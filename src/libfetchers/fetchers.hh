@@ -167,7 +167,14 @@ DownloadFileResult downloadFile(
     bool locked,
     const Headers & headers = {});
 
-std::pair<Tree, time_t> downloadTarball(
+struct DownloadTarballResult
+{
+    time_t lastModified;
+    std::string etag;
+    std::string effectiveUrl;
+};
+
+std::pair<Tree, DownloadTarballResult> downloadTarball(
     ref<Store> store,
     const std::string & url,
     const std::string & name,

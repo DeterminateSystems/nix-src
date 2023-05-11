@@ -114,7 +114,7 @@ DownloadFileResult downloadFile(
     };
 }
 
-std::pair<Tree, time_t> downloadTarball(
+std::pair<Tree, DownloadTarballResult> downloadTarball(
     ref<Store> store,
     const std::string & url,
     const std::string & name,
@@ -132,7 +132,12 @@ std::pair<Tree, time_t> downloadTarball(
     if (cached && !cached->expired)
         return {
             Tree { .actualPath = store->toRealPath(cached->storePath), .storePath = std::move(cached->storePath) },
-            getIntAttr(cached->infoAttrs, "lastModified")
+            DownloadTarballResult {
+                .lastModified = getIntAttr(cached->infoAttrs, "lastModified"),
+                .etag = getStrAttr(cached->infoAttrs, "etag"),
+                .effectiveUrl = getStrAttr(cached->infoAttrs, "effectiveUrl"),
+            }
+
         };
 
     auto res = downloadFile(store, url, name, locked, headers);
@@ -169,7 +174,11 @@ std::pair<Tree, time_t> downloadTarball(
 
     return {
         Tree { .actualPath = store->toRealPath(*unpackedStorePath), .storePath = std::move(*unpackedStorePath) },
-        lastModified,
+        DownloadTarballResult {
+            .lastModified = lastModified,
+            .etag = res.etag,
+            .effectiveUrl = res.effectiveUrl,
+        },
     };
 }
 
@@ -275,9 +284,14 @@ struct TarballInputScheme : CurlInputScheme
                     : hasTarballExtension(url.path));
     }
 
-    std::pair<StorePath, Input> fetch(ref<Store> store, const Input & input) override
+    std::pair<StorePath, Input> fetch(ref<Store> store, const Input & _input) override
     {
-        auto tree = downloadTarball(store, getStrAttr(input.attrs, "url"), input.getName(), false).first;
+        Input input(_input);
+
+        auto [tree, downloadTarballResult] = downloadTarball(store, getStrAttr(input.attrs, "url"), input.getName(), false);
+
+        input.attrs.insert_or_assign("etag", downloadTarballResult.etag);
+        input.attrs.insert_or_assign("url", downloadTarballResult.effectiveUrl);
         return {std::move(tree.storePath), input};
     }
 };
