@@ -160,20 +160,15 @@ std::pair<Tree, DownloadTarballResult> downloadTarball(
     }
 
     Attrs lockedAttrs({
-        {"type", "tarball"},
-        {"etag", res.etag},
-        {"url", res.effectiveUrl},
-    });
-
-    Attrs infoAttrs({
         {"lastModified", uint64_t(lastModified)},
+        {"type", "tarball"},
         {"etag", res.etag},
         {"url", res.effectiveUrl},
     });
 
     getCache()->add(
         store,
-        lockedAttrs,
+        inAttrs,
         lockedAttrs,
         *unpackedStorePath,
         true);
@@ -227,7 +222,7 @@ struct CurlInputScheme : InputScheme
         auto type = maybeGetStrAttr(attrs, "type");
         if (type != inputType()) return {};
 
-        std::set<std::string> allowedNames = {"type", "url", "narHash", "name", "unpack"};
+        std::set<std::string> allowedNames = {"type", "url", "narHash", "name", "unpack", "etag"};
         for (auto & [name, value] : attrs)
             if (!allowedNames.count(name))
                 throw Error("unsupported %s input attribute '%s'", *type, name);
