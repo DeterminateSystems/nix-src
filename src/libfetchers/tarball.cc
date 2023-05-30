@@ -46,6 +46,7 @@ DownloadFileResult downloadFile(
     FileTransferResult res;
     try {
         res = getFileTransfer()->download(request);
+        warn("effective: %s", res.effectiveUri);
     } catch (FileTransferError & e) {
         if (cached) {
             warn("%s; using cached version", e.msg());
@@ -87,6 +88,8 @@ DownloadFileResult downloadFile(
         store->addToStore(info, source, NoRepair, NoCheckSigs);
         storePath = std::move(info.path);
     }
+
+    warn("what %s", res.effectiveUri);
 
     getCache()->add(
         store,
@@ -133,7 +136,7 @@ std::pair<Tree, DownloadTarballResult> downloadTarball(
         return {
             Tree { .actualPath = store->toRealPath(cached->storePath), .storePath = std::move(cached->storePath) },
             DownloadTarballResult {
-                .lastModified = getIntAttr(cached->infoAttrs, "lastModified"),
+                .lastModified = static_cast<time_t>(getIntAttr(cached->infoAttrs, "lastModified")),
                 .etag = getStrAttr(cached->infoAttrs, "etag"),
                 .effectiveUrl = getStrAttr(cached->infoAttrs, "effectiveUrl"),
             }
@@ -160,17 +163,26 @@ std::pair<Tree, DownloadTarballResult> downloadTarball(
         unpackedStorePath = store->addToStore(name, topDir, FileIngestionMethod::Recursive, htSHA256, defaultPathFilter, NoRepair);
     }
 
+    warn("effective, tarballcc: %s", res.effectiveUrl);
+
+    Attrs lockedAttrs({
+        {"type", "tarball"},
+        {"etag", res.etag},
+        {"url", res.effectiveUrl},
+    });
+
     Attrs infoAttrs({
         {"lastModified", uint64_t(lastModified)},
         {"etag", res.etag},
+        {"url", res.effectiveUrl},
     });
 
     getCache()->add(
         store,
-        inAttrs,
-        infoAttrs,
+        lockedAttrs,
+        lockedAttrs,
         *unpackedStorePath,
-        locked);
+        true);
 
     return {
         Tree { .actualPath = store->toRealPath(*unpackedStorePath), .storePath = std::move(*unpackedStorePath) },

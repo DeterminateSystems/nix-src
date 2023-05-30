@@ -350,8 +350,8 @@ struct curlFileTransfer : public FileTransfer
             if (effectiveUriCStr)
                 result.effectiveUri = effectiveUriCStr;
 
-            debug("finished %s of '%s'; curl status = %d, HTTP status = %d, body = %d bytes",
-                request.verb(), request.uri, code, httpStatus, result.bodySize);
+            debug("finished %s of '%s' ('%s'); curl status = %d, HTTP status = %d, body = %d bytes",
+                request.verb(), request.uri, result.effectiveUri, code, httpStatus, result.bodySize);
 
             if (decompressionSink) {
                 try {
