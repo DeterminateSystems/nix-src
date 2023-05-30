@@ -46,7 +46,6 @@ DownloadFileResult downloadFile(
     FileTransferResult res;
     try {
         res = getFileTransfer()->download(request);
-        warn("effective: %s", res.effectiveUri);
     } catch (FileTransferError & e) {
         if (cached) {
             warn("%s; using cached version", e.msg());
@@ -88,8 +87,6 @@ DownloadFileResult downloadFile(
         store->addToStore(info, source, NoRepair, NoCheckSigs);
         storePath = std::move(info.path);
     }
-
-    warn("what %s", res.effectiveUri);
 
     getCache()->add(
         store,
@@ -162,8 +159,6 @@ std::pair<Tree, DownloadTarballResult> downloadTarball(
         lastModified = lstat(topDir).st_mtime;
         unpackedStorePath = store->addToStore(name, topDir, FileIngestionMethod::Recursive, htSHA256, defaultPathFilter, NoRepair);
     }
-
-    warn("effective, tarballcc: %s", res.effectiveUrl);
 
     Attrs lockedAttrs({
         {"type", "tarball"},
