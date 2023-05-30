@@ -129,7 +129,7 @@ std::pair<Tree, DownloadTarballResult> downloadTarball(
 
     auto cached = getCache()->lookupExpired(store, inAttrs);
 
-    if (cached && !cached->expired)
+    if (cached && !cached->expired && cached->infoAttrs.contains("etag") && cached->infoAttrs.contains("effectiveUrl"))
         return {
             Tree { .actualPath = store->toRealPath(cached->storePath), .storePath = std::move(cached->storePath) },
             DownloadTarballResult {
@@ -137,7 +137,6 @@ std::pair<Tree, DownloadTarballResult> downloadTarball(
                 .etag = getStrAttr(cached->infoAttrs, "etag"),
                 .effectiveUrl = getStrAttr(cached->infoAttrs, "effectiveUrl"),
             }
-
         };
 
     auto res = downloadFile(store, url, name, locked, headers);
