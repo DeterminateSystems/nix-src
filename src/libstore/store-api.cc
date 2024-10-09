@@ -18,6 +18,7 @@
 #include "worker-protocol.hh"
 #include "signals.hh"
 #include "users.hh"
+#include "provenance.hh"
 
 #include <filesystem>
 #include <nlohmann/json.hpp>
@@ -195,7 +196,8 @@ StorePath Store::addToStore(
     HashAlgorithm hashAlgo,
     const StorePathSet & references,
     PathFilter & filter,
-    RepairFlag repair)
+    RepairFlag repair,
+    std::optional<std::reference_wrapper<Provenance>> provenance)
 {
     FileSerialisationMethod fsm;
     switch (method.getFileIngestionMethod()) {
@@ -213,7 +215,7 @@ StorePath Store::addToStore(
     std::optional<StorePath> storePath;
     auto sink = sourceToSink([&](Source & source) {
         LengthSource lengthSource(source);
-        storePath = addToStoreFromDump(lengthSource, name, fsm, method, hashAlgo, references, repair);
+        storePath = addToStoreFromDump(lengthSource, name, fsm, method, hashAlgo, references, repair, provenance);
         if (lengthSource.total >= settings.warnLargePathThreshold)
             warn("copied large path '%s' to the store (%s)", path, renderSize(lengthSource.total));
     });
@@ -973,26 +975,27 @@ void copyStorePath(
         {storePathS, srcUri, dstUri});
     PushActivity pact(act.id);
 
-    auto info = srcStore.queryPathInfo(storePath);
+    auto srcInfo = srcStore.queryPathInfo(storePath);
+    auto info = make_ref<ValidPathInfo>(*srcInfo);
 
     uint64_t total = 0;
 
     // recompute store path on the chance dstStore does it differently
     if (info->ca && info->references.empty()) {
-        auto info2 = make_ref<ValidPathInfo>(*info);
-        info2->path = dstStore.makeFixedOutputPathFromCA(
+        info->path = dstStore.makeFixedOutputPathFromCA(
             info->path.name(),
             info->contentAddressWithReferences().value());
         if (dstStore.storeDir == srcStore.storeDir)
-            assert(info->path == info2->path);
-        info = info2;
+            assert(info->path == srcInfo->path);
     }
 
-    if (info->ultimate) {
-        auto info2 = make_ref<ValidPathInfo>(*info);
-        info2->ultimate = false;
-        info = info2;
-    }
+    info->ultimate = false;
+
+    info->provenance = std::make_shared<const Provenance>(
+        Provenance::ProvSubstituted {
+            .from = srcStore.getUri(),
+            .provenance = info->provenance,
+        });
 
     auto source = sinkToSource([&](Sink & sink) {
         LambdaSink progressSink([&](std::string_view data) {

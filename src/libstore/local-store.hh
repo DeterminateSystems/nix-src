@@ -25,7 +25,7 @@ namespace nix {
  * Version 4 is Nix 0.11.  Version 5 is Nix 0.12-0.16.  Version 6 is
  * Nix 1.0.  Version 7 is Nix 1.3. Version 10 is 2.0.
  */
-const int nixSchemaVersion = 10;
+const int nixSchemaVersion = 11;
 
 
 struct OptimiseStats
@@ -191,7 +191,8 @@ public:
         ContentAddressMethod hashMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::optional<std::reference_wrapper<Provenance>> provenance = std::nullopt) override;
 
     void addTempRoot(const StorePath & path) override;
 

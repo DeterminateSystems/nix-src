@@ -75,6 +75,8 @@ struct SourceAccessor;
 class NarInfoDiskCache;
 class Store;
 
+struct Provenance;
+
 
 typedef std::map<std::string, StorePath> OutputPathMap;
 
@@ -445,7 +447,8 @@ public:
         HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
         const StorePathSet & references = StorePathSet(),
         PathFilter & filter = defaultPathFilter,
-        RepairFlag repair = NoRepair);
+        RepairFlag repair = NoRepair,
+        std::optional<std::reference_wrapper<Provenance>> provenance = std::nullopt);
 
     /**
      * Copy the contents of a path to the store and register the
@@ -484,7 +487,8 @@ public:
         ContentAddressMethod hashMethod = ContentAddressMethod::Raw::NixArchive,
         HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
         const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) = 0;
+        RepairFlag repair = NoRepair,
+        std::optional<std::reference_wrapper<Provenance>> provenance = std::nullopt) = 0;
 
     /**
      * Add a mapping indicating that `deriver!outputName` maps to the output path

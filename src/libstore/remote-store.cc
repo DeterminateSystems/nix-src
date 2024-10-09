@@ -463,8 +463,12 @@ StorePath RemoteStore::addToStoreFromDump(
     ContentAddressMethod hashMethod,
     HashAlgorithm hashAlgo,
     const StorePathSet & references,
-    RepairFlag repair)
+    RepairFlag repair,
+    std::optional<std::reference_wrapper<Provenance>> provenance)
 {
+    if (provenance)
+        throw UnimplementedError("RemoteStore::addToStoreFromDump() with provenance");
+
     FileSerialisationMethod fsm;
     switch (hashMethod.getFileIngestionMethod()) {
     case FileIngestionMethod::Flat:

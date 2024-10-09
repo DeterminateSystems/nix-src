@@ -75,7 +75,8 @@ struct LegacySSHStore : public virtual LegacySSHStoreConfig, public virtual Stor
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
         PathFilter & filter,
-        RepairFlag repair) override
+        RepairFlag repair,
+        std::optional<std::reference_wrapper<Provenance>> provenance) override
     { unsupported("addToStore"); }
 
     virtual StorePath addToStoreFromDump(
@@ -85,7 +86,8 @@ struct LegacySSHStore : public virtual LegacySSHStoreConfig, public virtual Stor
         ContentAddressMethod hashMethod = FileIngestionMethod::NixArchive,
         HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
         const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) override
+        RepairFlag repair = NoRepair,
+        std::optional<std::reference_wrapper<Provenance>> provenance = std::nullopt) override
     { unsupported("addToStore"); }
 
 public:

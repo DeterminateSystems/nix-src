@@ -20,6 +20,7 @@ StorePath fetchToStore(
     std::string_view name = "source",
     ContentAddressMethod method = ContentAddressMethod::Raw::NixArchive,
     PathFilter * filter = nullptr,
-    RepairFlag repair = NoRepair);
+    RepairFlag repair = NoRepair,
+    std::optional<std::reference_wrapper<Provenance>> provenance = std::nullopt);
 
 }
