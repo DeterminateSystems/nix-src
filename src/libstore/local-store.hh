@@ -191,7 +191,8 @@ public:
         ContentAddressMethod hashMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::optional<std::reference_wrapper<Provenance>> provenance = std::nullopt) override;
 
     void addTempRoot(const StorePath & path) override;
 

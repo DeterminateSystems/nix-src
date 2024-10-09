@@ -91,7 +91,8 @@ public:
         ContentAddressMethod hashMethod = FileIngestionMethod::NixArchive,
         HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
         const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) override;
+        RepairFlag repair = NoRepair,
+        std::optional<std::reference_wrapper<Provenance>> provenance = std::nullopt) override;
 
     void addToStore(const ValidPathInfo & info, Source & nar,
         RepairFlag repair, CheckSigsFlag checkSigs) override;

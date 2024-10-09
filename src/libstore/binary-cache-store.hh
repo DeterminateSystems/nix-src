@@ -129,7 +129,8 @@ public:
         ContentAddressMethod hashMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::optional<std::reference_wrapper<Provenance>> provenance = std::nullopt) override;
 
     StorePath addToStore(
         std::string_view name,
@@ -138,7 +139,8 @@ public:
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
         PathFilter & filter,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::optional<std::reference_wrapper<Provenance>> provenance) override;
 
     void registerDrvOutput(const Realisation & info) override;
 
