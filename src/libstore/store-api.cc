@@ -1122,6 +1122,11 @@ std::map<StorePath, StorePath> copyPaths(
 
         ValidPathInfo infoForDst = *info;
         infoForDst.path = storePathForDst;
+        infoForDst.provenance = std::make_shared<const Provenance>(
+            Provenance::ProvSubstituted {
+                .from = srcStore.getUri(),
+                .provenance = info->provenance,
+            });
 
         auto source = sinkToSource([&](Sink & sink) {
             // We can reasonably assume that the copy will happen whenever we
