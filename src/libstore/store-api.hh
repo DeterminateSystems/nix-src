@@ -225,6 +225,13 @@ public:
     virtual std::string getUri() = 0;
 
     /**
+     * Whether, when copying *from* this store, a "copied" provenance
+     * record should be added.
+     */
+    virtual bool uriIsUsefulProvenance()
+    { return false; }
+
+    /**
      * Follow symlinks until we end up with a path in the Nix store.
      */
     Path followLinksToStore(std::string_view path) const;

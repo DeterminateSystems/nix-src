@@ -68,6 +68,9 @@ protected:
 
 public:
 
+    bool uriIsUsefulProvenance() override
+    { return true; }
+
     virtual bool fileExists(const std::string & path) = 0;
 
     virtual void upsertFile(const std::string & path,

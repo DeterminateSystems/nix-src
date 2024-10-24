@@ -12,9 +12,9 @@ std::string Provenance::type() const
         {
             return "derivation";
         },
-        [&](const Provenance::ProvSubstituted & p) -> std::string
+        [&](const Provenance::ProvCopied & p) -> std::string
         {
-            return "substituted";
+            return "copied";
         },
         [&](const Provenance::ProvFlake & p) -> std::string
         {
@@ -30,7 +30,7 @@ void to_json(nlohmann::json & j, const Provenance & p)
         {
             nlohmann::to_json(j, p);
         },
-        [&](const Provenance::ProvSubstituted & p)
+        [&](const Provenance::ProvCopied & p)
         {
             nlohmann::to_json(j, p);
         },
@@ -52,7 +52,7 @@ void to_json(nlohmann::json & j, const Provenance::ProvDerivation & p)
     };
 }
 
-void to_json(nlohmann::json & j, const Provenance::ProvSubstituted & p)
+void to_json(nlohmann::json & j, const Provenance::ProvCopied & p)
 {
     j = nlohmann::json{
         {"from", p.from},
@@ -89,10 +89,10 @@ void from_json(const nlohmann::json & j, Provenance & p)
         };
     }
 
-    else if (type == "substituted") {
+    else if (type == "copied") {
         auto prov = j.at("provenance");
         p = {
-            Provenance::ProvSubstituted {
+            Provenance::ProvCopied {
                 .from = j.at("from").get<std::string>(),
                 .provenance = prov.is_null() ? nullptr : std::make_shared<Provenance>(prov.get<Provenance>()),
             }

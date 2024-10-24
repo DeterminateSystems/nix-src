@@ -39,10 +39,10 @@ struct Provenance
     };
 
     /**
-     * Type that denotes a store path that was copied (substituted)
+     * Type that denotes a store path that was copied/substituted
      * from another store.
      */
-    struct ProvSubstituted
+    struct ProvCopied
     {
         /**
          * Store URL (typically a binary cache) from which this store
@@ -66,7 +66,7 @@ struct Provenance
         std::string flakeRef;
     };
 
-    using Raw = std::variant<ProvDerivation, ProvSubstituted, ProvFlake>;
+    using Raw = std::variant<ProvDerivation, ProvCopied, ProvFlake>;
 
     Raw raw;
 
@@ -83,7 +83,7 @@ struct Provenance
 
 void to_json(nlohmann::json & j, const Provenance & p);
 void to_json(nlohmann::json & j, const Provenance::ProvDerivation & p);
-void to_json(nlohmann::json & j, const Provenance::ProvSubstituted & p);
+void to_json(nlohmann::json & j, const Provenance::ProvCopied & p);
 void to_json(nlohmann::json & j, const Provenance::ProvFlake & p);
 
 void from_json(const nlohmann::json & j, Provenance & p);

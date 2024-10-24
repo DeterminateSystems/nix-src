@@ -19,6 +19,7 @@
 #include "signals.hh"
 #include "users.hh"
 #include "provenance.hh"
+#include "local-fs-store.hh"
 
 #include <filesystem>
 #include <nlohmann/json.hpp>
@@ -955,6 +956,25 @@ static std::string makeCopyPathMessage(
 }
 
 
+/**
+ * Wrap upstream provenance in a "copied" provenance record to record
+ * where the path was copied from. But uninformative origins like
+ * LocalStore are omitted.
+ */
+static std::shared_ptr<const Provenance> addCopiedProvenance(
+    std::shared_ptr<const Provenance> prov,
+    Store & srcStore)
+{
+    if (!srcStore.uriIsUsefulProvenance())
+        return prov;
+    return std::make_shared<const Provenance>(
+        Provenance::ProvCopied {
+            .from = srcStore.getUri(),
+            .provenance = prov,
+        });
+}
+
+
 void copyStorePath(
     Store & srcStore,
     Store & dstStore,
@@ -991,11 +1011,7 @@ void copyStorePath(
 
     info->ultimate = false;
 
-    info->provenance = std::make_shared<const Provenance>(
-        Provenance::ProvSubstituted {
-            .from = srcStore.getUri(),
-            .provenance = info->provenance,
-        });
+    info->provenance = addCopiedProvenance(info->provenance, srcStore);
 
     auto source = sinkToSource([&](Sink & sink) {
         LambdaSink progressSink([&](std::string_view data) {
@@ -1122,11 +1138,7 @@ std::map<StorePath, StorePath> copyPaths(
 
         ValidPathInfo infoForDst = *info;
         infoForDst.path = storePathForDst;
-        infoForDst.provenance = std::make_shared<const Provenance>(
-            Provenance::ProvSubstituted {
-                .from = srcStore.getUri(),
-                .provenance = info->provenance,
-            });
+        infoForDst.provenance = addCopiedProvenance(info->provenance, srcStore);
 
         auto source = sinkToSource([&](Sink & sink) {
             // We can reasonably assume that the copy will happen whenever we

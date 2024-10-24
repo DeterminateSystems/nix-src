@@ -57,6 +57,9 @@ struct LegacySSHStore : public virtual LegacySSHStoreConfig, public virtual Stor
 
     std::string getUri() override;
 
+    bool uriIsUsefulProvenance() override
+    { return true; }
+
     void queryPathInfoUncached(const StorePath & path,
         Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override;
 
