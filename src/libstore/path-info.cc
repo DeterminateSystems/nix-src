@@ -227,6 +227,9 @@ UnkeyedValidPathInfo UnkeyedValidPathInfo::fromJSON(
     if (json.contains("signatures"))
         res.sigs = getStringSet(valueAt(json, "signatures"));
 
+    auto prov = json.find("provenance");
+    res.provenance = prov == json.end() || prov->second.is_null() ? nullptr : std::make_shared<Provenance>(prov->second.get<Provenance>());
+
     return res;
 }
 
