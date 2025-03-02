@@ -6,6 +6,7 @@
 #include "common-eval-args.hh"
 #include "path.hh"
 #include "flake/lockfile.hh"
+#include "flake-schemas.hh"
 
 #include <optional>
 
@@ -141,7 +142,7 @@ struct MixFlakeSchemas : virtual Args, virtual StoreCommand
     std::optional<FlakeRef> getDefaultFlakeSchemas();
 };
 
-struct SourceExprCommand : virtual Args, MixFlakeOptions, MixFlakeSchemas
+struct SourceExprCommand : virtual Args, MixFlakeOptions, MixFlakeSchemas, flake_schemas::MixFlakeConfigOptions
 {
     std::optional<Path> file;
     std::optional<std::string> expr;

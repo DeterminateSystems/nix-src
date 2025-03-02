@@ -2,14 +2,21 @@
 
 #include "eval-cache.hh"
 #include "flake/flake.hh"
-#include "command.hh"
+#include "args.hh"
 
 namespace nix::flake_schemas {
 
 using namespace eval_cache;
 
-ref<eval_cache::EvalCache>
-call(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake, std::optional<FlakeRef> defaultSchemasFlake);
+using Option = std::variant<std::string, Explicit<bool>>;
+
+using Options = std::map<std::string, Option>;
+
+ref<eval_cache::EvalCache> call(
+    EvalState & state,
+    std::shared_ptr<flake::LockedFlake> lockedFlake,
+    std::optional<FlakeRef> defaultSchemasFlake,
+    const Options & options = {});
 
 void forEachOutput(
     ref<AttrCursor> inventory,
@@ -51,5 +58,12 @@ struct SchemaInfo
 using Schemas = std::map<std::string, SchemaInfo>;
 
 Schemas getSchema(ref<AttrCursor> root);
+
+struct MixFlakeConfigOptions : virtual Args
+{
+    Options options;
+
+    MixFlakeConfigOptions();
+};
 
 }

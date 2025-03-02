@@ -56,6 +56,7 @@ InstallableFlake::InstallableFlake(
     , extendedOutputsSpec(std::move(extendedOutputsSpec))
     , lockFlags(lockFlags)
     , defaultFlakeSchemas(defaultFlakeSchemas)
+    , options(cmd ? cmd->options : flake_schemas::Options{})
 {
     if (cmd && cmd->getAutoArgs(*state)->size())
         throw UsageError("'--arg' and '--argstr' are incompatible with flakes");
@@ -329,7 +330,8 @@ ref<eval_cache::EvalCache> InstallableFlake::openEvalCache() const
         _evalCache = flake_schemas::call(
             *state,
             getLockedFlake(),
-            defaultFlakeSchemas);
+            defaultFlakeSchemas,
+            options);
     }
     return ref(_evalCache);
 }

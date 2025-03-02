@@ -4,6 +4,7 @@
 #include "common-eval-args.hh"
 #include "installable-value.hh"
 #include "eval-cache.hh"
+#include "flake-schemas.hh"
 
 namespace nix {
 
@@ -47,6 +48,7 @@ struct InstallableFlake : InstallableValue
     const flake::LockFlags & lockFlags;
     mutable std::shared_ptr<flake::LockedFlake> _lockedFlake;
     std::optional<FlakeRef> defaultFlakeSchemas;
+    flake_schemas::Options options;
 
     InstallableFlake(
         SourceExprCommand * cmd,

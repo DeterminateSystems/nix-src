@@ -3,6 +3,10 @@
 #include "fetch-to-store.hh"
 #include "memory-source-accessor.hh"
 #include "strings-inline.hh"
+#include "command.hh"
+#include "value-to-json.hh"
+
+#include <sstream>
 
 namespace nix::flake_schemas {
 
@@ -35,9 +39,44 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
     return lockFlake(flakeSettings, state, flakeRef, {}, flake);
 }
 
-ref<EvalCache>
-call(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake, std::optional<FlakeRef> defaultSchemasFlake)
+static Value * optionsToValue(EvalState & state, const Options & options)
 {
+    auto vRes = state.allocValue();
+
+    auto attrs = state.buildBindings(options.size());
+
+    for (auto & [name, value] : options) {
+        auto & vOption = attrs.alloc(name);
+        std::visit(
+            overloaded{
+                [&](const std::string & s) { vOption.mkString(s); },
+                [&](const Explicit<bool> & b) { vOption.mkBool(b.t); },
+            },
+            value);
+    }
+
+    vRes->mkAttrs(attrs);
+
+    return vRes;
+}
+
+static Hash hashValue(EvalState & state, Value & v)
+{
+    std::ostringstream str;
+    NixStringContext context;
+    printValueAsJSON(state, true, v, noPos, str, context, false);
+    assert(context.empty());
+    return hashString(HashAlgorithm::SHA256, str.str());
+}
+
+ref<EvalCache> call(
+    EvalState & state,
+    std::shared_ptr<flake::LockedFlake> lockedFlake,
+    std::optional<FlakeRef> defaultSchemasFlake,
+    const Options & options)
+{
+    auto vOptions = optionsToValue(state, options);
+
     auto fingerprint = lockedFlake->getFingerprint(state.store, state.fetchSettings);
 
     std::string callFlakeSchemasNix =
@@ -54,17 +93,18 @@ call(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake, std::op
     if (fingerprint && lockedDefaultSchemasFlakeFingerprint)
         fingerprint2 = hashString(
             HashAlgorithm::SHA256,
-            fmt("app:%s:%s:%s",
+            fmt("app:%s:%s:%s:%s",
                 hashString(HashAlgorithm::SHA256, callFlakeSchemasNix).to_string(HashFormat::Base16, false),
                 fingerprint->to_string(HashFormat::Base16, false),
-                lockedDefaultSchemasFlakeFingerprint->to_string(HashFormat::Base16, false)));
+                lockedDefaultSchemasFlakeFingerprint->to_string(HashFormat::Base16, false),
+                hashValue(state, *vOptions).to_string(HashFormat::Base16, false)));
 
     // FIXME: memoize eval cache on fingerprint to avoid opening the
     // same database twice.
     auto cache = make_ref<EvalCache>(
         evalSettings.useEvalCache && evalSettings.pureEval ? fingerprint2 : std::nullopt,
         state,
-        [&state, lockedFlake, callFlakeSchemasNix, lockedDefaultSchemasFlake]() {
+        [&state, lockedFlake, callFlakeSchemasNix, lockedDefaultSchemasFlake, vOptions]() {
             auto vCallFlakeSchemas = state.allocValue();
             state.eval(
                 state.parseExprFromString(callFlakeSchemasNix, state.rootPath(CanonPath::root)), *vCallFlakeSchemas);
@@ -79,7 +119,7 @@ call(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake, std::op
                 flake::callFlake(state, lockedDefaultSchemasFlake, *vDefaultSchemasFlake);
 
             auto vRes = state.allocValue();
-            Value * args[] = {vDefaultSchemasFlake, vFlake};
+            Value * args[] = {vDefaultSchemasFlake, vFlake, vOptions};
             state.callFunction(*vCallFlakeSchemas, args, *vRes, noPos);
 
             return vRes;
@@ -275,6 +315,27 @@ Schemas getSchema(ref<AttrCursor> inventory)
     }
 
     return schemas;
+}
+
+MixFlakeConfigOptions::MixFlakeConfigOptions()
+{
+    addFlag(
+        {.longName = "string",
+         .description = "Set a flake option to a string value.",
+         .labels = {"name", "value"},
+         .handler = {[&, this](std::string name, std::string value) { options.insert_or_assign(name, value); }}});
+
+    addFlag(
+        {.longName = "enable",
+         .description = "Set a flake option to the Boolean value `true`.",
+         .labels = {"name"},
+         .handler = {[&, this](std::string name) { options.insert_or_assign(name, Explicit<bool>(true)); }}});
+
+    addFlag(
+        {.longName = "disable",
+         .description = "Set a flake option to the Boolean value `false`.",
+         .labels = {"name"},
+         .handler = {[&, this](std::string name) { options.insert_or_assign(name, Explicit<bool>(false)); }}});
 }
 
 }
