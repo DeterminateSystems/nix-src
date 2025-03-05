@@ -68,6 +68,28 @@ static Value * optionsToValue(ref<EvalState> state, const Options & options)
 
                     attrs.insert(state->symbols.create(name), value, pos);
                 },
+                [&](const std::vector<PackageOption> & pkgs) {
+                    auto list = state->buildList(pkgs.size());
+
+                    for (const auto & [n, pkg] : enumerate(pkgs)) {
+                        // FIXME: memoize InstallableFlake.
+                        auto installable = make_ref<InstallableFlake>(
+                            nullptr,
+                            state,
+                            FlakeRef(pkg.flakeRef),
+                            pkg.fragment,
+                            ExtendedOutputsSpec::Default(),
+                            StringSet{"nix-build"}, // FIXME: get role from option schema
+                            LockFlags{},
+                            std::nullopt);
+
+                        auto [value, pos] = installable->toValue(*state);
+
+                        list[n] = value;
+                    }
+
+                    attrs.alloc(name).mkList(list);
+                },
                 [&](const NixInt & n) { attrs.alloc(name).mkInt(n); }},
             value);
     }
@@ -357,6 +379,16 @@ MixFlakeConfigOptions::MixFlakeConfigOptions()
          .labels = {"name"},
          .handler = {[&, this](std::string name) { options.insert_or_assign(name, Explicit<bool>(false)); }}});
 
+    auto packageCompleter = [&](AddCompletions & completions, size_t index, std::string_view prefix) {
+        if (index == 1)
+            completeFlakeRefWithFragment(
+                completions,
+                getEvalState(),
+                flake::LockFlags{},
+                StringSet{"nix-build"}, // FIXME: get role from option schema
+                prefix);
+    };
+
     addFlag(
         {.longName = "with",
          .description = "Set a flake option to a package specified as a flake output.",
@@ -365,15 +397,19 @@ MixFlakeConfigOptions::MixFlakeConfigOptions()
              auto [flakeRef, fragment] = parseFlakeRefWithFragment(fetchSettings, value, absPath(getCommandBaseDir()));
              options.insert_or_assign(name, flake_schemas::PackageOption{.flakeRef = flakeRef, .fragment = fragment});
          }},
-         .completer = {[&](AddCompletions & completions, size_t index, std::string_view prefix) {
-             if (index == 1)
-                 completeFlakeRefWithFragment(
-                     completions,
-                     getEvalState(),
-                     flake::LockFlags{},
-                     StringSet{"nix-build"}, // FIXME: get role from option schema
-                     prefix);
-         }}});
+         .completer = {packageCompleter}});
+
+    addFlag(
+        {.longName = "plugin",
+         .description = "Append a package to a flake option.",
+         .labels = {"name", "flakeref"},
+         .handler = {[&, this](std::string name, std::string value) {
+             auto [flakeRef, fragment] = parseFlakeRefWithFragment(fetchSettings, value, absPath(getCommandBaseDir()));
+             std::get<std::vector<flake_schemas::PackageOption>>(
+                 options.emplace(name, std::vector<flake_schemas::PackageOption>()).first->second)
+                 .push_back(flake_schemas::PackageOption{.flakeRef = flakeRef, .fragment = fragment});
+         }},
+         .completer = {packageCompleter}});
 
     addFlag(
         {.longName = "int",

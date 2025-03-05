@@ -8,7 +8,8 @@ struct PackageOption
     std::string fragment;
 };
 
-using Option = std::variant<std::string, Explicit<bool>, PackageOption, NixInt>;
+// FIXME: generalize list support.
+using Option = std::variant<std::string, Explicit<bool>, PackageOption, std::vector<PackageOption>, NixInt>;
 
 using Options = std::map<std::string, Option>;
 
