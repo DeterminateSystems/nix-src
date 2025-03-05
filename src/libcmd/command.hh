@@ -6,7 +6,7 @@
 #include "common-eval-args.hh"
 #include "path.hh"
 #include "flake/lockfile.hh"
-#include "flake-schemas.hh"
+#include "flake-options.hh"
 
 #include <optional>
 
@@ -113,7 +113,7 @@ private:
  * A mixin class for commands that process flakes, adding a few standard
  * flake-related options/flags.
  */
-struct MixFlakeOptions : virtual Args, EvalCommand
+struct MixFlakeOptions : virtual Args, virtual EvalCommand
 {
     flake::LockFlags lockFlags;
 
@@ -142,7 +142,14 @@ struct MixFlakeSchemas : virtual Args, virtual StoreCommand
     std::optional<FlakeRef> getDefaultFlakeSchemas();
 };
 
-struct SourceExprCommand : virtual Args, MixFlakeOptions, MixFlakeSchemas, flake_schemas::MixFlakeConfigOptions
+struct MixFlakeConfigOptions : virtual EvalCommand
+{
+    flake_schemas::Options options;
+
+    MixFlakeConfigOptions();
+};
+
+struct SourceExprCommand : virtual Args, MixFlakeOptions, MixFlakeSchemas, MixFlakeConfigOptions
 {
     std::optional<Path> file;
     std::optional<std::string> expr;

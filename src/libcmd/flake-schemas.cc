@@ -5,6 +5,8 @@
 #include "strings-inline.hh"
 #include "command.hh"
 #include "value-to-json.hh"
+#include "installable-flake.hh"
+#include "flake-options.hh"
 
 #include <sstream>
 
@@ -39,19 +41,33 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
     return lockFlake(flakeSettings, state, flakeRef, {}, flake);
 }
 
-static Value * optionsToValue(EvalState & state, const Options & options)
+static Value * optionsToValue(ref<EvalState> state, const Options & options)
 {
-    auto vRes = state.allocValue();
+    auto vRes = state->allocValue();
 
-    auto attrs = state.buildBindings(options.size());
+    auto attrs = state->buildBindings(options.size());
 
     for (auto & [name, value] : options) {
-        auto & vOption = attrs.alloc(name);
         std::visit(
             overloaded{
-                [&](const std::string & s) { vOption.mkString(s); },
-                [&](const Explicit<bool> & b) { vOption.mkBool(b.t); },
-            },
+                [&](const std::string & s) { attrs.alloc(name).mkString(s); },
+                [&](const Explicit<bool> & b) { attrs.alloc(name).mkBool(b.t); },
+                [&](const PackageOption & pkg) {
+                    // FIXME: memoize InstallableFlake.
+                    auto installable = make_ref<InstallableFlake>(
+                        nullptr,
+                        state,
+                        FlakeRef(pkg.flakeRef),
+                        pkg.fragment,
+                        ExtendedOutputsSpec::Default(),
+                        StringSet{"nix-build"}, // FIXME: get role from option schema
+                        LockFlags{},
+                        std::nullopt);
+
+                    auto [value, pos] = installable->toValue(*state);
+
+                    attrs.insert(state->symbols.create(name), value, pos);
+                }},
             value);
     }
 
@@ -65,29 +81,28 @@ static Hash hashValue(EvalState & state, Value & v)
     std::ostringstream str;
     NixStringContext context;
     printValueAsJSON(state, true, v, noPos, str, context, false);
-    assert(context.empty());
     return hashString(HashAlgorithm::SHA256, str.str());
 }
 
 ref<EvalCache> call(
-    EvalState & state,
+    ref<EvalState> state,
     std::shared_ptr<flake::LockedFlake> lockedFlake,
     std::optional<FlakeRef> defaultSchemasFlake,
     const Options & options)
 {
     auto vOptions = optionsToValue(state, options);
 
-    auto fingerprint = lockedFlake->getFingerprint(state.store, state.fetchSettings);
+    auto fingerprint = lockedFlake->getFingerprint(state->store, state->fetchSettings);
 
     std::string callFlakeSchemasNix =
 #include "call-flake-schemas.nix.gen.hh"
         ;
 
     auto lockedDefaultSchemasFlake = defaultSchemasFlake
-                                         ? flake::lockFlake(flakeSettings, state, *defaultSchemasFlake, {})
-                                         : getBuiltinDefaultSchemasFlake(state);
+                                         ? flake::lockFlake(flakeSettings, *state, *defaultSchemasFlake, {})
+                                         : getBuiltinDefaultSchemasFlake(*state);
     auto lockedDefaultSchemasFlakeFingerprint =
-        lockedDefaultSchemasFlake.getFingerprint(state.store, state.fetchSettings);
+        lockedDefaultSchemasFlake.getFingerprint(state->store, state->fetchSettings);
 
     std::optional<Fingerprint> fingerprint2;
     if (fingerprint && lockedDefaultSchemasFlakeFingerprint)
@@ -97,30 +112,30 @@ ref<EvalCache> call(
                 hashString(HashAlgorithm::SHA256, callFlakeSchemasNix).to_string(HashFormat::Base16, false),
                 fingerprint->to_string(HashFormat::Base16, false),
                 lockedDefaultSchemasFlakeFingerprint->to_string(HashFormat::Base16, false),
-                hashValue(state, *vOptions).to_string(HashFormat::Base16, false)));
+                hashValue(*state, *vOptions).to_string(HashFormat::Base16, false)));
 
     // FIXME: memoize eval cache on fingerprint to avoid opening the
     // same database twice.
     auto cache = make_ref<EvalCache>(
         evalSettings.useEvalCache && evalSettings.pureEval ? fingerprint2 : std::nullopt,
-        state,
-        [&state, lockedFlake, callFlakeSchemasNix, lockedDefaultSchemasFlake, vOptions]() {
-            auto vCallFlakeSchemas = state.allocValue();
-            state.eval(
-                state.parseExprFromString(callFlakeSchemasNix, state.rootPath(CanonPath::root)), *vCallFlakeSchemas);
+        *state,
+        [state, lockedFlake, callFlakeSchemasNix, lockedDefaultSchemasFlake, vOptions]() {
+            auto vCallFlakeSchemas = state->allocValue();
+            state->eval(
+                state->parseExprFromString(callFlakeSchemasNix, state->rootPath(CanonPath::root)), *vCallFlakeSchemas);
 
-            auto vFlake = state.allocValue();
-            flake::callFlake(state, *lockedFlake, *vFlake);
+            auto vFlake = state->allocValue();
+            flake::callFlake(*state, *lockedFlake, *vFlake);
 
-            auto vDefaultSchemasFlake = state.allocValue();
-            if (vFlake->type() == nAttrs && vFlake->attrs()->get(state.symbols.create("schemas")))
+            auto vDefaultSchemasFlake = state->allocValue();
+            if (vFlake->type() == nAttrs && vFlake->attrs()->get(state->symbols.create("schemas")))
                 vDefaultSchemasFlake->mkNull();
             else
-                flake::callFlake(state, lockedDefaultSchemasFlake, *vDefaultSchemasFlake);
+                flake::callFlake(*state, lockedDefaultSchemasFlake, *vDefaultSchemasFlake);
 
-            auto vRes = state.allocValue();
+            auto vRes = state->allocValue();
             Value * args[] = {vDefaultSchemasFlake, vFlake, vOptions};
-            state.callFunction(*vCallFlakeSchemas, args, *vRes, noPos);
+            state->callFunction(*vCallFlakeSchemas, args, *vRes, noPos);
 
             return vRes;
         });
@@ -128,13 +143,13 @@ ref<EvalCache> call(
     /* Derive the flake output attribute path from the cursor used to
        traverse the inventory. We do this so we don't have to maintain
        a separate attrpath for that. */
-    cache->cleanupAttrPath = [&](eval_cache::AttrPath && attrPath) {
+    cache->cleanupAttrPath = [state](eval_cache::AttrPath && attrPath) {
         eval_cache::AttrPath res;
         auto i = attrPath.begin();
         if (i == attrPath.end())
             return attrPath;
 
-        if (state.symbols[*i] == "inventory") {
+        if (state->symbols[*i] == "inventory") {
             ++i;
             if (i != attrPath.end()) {
                 res.push_back(*i++); // copy output name
@@ -148,7 +163,7 @@ ref<EvalCache> call(
             }
         }
 
-        else if (state.symbols[*i] == "outputs") {
+        else if (state->symbols[*i] == "outputs") {
             res.insert(res.begin(), ++i, attrPath.end());
         }
 
@@ -317,6 +332,10 @@ Schemas getSchema(ref<AttrCursor> inventory)
     return schemas;
 }
 
+}
+
+namespace nix {
+
 MixFlakeConfigOptions::MixFlakeConfigOptions()
 {
     addFlag(
@@ -336,11 +355,25 @@ MixFlakeConfigOptions::MixFlakeConfigOptions()
          .description = "Set a flake option to the Boolean value `false`.",
          .labels = {"name"},
          .handler = {[&, this](std::string name) { options.insert_or_assign(name, Explicit<bool>(false)); }}});
-}
 
+    addFlag(
+        {.longName = "with",
+         .description = "Set a flake option to a package specified as a flake output.",
+         .labels = {"name", "flakeref"},
+         .handler = {[&, this](std::string name, std::string value) {
+             auto [flakeRef, fragment] = parseFlakeRefWithFragment(fetchSettings, value, absPath(getCommandBaseDir()));
+             options.insert_or_assign(name, flake_schemas::PackageOption{.flakeRef = flakeRef, .fragment = fragment});
+         }},
+         .completer = {[&](AddCompletions & completions, size_t index, std::string_view prefix) {
+             if (index == 1)
+                 completeFlakeRefWithFragment(
+                     completions,
+                     getEvalState(),
+                     flake::LockFlags{},
+                     StringSet{"nix-build"}, // FIXME: get role from option schema
+                     prefix);
+         }}});
 }
-
-namespace nix {
 
 MixFlakeSchemas::MixFlakeSchemas()
 {

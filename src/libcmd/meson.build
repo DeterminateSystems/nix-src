@@ -107,6 +107,7 @@ headers = [config_h] + files(
   'common-eval-args.hh',
   'compatibility-settings.hh',
   'editor-for.hh',
+  'flake-options.hh',
   'flake-schemas.hh',
   'installable-attr-path.hh',
   'installable-derived-path.hh',

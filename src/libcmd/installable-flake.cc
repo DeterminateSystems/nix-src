@@ -328,7 +328,7 @@ ref<eval_cache::EvalCache> InstallableFlake::openEvalCache() const
 {
     if (!_evalCache) {
         _evalCache = flake_schemas::call(
-            *state,
+            state,
             getLockedFlake(),
             defaultFlakeSchemas,
             options);

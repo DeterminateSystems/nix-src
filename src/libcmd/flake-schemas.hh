@@ -2,18 +2,14 @@
 
 #include "eval-cache.hh"
 #include "flake/flake.hh"
-#include "args.hh"
+#include "flake-options.hh"
 
 namespace nix::flake_schemas {
 
 using namespace eval_cache;
 
-using Option = std::variant<std::string, Explicit<bool>>;
-
-using Options = std::map<std::string, Option>;
-
 ref<eval_cache::EvalCache> call(
-    EvalState & state,
+    ref<EvalState> state,
     std::shared_ptr<flake::LockedFlake> lockedFlake,
     std::optional<FlakeRef> defaultSchemasFlake,
     const Options & options = {});
@@ -58,12 +54,5 @@ struct SchemaInfo
 using Schemas = std::map<std::string, SchemaInfo>;
 
 Schemas getSchema(ref<AttrCursor> root);
-
-struct MixFlakeConfigOptions : virtual Args
-{
-    Options options;
-
-    MixFlakeConfigOptions();
-};
 
 }
