@@ -8,7 +8,7 @@ struct PackageOption
     std::string fragment;
 };
 
-using Option = std::variant<std::string, Explicit<bool>, PackageOption>;
+using Option = std::variant<std::string, Explicit<bool>, PackageOption, NixInt>;
 
 using Options = std::map<std::string, Option>;
 

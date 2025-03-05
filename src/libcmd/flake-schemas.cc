@@ -67,7 +67,8 @@ static Value * optionsToValue(ref<EvalState> state, const Options & options)
                     auto [value, pos] = installable->toValue(*state);
 
                     attrs.insert(state->symbols.create(name), value, pos);
-                }},
+                },
+                [&](const NixInt & n) { attrs.alloc(name).mkInt(n); }},
             value);
     }
 
@@ -372,6 +373,17 @@ MixFlakeConfigOptions::MixFlakeConfigOptions()
                      flake::LockFlags{},
                      StringSet{"nix-build"}, // FIXME: get role from option schema
                      prefix);
+         }}});
+
+    addFlag(
+        {.longName = "int",
+         .description = "Set a flake option to an integer value.",
+         .labels = {"name", "value"},
+         .handler = {[&, this](std::string name, std::string value) {
+             if (auto n = string2Int<NixInt::Inner>(value))
+                 options.insert_or_assign(name, NixInt(*n));
+             else
+                 throw UsageError("not an integer: '%s'", value);
          }}});
 }
 
