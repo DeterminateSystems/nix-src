@@ -288,6 +288,10 @@ EvalState::EvalState(
         CanonPath("derivation-internal.nix"),
         #include "primops/derivation.nix.gen.hh"
     )}
+    , applyOptions{internalFS->addFile(
+        CanonPath("apply-options.nix"),
+        #include "primops/apply-options.nix.gen.hh"
+    )}
     , callFlakeInternal{internalFS->addFile(
         CanonPath("call-flake.nix"),
         #include "call-flake.nix.gen.hh"

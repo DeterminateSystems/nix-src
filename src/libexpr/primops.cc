@@ -4938,15 +4938,21 @@ void EvalState::createBaseEnv()
         .type = nFunction,
     });
 
+    auto vApplyOptions = allocValue();
+    addConstant("applyOptions", vApplyOptions, {
+        .type = nFunction,
+    });
+
     /* Now that we've added all primops, sort the `builtins' set,
        because attribute lookups expect it to be sorted. */
     getBuiltins().payload.attrs->sort();
 
     staticBaseEnv->sort();
 
-    /* Note: we have to initialize the 'derivation' constant *after*
-       building baseEnv/staticBaseEnv because it uses 'builtins'. */
+    /* Note: we have to initialize the following constants *after*
+       building baseEnv/staticBaseEnv because they use 'builtins'. */
     evalFile(derivationInternal, *vDerivation);
+    evalFile(applyOptions, *vApplyOptions);
 }
 
 

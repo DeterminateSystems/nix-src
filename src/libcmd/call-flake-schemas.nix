@@ -13,29 +13,6 @@ let
 
   mapAttrsToList = f: attrs: map (name: f name attrs.${name}) (builtins.attrNames attrs);
 
-  applyOptions =
-    node: definitions:
-    assert builtins.all (
-      name: if node.options ? ${name} then true else throw "Flake option `${name}` is not declared."
-    ) (builtins.attrNames definitions);
-    node.applyOptions (
-      builtins.mapAttrs (
-        name:
-        {
-          type,
-          default,
-          description,
-        }:
-        let
-          value = definitions.${name} or default;
-        in
-        if type.check value then
-          value
-        else
-          throw "Flake option `${name}` does not have expected type `${type.description or "unknown"}`."
-      ) node.options
-    );
-
   decorateOutput =
     node: output:
     node
@@ -52,7 +29,7 @@ let
     }
     // (
       if node ? derivation && node ? applyOptions then
-        { derivation = applyOptions node options; }
+        { derivation = builtins.applyOptions node options; }
       else
         { }
     );

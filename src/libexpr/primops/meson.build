@@ -3,6 +3,11 @@ generated_headers += gen_header.process(
   preserve_path_from: meson.project_source_root(),
 )
 
+generated_headers += gen_header.process(
+  'apply-options.nix',
+  preserve_path_from: meson.project_source_root(),
+)
+
 sources += files(
   'context.cc',
   'fetchClosure.cc',

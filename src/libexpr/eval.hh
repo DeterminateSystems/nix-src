@@ -262,7 +262,7 @@ public:
     const ref<MemorySourceAccessor> internalFS;
 
     const SourcePath derivationInternal;
-
+    const SourcePath applyOptions;
     const SourcePath callFlakeInternal;
 
     /**
