@@ -612,6 +612,189 @@ struct CmdFlakeNew : CmdFlakeInitCommon
     }
 };
 
+struct CmdFlakeNewFromConfiguration : virtual Args, InstallableCommand
+{
+    std::filesystem::path destDir;
+
+    CmdFlakeNewFromConfiguration()
+    {
+        expectArgs({
+            .label = "dest-dir",
+            .handler = {&destDir},
+            .completer = completePath
+        });
+    }
+
+    std::string description() override
+    {
+        return "generate a flake that calls another flake with configuration options applied";
+    }
+
+    void run(ref<Store> store, ref<Installable> _installable) override
+    {
+        auto installable = _installable.dynamic_pointer_cast<InstallableFlake>();
+        if (!installable)
+            throw Error("'%s' is not a flake installable", _installable->what());
+
+        auto cursor = installable->getCursor(*installable->state);
+
+        /*
+          {
+            inputs.main = <installable.flakeRef>
+
+            outputs = { self, main }: {
+              <installable.fragment> = builtins.applyOptions main.<installable.fragment> {
+                <options>
+              };
+            };
+          }
+         */
+
+        auto convertAttrPath = [&](const eval_cache::AttrPath & attrPath) -> AttrPath
+        {
+            AttrPath res;
+            for (auto & sym : attrPath)
+                res.push_back({sym});
+            return res;
+        };
+
+        auto makeNestedAttr = [&](const eval_cache::AttrPath & attrPath, Expr * e) -> Expr *
+        {
+            for (auto i = attrPath.rbegin(); i != attrPath.rend(); ++i) {
+                auto e2 = new ExprAttrs();
+                e2->attrs.insert_or_assign(*i, ExprAttrs::AttrDef(e, noPos));
+                e = e2;
+            }
+            return e;
+        };
+
+        auto & state(*installable->state);
+
+        std::map<std::string, FlakeRef> inputs;
+
+        auto addInput = [&](const FlakeRef & flakeRef) -> std::string
+        {
+            static int n = 0;
+            auto id = fmt("input-%d", ++n);
+            inputs.insert_or_assign(id, flakeRef);
+            return id;
+        };
+
+        auto eApplyOptions = new ExprSelect(
+            noPos,
+            new ExprVar(state.symbols.create("builtins")),
+            {{state.symbols.create("applyOptions")}},
+            nullptr);
+
+        auto eInstallable = new ExprSelect(
+            noPos,
+            new ExprVar(state.symbols.create(addInput(installable->flakeRef))),
+            convertAttrPath(cursor->getAttrPath()),
+            nullptr);
+
+        auto eOptions = new ExprAttrs();
+
+        for (auto & [optionName, option] : installable->options) {
+            auto eOption = std::visit(
+                overloaded
+                {
+                    [&](const std::string & s) -> Expr *
+                    {
+                        return new ExprString(std::string(s));
+                    },
+                    [&](const Explicit<bool> & b) -> Expr *
+                    {
+                        return new ExprVar(state.symbols.create(b.t ? "true" : "false"));
+                    },
+                    [&](const flake_schemas::PackageOption & pkg) -> Expr *
+                    {
+                        // FIXME: copied from optionsToValue().
+                        // FIXME: memoize InstallableFlake.
+                        auto installable2 = make_ref<InstallableFlake>(
+                            nullptr,
+                            installable->state,
+                            FlakeRef(pkg.flakeRef),
+                            pkg.fragment,
+                            ExtendedOutputsSpec::Default(),
+                            StringSet{"nix-build"}, // FIXME: get role from option schema
+                            LockFlags{},
+                            std::nullopt);
+
+                        auto cursor = installable2->getCursor(state);
+
+                        auto input = addInput(pkg.flakeRef);
+
+                        return new ExprSelect(
+                            noPos,
+                            new ExprVar(state.symbols.create(input)),
+                            convertAttrPath(cursor->getAttrPath()),
+                            nullptr);
+                    },
+                    [&](const std::vector<flake_schemas::PackageOption> & pkg) -> Expr *
+                    {
+                        abort();
+                    },
+                    [&](const NixInt & n) -> Expr *
+                    {
+                        return new ExprInt(n);
+                    },
+                },
+                option);
+            eOptions->attrs.insert_or_assign(state.symbols.create(optionName), ExprAttrs::AttrDef(eOption, noPos));
+        }
+
+        auto eResult = new ExprCall(noPos, eApplyOptions, {eInstallable, eOptions});
+
+        auto eBody = makeNestedAttr(cursor->getAttrPath(), eResult);
+
+        auto formals = new Formals();
+        formals->formals.push_back({.pos = noPos, .name = state.symbols.create("self"), .def = nullptr});
+        for (auto & [inputName, input] : inputs)
+            formals->formals.push_back({.pos = noPos, .name = state.symbols.create(inputName), .def = nullptr});
+
+        auto eOutputs = new ExprLambda(noPos, formals, eBody);
+
+        auto eInputs = new ExprAttrs();
+
+        for (auto & [inputName, input] : inputs) {
+            auto eInput = new ExprAttrs();
+            for (auto & [name, value] : input.input.attrs) {
+                auto eAttr = std::visit(
+                    overloaded
+                    {
+                        [&](const std::string & s) -> Expr *
+                        {
+                            return new ExprString(std::string(s));
+                        },
+                        [&](const uint64_t & n) -> Expr *
+                        {
+                            return new ExprInt(n);
+                        },
+                        [&](const Explicit<bool> & b) -> Expr *
+                        {
+                            return new ExprVar(state.symbols.create(b.t ? "true" : "false"));
+                        }
+                    },
+                    value);
+                eInput->attrs.insert_or_assign(state.symbols.create(name), ExprAttrs::AttrDef(eAttr, noPos));
+            }
+            eInputs->attrs.insert_or_assign(state.symbols.create(inputName), ExprAttrs::AttrDef(eInput, noPos));
+        }
+
+        auto eFlake = new ExprAttrs();
+        eFlake->attrs.insert_or_assign(state.symbols.create("inputs"), ExprAttrs::AttrDef(eInputs, noPos));
+        eFlake->attrs.insert_or_assign(state.symbols.create("outputs"), ExprAttrs::AttrDef(eOutputs, noPos));
+
+        std::ostringstream str;
+        eFlake->show(state.symbols, str);
+
+        if (destDir.empty())
+            logger->cout(str.str());
+        else
+            writeFile(destDir / "flake.nix", str.str());
+    }
+};
+
 struct CmdFlakeClone : FlakeCommand
 {
     Path destDir;
@@ -990,6 +1173,7 @@ struct CmdFlake : NixMultiCommand
                 {"check", []() { return make_ref<CmdFlakeCheck>(); }},
                 {"init", []() { return make_ref<CmdFlakeInit>(); }},
                 {"new", []() { return make_ref<CmdFlakeNew>(); }},
+                {"new-from-configuration", []() { return make_ref<CmdFlakeNewFromConfiguration>(); }},
                 {"clone", []() { return make_ref<CmdFlakeClone>(); }},
                 {"archive", []() { return make_ref<CmdFlakeArchive>(); }},
                 {"show", []() { return make_ref<CmdFlakeShow>(); }},

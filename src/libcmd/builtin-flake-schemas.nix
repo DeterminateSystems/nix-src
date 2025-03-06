@@ -408,7 +408,7 @@
                 what = "package";
                 isFlakeCheck = false;
                 options = package.options or { };
-                applyOptions = package.applyOptions;
+                applyOptions = package.applyOptions or (_: package); # FIXME: hack
               }) packagesForSystem;
             }) output
           );
