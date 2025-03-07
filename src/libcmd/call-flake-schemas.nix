@@ -25,7 +25,7 @@ let
         { }
     )
     // {
-      raw = output;
+      raw = if node ? applyOptions then builtins.applyOptions node options else output;
     }
     // (
       if node ? derivation && node ? applyOptions then
