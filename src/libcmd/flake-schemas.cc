@@ -41,17 +41,25 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
     return lockFlake(flakeSettings, state, flakeRef, {}, flake);
 }
 
-static Value * optionsToValue(ref<EvalState> state, const Options & options)
+static std::pair<Value *, Value *> optionsToValue(ref<EvalState> state, const Options & options)
 {
-    auto vRes = state->allocValue();
+    auto vFingerprint = state->allocValue();
+    auto vOptions = state->allocValue();
 
-    auto attrs = state->buildBindings(options.size());
+    auto attrsFingerprint = state->buildBindings(options.size());
+    auto attrsOptions = state->buildBindings(options.size());
 
     for (auto & [name, value] : options) {
         std::visit(
             overloaded{
-                [&](const std::string & s) { attrs.alloc(name).mkString(s); },
-                [&](const Explicit<bool> & b) { attrs.alloc(name).mkBool(b.t); },
+                [&](const std::string & s) {
+                    attrsFingerprint.alloc(name).mkString(s);
+                    attrsOptions.alloc(name).mkString(s);
+                },
+                [&](const Explicit<bool> & b) {
+                    attrsFingerprint.alloc(name).mkBool(b.t);
+                    attrsOptions.alloc(name).mkBool(b.t);
+                },
                 [&](const PackageOption & pkg) {
                     // FIXME: memoize InstallableFlake.
                     auto installable = make_ref<InstallableFlake>(
@@ -64,12 +72,23 @@ static Value * optionsToValue(ref<EvalState> state, const Options & options)
                         LockFlags{},
                         std::nullopt);
 
-                    auto [value, pos] = installable->toValue(*state);
+                    auto cursor = installable->getCursor(*state);
 
-                    attrs.insert(state->symbols.create(name), value, pos);
+                    auto lockedFlake = installable->getLockedFlake();
+
+                    auto s = lockedFlake->flake.lockedRef.to_string() \
+                        + "#"
+                        + toAttrPathStr(*state, cursor->getAttrPath());
+
+                    attrsFingerprint.alloc(name).mkString(s);
+
+                    // FIXME: reuse cursor
+                    auto [value, pos] = installable->toValue(*state);
+                    attrsOptions.insert(state->symbols.create(name), value, pos);
                 },
                 [&](const std::vector<PackageOption> & pkgs) {
-                    auto list = state->buildList(pkgs.size());
+                    auto listFingerprint = state->buildList(pkgs.size());
+                    auto listOptions = state->buildList(pkgs.size());
 
                     for (const auto & [n, pkg] : enumerate(pkgs)) {
                         // FIXME: memoize InstallableFlake.
@@ -83,20 +102,36 @@ static Value * optionsToValue(ref<EvalState> state, const Options & options)
                             LockFlags{},
                             std::nullopt);
 
-                        auto [value, pos] = installable->toValue(*state);
+                        auto cursor = installable->getCursor(*state);
 
-                        list[n] = value;
+                        auto lockedFlake = installable->getLockedFlake();
+
+                        auto s = lockedFlake->flake.lockedRef.to_string() \
+                            + "#"
+                            + toAttrPathStr(*state, cursor->getAttrPath());
+
+                        listFingerprint[n] = state->allocValue();
+                        listFingerprint[n]->mkString(s);
+
+                        // FIXME: reuse cursor
+                        auto [value, pos] = installable->toValue(*state);
+                        listOptions[n] = value;
                     }
 
-                    attrs.alloc(name).mkList(list);
+                    attrsFingerprint.alloc(name).mkList(listFingerprint);
+                    attrsOptions.alloc(name).mkList(listOptions);
                 },
-                [&](const NixInt & n) { attrs.alloc(name).mkInt(n); }},
+                [&](const NixInt & n) {
+                    attrsFingerprint.alloc(name).mkInt(n);
+                    attrsOptions.alloc(name).mkInt(n);
+                }},
             value);
     }
 
-    vRes->mkAttrs(attrs);
+    vFingerprint->mkAttrs(attrsFingerprint);
+    vOptions->mkAttrs(attrsOptions);
 
-    return vRes;
+    return {vFingerprint, vOptions};
 }
 
 static Hash hashValue(EvalState & state, Value & v)
@@ -113,7 +148,7 @@ ref<EvalCache> call(
     std::optional<FlakeRef> defaultSchemasFlake,
     const Options & options)
 {
-    auto vOptions = optionsToValue(state, options);
+    auto [vFingerprint, vOptions] = optionsToValue(state, options);
 
     auto fingerprint = lockedFlake->getFingerprint(state->store, state->fetchSettings);
 
@@ -135,7 +170,7 @@ ref<EvalCache> call(
                 hashString(HashAlgorithm::SHA256, callFlakeSchemasNix).to_string(HashFormat::Base16, false),
                 fingerprint->to_string(HashFormat::Base16, false),
                 lockedDefaultSchemasFlakeFingerprint->to_string(HashFormat::Base16, false),
-                hashValue(*state, *vOptions).to_string(HashFormat::Base16, false)));
+                hashValue(*state, *vFingerprint).to_string(HashFormat::Base16, false)));
 
     // FIXME: memoize eval cache on fingerprint to avoid opening the
     // same database twice.
