@@ -37,13 +37,6 @@ Goal::Done PathSubstitutionGoal::done(ExitCode result, BuildResult::Status statu
         buildResult.errorMsg = *errorMsg;
     }
 
-    logger->result(
-        getCurActivity(),
-        resBuildResult,
-        KeyedBuildResult(
-            buildResult,
-            DerivedPath::Opaque{storePath}).toJSON(worker.store));
-
     return amDone(result);
 }
 

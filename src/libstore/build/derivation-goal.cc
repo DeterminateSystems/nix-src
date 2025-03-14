@@ -377,13 +377,6 @@ Goal::Done DerivationGoal::doneFailure(BuildError ex)
         fs << worker.store.printStorePath(drvPath) << "\t" << buildResult.toString() << std::endl;
     }
 
-    logger->result(
-        act ? act->id : getCurActivity(),
-        resBuildResult,
-        KeyedBuildResult(
-            buildResult,
-            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = wantedOutputs}).toJSON(worker.store));
-
     return amDone(buildResult.success() ? ecSuccess : ecFailed, std::move(ex));
 }
 

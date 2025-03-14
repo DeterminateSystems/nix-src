@@ -55,29 +55,46 @@ struct BuildResult
     static std::string_view statusToString(Status status)
     {
         switch (status) {
-        case Built: return "Built";
-        case Substituted: return "Substituted";
-        case AlreadyValid: return "AlreadyValid";
-        case PermanentFailure: return "PermanentFailure";
-        case InputRejected: return "InputRejected";
-        case OutputRejected: return "OutputRejected";
-        case TransientFailure: return "TransientFailure";
-        case CachedFailure: return "CachedFailure";
-        case TimedOut: return "TimedOut";
-        case MiscFailure: return "MiscFailure";
-        case DependencyFailed: return "DependencyFailed";
-        case LogLimitExceeded: return "LogLimitExceeded";
-        case NotDeterministic: return "NotDeterministic";
-        case ResolvesToAlreadyValid: return "ResolvesToAlreadyValid";
-        case NoSubstituters: return "NoSubstituters";
-        default: return "Unknown";
+        case Built:
+            return "Built";
+        case Substituted:
+            return "Substituted";
+        case AlreadyValid:
+            return "AlreadyValid";
+        case PermanentFailure:
+            return "PermanentFailure";
+        case InputRejected:
+            return "InputRejected";
+        case OutputRejected:
+            return "OutputRejected";
+        case TransientFailure:
+            return "TransientFailure";
+        case CachedFailure:
+            return "CachedFailure";
+        case TimedOut:
+            return "TimedOut";
+        case MiscFailure:
+            return "MiscFailure";
+        case DependencyFailed:
+            return "DependencyFailed";
+        case LogLimitExceeded:
+            return "LogLimitExceeded";
+        case NotDeterministic:
+            return "NotDeterministic";
+        case ResolvesToAlreadyValid:
+            return "ResolvesToAlreadyValid";
+        case NoSubstituters:
+            return "NoSubstituters";
+        case HashMismatch:
+            return "HashMismatch";
+        default:
+            return "Unknown";
         };
     }
 
-    std::string toString() const {
-        return
-            std::string(statusToString(status))
-            + ((errorMsg == "") ? "" : " : " + errorMsg);
+    std::string toString() const
+    {
+        return std::string(statusToString(status)) + ((errorMsg == "") ? "" : " : " + errorMsg);
     }
 
     /**
@@ -165,7 +182,6 @@ struct KeyedBuildResult : BuildResult
 };
 
 void to_json(nlohmann::json & json, const BuildResult & buildResult);
-
-}
+void to_json(nlohmann::json & json, const KeyedBuildResult & buildResult);
 
 } // namespace nix
