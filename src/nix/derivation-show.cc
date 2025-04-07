@@ -17,12 +17,11 @@ struct CmdShowDerivation : InstallablesCommand, MixPrintJSON
 
     CmdShowDerivation()
     {
-        addFlag({
-            .longName = "recursive",
-            .shortName = 'r',
-            .description = "Include the dependencies of the specified derivations.",
-            .handler = {&recursive, true}
-        });
+        addFlag(
+            {.longName = "recursive",
+             .shortName = 'r',
+             .description = "Include the dependencies of the specified derivations.",
+             .handler = {&recursive, true}});
     }
 
     std::string description() override
@@ -33,11 +32,14 @@ struct CmdShowDerivation : InstallablesCommand, MixPrintJSON
     std::string doc() override
     {
         return
-          #include "derivation-show.md"
-          ;
+#include "derivation-show.md"
+            ;
     }
 
-    Category category() override { return catUtility; }
+    Category category() override
+    {
+        return catUtility;
+    }
 
     void run(ref<Store> store, Installables && installables) override
     {
@@ -52,10 +54,10 @@ struct CmdShowDerivation : InstallablesCommand, MixPrintJSON
         json jsonRoot = json::object();
 
         for (auto & drvPath : drvPaths) {
-            if (!drvPath.isDerivation()) continue;
+            if (!drvPath.isDerivation())
+                continue;
 
-            jsonRoot[store->printStorePath(drvPath)] =
-                store->readDerivation(drvPath).toJSON(*store);
+            jsonRoot[store->printStorePath(drvPath)] = store->readDerivation(drvPath).toJSON(*store);
         }
         printJSON(jsonRoot);
     }

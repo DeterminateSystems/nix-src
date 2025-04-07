@@ -6,7 +6,9 @@
 #include "nix/store/local-fs-store.hh"
 #include "nix/expr/eval-inline.hh"
 
-namespace nix::fs { using namespace std::filesystem; }
+namespace nix::fs {
+using namespace std::filesystem;
+}
 
 using namespace nix;
 
@@ -17,25 +19,23 @@ struct CmdBundle : InstallableValueCommand
 
     CmdBundle()
     {
-        addFlag({
-            .longName = "bundler",
-            .description = fmt("Use a custom bundler instead of the default (`%s`).", bundler),
-            .labels = {"flake-url"},
-            .handler = {&bundler},
-            .completer = {[&](AddCompletions & completions, size_t, std::string_view prefix) {
-                completeFlakeRef(completions, getStore(), prefix);
-            }}
-        });
+        addFlag(
+            {.longName = "bundler",
+             .description = fmt("Use a custom bundler instead of the default (`%s`).", bundler),
+             .labels = {"flake-url"},
+             .handler = {&bundler},
+             .completer = {[&](AddCompletions & completions, size_t, std::string_view prefix) {
+                 completeFlakeRef(completions, getStore(), prefix);
+             }}});
 
-        addFlag({
-            .longName = "out-link",
-            .shortName = 'o',
-            .description = "Override the name of the symlink to the build result. It defaults to the base name of the app.",
-            .labels = {"path"},
-            .handler = {&outLink},
-            .completer = completePath
-        });
-
+        addFlag(
+            {.longName = "out-link",
+             .shortName = 'o',
+             .description =
+                 "Override the name of the symlink to the build result. It defaults to the base name of the app.",
+             .labels = {"path"},
+             .handler = {&outLink},
+             .completer = completePath});
     }
 
     std::string description() override
@@ -46,19 +46,19 @@ struct CmdBundle : InstallableValueCommand
     std::string doc() override
     {
         return
-          #include "bundle.md"
-          ;
+#include "bundle.md"
+            ;
     }
 
-    Category category() override { return catSecondary; }
+    Category category() override
+    {
+        return catSecondary;
+    }
 
     // FIXME: cut&paste from CmdRun.
     Strings getDefaultFlakeAttrPaths() override
     {
-        Strings res{
-            "apps." + settings.thisSystem.get() + ".default",
-            "defaultApp." + settings.thisSystem.get()
-        };
+        Strings res{"apps." + settings.thisSystem.get() + ".default", "defaultApp." + settings.thisSystem.get()};
         for (auto & s : SourceExprCommand::getDefaultFlakeAttrPaths())
             res.push_back(s);
         return res;
@@ -79,17 +79,17 @@ struct CmdBundle : InstallableValueCommand
         auto val = installable->toValue(*evalState).first;
 
         auto [bundlerFlakeRef, bundlerName, extendedOutputsSpec] =
-            parseFlakeRefWithFragmentAndExtendedOutputsSpec(
-                fetchSettings, bundler, fs::current_path().string());
-        const flake::LockFlags lockFlags{ .writeLockFile = false };
-        InstallableFlake bundler{this,
-            evalState, std::move(bundlerFlakeRef), bundlerName, std::move(extendedOutputsSpec),
-            {"bundlers." + settings.thisSystem.get() + ".default",
-             "defaultBundler." + settings.thisSystem.get()
-            },
+            parseFlakeRefWithFragmentAndExtendedOutputsSpec(fetchSettings, bundler, fs::current_path().string());
+        const flake::LockFlags lockFlags{.writeLockFile = false};
+        InstallableFlake bundler{
+            this,
+            evalState,
+            std::move(bundlerFlakeRef),
+            bundlerName,
+            std::move(extendedOutputsSpec),
+            {"bundlers." + settings.thisSystem.get() + ".default", "defaultBundler." + settings.thisSystem.get()},
             {"bundlers." + settings.thisSystem.get() + "."},
-            lockFlags
-        };
+            lockFlags};
 
         auto vRes = evalState->allocValue();
         evalState->callFunction(*bundler.toValue(*evalState).first, *val, *vRes, noPos);
@@ -113,9 +113,9 @@ struct CmdBundle : InstallableValueCommand
         auto outPath = evalState->coerceToStorePath(attr2->pos, *attr2->value, context2, "");
 
         store->buildPaths({
-            DerivedPath::Built {
+            DerivedPath::Built{
                 .drvPath = makeConstantStorePathRef(drvPath),
-                .outputs = OutputsSpec::All { },
+                .outputs = OutputsSpec::All{},
             },
         });
 
