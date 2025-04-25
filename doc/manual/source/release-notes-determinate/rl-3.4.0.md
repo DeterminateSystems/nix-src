@@ -1,5 +1,7 @@
 # Release 3.4.0 (2025-04-25)
 
+* Based on [upstream Nix 2.28.2](../release-notes/rl-2.28.md).
+
 * **Warn users that `nix-channel` is deprecated.**
 
 This is the first change accomplishing our roadmap item of deprecating Nix channels: https://github.com/DeterminateSystems/nix-src/issues/34
