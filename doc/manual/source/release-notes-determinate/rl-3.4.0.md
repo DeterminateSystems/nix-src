@@ -46,7 +46,5 @@ Users will now see the following warning if their flake.nix uses an implicit or 
 
 
 ### Other updates:
-
-* Incorporated changes from Nix 2.28.2
 * Improve the "dirty tree" message. Determinate Nix will now say `Git tree '...' has uncommitted changes` instead of `Git tree '...' is dirty`
 * Stop warning about uncommitted changes in a Git repository when using `nix develop`
