@@ -10,7 +10,7 @@ This section lists the differences between upstream Nix 2.24 and Determinate Nix
 
 * Determinate Nix has made `nix profile install` an alias to `nix profile add`, a more symmetrical antonym of `nix profile remove`.
 
-* `nix-channel` and `channel:xxx` url syntax is deprecated, see: https://github.com/DeterminateSystems/nix-src/issues/34
+* `nix-channel` and `channel:` url syntax (like `channel:nixos-24.11`) is deprecated, see: https://github.com/DeterminateSystems/nix-src/issues/34
 
 * Using indirect flake references and implicit inputs is deprecated, see: https://github.com/DeterminateSystems/nix-src/issues/37
 
