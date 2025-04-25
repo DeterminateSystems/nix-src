@@ -19,7 +19,7 @@ Users will now see this message:
 * **Warn users that `channel:` URLs are deprecated.**
 
 This is the second change regarding our deprecation of Nix channels.
-Using a `channel:xxx` URL will yield a warning like this:
+Using a `channel:` URL (like `channel:nixos-24.11`) will yield a warning like this:
 
 > Channels are deprecated in favor of flakes in Determinate Nix. Instead of 'channel:nixos-24.11', use 'https://nixos.org/channels/nixos-24.11/nixexprs.tar.xz'. For a guide on Nix flakes, see: https://zero-to-nix.com/. For details and to offer feedback on the deprecation process, see: https://github.com/DeterminateSystems/nix-src/issues/34.
 
