@@ -392,9 +392,24 @@ Goal::Co DerivationGoal::gaveUpOnSubstitution()
     if (nrFailed != 0) {
         if (!useDerivation)
             throw Error("some dependencies of '%s' are missing", worker.store.printStorePath(drvPath));
+
+        std::string describer;
+        auto firstOutput = drv->outputsAndOptPaths(worker.store).begin()->second.second;
+        if (firstOutput) {
+            describer = worker.store.printStorePath(*firstOutput);
+        } else {
+            describer = drv->name;
+        }
+
         co_return done(BuildResult::DependencyFailed, {}, Error(
-                "%s %s of derivation '%s' failed to build",
-                nrFailed, nrFailed == 1 ? "dependency" : "dependencies", worker.store.printStorePath(drvPath)));
+                (nrFailed == 1
+                    ? "%s dependency of %s (derivation '%s') failed to build"
+                    : "%s dependencies of %s (derivation '%s') failed to build"
+                ),
+                nrFailed,
+                describer,
+                worker.store.printStorePath(drvPath)
+        ));
     }
 
     if (retrySubstitution == RetrySubstitution::YesNeed) {
