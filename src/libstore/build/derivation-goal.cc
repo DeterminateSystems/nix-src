@@ -393,8 +393,8 @@ Goal::Co DerivationGoal::gaveUpOnSubstitution()
         if (!useDerivation)
             throw Error("some dependencies of '%s' are missing", worker.store.printStorePath(drvPath));
         co_return done(BuildResult::DependencyFailed, {}, Error(
-                "%s dependencies of derivation '%s' failed to build",
-                nrFailed, worker.store.printStorePath(drvPath)));
+                "%s %s of derivation '%s' failed to build",
+                nrFailed, nrFailed == 1 ? "dependency" : "dependencies", worker.store.printStorePath(drvPath)));
     }
 
     if (retrySubstitution == RetrySubstitution::YesNeed) {
