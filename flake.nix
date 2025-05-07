@@ -2,12 +2,7 @@
   description = "The purely functional package manager";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/release-24.11";
-
   inputs.nixpkgs-regression.url = "github:NixOS/nixpkgs/215d4d0fd80ca5163643b03a33fde804a29cc1e2";
-  inputs.flake-compat = {
-    url = "github:edolstra/flake-compat";
-    flake = false;
-  };
 
   # dev tooling
   inputs.flake-parts.url = "github:hercules-ci/flake-parts";
@@ -17,7 +12,6 @@
   inputs.git-hooks-nix.inputs.nixpkgs.follows = "nixpkgs";
   inputs.git-hooks-nix.inputs.nixpkgs-stable.follows = "nixpkgs";
   # work around 7730 and https://github.com/NixOS/nix/issues/7807
-  inputs.git-hooks-nix.inputs.flake-compat.follows = "";
   inputs.git-hooks-nix.inputs.gitignore.follows = "";
 
   outputs =
