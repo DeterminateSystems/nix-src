@@ -20,6 +20,7 @@
 #include "nix/util/url.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/fetchers/tarball.hh"
+#include "nix/fetchers/input-cache.hh"
 
 #include "parser-tab.hh"
 
@@ -266,12 +267,9 @@ EvalState::EvalState(
                /nix/store while using a chroot store. */
             auto accessor = getFSSourceAccessor();
 
-            auto realStoreDir = dirOf(store->toRealPath(StorePath::dummy));
-            if (settings.pureEval || store->storeDir != realStoreDir) {
-                accessor = settings.pureEval
-                    ? storeFS.cast<SourceAccessor>()
-                    : makeUnionSourceAccessor({accessor, storeFS});
-            }
+            accessor = settings.pureEval
+                ? storeFS.cast<SourceAccessor>()
+                : makeUnionSourceAccessor({accessor, storeFS});
 
             /* Apply access control if needed. */
             if (settings.restrictEval || settings.pureEval)
@@ -293,6 +291,7 @@ EvalState::EvalState(
     )}
     , store(store)
     , buildStore(buildStore ? buildStore : store)
+    , inputCache(fetchers::InputCache::create())
     , debugRepl(nullptr)
     , debugStop(false)
     , trylevel(0)
@@ -949,7 +948,16 @@ void EvalState::mkPos(Value & v, PosIdx p)
     auto origin = positions.originOf(p);
     if (auto path = std::get_if<SourcePath>(&origin)) {
         auto attrs = buildBindings(3);
-        attrs.alloc(sFile).mkString(path->path.abs());
+        if (path->accessor == rootFS && store->isInStore(path->path.abs()))
+            // FIXME: only do this for virtual store paths?
+            attrs.alloc(sFile).mkString(path->path.abs(),
+                {
+                    NixStringContextElem::Path{
+                        .storePath = store->toStorePath(path->path.abs()).first
+                    }
+                });
+        else
+            attrs.alloc(sFile).mkString(path->path.abs());
         makePositionThunks(*this, p, attrs.alloc(sLine), attrs.alloc(sColumn));
         v.mkAttrs(attrs);
     } else
@@ -1135,6 +1143,7 @@ void EvalState::resetFileCache()
 {
     fileEvalCache.clear();
     fileParseCache.clear();
+    inputCache->clear();
 }
 
 
@@ -2069,7 +2078,7 @@ void ExprConcatStrings::eval(EvalState & state, Env & env, Value & v)
     else if (firstType == nFloat)
         v.mkFloat(nf);
     else if (firstType == nPath) {
-        if (!context.empty())
+        if (hasContext(context))
             state.error<EvalError>("a string that refers to a store path cannot be appended to a path").atPos(pos).withFrame(env, *this).debugThrow();
         v.mkPath(state.rootPath(CanonPath(str())));
     } else
@@ -2268,7 +2277,10 @@ std::string_view EvalState::forceStringNoCtx(Value & v, const PosIdx pos, std::s
 {
     auto s = forceString(v, pos, errorCtx);
     if (v.context()) {
-        error<EvalError>("the string '%1%' is not allowed to refer to a store path (such as '%2%')", v.string_view(), v.context()[0]).withTrace(pos, errorCtx).debugThrow();
+        NixStringContext context;
+        copyContext(v, context);
+        if (hasContext(context))
+            error<EvalError>("the string '%1%' is not allowed to refer to a store path (such as '%2%')", v.string_view(), v.context()[0]).withTrace(pos, errorCtx).debugThrow();
     }
     return s;
 }
@@ -2317,6 +2329,9 @@ BackedStringView EvalState::coerceToString(
     }
 
     if (v.type() == nPath) {
+        // FIXME: instead of copying the path to the store, we could
+        // return a virtual store path that lazily copies the path to
+        // the store in devirtualize().
         return
             !canonicalizePath && !copyToStore
             ? // FIXME: hack to preserve path literals that end in a
@@ -2324,7 +2339,16 @@ BackedStringView EvalState::coerceToString(
               v.payload.path.path
             : copyToStore
             ? store->printStorePath(copyPathToStore(context, v.path()))
-            : std::string(v.path().path.abs());
+            : ({
+                auto path = v.path();
+                if (path.accessor == rootFS && store->isInStore(path.path.abs())) {
+                    context.insert(
+                        NixStringContextElem::Path{
+                            .storePath = store->toStorePath(path.path.abs()).first
+                        });
+                }
+                std::string(path.path.abs());
+              });
     }
 
     if (v.type() == nAttrs) {
@@ -2406,7 +2430,7 @@ StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePat
                 *store,
                 path.resolveSymlinks(SymlinkResolution::Ancestors),
                 settings.readOnlyMode ? FetchMode::DryRun : FetchMode::Copy,
-                path.baseName(),
+                computeBaseName(path),
                 ContentAddressMethod::Raw::NixArchive,
                 nullptr,
                 repair);
@@ -2461,7 +2485,7 @@ StorePath EvalState::coerceToStorePath(const PosIdx pos, Value & v, NixStringCon
     auto path = coerceToString(pos, v, context, errorCtx, false, false, true).toOwned();
     if (auto storePath = store->maybeParseStorePath(path))
         return *storePath;
-    error<EvalError>("path '%1%' is not in the Nix store", path).withTrace(pos, errorCtx).debugThrow();
+    error<EvalError>("cannot coerce '%s' to a store path because it is not a subpath of the Nix store", path).withTrace(pos, errorCtx).debugThrow();
 }
 
 
@@ -2486,6 +2510,11 @@ std::pair<SingleDerivedPath, std::string_view> EvalState::coerceToSingleDerivedP
         },
         [&](NixStringContextElem::Built && b) -> SingleDerivedPath {
             return std::move(b);
+        },
+        [&](NixStringContextElem::Path && p) -> SingleDerivedPath {
+            error<EvalError>(
+                "string '%s' has no context",
+                s).withTrace(pos, errorCtx).debugThrow();
         },
     }, ((NixStringContextElem &&) *context.begin()).raw);
     return {

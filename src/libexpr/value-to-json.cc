@@ -7,9 +7,10 @@
 #include <iomanip>
 #include <nlohmann/json.hpp>
 
-
 namespace nix {
+
 using json = nlohmann::json;
+
 json printValueAsJSON(EvalState & state, bool strict,
     Value & v, const PosIdx pos, NixStringContext & context, bool copyToStore)
 {
