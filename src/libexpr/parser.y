@@ -245,10 +245,10 @@ expr_op
   | '-' expr_op %prec NEGATE { $$ = new ExprCall(CUR_POS, new ExprVar(state->s.sub), {new ExprInt(0), $2}); }
   | expr_op EQ expr_op { $$ = new ExprOpEq($1, $3); }
   | expr_op NEQ expr_op { $$ = new ExprOpNEq($1, $3); }
-  | expr_op '<' expr_op { $$ = new ExprCall(state->at(@2), new ExprVar(state->s.lessThan), {$1, $3}); }
-  | expr_op LEQ expr_op { $$ = new ExprOpNot(new ExprCall(state->at(@2), new ExprVar(state->s.lessThan), {$3, $1})); }
-  | expr_op '>' expr_op { $$ = new ExprCall(state->at(@2), new ExprVar(state->s.lessThan), {$3, $1}); }
-  | expr_op GEQ expr_op { $$ = new ExprOpNot(new ExprCall(state->at(@2), new ExprVar(state->s.lessThan), {$1, $3})); }
+  | expr_op '<' expr_op { $$ = new ExprOpLessThan(state->at(@2), $1, $3); }
+  | expr_op LEQ expr_op { $$ = new ExprOpLessEqual(state->at(@2), $1, $3); }
+  | expr_op '>' expr_op { $$ = new ExprOpGreaterThan(state->at(@2), $1, $3); }
+  | expr_op GEQ expr_op { $$ = new ExprOpGreaterEqual(state->at(@2), $1, $3); }
   | expr_op AND expr_op { $$ = new ExprOpAnd(state->at(@2), $1, $3); }
   | expr_op OR expr_op { $$ = new ExprOpOr(state->at(@2), $1, $3); }
   | expr_op IMPL expr_op { $$ = new ExprOpImpl(state->at(@2), $1, $3); }
@@ -256,9 +256,9 @@ expr_op
   | expr_op '?' attrpath { $$ = new ExprOpHasAttr($1, std::move(*$3)); delete $3; }
   | expr_op '+' expr_op
     { $$ = new ExprConcatStrings(state->at(@2), false, new std::vector<std::pair<PosIdx, Expr *> >({{state->at(@1), $1}, {state->at(@3), $3}})); }
-  | expr_op '-' expr_op { $$ = new ExprCall(state->at(@2), new ExprVar(state->s.sub), {$1, $3}); }
-  | expr_op '*' expr_op { $$ = new ExprCall(state->at(@2), new ExprVar(state->s.mul), {$1, $3}); }
-  | expr_op '/' expr_op { $$ = new ExprCall(state->at(@2), new ExprVar(state->s.div), {$1, $3}); }
+  | expr_op '-' expr_op { $$ = new ExprOpSub(state->at(@2), $1, $3); }
+  | expr_op '*' expr_op { $$ = new ExprOpMul(state->at(@2), $1, $3); }
+  | expr_op '/' expr_op { $$ = new ExprOpDiv(state->at(@2), $1, $3); }
   | expr_op CONCAT expr_op { $$ = new ExprOpConcatLists(state->at(@2), $1, $3); }
   | expr_app
   ;

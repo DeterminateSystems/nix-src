@@ -3648,9 +3648,6 @@ static RegisterPrimOp primop_genList({
     .fun = prim_genList,
 });
 
-static void prim_lessThan(EvalState & state, const PosIdx pos, Value * * args, Value & v);
-
-
 static void prim_sort(EvalState & state, const PosIdx pos, Value * * args, Value & v)
 {
     state.forceList(*args[1], pos, "while evaluating the second argument passed to builtins.sort");
@@ -3896,7 +3893,7 @@ static RegisterPrimOp primop_add({
     .fun = prim_add,
 });
 
-static void prim_sub(EvalState & state, const PosIdx pos, Value * * args, Value & v)
+void prim_sub(EvalState & state, const PosIdx pos, Value * * args, Value & v)
 {
     state.forceValue(*args[0], pos);
     state.forceValue(*args[1], pos);
@@ -3926,12 +3923,12 @@ static RegisterPrimOp primop_sub({
     .fun = prim_sub,
 });
 
-static void prim_mul(EvalState & state, const PosIdx pos, Value * * args, Value & v)
+void prim_mul(EvalState & state, const PosIdx pos, Value * * args, Value & v)
 {
     state.forceValue(*args[0], pos);
     state.forceValue(*args[1], pos);
     if (args[0]->type() == nFloat || args[1]->type() == nFloat)
-        v.mkFloat(state.forceFloat(*args[0], pos, "while evaluating the first of the multiplication")
+        v.mkFloat(state.forceFloat(*args[0], pos, "while evaluating the first argument of the multiplication")
                 * state.forceFloat(*args[1], pos, "while evaluating the second argument of the multiplication"));
     else {
         auto i1 = state.forceInt(*args[0], pos, "while evaluating the first argument of the multiplication");
@@ -3956,7 +3953,7 @@ static RegisterPrimOp primop_mul({
     .fun = prim_mul,
 });
 
-static void prim_div(EvalState & state, const PosIdx pos, Value * * args, Value & v)
+void prim_div(EvalState & state, const PosIdx pos, Value * * args, Value & v)
 {
     state.forceValue(*args[0], pos);
     state.forceValue(*args[1], pos);
@@ -4039,7 +4036,7 @@ static RegisterPrimOp primop_bitXor({
     .fun = prim_bitXor,
 });
 
-static void prim_lessThan(EvalState & state, const PosIdx pos, Value * * args, Value & v)
+void prim_lessThan(EvalState & state, const PosIdx pos, Value * * args, Value & v)
 {
     state.forceValue(*args[0], pos);
     state.forceValue(*args[1], pos);
