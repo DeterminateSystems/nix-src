@@ -1951,38 +1951,55 @@ void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
 void ExprOpSub::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
-    e1->eval(state, env, v1);
-    e2->eval(state, env, v2);
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the - operator");
+        throw;
+    }
 
-    Value *args[2] = { &v1, &v2 };
-    prim_sub(state, pos, args, v);
+    prim_sub(state, pos, v1, v2, v);
 }
 
 void ExprOpDiv::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
-    e1->eval(state, env, v1);
-    e2->eval(state, env, v2);
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the / operator");
+        throw;
+    }
 
-    Value *args[2] = { &v1, &v2 };
-    prim_div(state, pos, args, v);
+    prim_div(state, pos, v1, v2, v);
 }
 
 void ExprOpMul::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
-    e1->eval(state, env, v1);
-    e2->eval(state, env, v2);
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the * operator");
+        throw;
+    }
 
-    Value *args[2] = { &v1, &v2 };
-    prim_mul(state, pos, args, v);
+    prim_mul(state, pos, v1, v2, v);
 }
 
 void ExprOpLessThan::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
-    e1->eval(state, env, v1);
-    e2->eval(state, env, v2);
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the < operator");
+        throw;
+    }
 
     Value *args[2] = { &v1, &v2 };
     prim_lessThan(state, pos, args, v);
@@ -1991,8 +2008,13 @@ void ExprOpLessThan::eval(EvalState & state, Env & env, Value & v)
 void ExprOpLessEqual::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
-    e1->eval(state, env, v1);
-    e2->eval(state, env, v2);
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the <= operator");
+        throw;
+    }
 
     Value *args[2] = { &v2, &v1 };
     prim_lessThan(state, pos, args, v);
@@ -2002,8 +2024,13 @@ void ExprOpLessEqual::eval(EvalState & state, Env & env, Value & v)
 void ExprOpGreaterThan::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
-    e1->eval(state, env, v1);
-    e2->eval(state, env, v2);
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the > operator");
+        throw;
+    }
 
     Value *args[2] = { &v2, &v1 };
     prim_lessThan(state, pos, args, v);
@@ -2012,8 +2039,13 @@ void ExprOpGreaterThan::eval(EvalState & state, Env & env, Value & v)
 void ExprOpGreaterEqual::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
-    e1->eval(state, env, v1);
-    e2->eval(state, env, v2);
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the >= operator");
+        throw;
+    }
 
     Value *args[2] = { &v1, &v2 };
     prim_lessThan(state, pos, args, v);

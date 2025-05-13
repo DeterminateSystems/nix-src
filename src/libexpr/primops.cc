@@ -3864,16 +3864,16 @@ static RegisterPrimOp primop_concatMap({
  *************************************************************/
 
 
-static void prim_add(EvalState & state, const PosIdx pos, Value * * args, Value & v)
+static void prim_add(EvalState & state, const PosIdx pos, Value & left, Value & right, Value & v)
 {
-    state.forceValue(*args[0], pos);
-    state.forceValue(*args[1], pos);
-    if (args[0]->type() == nFloat || args[1]->type() == nFloat)
-        v.mkFloat(state.forceFloat(*args[0], pos, "while evaluating the first argument of the addition")
-                + state.forceFloat(*args[1], pos, "while evaluating the second argument of the addition"));
+    state.forceValue(left, pos);
+    state.forceValue(right, pos);
+    if (left.type() == nFloat || right.type() == nFloat)
+        v.mkFloat(state.forceFloat(left, pos, "while evaluating the first argument of the addition")
+                + state.forceFloat(right, pos, "while evaluating the second argument of the addition"));
     else {
-        auto i1 = state.forceInt(*args[0], pos, "while evaluating the first argument of the addition");
-        auto i2 = state.forceInt(*args[1], pos, "while evaluating the second argument of the addition");
+        auto i1 = state.forceInt(left, pos, "while evaluating the first argument of the addition");
+        auto i2 = state.forceInt(right, pos, "while evaluating the second argument of the addition");
 
         auto result_ = i1 + i2;
         if (auto result = result_.valueChecked(); result.has_value()) {
@@ -3890,19 +3890,19 @@ static RegisterPrimOp primop_add({
     .doc = R"(
       Return the sum of the numbers *e1* and *e2*.
     )",
-    .fun = prim_add,
+    .fun = [](EvalState & state, const PosIdx pos, Value * * args, Value & v) { prim_add(state, pos, *args[0], *args[1], v); },
 });
 
-void prim_sub(EvalState & state, const PosIdx pos, Value * * args, Value & v)
+void prim_sub(EvalState & state, const PosIdx pos, Value & left, Value & right, Value & v)
 {
-    state.forceValue(*args[0], pos);
-    state.forceValue(*args[1], pos);
-    if (args[0]->type() == nFloat || args[1]->type() == nFloat)
-        v.mkFloat(state.forceFloat(*args[0], pos, "while evaluating the first argument of the subtraction")
-                - state.forceFloat(*args[1], pos, "while evaluating the second argument of the subtraction"));
+    state.forceValue(left, pos);
+    state.forceValue(right, pos);
+    if (left.type() == nFloat || right.type() == nFloat)
+        v.mkFloat(state.forceFloat(left, pos, "while evaluating the first argument of the subtraction")
+                - state.forceFloat(right, pos, "while evaluating the second argument of the subtraction"));
     else {
-        auto i1 = state.forceInt(*args[0], pos, "while evaluating the first argument of the subtraction");
-        auto i2 = state.forceInt(*args[1], pos, "while evaluating the second argument of the subtraction");
+        auto i1 = state.forceInt(left, pos, "while evaluating the first argument of the subtraction");
+        auto i2 = state.forceInt(right, pos, "while evaluating the second argument of the subtraction");
 
         auto result_ = i1 - i2;
 
@@ -3920,19 +3920,19 @@ static RegisterPrimOp primop_sub({
     .doc = R"(
       Return the difference between the numbers *e1* and *e2*.
     )",
-    .fun = prim_sub,
+    .fun = [](EvalState & state, const PosIdx pos, Value * * args, Value & v) { prim_sub(state, pos, *args[0], *args[1], v); },
 });
 
-void prim_mul(EvalState & state, const PosIdx pos, Value * * args, Value & v)
+void prim_mul(EvalState & state, const PosIdx pos, Value & left, Value & right, Value & v)
 {
-    state.forceValue(*args[0], pos);
-    state.forceValue(*args[1], pos);
-    if (args[0]->type() == nFloat || args[1]->type() == nFloat)
-        v.mkFloat(state.forceFloat(*args[0], pos, "while evaluating the first argument of the multiplication")
-                * state.forceFloat(*args[1], pos, "while evaluating the second argument of the multiplication"));
+    state.forceValue(left, pos);
+    state.forceValue(right, pos);
+    if (left.type() == nFloat || right.type() == nFloat)
+        v.mkFloat(state.forceFloat(left, pos, "while evaluating the first argument of the multiplication")
+                * state.forceFloat(right, pos, "while evaluating the second argument of the multiplication"));
     else {
-        auto i1 = state.forceInt(*args[0], pos, "while evaluating the first argument of the multiplication");
-        auto i2 = state.forceInt(*args[1], pos, "while evaluating the second argument of the multiplication");
+        auto i1 = state.forceInt(left, pos, "while evaluating the first argument of the multiplication");
+        auto i2 = state.forceInt(right, pos, "while evaluating the second argument of the multiplication");
 
         auto result_ = i1 * i2;
 
@@ -3950,23 +3950,23 @@ static RegisterPrimOp primop_mul({
     .doc = R"(
       Return the product of the numbers *e1* and *e2*.
     )",
-    .fun = prim_mul,
+    .fun = [](EvalState & state, const PosIdx pos, Value * * args, Value & v) { prim_mul(state, pos, *args[0], *args[1], v); },
 });
 
-void prim_div(EvalState & state, const PosIdx pos, Value * * args, Value & v)
+void prim_div(EvalState & state, const PosIdx pos, Value & left, Value & right, Value & v)
 {
-    state.forceValue(*args[0], pos);
-    state.forceValue(*args[1], pos);
+    state.forceValue(left, pos);
+    state.forceValue(right, pos);
 
-    NixFloat f2 = state.forceFloat(*args[1], pos, "while evaluating the second operand of the division");
+    NixFloat f2 = state.forceFloat(right, pos, "while evaluating the second operand of the division");
     if (f2 == 0)
         state.error<EvalError>("division by zero").atPos(pos).debugThrow();
 
-    if (args[0]->type() == nFloat || args[1]->type() == nFloat) {
-        v.mkFloat(state.forceFloat(*args[0], pos, "while evaluating the first operand of the division") / f2);
+    if (left.type() == nFloat || right.type() == nFloat) {
+        v.mkFloat(state.forceFloat(left, pos, "while evaluating the first operand of the division") / f2);
     } else {
-        NixInt i1 = state.forceInt(*args[0], pos, "while evaluating the first operand of the division");
-        NixInt i2 = state.forceInt(*args[1], pos, "while evaluating the second operand of the division");
+        NixInt i1 = state.forceInt(left, pos, "while evaluating the first operand of the division");
+        NixInt i2 = state.forceInt(right, pos, "while evaluating the second operand of the division");
         /* Avoid division overflow as it might raise SIGFPE. */
         auto result_ = i1 / i2;
         if (auto result = result_.valueChecked(); result.has_value()) {
@@ -3983,7 +3983,7 @@ static RegisterPrimOp primop_div({
     .doc = R"(
       Return the quotient of the numbers *e1* and *e2*.
     )",
-    .fun = prim_div,
+    .fun = [](EvalState & state, const PosIdx pos, Value * * args, Value & v) { prim_div(state, pos, *args[0], *args[1], v); },
 });
 
 static void prim_bitAnd(EvalState & state, const PosIdx pos, Value * * args, Value & v)
