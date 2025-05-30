@@ -135,12 +135,11 @@ struct ExprString : Expr
 
 struct ExprPath : Expr
 {
-    ref<SourceAccessor> accessor;
     std::string s;
     Value v;
-    ExprPath(ref<SourceAccessor> accessor, std::string s) : accessor(accessor), s(std::move(s))
+    ExprPath(std::string s) : s(std::move(s))
     {
-        v.mkPath(&*accessor, this->s.c_str());
+        v.mkPath(this->s.c_str());
     }
     Value * maybeThunk(EvalState & state, Env & env) override;
     COMMON_METHODS

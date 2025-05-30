@@ -248,6 +248,8 @@ EvalState::EvalState(
     }
     , repair(NoRepair)
     , emptyBindings(0)
+    , corepkgsFS(make_ref<MemorySourceAccessor>())
+    , corepkgsPath(CanonPath(store->printStorePath(StorePath::random("source"))))
     , storeFS(
         makeMountedSourceAccessor(
             {
@@ -301,7 +303,6 @@ EvalState::EvalState(
 
             accessor;
         }))
-    , corepkgsFS(make_ref<MemorySourceAccessor>())
     , internalFS(make_ref<MemorySourceAccessor>())
     , derivationInternal{corepkgsFS->addFile(
         CanonPath("derivation-internal.nix"),
@@ -326,6 +327,9 @@ EvalState::EvalState(
 {
     corepkgsFS->setPathDisplay("<nix", ">");
     internalFS->setPathDisplay("«nix-internal»", "");
+
+    storeFS->mount(corepkgsPath, corepkgsFS);
+    allowPath(corepkgsPath.abs());
 
     countCalls = getEnv("NIX_COUNT_CALLS").value_or("0") != "0";
 
@@ -904,9 +908,9 @@ void Value::mkStringMove(const char * s, const NixStringContext & context)
     mkString(s, encodeContext(context));
 }
 
-void Value::mkPath(const SourcePath & path)
+void Value::mkPath(const CanonPath & path)
 {
-    mkPath(&*path.accessor, makeImmutableString(path.path.abs()));
+    mkPath(makeImmutableString(path.abs()));
 }
 
 
@@ -2098,7 +2102,7 @@ void ExprConcatStrings::eval(EvalState & state, Env & env, Value & v)
     else if (firstType == nPath) {
         if (hasContext(context))
             state.error<EvalError>("a string that refers to a store path cannot be appended to a path").atPos(pos).withFrame(env, *this).debugThrow();
-        v.mkPath(state.rootPath(CanonPath(str())));
+        v.mkPath(CanonPath(str()));
     } else
         v.mkStringMove(c_str(), context);
 }
@@ -2356,16 +2360,16 @@ BackedStringView EvalState::coerceToString(
               // slash, as in /foo/${x}.
               v.payload.path.path
             : copyToStore
-            ? store->printStorePath(copyPathToStore(context, v.path()))
+            ? store->printStorePath(copyPathToStore(context, rootPath(v.path())))
             : ({
                 auto path = v.path();
-                if (path.accessor == rootFS && store->isInStore(path.path.abs())) {
+                if (store->isInStore(path.abs())) {
                     context.insert(
                         NixStringContextElem::Path{
-                            .storePath = store->toStorePath(path.path.abs()).first
+                            .storePath = store->toStorePath(path.abs()).first
                         });
                 }
-                std::string(path.path.abs());
+                std::string(path.abs());
               });
     }
 
@@ -2476,7 +2480,7 @@ SourcePath EvalState::coerceToPath(const PosIdx pos, Value & v, NixStringContext
 
     /* Handle path values directly, without coercing to a string. */
     if (v.type() == nPath)
-        return v.path();
+        return rootPath(v.path());
 
     /* Similarly, handle __toString where the result may be a path
        value. */
@@ -2635,13 +2639,6 @@ void EvalState::assertEqValues(Value & v1, Value & v2, const PosIdx pos, std::st
         return;
 
     case nPath:
-        if (v1.payload.path.accessor != v2.payload.path.accessor) {
-            error<AssertionError>(
-                "path '%s' is not equal to path '%s' because their accessors are different",
-                ValuePrinter(*this, v1, errorPrintOptions),
-                ValuePrinter(*this, v2, errorPrintOptions))
-                .debugThrow();
-        }
         if (strcmp(v1.payload.path.path, v2.payload.path.path) != 0) {
             error<AssertionError>(
                 "path '%s' is not equal to path '%s'",
@@ -2808,9 +2805,7 @@ bool EvalState::eqValues(Value & v1, Value & v2, const PosIdx pos, std::string_v
 
         case nPath:
             return
-                // FIXME: compare accessors by their fingerprint.
-                v1.payload.path.accessor == v2.payload.path.accessor
-                && strcmp(v1.payload.path.path, v2.payload.path.path) == 0;
+                strcmp(v1.payload.path.path, v2.payload.path.path) == 0;
 
         case nNull:
             return true;
@@ -3125,7 +3120,7 @@ SourcePath EvalState::findFile(const LookupPath & lookupPath, const std::string_
     }
 
     if (hasPrefix(path, "nix/"))
-        return {corepkgsFS, CanonPath(path.substr(3))};
+        return rootPath(corepkgsPath / CanonPath(path.substr(3)));
 
     error<ThrownError>(
         settings.pureEval

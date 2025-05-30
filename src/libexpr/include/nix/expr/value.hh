@@ -216,7 +216,6 @@ public:
     };
 
     struct Path {
-        SourceAccessor * accessor;
         const char * path;
     };
 
@@ -336,12 +335,11 @@ public:
         mkString(s.c_str());
     }
 
-    void mkPath(const SourcePath & path);
-    void mkPath(std::string_view path);
+    void mkPath(const CanonPath & path);
 
-    inline void mkPath(SourceAccessor * accessor, const char * path)
+    inline void mkPath(const char * path)
     {
-        finishValue(tPath, { .path = { .accessor = accessor, .path = path } });
+        finishValue(tPath, {.path = {.path = path}});
     }
 
     inline void mkNull()
@@ -440,12 +438,10 @@ public:
      */
     bool isTrivial() const;
 
-    SourcePath path() const
+    CanonPath path() const
     {
         assert(internalType == tPath);
-        return SourcePath(
-            ref(payload.path.accessor->shared_from_this()),
-            CanonPath(CanonPath::unchecked_t(), payload.path.path));
+        return CanonPath(CanonPath::unchecked_t(), payload.path.path);
     }
 
     std::string_view string_view() const

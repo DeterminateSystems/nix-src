@@ -271,6 +271,13 @@ public:
     Value vStringUnknown;
 
     /**
+     * The in-memory filesystem for <nix/...> paths.
+     */
+    const ref<MemorySourceAccessor> corepkgsFS;
+
+    const CanonPath corepkgsPath;
+
+    /**
      * The accessor corresponding to `store`.
      */
     const ref<MountedSourceAccessor> storeFS;
@@ -279,11 +286,6 @@ public:
      * The accessor for the root filesystem.
      */
     const ref<SourceAccessor> rootFS;
-
-    /**
-     * The in-memory filesystem for <nix/...> paths.
-     */
-    const ref<MemorySourceAccessor> corepkgsFS;
 
     /**
      * In-memory filesystem for internal, non-user-callable Nix

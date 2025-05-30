@@ -260,7 +260,7 @@ private:
     {
         if (options.ansiColors)
             output << ANSI_GREEN;
-        output << v.path().to_string(); // !!! escaping?
+        output << v.path(); // !!! escaping?
         if (options.ansiColors)
             output << ANSI_NORMAL;
     }

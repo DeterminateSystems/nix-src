@@ -121,8 +121,8 @@ namespace nix {
             return false;
         } else {
             auto path = arg.path();
-            if (path.path != CanonPath(p)) {
-                *result_listener << "Expected a path that equals \"" << p << "\" but got: " << path.path;
+            if (path != CanonPath(p)) {
+                *result_listener << "Expected a path that equals \"" << p << "\" but got: " << path;
                 return false;
             }
         }

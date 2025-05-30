@@ -145,7 +145,8 @@ static void getAllExprs(EvalState & state,
             }
             /* Load the expression on demand. */
             auto vArg = state.allocValue();
-            vArg->mkPath(path2);
+            assert(path2.accessor == state.rootFS);
+            vArg->mkPath(path2.path);
             if (seen.size() == maxAttrs)
                 throw Error("too many Nix expressions in directory '%1%'", path);
             attrs.alloc(attrName).mkApp(&state.getBuiltin("import"), vArg);

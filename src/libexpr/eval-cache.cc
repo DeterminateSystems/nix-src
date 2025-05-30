@@ -473,8 +473,8 @@ Value & AttrCursor::forceValue()
             cachedValue = {root->db->setString(getKey(), v.c_str(), v.context()),
                            string_t{v.c_str(), {}}};
         else if (v.type() == nPath) {
-            auto path = v.path().path;
-            cachedValue = {root->db->setString(getKey(), path.abs()), string_t{path.abs(), {}}};
+            auto path = v.path().abs();
+            cachedValue = {root->db->setString(getKey(), path), string_t{path, {}}};
         }
         else if (v.type() == nBool)
             cachedValue = {root->db->setBool(getKey(), v.boolean()), v.boolean()};
@@ -607,7 +607,7 @@ std::string AttrCursor::getString()
     if (v.type() != nString && v.type() != nPath)
         root->state.error<TypeError>("'%s' is not a string but %s", getAttrPathStr(), showType(v)).debugThrow();
 
-    return v.type() == nString ? v.c_str() : v.path().to_string();
+    return v.type() == nString ? v.c_str() : v.path().abs();
 }
 
 string_t AttrCursor::getStringWithContext()
@@ -654,7 +654,7 @@ string_t AttrCursor::getStringWithContext()
         return {v.c_str(), std::move(context)};
     }
     else if (v.type() == nPath)
-        return {v.path().to_string(), {}};
+        return {v.path().abs(), {}};
     else
         root->state.error<TypeError>("'%s' is not a string but %s", getAttrPathStr(), showType(v)).debugThrow();
 }
