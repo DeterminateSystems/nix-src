@@ -1,7 +1,8 @@
 {
   description = "The purely functional package manager";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/release-24.11";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
   inputs.nixpkgs-regression.url = "github:NixOS/nixpkgs/215d4d0fd80ca5163643b03a33fde804a29cc1e2";
 
   # dev tooling
@@ -15,11 +16,10 @@
   inputs.git-hooks-nix.inputs.gitignore.follows = "";
 
   outputs =
-    inputs@{
-      self,
-      nixpkgs,
-      nixpkgs-regression,
-      ...
+    inputs@{ self
+    , nixpkgs
+    , nixpkgs-regression
+    , ...
     }:
 
     let
@@ -40,12 +40,12 @@
       systems = linuxSystems ++ darwinSystems;
 
       crossSystems = [
-        "armv6l-unknown-linux-gnueabihf"
-        "armv7l-unknown-linux-gnueabihf"
-        "riscv64-unknown-linux-gnu"
+        #"armv6l-unknown-linux-gnueabihf"
+        #"armv7l-unknown-linux-gnueabihf"
+        #"riscv64-unknown-linux-gnu"
         # Disabled because of https://github.com/NixOS/nixpkgs/issues/344423
         # "x86_64-unknown-netbsd"
-        "x86_64-unknown-freebsd"
+        #"x86_64-unknown-freebsd"
       ];
 
       stdenvs = [
@@ -258,60 +258,61 @@
         }
         # Add "passthru" tests
         //
-          flatMapAttrs
-            (
-              {
-                # Run all tests with UBSAN enabled. Running both with ubsan and
-                # without doesn't seem to have much immediate benefit for doubling
-                # the GHA CI workaround.
-                #
-                # TODO: Work toward enabling "address,undefined" if it seems feasible.
-                # This would maybe require dropping Boost coroutines and ignoring intentional
-                # memory leaks with detect_leaks=0.
-                "" = rec {
-                  nixpkgs = nixpkgsFor.${system}.native;
-                  nixComponents = nixpkgs.nixComponents2.overrideScope (
-                    nixCompFinal: nixCompPrev: {
-                      mesonComponentOverrides = _finalAttrs: prevAttrs: {
-                        mesonFlags =
-                          (prevAttrs.mesonFlags or [ ])
-                          # TODO: Macos builds instrumented with ubsan take very long
-                          # to run functional tests.
-                          ++ lib.optionals (!nixpkgs.stdenv.hostPlatform.isDarwin) [
-                            (lib.mesonOption "b_sanitize" "undefined")
-                          ];
-                      };
-                    }
-                  );
-                };
-              }
-              // lib.optionalAttrs (!nixpkgsFor.${system}.native.stdenv.hostPlatform.isDarwin) {
-                # TODO: enable static builds for darwin, blocked on:
-                #       https://github.com/NixOS/nixpkgs/issues/320448
-                # TODO: disabled to speed up GHA CI.
-                # "static-" = {
-                #   nixpkgs = nixpkgsFor.${system}.native.pkgsStatic;
-                # };
-              }
-            )
-            (
-              nixpkgsPrefix:
-              {
-                nixpkgs,
-                nixComponents ? nixpkgs.nixComponents2,
-              }:
-              flatMapAttrs nixComponents (
-                pkgName: pkg:
-                flatMapAttrs pkg.tests or { } (
-                  testName: test: {
-                    "${nixpkgsPrefix}${pkgName}-${testName}" = test;
+        flatMapAttrs
+          (
+            {
+              # Run all tests with UBSAN enabled. Running both with ubsan and
+              # without doesn't seem to have much immediate benefit for doubling
+              # the GHA CI workaround.
+              #
+              # TODO: Work toward enabling "address,undefined" if it seems feasible.
+              # This would maybe require dropping Boost coroutines and ignoring intentional
+              # memory leaks with detect_leaks=0.
+              "" = rec {
+                nixpkgs = nixpkgsFor.${system}.native;
+                nixComponents = nixpkgs.nixComponents2.overrideScope (
+                  nixCompFinal: nixCompPrev: {
+                    mesonComponentOverrides = _finalAttrs: prevAttrs: {
+                      mesonFlags =
+                        (prevAttrs.mesonFlags or [ ])
+                        # TODO: Macos builds instrumented with ubsan take very long
+                        # to run functional tests.
+                        ++ lib.optionals (!nixpkgs.stdenv.hostPlatform.isDarwin) [
+                          (lib.mesonOption "b_sanitize" "undefined")
+                        ];
+                    };
                   }
-                )
+                );
+              };
+            }
+            // lib.optionalAttrs (!nixpkgsFor.${system}.native.stdenv.hostPlatform.isDarwin) {
+              # TODO: enable static builds for darwin, blocked on:
+              #       https://github.com/NixOS/nixpkgs/issues/320448
+              # TODO: disabled to speed up GHA CI.
+              # "static-" = {
+              #   nixpkgs = nixpkgsFor.${system}.native.pkgsStatic;
+              # };
+            }
+          )
+          (
+            nixpkgsPrefix:
+            { nixpkgs
+            , nixComponents ? nixpkgs.nixComponents2
+            ,
+            }:
+            flatMapAttrs nixComponents
+              (
+                pkgName: pkg:
+                  flatMapAttrs pkg.tests or { } (
+                    testName: test: {
+                      "${nixpkgsPrefix}${pkgName}-${testName}" = test;
+                    }
+                  )
               )
-              // lib.optionalAttrs (nixpkgs.stdenv.hostPlatform == nixpkgs.stdenv.buildPlatform) {
-                "${nixpkgsPrefix}nix-functional-tests" = nixComponents.nix-functional-tests;
-              }
-            )
+            // lib.optionalAttrs (nixpkgs.stdenv.hostPlatform == nixpkgs.stdenv.buildPlatform) {
+              "${nixpkgsPrefix}nix-functional-tests" = nixComponents.nix-functional-tests;
+            }
+          )
         // devFlake.checks.${system} or { }
       );
 
@@ -368,76 +369,78 @@
         }
         # We need to flatten recursive attribute sets of derivations to pass `flake check`.
         //
-          flatMapAttrs
+        flatMapAttrs
+          {
+            # Components we'll iterate over in the upcoming lambda
+            "nix-util" = { };
+            "nix-util-c" = { };
+            "nix-util-test-support" = { };
+            "nix-util-tests" = { };
+
+            "nix-store" = { };
+            "nix-store-c" = { };
+            "nix-store-test-support" = { };
+            "nix-store-tests" = { };
+
+            "nix-fetchers" = { };
+            "nix-fetchers-c" = { };
+            "nix-fetchers-tests" = { };
+
+            "nix-expr" = { };
+            "nix-expr-c" = { };
+            "nix-expr-test-support" = { };
+            "nix-expr-tests" = { };
+
+            "nix-flake" = { };
+            "nix-flake-c" = { };
+            "nix-flake-tests" = { };
+
+            "nix-main" = { };
+            "nix-main-c" = { };
+
+            "nix-cmd" = { };
+
+            "nix-cli" = { };
+
+            "nix-everything" = { };
+
+            "nix-functional-tests" = {
+              supportsCross = false;
+            };
+
+            "nix-perl-bindings" = {
+              supportsCross = false;
+            };
+          }
+          (
+            pkgName:
+            { supportsCross ? true
+            ,
+            }:
             {
-              # Components we'll iterate over in the upcoming lambda
-              "nix-util" = { };
-              "nix-util-c" = { };
-              "nix-util-test-support" = { };
-              "nix-util-tests" = { };
-
-              "nix-store" = { };
-              "nix-store-c" = { };
-              "nix-store-test-support" = { };
-              "nix-store-tests" = { };
-
-              "nix-fetchers" = { };
-              "nix-fetchers-tests" = { };
-
-              "nix-expr" = { };
-              "nix-expr-c" = { };
-              "nix-expr-test-support" = { };
-              "nix-expr-tests" = { };
-
-              "nix-flake" = { };
-              "nix-flake-tests" = { };
-
-              "nix-main" = { };
-              "nix-main-c" = { };
-
-              "nix-cmd" = { };
-
-              "nix-cli" = { };
-
-              "nix-everything" = { };
-
-              "nix-functional-tests" = {
-                supportsCross = false;
-              };
-
-              "nix-perl-bindings" = {
-                supportsCross = false;
-              };
+              # These attributes go right into `packages.<system>`.
+              "${pkgName}" = nixpkgsFor.${system}.native.nixComponents2.${pkgName};
             }
-            (
-              pkgName:
-              {
-                supportsCross ? true,
-              }:
-              {
-                # These attributes go right into `packages.<system>`.
-                "${pkgName}" = nixpkgsFor.${system}.native.nixComponents2.${pkgName};
-              }
-              // lib.optionalAttrs supportsCross (
-                flatMapAttrs (lib.genAttrs crossSystems (_: { })) (
-                  crossSystem:
-                  { }:
-                  {
-                    # These attributes go right into `packages.<system>`.
-                    "${pkgName}-${crossSystem}" = nixpkgsFor.${system}.cross.${crossSystem}.nixComponents2.${pkgName};
-                  }
-                )
-              )
-              // flatMapAttrs (lib.genAttrs stdenvs (_: { })) (
-                stdenvName:
-                { }:
+            // lib.optionalAttrs supportsCross (
+              flatMapAttrs (lib.genAttrs crossSystems (_: { })) (
+                crossSystem:
+                {}:
                 {
                   # These attributes go right into `packages.<system>`.
-                  "${pkgName}-${stdenvName}" =
-                    nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.nixComponents2.${pkgName};
+                  "${pkgName}-${crossSystem}" = nixpkgsFor.${system}.cross.${crossSystem}.nixComponents2.${pkgName};
                 }
               )
             )
+            // flatMapAttrs (lib.genAttrs stdenvs (_: { })) (
+              stdenvName:
+              {}:
+              {
+                # These attributes go right into `packages.<system>`.
+                "${pkgName}-${stdenvName}" =
+                  nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.nixComponents2.${pkgName};
+              }
+            )
+          )
         // lib.optionalAttrs (builtins.elem system linux64BitSystems) {
           dockerImage =
             let
@@ -465,14 +468,15 @@
         in
         forAllSystems (
           system:
-          prefixAttrs "native" (
-            forAllStdenvs (
-              stdenvName:
-              makeShell {
-                pkgs = nixpkgsFor.${system}.nativeForStdenv.${stdenvName};
-              }
+          prefixAttrs "native"
+            (
+              forAllStdenvs (
+                stdenvName:
+                makeShell {
+                  pkgs = nixpkgsFor.${system}.nativeForStdenv.${stdenvName};
+                }
+              )
             )
-          )
           // {
             native = self.devShells.${system}.native-stdenv;
             default = self.devShells.${system}.native;

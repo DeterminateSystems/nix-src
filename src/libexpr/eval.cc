@@ -149,6 +149,8 @@ PosIdx Value::determinePos(const PosIdx pos) const
     // Allow selecting a subset of enum values
     #pragma GCC diagnostic push
     #pragma GCC diagnostic ignored "-Wswitch-enum"
+    if (this->pos != 0)
+        return PosIdx(this->pos);
     switch (internalType) {
         case tAttrs: return attrs()->pos;
         case tLambda: return payload.lambda.fun->pos;
@@ -252,6 +254,24 @@ EvalState::EvalState(
         makeMountedSourceAccessor(
             {
                 {CanonPath::root, makeEmptySourceAccessor()},
+                /* In the pure eval case, we can simply require
+                   valid paths. However, in the *impure* eval
+                   case this gets in the way of the union
+                   mechanism, because an invalid access in the
+                   upper layer will *not* be caught by the union
+                   source accessor, but instead abort the entire
+                   lookup.
+
+                   This happens when the store dir in the
+                   ambient file system has a path (e.g. because
+                   another Nix store there), but the relocated
+                   store does not.
+
+                   TODO make the various source accessors doing
+                   access control all throw the same type of
+                   exception, and make union source accessor
+                   catch it, so we don't need to do this hack.
+                 */
                 {CanonPath(store->storeDir), makeFSSourceAccessor(dirOf(store->toRealPath(StorePath::dummy)))}
             }))
     , rootFS(
@@ -888,7 +908,7 @@ void Value::mkStringMove(const char * s, const NixStringContext & context)
 
 void Value::mkPath(const SourcePath & path)
 {
-    mkPath(&*path.accessor, makeImmutableString(path.path.abs()));
+    mkPath(&*path.accessor, makeImmutableString(path.path.abs()), noPos.get());
 }
 
 
@@ -1435,7 +1455,7 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
             } else {
                 state.forceAttrs(*vAttrs, pos, "while selecting an attribute");
                 if (!(j = vAttrs->attrs()->get(name))) {
-                    std::set<std::string> allAttrNames;
+                    StringSet allAttrNames;
                     for (auto & attr : *vAttrs->attrs())
                         allAttrNames.insert(std::string(state.symbols[attr.name]));
                     auto suggestions = Suggestions::bestMatches(allAttrNames, state.symbols[name]);
@@ -1592,7 +1612,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                        user. */
                     for (auto & i : *args[0]->attrs())
                         if (!lambda.formals->has(i.name)) {
-                            std::set<std::string> formalNames;
+                            StringSet formalNames;
                             for (auto & formal : lambda.formals->formals)
                                 formalNames.insert(std::string(symbols[formal.name]));
                             auto suggestions = Suggestions::bestMatches(formalNames, symbols[i.name]);
@@ -2338,7 +2358,7 @@ BackedStringView EvalState::coerceToString(
               // slash, as in /foo/${x}.
               v.payload.path.path
             : copyToStore
-            ? store->printStorePath(copyPathToStore(context, v.path()))
+            ? store->printStorePath(copyPathToStore(context, v.path(), v.determinePos(pos)))
             : ({
                 auto path = v.path();
                 if (path.accessor == rootFS && store->isInStore(path.path.abs())) {
@@ -2416,7 +2436,7 @@ BackedStringView EvalState::coerceToString(
 }
 
 
-StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePath & path)
+StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePath & path, PosIdx pos)
 {
     if (nix::isDerivation(path.path.abs()))
         error<EvalError>("file names are not allowed to end in '%1%'", drvExtension).debugThrow();
@@ -2430,7 +2450,7 @@ StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePat
                 *store,
                 path.resolveSymlinks(SymlinkResolution::Ancestors),
                 settings.readOnlyMode ? FetchMode::DryRun : FetchMode::Copy,
-                computeBaseName(path),
+                computeBaseName(path, pos),
                 ContentAddressMethod::Raw::NixArchive,
                 nullptr,
                 repair);

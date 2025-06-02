@@ -1,7 +1,7 @@
-{
-  lib,
-  nixpkgs,
-  nixpkgsFor,
+{ lib
+, nixpkgs
+, nixpkgsFor
+,
 }:
 
 let
@@ -54,7 +54,7 @@ let
                 let
                   packages = (builtins.getFlake "nix/${nixVersion}").packages.${system};
                 in
-                packages.nix-cli or packages.nix;
+                  packages.nix-cli or packages.nix;
             })
           ];
         };
@@ -85,7 +85,6 @@ let
       imports = [ checkOverrideNixVersion ];
       nix.package = lib.mkForce pkgs.nixVersions.nix_2_18;
     };
-
 in
 
 {
@@ -96,52 +95,54 @@ in
   remoteBuildsSshNg = runNixOSTestFor "x86_64-linux" ./remote-builds-ssh-ng.nix;
 
 }
-// lib.concatMapAttrs (
-  nixVersion:
-  { setNixPackage, ... }:
-  {
-    "remoteBuilds_remote_${nixVersion}" = runNixOSTestFor "x86_64-linux" {
-      name = "remoteBuilds_remote_${nixVersion}";
-      imports = [ ./remote-builds.nix ];
-      builders.config =
-        { lib, pkgs, ... }:
-        {
-          imports = [ setNixPackage ];
-        };
-    };
+// lib.concatMapAttrs
+  (
+    nixVersion:
+    { setNixPackage, ... }:
+    {
+      "remoteBuilds_remote_${nixVersion}" = runNixOSTestFor "x86_64-linux" {
+        name = "remoteBuilds_remote_${nixVersion}";
+        imports = [ ./remote-builds.nix ];
+        builders.config =
+          { lib, pkgs, ... }:
+          {
+            imports = [ setNixPackage ];
+          };
+      };
 
-    "remoteBuilds_local_${nixVersion}" = runNixOSTestFor "x86_64-linux" {
-      name = "remoteBuilds_local_${nixVersion}";
-      imports = [ ./remote-builds.nix ];
-      nodes.client =
-        { lib, pkgs, ... }:
-        {
-          imports = [ setNixPackage ];
-        };
-    };
+      "remoteBuilds_local_${nixVersion}" = runNixOSTestFor "x86_64-linux" {
+        name = "remoteBuilds_local_${nixVersion}";
+        imports = [ ./remote-builds.nix ];
+        nodes.client =
+          { lib, pkgs, ... }:
+          {
+            imports = [ setNixPackage ];
+          };
+      };
 
-    "remoteBuildsSshNg_remote_${nixVersion}" = runNixOSTestFor "x86_64-linux" {
-      name = "remoteBuildsSshNg_remote_${nixVersion}";
-      imports = [ ./remote-builds-ssh-ng.nix ];
-      builders.config =
-        { lib, pkgs, ... }:
-        {
-          imports = [ setNixPackage ];
-        };
-    };
+      "remoteBuildsSshNg_remote_${nixVersion}" = runNixOSTestFor "x86_64-linux" {
+        name = "remoteBuildsSshNg_remote_${nixVersion}";
+        imports = [ ./remote-builds-ssh-ng.nix ];
+        builders.config =
+          { lib, pkgs, ... }:
+          {
+            imports = [ setNixPackage ];
+          };
+      };
 
-    # FIXME: these tests don't work yet
+      # FIXME: these tests don't work yet
 
-    # "remoteBuildsSshNg_local_${nixVersion}" = runNixOSTestFor "x86_64-linux" {
-    #   name = "remoteBuildsSshNg_local_${nixVersion}";
-    #   imports = [ ./remote-builds-ssh-ng.nix ];
-    #   nodes.client = { lib, pkgs, ... }: {
-    #     imports = [ overridingModule ];
-    #   };
-    # };
-  }
-) otherNixes
-// {
+      # "remoteBuildsSshNg_local_${nixVersion}" = runNixOSTestFor "x86_64-linux" {
+      #   name = "remoteBuildsSshNg_local_${nixVersion}";
+      #   imports = [ ./remote-builds-ssh-ng.nix ];
+      #   nodes.client = { lib, pkgs, ... }: {
+      #     imports = [ overridingModule ];
+      #   };
+      # };
+    }
+  )
+  otherNixes
+  // {
 
   nix-copy-closure = runNixOSTestFor "x86_64-linux" ./nix-copy-closure.nix;
 
