@@ -103,6 +103,7 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
         categories[catNixInstallation] = "Commands for upgrading or troubleshooting your Nix installation";
 
         addFlag({
+            .shortName = 'h',
             .longName = "help",
             .description = "Show usage information.",
             .category = miscCategory,
