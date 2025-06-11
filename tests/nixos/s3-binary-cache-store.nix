@@ -67,6 +67,9 @@ in
       server.wait_for_unit("minio")
       server.wait_for_unit("network-addresses-eth1.service")
 
+      # Explicitly wait on minio (actual startup lags behind the systemd unit)
+      server.succeed("while ! mc ping local -x; do sleep 1; done", timeout=30)
+
       server.succeed("mc config host add minio http://localhost:9000 ${accessKey} ${secretKey} --api s3v4")
       server.succeed("mc mb minio/my-cache")
 
