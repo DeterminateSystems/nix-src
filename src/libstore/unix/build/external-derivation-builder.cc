@@ -38,6 +38,25 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
         return {};
     }
 
+    void prepareSandbox() override
+    {
+        // pathsInChroot = getPathsInSandbox();
+
+        auto paths = {
+            "/Users/Shared/runvf",
+            "/Users/Shared/determinate-nixd",
+            "/tmp/bootinfo",
+            "/tmp/bootinfo/initrd",
+            "/tmp/bootinfo/kernel",
+            "/nix/store/3i3mh1qzdimsh58i6jx5kkzxx2lfm3s2-initrd/initrd",
+            "/nix/store/b8p65z1sb5dd8ixlkahhanw2amaimj6m-linux-6.6.94/Image",
+        };
+
+        for (auto & path : paths) {
+            pathsInChroot[path] = {path, false};
+        }
+    }
+
     bool prepareBuild() override
     {
         // External builds don't use build users, so this always
