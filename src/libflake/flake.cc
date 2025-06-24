@@ -554,7 +554,7 @@ LockedFlake lockFlake(
 
                     /* Get the input flake, resolve 'path:./...'
                        flakerefs relative to the parent flake. */
-                    auto getInputFlake = [&](const FlakeRef & ref)
+                    auto getInputFlake = [&](const FlakeRef & ref, const fetchers::UseRegistries useRegistries)
                     {
                         if (auto resolvedPath = resolveRelativePath()) {
                             return readFlake(state, ref, ref, ref, *resolvedPath, inputAttrPath);
@@ -645,7 +645,7 @@ LockedFlake lockFlake(
                         }
 
                         if (mustRefetch) {
-                            auto inputFlake = getInputFlake(oldLock->lockedRef);
+                            auto inputFlake = getInputFlake(oldLock->lockedRef, useRegistriesInputs);
                             nodePaths.emplace(childNode, inputFlake.path.parent());
                             computeLocks(inputFlake.inputs, childNode, inputAttrPath, oldLock, followsPrefix,
                                 inputFlake.path, false);
@@ -670,7 +670,8 @@ LockedFlake lockFlake(
                             nuked the next time we update the lock
                             file. That is, overrides are sticky unless you
                             use --no-write-lock-file. */
-                        auto ref = (input2.ref && explicitCliOverrides.contains(inputAttrPath)) ? *input2.ref : *input.ref;
+                        auto inputIsOverride = explicitCliOverrides.contains(inputAttrPath);
+                        auto ref = (input2.ref && inputIsOverride) ? *input2.ref : *input.ref;
 
                         /* Warn against the use of indirect flakerefs
                            (but only at top-level since we don't want
@@ -696,7 +697,7 @@ LockedFlake lockFlake(
                         };
 
                         if (input.isFlake) {
-                            auto inputFlake = getInputFlake(*input.ref);
+                            auto inputFlake = getInputFlake(*input.ref, inputIsOverride ? fetchers::UseRegistries::All : useRegistriesInputs);
 
                             auto childNode = make_ref<LockedNode>(
                                 inputFlake.lockedRef,
@@ -803,10 +804,10 @@ LockedFlake lockFlake(
                     if (auto unlockedInput = newLockFile.isUnlocked(state.fetchSettings)) {
                         if (lockFlags.failOnUnlocked)
                             throw Error(
-                                "Will not write lock file of flake '%s' because it has an unlocked input ('%s'). "
+                                "Not writing lock file of flake '%s' because it has an unlocked input ('%s'). "
                                 "Use '--allow-dirty-locks' to allow this anyway.", topRef, *unlockedInput);
                         if (state.fetchSettings.warnDirty)
-                            warn("will not write lock file of flake '%s' because it has an unlocked input ('%s')", topRef, *unlockedInput);
+                            warn("Not writing lock file of flake '%s' because it has an unlocked input ('%s')", topRef, *unlockedInput);
                     } else {
                         if (!lockFlags.updateLockFile)
                             throw Error("flake '%s' requires lock file changes but they're not allowed due to '--no-update-lock-file'", topRef);
