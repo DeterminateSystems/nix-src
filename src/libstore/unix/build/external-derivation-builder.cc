@@ -1,3 +1,5 @@
+#include "nix/util/file-descriptor.hh"
+
 namespace nix {
 
 struct ExternalDerivationBuilder : DerivationBuilderImpl
@@ -11,6 +13,11 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
      * always have *some* sandboxing (see sandbox-minimal.sb).
      */
     bool useSandbox;
+
+    /**
+     * Pipe for talking to the spawned builder.
+     */
+    Pipe toBuilder;
 
     ExternalDerivationBuilder(
         Store & store,
@@ -61,7 +68,8 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
     {
         // External builds don't use build users, so this always
         // succeeds.
-        return true;
+        // TODO: maybe only do this if sandboxing is enabled?
+        return DerivationBuilderImpl::prepareBuild();
     }
 
     Path tmpDirInSandbox() override
@@ -84,6 +92,8 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
 
     void setUser() override
     {
+        DerivationBuilderImpl::setUser();
+
 #ifdef __APPLE__
         /* This has to appear before import statements. */
         std::string sandboxProfile = "(version 1)\n";
@@ -222,6 +232,7 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
                 _exit(1);
             }
         }
+
 #endif
     }
 
@@ -257,22 +268,24 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
         json.emplace("realStoreDir", getLocalStore(store).config->realStoreDir.get());
         json.emplace("system", drv.platform);
 
-        // FIXME: maybe write this JSON into the builder's stdin instead....?
-        auto jsonFile = topTmpDir + "/build.json";
-        writeFile(jsonFile, json.dump());
+        toBuilder.create();
+        // FIXME: this is probably bad...? but we need to make them accessible so we can do some writing stuff into them...
+        chownToBuilder(tmpDir);
+        chownToBuilder(topTmpDir);
 
         pid = startProcess([&]() {
             openSlave();
             try {
                 commonChildInit();
 
+                if (dup2(toBuilder.readSide.get(), STDIN_FILENO) == -1)
+                    throw SysError("dupping to-builder read side to builder's stdin");
+
                 Strings args = {externalBuilder.program};
 
                 if (!externalBuilder.args.empty()) {
                     args.insert(args.end(), externalBuilder.args.begin(), externalBuilder.args.end());
                 }
-
-                args.insert(args.end(), jsonFile);
 
                 setUser();
 
@@ -285,6 +298,9 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
                 _exit(1);
             }
         });
+
+        writeFull(toBuilder.writeSide.get(), json.dump());
+        toBuilder.close();
     }
 };
 
