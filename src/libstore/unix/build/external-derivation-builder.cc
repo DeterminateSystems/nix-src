@@ -289,6 +289,9 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
 
                 setUser();
 
+                if (chdir(tmpDir.c_str()) == -1)
+                    throw SysError("changing into '%1%'", tmpDir);
+
                 debug("executing external builder: %s", concatStringsSep(" ", args));
                 execv(externalBuilder.program.c_str(), stringsToCharPtrs(args).data());
 
