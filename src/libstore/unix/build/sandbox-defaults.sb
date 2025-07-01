@@ -112,4 +112,44 @@ R""(
        (subpath "/System/Library/LaunchDaemons/com.apple.oahd.plist")
        (subpath "/Library/Apple/System/Library/LaunchDaemons/com.apple.oahd.plist"))
 
+; Allow access to the keychain
+(allow mach-lookup (global-name "com.apple.SecurityServer"))
+
+(allow file-read-metadata (literal "/Library"))
+(allow file-read* (literal "/Library/Keychains"))
+(allow file-read* (regex "/Library/Keychains/.*"))
+(allow file* (literal "/Library/Keychains/System.keychain"))
+
+(allow file* (regex "/private/var/db/mds/system/.*"))
+(allow file* (literal "/private/var/db/mds/messages/se_SecurityMessages"))
+(allow file* (literal "/private/var/db/mds/system"))
+(allow file* (literal "/private/var/db/mds/system/mds.lock"))
+(allow file* (literal "/private/var/db/mds/system/mdsDirectory.db"))
+(allow file* (literal "/private/var/db/mds/system/mdsObject.db"))
+(allow file-write* (regex "/Library/Keychains/System.keychain.sb.*"))
+
+(allow authorization-right-obtain (right-name "system.keychain.create.loginkc"))
+
+; Allow access to Virtualization
+(allow mach-lookup (global-name "com.apple.Virtualization.VirtualMachine"))
+
+(allow file-read-data (literal "/System/Library/Frameworks/Virtualization.framework"))
+(allow file-read-data (literal "/System/Library/Frameworks/Virtualization.framework/Versions/A/Resources"))
+(allow file-read-data (literal "/System/Library/Frameworks/Virtualization.framework/Versions/A/Resources/Info.plist"))
+(allow file-read-data (literal "/System/Library/Frameworks/Virtualization.framework/Versions/A/Resources/Localizable.loctable"))
+(allow file-read-data (literal "/System/Library/Frameworks/Virtualization.framework/Versions/A/Resources/en.lproj"))
+(allow file-read-metadata (literal "/System/Library/Frameworks/Virtualization.framework"))
+(allow file-read-metadata (literal "/System/Library/Frameworks/Virtualization.framework/Resources"))
+(allow file-read-metadata (literal "/System/Library/Frameworks/Virtualization.framework/Versions/Current"))
+(allow file-read-metadata (literal "/System/Library/Frameworks/Virtualization.framework/Virtualization"))
+
+(allow generic-issue-extension
+    (extension-class "com.apple.virtualization.extension.fuse")
+    (with report))
+(allow file-issue-extension
+    (extension-class "com.apple.app-sandbox.read-write")
+    ; TODO: can we make it only allow /nix/store and the build tmpdir?
+    ;(target "/nix/store")
+    (with report))
+
 )""

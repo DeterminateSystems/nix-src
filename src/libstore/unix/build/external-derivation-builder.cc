@@ -38,9 +38,7 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
             for (auto & system : handler.systems)
                 if (params.drv.platform == system)
                     return std::make_unique<ExternalDerivationBuilder>(
-                        // FIXME: sandbox true breaks things -- maybe related to paths the builder uses or something not being in the sandbox
-                        // FIXME: probably want to make it so that the external builder is probably what sets up the sandbox, but how do I do that
-                        store, std::move(miscMethods), std::move(params), handler, false);
+                        store, std::move(miscMethods), std::move(params), handler, settings.sandboxMode == smEnabled);
         }
         return {};
     }
