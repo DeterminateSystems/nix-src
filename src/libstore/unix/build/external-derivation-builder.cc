@@ -47,16 +47,16 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
 
     void prepareSandbox() override
     {
+        // FIXME: doesn't work with the darwin sandboxing stuff cuz of "mismatched impure paths"
         // pathsInChroot = getPathsInSandbox();
 
+        pathsInChroot[externalBuilder.program] = {externalBuilder.program, false};
+
+        // FIXME: don't hardcode
         auto paths = {
-            "/Users/Shared/runvf",
-            "/Users/Shared/determinate-nixd",
-            "/tmp/bootinfo",
-            "/tmp/bootinfo/initrd",
-            "/tmp/bootinfo/kernel",
-            "/nix/store/3i3mh1qzdimsh58i6jx5kkzxx2lfm3s2-initrd/initrd",
-            "/nix/store/b8p65z1sb5dd8ixlkahhanw2amaimj6m-linux-6.6.94/Image",
+            "/nix/store/5dy050xmn2645mxrvcjxfkbpdx0k7674-initrd/initrd",
+            "/nix/store/jfi2qs9d52fazgjwzqvjz5cb5m20ivxf-linux-6.15.3/Image",
+            "/etc/determinate/config.json",
         };
 
         for (auto & path : paths) {
