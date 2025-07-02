@@ -1248,7 +1248,7 @@ public:
 
     Setting<ExternalBuilders> externalBuilders{
         this,
-        {{{"x86_64-linux","aarch64-linux"}, {"/Users/Shared/determinate-nixd"},{"builder"}}},
+        {},
         "external-builders",
         R"(
           Helper programs that execute derivations.
