@@ -56,6 +56,11 @@ void prim_importNative(EvalState & state, const PosIdx pos, Value * * args, Valu
  */
 void prim_exec(EvalState & state, const PosIdx pos, Value * * args, Value & v);
 
+void prim_sub(EvalState & state, const PosIdx pos, Value & left, Value & right, Value & v);
+void prim_div(EvalState & state, const PosIdx pos, Value & left, Value & right, Value & v);
+void prim_mul(EvalState & state, const PosIdx pos, Value & left, Value & right, Value & v);
+void prim_lessThan(EvalState & state, const PosIdx pos, Value * * args, Value & v);
+
 void makePositionThunks(EvalState & state, const PosIdx pos, Value & line, Value & column);
 
 }

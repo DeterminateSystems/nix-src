@@ -445,6 +445,13 @@ MakeBinOp(ExprOpOr, "||")
 MakeBinOp(ExprOpImpl, "->")
 MakeBinOp(ExprOpUpdate, "//")
 MakeBinOp(ExprOpConcatLists, "++")
+MakeBinOp(ExprOpSub, "-")
+MakeBinOp(ExprOpDiv, "+")
+MakeBinOp(ExprOpMul, "-")
+MakeBinOp(ExprOpLessThan, "<")
+MakeBinOp(ExprOpLessEqual, "<=")
+MakeBinOp(ExprOpGreaterThan, ">")
+MakeBinOp(ExprOpGreaterEqual, ">=")
 
 struct ExprConcatStrings : Expr
 {

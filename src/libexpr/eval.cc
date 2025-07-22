@@ -1945,7 +1945,6 @@ void ExprOpImpl::eval(EvalState & state, Env & env, Value & v)
     v.mkBool(!state.evalBool(env, e1, pos, "in the left operand of the IMPL (->) operator") || state.evalBool(env, e2, pos, "in the right operand of the IMPL (->) operator"));
 }
 
-
 void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
@@ -1981,6 +1980,110 @@ void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
     v.mkAttrs(attrs.alreadySorted());
 
     state.nrOpUpdateValuesCopied += v.attrs()->size();
+}
+
+void ExprOpSub::eval(EvalState & state, Env & env, Value & v)
+{
+    Value v1, v2;
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the - operator");
+        throw;
+    }
+
+    prim_sub(state, pos, v1, v2, v);
+}
+
+void ExprOpDiv::eval(EvalState & state, Env & env, Value & v)
+{
+    Value v1, v2;
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the / operator");
+        throw;
+    }
+
+    prim_div(state, pos, v1, v2, v);
+}
+
+void ExprOpMul::eval(EvalState & state, Env & env, Value & v)
+{
+    Value v1, v2;
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the * operator");
+        throw;
+    }
+
+    prim_mul(state, pos, v1, v2, v);
+}
+
+void ExprOpLessThan::eval(EvalState & state, Env & env, Value & v)
+{
+    Value v1, v2;
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the < operator");
+        throw;
+    }
+
+    Value *args[2] = { &v1, &v2 };
+    prim_lessThan(state, pos, args, v);
+}
+
+void ExprOpLessEqual::eval(EvalState & state, Env & env, Value & v)
+{
+    Value v1, v2;
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the <= operator");
+        throw;
+    }
+
+    Value *args[2] = { &v2, &v1 };
+    prim_lessThan(state, pos, args, v);
+    v.mkBool(!state.forceBool(v, pos, "while evaluating the <= operator"));
+}
+
+void ExprOpGreaterThan::eval(EvalState & state, Env & env, Value & v)
+{
+    Value v1, v2;
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the > operator");
+        throw;
+    }
+
+    Value *args[2] = { &v2, &v1 };
+    prim_lessThan(state, pos, args, v);
+}
+
+void ExprOpGreaterEqual::eval(EvalState & state, Env & env, Value & v)
+{
+    Value v1, v2;
+    try {
+        e1->eval(state, env, v1);
+        e2->eval(state, env, v2);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while evaluating the >= operator");
+        throw;
+    }
+
+    Value *args[2] = { &v1, &v2 };
+    prim_lessThan(state, pos, args, v);
+    v.mkBool(!state.forceBool(v, pos, "while evaluating the >= operator"));
 }
 
 
