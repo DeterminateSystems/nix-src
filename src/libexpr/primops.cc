@@ -524,6 +524,7 @@ static void prim_typeOf(EvalState & state, const PosIdx pos, Value ** args, Valu
         t = "float";
         break;
     case nThunk:
+    case nFailed:
         unreachable();
     }
     v.mkString(t);
@@ -3792,8 +3793,8 @@ static void anyOrAll(bool any, EvalState & state, const PosIdx pos, Value ** arg
     std::string_view errorCtx = any ? "while evaluating the return value of the function passed to builtins.any"
                                     : "while evaluating the return value of the function passed to builtins.all";
 
-    Value vTmp;
     for (auto elem : args[1]->listView()) {
+        Value vTmp;
         state.callFunction(*args[0], *elem, vTmp, pos);
         bool res = state.forceBool(vTmp, pos, errorCtx);
         if (res == any) {
@@ -5088,9 +5089,7 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
         )",
         });
 
-    if (!settings.pureEval) {
-        v.mkInt(time(0));
-    }
+    v.mkInt(time(0));
     addConstant(
         "__currentTime",
         v,
@@ -5118,8 +5117,7 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
             .impureOnly = true,
         });
 
-    if (!settings.pureEval)
-        v.mkString(settings.getCurrentSystem());
+    v.mkString(settings.getCurrentSystem());
     addConstant(
         "__currentSystem",
         v,
