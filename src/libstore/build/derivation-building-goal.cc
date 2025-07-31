@@ -669,7 +669,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
                     *drvOptions,
                     inputPaths,
                     initialOutputs,
-                });
+                    act});
         }
 
         if (!builder->prepareBuild()) {
@@ -798,7 +798,7 @@ void DerivationBuildingGoal::appendLogTailErrorMsg(std::string & msg)
             msg += line;
             msg += "\n";
         }
-        auto nixLogCommand = experimentalFeatureSettings.isEnabled(Xp::NixCommand) ? "nix log" : "nix-store -l";
+        auto nixLogCommand = "nix log";
         // The command is on a separate line for easy copying, such as with triple click.
         // This message will be indented elsewhere, so removing the indentation before the
         // command will not put it at the start of the line unfortunately.
@@ -1268,6 +1268,13 @@ DerivationBuildingGoal::done(BuildResult::Status status, SingleDrvOutputs builtO
         fs.open(traceBuiltOutputsFile, std::fstream::out);
         fs << worker.store.printStorePath(drvPath) << "\t" << buildResult.toString() << std::endl;
     }
+
+    logger->result(
+        act ? act->id : getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
     return amDone(buildResult.success() ? ecSuccess : ecFailed, std::move(ex));
 }
