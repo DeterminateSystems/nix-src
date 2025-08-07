@@ -292,7 +292,7 @@ void parseCmdLine(
 
 void printVersion(const std::string & programName)
 {
-    std::cout << fmt("%1% (Nix) %2%", programName, nixVersion) << std::endl;
+    std::cout << fmt("%s (Determinate Nix %s) %s", programName, determinateNixVersion, nixVersion) << std::endl;
     if (verbosity > lvlInfo) {
         Strings cfg;
 #if NIX_USE_BOEHMGC
