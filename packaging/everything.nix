@@ -75,7 +75,7 @@ let
       };
 
   devdoc = buildEnv {
-    name = "nix-${nix-cli.version}-devdoc";
+    name = "determinate-nix-${nix-cli.version}-devdoc";
     paths = [
       nix-internal-api-docs
       nix-external-api-docs
@@ -84,7 +84,7 @@ let
 
 in
 stdenv.mkDerivation (finalAttrs: {
-  pname = "nix";
+  pname = "determinate-nix";
   version = nix-cli.version;
 
   /**

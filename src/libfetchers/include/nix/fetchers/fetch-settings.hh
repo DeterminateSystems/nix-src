@@ -88,10 +88,7 @@ struct Settings : public Config
           are subsequently modified. Therefore lock files with dirty
           locks should generally only be used for local testing, and
           should not be pushed to other users.
-        )",
-        {},
-        true,
-        Xp::Flakes};
+        )"};
 
     Setting<bool> trustTarballsFromGitForges{
         this,
@@ -118,10 +115,7 @@ struct Settings : public Config
           Path or URI of the global flake registry.
 
           When empty, disables the global flake registry.
-        )",
-        {},
-        true,
-        Xp::Flakes};
+        )"};
 
     ref<Cache> getCache() const;
 
