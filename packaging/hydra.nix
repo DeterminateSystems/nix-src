@@ -158,7 +158,6 @@ in
   tests =
     import ../tests/nixos {
       inherit lib nixpkgs nixpkgsFor;
-      inherit (self.inputs) nixpkgs-23-11;
     }
     // {
 
