@@ -2,6 +2,7 @@
 #include "nix/expr/eval-inline.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/signals.hh"
+#include "nix/expr/parallel-eval.hh"
 
 #include <cstdlib>
 #include <iomanip>
@@ -57,6 +58,14 @@ json printValueAsJSON(
         if (auto i = v.attrs()->get(state.sOutPath))
             return printValueAsJSON(state, strict, *i->value, i->pos, context, copyToStore);
         else {
+            if (state.executor->evalCores > 1) {
+                std::vector<std::pair<Executor::work_t, uint8_t>> work;
+                for (auto & attr : *v.attrs())
+                    if (!attr.value->isFinished())
+                        work.emplace_back([&state, v(attr.value), pos(attr.pos)]() { state.forceValue(*v, pos); }, 0);
+                state.executor->spawn(std::move(work));
+            }
+
             out = json::object();
             for (auto & a : v.attrs()->lexicographicOrder(state.symbols)) {
                 try {
@@ -74,6 +83,14 @@ json printValueAsJSON(
     }
 
     case nList: {
+        if (state.executor->evalCores > 1) {
+            std::vector<std::pair<Executor::work_t, uint8_t>> work;
+            for (auto elem : v.listView())
+                if (!elem->isFinished())
+                    work.emplace_back([&state, elem, pos]() { state.forceValue(*elem, pos); }, 0);
+            state.executor->spawn(std::move(work));
+        }
+
         out = json::array();
         int i = 0;
         for (auto elem : v.listView()) {
