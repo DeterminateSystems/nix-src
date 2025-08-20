@@ -3,6 +3,8 @@
 
 #include "nix/util/types.hh"
 #include "nix/util/configuration.hh"
+#include "nix/util/ref.hh"
+#include "nix/util/sync.hh"
 
 #include <map>
 #include <limits>
@@ -11,11 +13,16 @@
 
 namespace nix::fetchers {
 
+struct Cache;
+
 struct Settings : public Config
 {
     Settings();
 
-    Setting<StringMap> accessTokens{this, {}, "access-tokens",
+    Setting<StringMap> accessTokens{
+        this,
+        {},
+        "access-tokens",
         R"(
           Access tokens used to access protected GitHub, GitLab, or
           other locations requiring token-based authentication.
@@ -66,11 +73,9 @@ struct Settings : public Config
           value.
           )"};
 
-    Setting<bool> allowDirty{this, true, "allow-dirty",
-        "Whether to allow dirty Git/Mercurial trees."};
+    Setting<bool> allowDirty{this, true, "allow-dirty", "Whether to allow dirty Git/Mercurial trees."};
 
-    Setting<bool> warnDirty{this, true, "warn-dirty",
-        "Whether to warn about dirty Git/Mercurial trees."};
+    Setting<bool> warnDirty{this, true, "warn-dirty", "Whether to warn about dirty Git/Mercurial trees."};
 
     Setting<bool> allowDirtyLocks{
         this,
@@ -86,7 +91,9 @@ struct Settings : public Config
         )"};
 
     Setting<bool> trustTarballsFromGitForges{
-        this, true, "trust-tarballs-from-git-forges",
+        this,
+        true,
+        "trust-tarballs-from-git-forges",
         R"(
           If enabled (the default), Nix considers tarballs from
           GitHub and similar Git forges to be locked if a Git revision
@@ -100,12 +107,20 @@ struct Settings : public Config
           e.g. `github:NixOS/patchelf/7c2f768bf9601268a4e71c2ebe91e2011918a70f?narHash=sha256-PPXqKY2hJng4DBVE0I4xshv/vGLUskL7jl53roB8UdU%3D`.
         )"};
 
-    Setting<std::string> flakeRegistry{this, "https://channels.nixos.org/flake-registry.json", "flake-registry",
+    Setting<std::string> flakeRegistry{
+        this,
+        "https://channels.nixos.org/flake-registry.json",
+        "flake-registry",
         R"(
           Path or URI of the global flake registry.
 
           When empty, disables the global flake registry.
         )"};
+
+    ref<Cache> getCache() const;
+
+private:
+    mutable Sync<std::shared_ptr<Cache>> _cache;
 };
 
-}
+} // namespace nix::fetchers

@@ -14,7 +14,6 @@ struct ContentAddress;
 struct DrvOutput;
 struct Realisation;
 
-
 /**
  * Shared serializers between the worker protocol, serve protocol, and a
  * few others.
@@ -28,7 +27,8 @@ struct CommonProto
      * A unidirectional read connection, to be used by the read half of the
      * canonical serializers below.
      */
-    struct ReadConn {
+    struct ReadConn
+    {
         Source & from;
     };
 
@@ -36,7 +36,8 @@ struct CommonProto
      * A unidirectional write connection, to be used by the write half of the
      * canonical serializers below.
      */
-    struct WriteConn {
+    struct WriteConn
+    {
         Sink & to;
     };
 
@@ -54,10 +55,10 @@ struct CommonProto
     }
 };
 
-#define DECLARE_COMMON_SERIALISER(T) \
-    struct CommonProto::Serialise< T > \
-    { \
-        static T read(const StoreDirConfig & store, CommonProto::ReadConn conn); \
+#define DECLARE_COMMON_SERIALISER(T)                                                                 \
+    struct CommonProto::Serialise<T>                                                                 \
+    {                                                                                                \
+        static T read(const StoreDirConfig & store, CommonProto::ReadConn conn);                     \
         static void write(const StoreDirConfig & store, CommonProto::WriteConn conn, const T & str); \
     }
 
@@ -89,12 +90,12 @@ DECLARE_COMMON_SERIALISER(std::map<K COMMA_ V>);
  * that the underlying types never serialize to the empty string.
  *
  * We do this instead of a generic std::optional<T> instance because
- * ordinal tags (0 or 1, here) are a bit of a compatability hazard. For
+ * ordinal tags (0 or 1, here) are a bit of a compatibility hazard. For
  * the same reason, we don't have a std::variant<T..> instances (ordinal
  * tags 0...n).
  *
  * We could the generic instances and then these as specializations for
- * compatability, but that's proven a bit finnicky, and also makes the
+ * compatibility, but that's proven a bit finnicky, and also makes the
  * worker protocol harder to implement in other languages where such
  * specializations may not be allowed.
  */
@@ -103,4 +104,4 @@ DECLARE_COMMON_SERIALISER(std::optional<StorePath>);
 template<>
 DECLARE_COMMON_SERIALISER(std::optional<ContentAddress>);
 
-}
+} // namespace nix

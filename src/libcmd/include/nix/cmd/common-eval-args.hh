@@ -5,6 +5,7 @@
 #include "nix/util/canon-path.hh"
 #include "nix/main/common-args.hh"
 #include "nix/expr/search-path.hh"
+#include "nix/expr/eval-settings.hh"
 
 #include <filesystem>
 
@@ -12,28 +13,30 @@ namespace nix {
 
 class Store;
 
-namespace fetchers { struct Settings; }
+namespace fetchers {
+struct Settings;
+}
 
 class EvalState;
-struct EvalSettings;
 struct CompatibilitySettings;
 class Bindings;
-struct SourcePath;
 
-namespace flake { struct Settings; }
+namespace flake {
+struct Settings;
+}
 
 /**
- * @todo Get rid of global setttings variables
+ * @todo Get rid of global settings variables
  */
 extern fetchers::Settings fetchSettings;
 
 /**
- * @todo Get rid of global setttings variables
+ * @todo Get rid of global settings variables
  */
 extern EvalSettings evalSettings;
 
 /**
- * @todo Get rid of global setttings variables
+ * @todo Get rid of global settings variables
  */
 extern flake::Settings flakeSettings;
 
@@ -55,10 +58,23 @@ struct MixEvalArgs : virtual Args, virtual MixRepair
     std::optional<std::string> evalStoreUrl;
 
 private:
-    struct AutoArgExpr { std::string expr; };
-    struct AutoArgString { std::string s; };
-    struct AutoArgFile { std::filesystem::path path; };
-    struct AutoArgStdin { };
+    struct AutoArgExpr
+    {
+        std::string expr;
+    };
+
+    struct AutoArgString
+    {
+        std::string s;
+    };
+
+    struct AutoArgFile
+    {
+        std::filesystem::path path;
+    };
+
+    struct AutoArgStdin
+    {};
 
     using AutoArg = std::variant<AutoArgExpr, AutoArgString, AutoArgFile, AutoArgStdin>;
 
@@ -70,4 +86,4 @@ private:
  */
 SourcePath lookupFileArg(EvalState & state, std::string_view s, const Path * baseDir = nullptr);
 
-}
+} // namespace nix

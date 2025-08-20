@@ -10,7 +10,7 @@ namespace nix {
 
 std::optional<Path> getCgroupFS();
 
-std::map<std::string, std::string> getCgroups(const Path & cgroupFile);
+StringMap getCgroups(const Path & cgroupFile);
 
 struct CgroupStats
 {
@@ -34,4 +34,4 @@ std::string getCurrentCgroup();
  */
 std::string getRootCgroup();
 
-}
+} // namespace nix

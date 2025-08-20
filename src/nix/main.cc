@@ -31,20 +31,20 @@
 #include <nlohmann/json.hpp>
 
 #ifndef _WIN32
-# include <sys/socket.h>
-# include <ifaddrs.h>
-# include <netdb.h>
-# include <netinet/in.h>
+#  include <sys/socket.h>
+#  include <ifaddrs.h>
+#  include <netdb.h>
+#  include <netinet/in.h>
 #endif
 
 #ifdef __linux__
-# include "nix/util/namespaces.hh"
+#  include "nix/util/linux-namespaces.hh"
 #endif
 
 #ifndef _WIN32
 extern std::string chrootHelperName;
 
-void chrootHelper(int argc, char * * argv);
+void chrootHelper(int argc, char ** argv);
 #endif
 
 #include "nix/util/strings.hh"
@@ -63,25 +63,40 @@ static bool haveInternet()
     Finally free([&]() { freeifaddrs(addrs); });
 
     for (auto i = addrs; i; i = i->ifa_next) {
-        if (!i->ifa_addr) continue;
+        if (!i->ifa_addr)
+            continue;
         if (i->ifa_addr->sa_family == AF_INET) {
             if (ntohl(((sockaddr_in *) i->ifa_addr)->sin_addr.s_addr) != INADDR_LOOPBACK) {
                 return true;
             }
         } else if (i->ifa_addr->sa_family == AF_INET6) {
-            if (!IN6_IS_ADDR_LOOPBACK(&((sockaddr_in6 *) i->ifa_addr)->sin6_addr) &&
-                !IN6_IS_ADDR_LINKLOCAL(&((sockaddr_in6 *) i->ifa_addr)->sin6_addr))
+            if (!IN6_IS_ADDR_LOOPBACK(&((sockaddr_in6 *) i->ifa_addr)->sin6_addr)
+                && !IN6_IS_ADDR_LINKLOCAL(&((sockaddr_in6 *) i->ifa_addr)->sin6_addr))
                 return true;
         }
     }
 
-    if (haveNetworkProxyConnection()) return true;
+    if (haveNetworkProxyConnection())
+        return true;
 
     return false;
 #else
     // TODO implement on Windows
     return true;
 #endif
+}
+
+static void disableNet()
+{
+    // FIXME: should check for command line overrides only.
+    if (!settings.useSubstitutes.overridden)
+        settings.useSubstitutes = false;
+    if (!settings.tarballTtl.overridden)
+        settings.tarballTtl = std::numeric_limits<unsigned int>::max();
+    if (!fileTransferSettings.tries.overridden)
+        fileTransferSettings.tries = 0;
+    if (!fileTransferSettings.connectTimeout.overridden)
+        fileTransferSettings.connectTimeout = 1;
 }
 
 std::string programPath;
@@ -93,7 +108,9 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
     bool helpRequested = false;
     bool showVersion = false;
 
-    NixArgs() : MultiCommand("", RegisterCommand::getCommandsFor({})), MixCommonArgs("nix")
+    NixArgs()
+        : MultiCommand("", RegisterCommand::getCommandsFor({}))
+        , MixCommonArgs("nix")
     {
         categories.clear();
         categories[catHelp] = "Help commands";
@@ -140,29 +157,29 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
         });
 
         aliases = {
-            {"add-to-store", { AliasStatus::Deprecated, {"store", "add-path"}}},
-            {"cat-nar", { AliasStatus::Deprecated, {"nar", "cat"}}},
-            {"cat-store", { AliasStatus::Deprecated, {"store", "cat"}}},
-            {"copy-sigs", { AliasStatus::Deprecated, {"store", "copy-sigs"}}},
-            {"dev-shell", { AliasStatus::Deprecated, {"develop"}}},
-            {"diff-closures", { AliasStatus::Deprecated, {"store", "diff-closures"}}},
-            {"dump-path", { AliasStatus::Deprecated, {"store", "dump-path"}}},
-            {"hash-file", { AliasStatus::Deprecated, {"hash", "file"}}},
-            {"hash-path", { AliasStatus::Deprecated, {"hash", "path"}}},
-            {"ls-nar", { AliasStatus::Deprecated, {"nar", "ls"}}},
-            {"ls-store", { AliasStatus::Deprecated, {"store", "ls"}}},
-            {"make-content-addressable", { AliasStatus::Deprecated, {"store", "make-content-addressed"}}},
-            {"optimise-store", { AliasStatus::Deprecated, {"store", "optimise"}}},
-            {"ping-store", { AliasStatus::Deprecated, {"store", "info"}}},
-            {"sign-paths", { AliasStatus::Deprecated, {"store", "sign"}}},
-            {"shell", { AliasStatus::AcceptedShorthand, {"env", "shell"}}},
-            {"show-derivation", { AliasStatus::Deprecated, {"derivation", "show"}}},
-            {"show-config", { AliasStatus::Deprecated, {"config", "show"}}},
-            {"to-base16", { AliasStatus::Deprecated, {"hash", "to-base16"}}},
-            {"to-base32", { AliasStatus::Deprecated, {"hash", "to-base32"}}},
-            {"to-base64", { AliasStatus::Deprecated, {"hash", "to-base64"}}},
-            {"verify", { AliasStatus::Deprecated, {"store", "verify"}}},
-            {"doctor", { AliasStatus::Deprecated, {"config", "check"}}},
+            {"add-to-store", {AliasStatus::Deprecated, {"store", "add-path"}}},
+            {"cat-nar", {AliasStatus::Deprecated, {"nar", "cat"}}},
+            {"cat-store", {AliasStatus::Deprecated, {"store", "cat"}}},
+            {"copy-sigs", {AliasStatus::Deprecated, {"store", "copy-sigs"}}},
+            {"dev-shell", {AliasStatus::Deprecated, {"develop"}}},
+            {"diff-closures", {AliasStatus::Deprecated, {"store", "diff-closures"}}},
+            {"dump-path", {AliasStatus::Deprecated, {"store", "dump-path"}}},
+            {"hash-file", {AliasStatus::Deprecated, {"hash", "file"}}},
+            {"hash-path", {AliasStatus::Deprecated, {"hash", "path"}}},
+            {"ls-nar", {AliasStatus::Deprecated, {"nar", "ls"}}},
+            {"ls-store", {AliasStatus::Deprecated, {"store", "ls"}}},
+            {"make-content-addressable", {AliasStatus::Deprecated, {"store", "make-content-addressed"}}},
+            {"optimise-store", {AliasStatus::Deprecated, {"store", "optimise"}}},
+            {"ping-store", {AliasStatus::Deprecated, {"store", "info"}}},
+            {"sign-paths", {AliasStatus::Deprecated, {"store", "sign"}}},
+            {"shell", {AliasStatus::AcceptedShorthand, {"env", "shell"}}},
+            {"show-derivation", {AliasStatus::Deprecated, {"derivation", "show"}}},
+            {"show-config", {AliasStatus::Deprecated, {"config", "show"}}},
+            {"to-base16", {AliasStatus::Deprecated, {"hash", "to-base16"}}},
+            {"to-base32", {AliasStatus::Deprecated, {"hash", "to-base32"}}},
+            {"to-base64", {AliasStatus::Deprecated, {"hash", "to-base64"}}},
+            {"verify", {AliasStatus::Deprecated, {"store", "verify"}}},
+            {"doctor", {AliasStatus::Deprecated, {"config", "check"}}},
         };
     };
 
@@ -174,8 +191,8 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
     std::string doc() override
     {
         return
-          #include "nix.md"
-          ;
+#include "nix.md"
+            ;
     }
 
     // Plugins may add new subcommands.
@@ -209,6 +226,14 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
    lowdown. */
 static void showHelp(std::vector<std::string> subcommand, NixArgs & toplevel)
 {
+    // Check for aliases if subcommand has exactly one element
+    if (subcommand.size() == 1) {
+        auto alias = toplevel.aliases.find(subcommand[0]);
+        if (alias != toplevel.aliases.end()) {
+            subcommand = alias->second.replacement;
+        }
+    }
+
     auto mdName = subcommand.empty() ? "nix" : fmt("nix3-%s", concatStringsSep("-", subcommand));
 
     evalSettings.restrictEval = false;
@@ -216,24 +241,26 @@ static void showHelp(std::vector<std::string> subcommand, NixArgs & toplevel)
     EvalState state({}, openStore("dummy://"), fetchSettings, evalSettings);
 
     auto vGenerateManpage = state.allocValue();
-    state.eval(state.parseExprFromString(
-        #include "generate-manpage.nix.gen.hh"
-        , state.rootPath(CanonPath::root)), *vGenerateManpage);
+    state.eval(
+        state.parseExprFromString(
+#include "generate-manpage.nix.gen.hh"
+            , state.rootPath(CanonPath::root)),
+        *vGenerateManpage);
 
     state.corepkgsFS->addFile(
         CanonPath("utils.nix"),
-        #include "utils.nix.gen.hh"
-        );
+#include "utils.nix.gen.hh"
+    );
 
     state.corepkgsFS->addFile(
         CanonPath("/generate-settings.nix"),
-        #include "generate-settings.nix.gen.hh"
-        );
+#include "generate-settings.nix.gen.hh"
+    );
 
     state.corepkgsFS->addFile(
         CanonPath("/generate-store-info.nix"),
-        #include "generate-store-info.nix.gen.hh"
-        );
+#include "generate-store-info.nix.gen.hh"
+    );
 
     auto vDump = state.allocValue();
     vDump->mkString(toplevel.dumpCli());
@@ -277,17 +304,21 @@ struct CmdHelp : Command
     std::string doc() override
     {
         return
-          #include "help.md"
-          ;
+#include "help.md"
+            ;
     }
 
-    Category category() override { return catHelp; }
+    Category category() override
+    {
+        return catHelp;
+    }
 
     void run() override
     {
         assert(parent);
         MultiCommand * toplevel = parent;
-        while (toplevel->parent) toplevel = toplevel->parent;
+        while (toplevel->parent)
+            toplevel = toplevel->parent;
         showHelp(subcommand, getNixArgs(*this));
     }
 };
@@ -304,11 +335,14 @@ struct CmdHelpStores : Command
     std::string doc() override
     {
         return
-          #include "help-stores.md.gen.hh"
-          ;
+#include "help-stores.md.gen.hh"
+            ;
     }
 
-    Category category() override { return catHelp; }
+    Category category() override
+    {
+        return catHelp;
+    }
 
     void run() override
     {
@@ -318,7 +352,7 @@ struct CmdHelpStores : Command
 
 static auto rCmdHelpStores = registerCommand<CmdHelpStores>("help-stores");
 
-void mainWrapped(int argc, char * * argv)
+void mainWrapped(int argc, char ** argv)
 {
     savedArgv = argv;
 
@@ -343,20 +377,22 @@ void mainWrapped(int argc, char * * argv)
        self-aware. That is, it has to know where it is installed. We
        don't think it's sentient.
      */
-    settings.buildHook.setDefault(Strings {
-        getNixBin({}).string(),
-        "__build-remote",
-    });
+    settings.buildHook.setDefault(
+        Strings{
+            getNixBin({}).string(),
+            "__build-remote",
+        });
 
-    #ifdef __linux__
+#ifdef __linux__
     if (isRootUser()) {
         try {
             saveMountNamespace();
             if (unshare(CLONE_NEWNS) == -1)
                 throw SysError("setting up a private mount namespace");
-        } catch (Error & e) { }
+        } catch (Error & e) {
+        }
     }
-    #endif
+#endif
 
     programPath = argv[0];
     auto programName = std::string(baseNameOf(programPath));
@@ -366,12 +402,14 @@ void mainWrapped(int argc, char * * argv)
 
     if (argc > 1 && std::string_view(argv[1]) == "__build-remote") {
         programName = "build-remote";
-        argv++; argc--;
+        argv++;
+        argc--;
     }
 
     {
         auto legacy = RegisterLegacyCommand::commands()[programName];
-        if (legacy) return legacy(argc, argv);
+        if (legacy)
+            return legacy(argc, argv);
     }
 
     evalSettings.pureEval = true;
@@ -405,9 +443,11 @@ void mainWrapped(int argc, char * * argv)
         for (auto & builtinPtr : state.getBuiltins().attrs()->lexicographicOrder(state.symbols)) {
             auto & builtin = *builtinPtr;
             auto b = nlohmann::json::object();
-            if (!builtin.value->isPrimOp()) continue;
+            if (!builtin.value->isPrimOp())
+                continue;
             auto primOp = builtin.value->primOp();
-            if (!primOp->doc) continue;
+            if (!primOp->doc)
+                continue;
             b["args"] = primOp->args;
             b["doc"] = trim(stripIndentation(primOp->doc));
             if (primOp->experimentalFeature)
@@ -416,7 +456,8 @@ void mainWrapped(int argc, char * * argv)
         }
         for (auto & [name, info] : state.constantInfos) {
             auto b = nlohmann::json::object();
-            if (!info.doc) continue;
+            if (!info.doc)
+                continue;
             b["doc"] = trim(stripIndentation(info.doc));
             b["type"] = showType(info.type, false);
             if (info.impureOnly)
@@ -432,28 +473,37 @@ void mainWrapped(int argc, char * * argv)
         return;
     }
 
-    Finally printCompletions([&]()
-    {
+    Finally printCompletions([&]() {
         if (args.completions) {
             switch (args.completions->type) {
             case Completions::Type::Normal:
-                logger->cout("normal"); break;
+                logger->cout("normal");
+                break;
             case Completions::Type::Filenames:
-                logger->cout("filenames"); break;
+                logger->cout("filenames");
+                break;
             case Completions::Type::Attrs:
-                logger->cout("attrs"); break;
+                logger->cout("attrs");
+                break;
             }
             for (auto & s : args.completions->completions)
                 logger->cout(s.completion + "\t" + trim(s.description));
         }
     });
 
+    if (getEnv("NIX_GET_COMPLETIONS"))
+        /* Avoid fetching stuff during tab completion. We have to this
+           early because we haven't checked `haveInternet()` yet
+           (below). */
+        disableNet();
+
     try {
         auto isNixCommand = std::regex_search(programName, std::regex("nix$"));
         auto allowShebang = isNixCommand && argc > 1;
-        args.parseCmdline(argvToStrings(argc, argv),allowShebang);
+        args.parseCmdline(argvToStrings(argc, argv), allowShebang);
     } catch (UsageError &) {
-        if (!args.helpRequested && !args.completions) throw;
+        if (!args.helpRequested && !args.completions)
+            throw;
     }
 
     applyJSONLogger();
@@ -472,7 +522,8 @@ void mainWrapped(int argc, char * * argv)
         return;
     }
 
-    if (args.completions) return;
+    if (args.completions)
+        return;
 
     if (args.showVersion) {
         printVersion(programName);
@@ -482,25 +533,15 @@ void mainWrapped(int argc, char * * argv)
     if (!args.command)
         throw UsageError("no subcommand specified");
 
-    experimentalFeatureSettings.require(
-        args.command->second->experimentalFeature());
+    experimentalFeatureSettings.require(args.command->second->experimentalFeature());
 
     if (args.useNet && !haveInternet()) {
         warn("you don't have Internet access; disabling some network-dependent features");
         args.useNet = false;
     }
 
-    if (!args.useNet) {
-        // FIXME: should check for command line overrides only.
-        if (!settings.useSubstitutes.overridden)
-            settings.useSubstitutes = false;
-        if (!settings.tarballTtl.overridden)
-            settings.tarballTtl = std::numeric_limits<unsigned int>::max();
-        if (!fileTransferSettings.tries.overridden)
-            fileTransferSettings.tries = 0;
-        if (!fileTransferSettings.connectTimeout.overridden)
-            fileTransferSettings.connectTimeout = 1;
-    }
+    if (!args.useNet)
+        disableNet();
 
     if (args.refresh) {
         settings.tarballTtl = 0;
@@ -522,9 +563,9 @@ void mainWrapped(int argc, char * * argv)
     }
 }
 
-}
+} // namespace nix
 
-int main(int argc, char * * argv)
+int main(int argc, char ** argv)
 {
     // The CLI has a more detailed version than the libraries; see nixVersion.
     nix::nixVersion = NIX_CLI_VERSION;
@@ -534,7 +575,5 @@ int main(int argc, char * * argv)
     nix::setStackSize(64 * 1024 * 1024);
 #endif
 
-    return nix::handleExceptions(argv[0], [&]() {
-        nix::mainWrapped(argc, argv);
-    });
+    return nix::handleExceptions(argv[0], [&]() { nix::mainWrapped(argc, argv); });
 }

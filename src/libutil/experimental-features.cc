@@ -289,6 +289,14 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
         .trackingUrl = "https://github.com/NixOS/nix/milestone/55",
     },
     {
+        .tag = Xp::ExternalBuilders,
+        .name = "external-builders",
+        .description = R"(
+            Enables support for external builders / sandbox providers.
+        )",
+        .trackingUrl = "",
+    },
+    {
         .tag = Xp::BLAKE3Hashes,
         .name = "blake3-hashes",
         .description = R"(
@@ -332,8 +340,8 @@ const std::optional<ExperimentalFeature> parseExperimentalFeature(const std::str
 
 std::string_view showExperimentalFeature(const ExperimentalFeature tag)
 {
-    assert((size_t)tag < xpFeatureDetails.size());
-    return xpFeatureDetails[(size_t)tag].name;
+    assert((size_t) tag < xpFeatureDetails.size());
+    return xpFeatureDetails[(size_t) tag].name;
 }
 
 nlohmann::json documentExperimentalFeatures()
@@ -342,7 +350,8 @@ nlohmann::json documentExperimentalFeatures()
     for (auto & xpFeature : xpFeatureDetails) {
         std::stringstream docOss;
         docOss << stripIndentation(xpFeature.description);
-        docOss << fmt("\nRefer to [%1% tracking issue](%2%) for feature tracking.", xpFeature.name, xpFeature.trackingUrl);
+        docOss << fmt(
+            "\nRefer to [%1% tracking issue](%2%) for feature tracking.", xpFeature.name, xpFeature.trackingUrl);
         res[std::string{xpFeature.name}] = trim(docOss.str());
     }
     return (nlohmann::json) res;
@@ -358,11 +367,14 @@ std::set<ExperimentalFeature> parseFeatures(const StringSet & rawFeatures)
 }
 
 MissingExperimentalFeature::MissingExperimentalFeature(ExperimentalFeature feature)
-    : Error("experimental Nix feature '%1%' is disabled; add '--extra-experimental-features %1%' to enable it", showExperimentalFeature(feature))
+    : Error(
+          "experimental Nix feature '%1%' is disabled; add '--extra-experimental-features %1%' to enable it",
+          showExperimentalFeature(feature))
     , missingFeature(feature)
-{}
+{
+}
 
-std::ostream & operator <<(std::ostream & str, const ExperimentalFeature & feature)
+std::ostream & operator<<(std::ostream & str, const ExperimentalFeature & feature)
 {
     return str << showExperimentalFeature(feature);
 }
@@ -383,4 +395,4 @@ void from_json(const nlohmann::json & j, ExperimentalFeature & feature)
         throw Error("Unknown experimental feature '%s' in JSON input", input);
 }
 
-}
+} // namespace nix

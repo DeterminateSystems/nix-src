@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.29 and Determinate Nix 3.6.7.<!-- differences -->
+This section lists the differences between upstream Nix 2.30 and Determinate Nix 3.8.6.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -76,3 +76,71 @@ This section lists the differences between upstream Nix 2.29 and Determinate Nix
 <!-- Determinate Nix version 3.6.6 -->
 
 <!-- Determinate Nix version 3.6.7 -->
+
+<!-- Determinate Nix version 3.6.8 -->
+
+* Fix fetchToStore() caching with --impure, improve testing by @edolstra in [DeterminateSystems/nix-src#117](https://github.com/DeterminateSystems/nix-src/pull/117)
+
+* Add lazy-locks setting by @edolstra in [DeterminateSystems/nix-src#113](https://github.com/DeterminateSystems/nix-src/pull/113)
+
+* Sync 2.29.1 by @edolstra in [DeterminateSystems/nix-src#124](https://github.com/DeterminateSystems/nix-src/pull/124)
+
+* Release v3.6.7 by @github-actions in [DeterminateSystems/nix-src#126](https://github.com/DeterminateSystems/nix-src/pull/126)
+
+<!-- Determinate Nix version 3.7.0 -->
+
+* Overriding deeply-nested transitive flake inputs now works, by @edolstra in [DeterminateSystems/nix-src#108](https://github.com/DeterminateSystems/nix-src/pull/108)
+
+* `nix store delete` now explains why deletion fails by @edolstra in [DeterminateSystems/nix-src#130](https://github.com/DeterminateSystems/nix-src/pull/130)
+
+* New command: `nix flake prefetch-inputs` for improved CI performance, by @edolstra in [DeterminateSystems/nix-src#127](https://github.com/DeterminateSystems/nix-src/pull/127)
+
+<!-- Determinate Nix version 3.8.0 -->
+
+* nix flake check: Skip substitutable derivations by @edolstra in [DeterminateSystems/nix-src#134](https://github.com/DeterminateSystems/nix-src/pull/134)
+
+* lockFlake(): When updating a lock, respect the input's lock file by @edolstra in [DeterminateSystems/nix-src#137](https://github.com/DeterminateSystems/nix-src/pull/137)
+
+<!-- Determinate Nix version 3.8.1 -->
+
+* Address ifdef problem with macOS/BSD sandboxing by @gustavderdrache in [DeterminateSystems/nix-src#142](https://github.com/DeterminateSystems/nix-src/pull/142)
+
+<!-- Determinate Nix version 3.8.2 -->
+
+* ci: don't run the full test suite for x86_64-darwin by @grahamc in [DeterminateSystems/nix-src#144](https://github.com/DeterminateSystems/nix-src/pull/144)
+
+* Try publishing the manual again by @grahamc in [DeterminateSystems/nix-src#145](https://github.com/DeterminateSystems/nix-src/pull/145)
+
+<!-- Determinate Nix version 3.8.3 -->
+
+* Add an `external-builders` experimental feature by @cole-h in [DeterminateSystems/nix-src#141](https://github.com/DeterminateSystems/nix-src/pull/141)
+
+* Add support for external builders by @edolstra in [DeterminateSystems/nix-src#78](https://github.com/DeterminateSystems/nix-src/pull/78)
+
+<!-- Determinate Nix version 3.8.4 -->
+
+* Revert "Use WAL mode for SQLite cache databases" by @grahamc in [DeterminateSystems/nix-src#155](https://github.com/DeterminateSystems/nix-src/pull/155)
+
+<!-- Determinate Nix version 3.8.5 -->
+
+* Tab completing arguments to Nix avoids network access. [DeterminateSystems/nix-src#161](https://github.com/DeterminateSystems/nix-src/pull/161)
+
+* Nix on ZFS no longer stalls for multiple seconds at a time [DeterminateSystems/nix-src#158](https://github.com/DeterminateSystems/nix-src/pull/158)
+
+* Importing Nixpkgs and other tarballs to the cache 2-4x faster [DeterminateSystems/nix-src#149](https://github.com/DeterminateSystems/nix-src/pull/149)
+
+* Adding paths to the store is significantly faster [DeterminateSystems/nix-src#162](https://github.com/DeterminateSystems/nix-src/pull/162)
+
+<!-- Determinate Nix version 3.8.6 -->
+
+* Auto update release notes by @grahamc in [DeterminateSystems/nix-src#170](https://github.com/DeterminateSystems/nix-src/pull/170)
+
+* Use WAL mode for SQLite cache databases (2nd attempt) by @edolstra in [DeterminateSystems/nix-src#167](https://github.com/DeterminateSystems/nix-src/pull/167)
+
+* Enable parallel marking in boehm-gc by @edolstra in [DeterminateSystems/nix-src#168](https://github.com/DeterminateSystems/nix-src/pull/168)
+
+* BasicClientConnection::queryPathInfo(): Don't throw exception for invalid paths by @edolstra in [DeterminateSystems/nix-src#172](https://github.com/DeterminateSystems/nix-src/pull/172)
+
+* Fix queryPathInfo() negative caching by @edolstra in [DeterminateSystems/nix-src#173](https://github.com/DeterminateSystems/nix-src/pull/173)
+
+* forceDerivation(): Wait for async path write after forcing value by @edolstra in [DeterminateSystems/nix-src#176](https://github.com/DeterminateSystems/nix-src/pull/176)

@@ -7,9 +7,11 @@
 
 namespace nix {
 
+// FIXME: should turn this into an std::variant to represent the
+// several root types.
+using GcRootInfo = std::string;
 
-typedef std::unordered_map<StorePath, std::unordered_set<std::string>> Roots;
-
+typedef std::unordered_map<StorePath, std::unordered_set<GcRootInfo>> Roots;
 
 struct GCOptions
 {
@@ -53,8 +55,13 @@ struct GCOptions
      * Stop after at least `maxFreed` bytes have been freed.
      */
     uint64_t maxFreed{std::numeric_limits<uint64_t>::max()};
-};
 
+    /**
+     * Whether to hide potentially sensitive information about GC
+     * roots (such as PIDs).
+     */
+    bool censor = false;
+};
 
 struct GCResults
 {
@@ -70,7 +77,6 @@ struct GCResults
      */
     uint64_t bytesFreed = 0;
 };
-
 
 /**
  * Mix-in class for \ref Store "stores" which expose a notion of garbage
@@ -89,7 +95,7 @@ struct GCResults
  *    Some views have only a no-op temp roots even though others to the
  *    same store allow triggering GC. For instance one can't add a root
  *    over ssh, but that doesn't prevent someone from gc-ing that store
- *    accesed via SSH locally).
+ *    accessed via SSH locally).
  *
  *  - The derived `LocalFSStore` class has `LocalFSStore::addPermRoot`,
  *    which is not part of this class because it relies on the notion of
@@ -117,4 +123,4 @@ struct GcStore : public virtual Store
     virtual void collectGarbage(const GCOptions & options, GCResults & results) = 0;
 };
 
-}
+} // namespace nix

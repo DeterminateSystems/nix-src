@@ -82,7 +82,8 @@ struct DerivationBuilderParams
         , initialOutputs{initialOutputs}
         , buildMode{buildMode}
         , act{act}
-    { }
+    {
+    }
 
     DerivationBuilderParams(DerivationBuilderParams &&) = default;
 };
@@ -103,14 +104,6 @@ struct DerivationBuilderCallbacks
      * Close the log file.
      */
     virtual void closeLogFile() = 0;
-
-    /**
-     * Aborts if any output is not valid or corrupt, and otherwise
-     * returns a 'SingleDrvOutputs' structure containing all outputs.
-     *
-     * @todo Probably should just be in `DerivationGoal`.
-     */
-    virtual SingleDrvOutputs assertPathValidity() = 0;
 
     virtual void appendLogTailErrorMsg(std::string & msg) = 0;
 
@@ -145,11 +138,6 @@ struct DerivationBuilderCallbacks
  */
 struct DerivationBuilder : RestrictionContext
 {
-    /**
-     * User selected for running the builder.
-     */
-    std::unique_ptr<UserLock> buildUser;
-
     /**
      * The process ID of the builder.
      */
@@ -209,8 +197,6 @@ struct DerivationBuilder : RestrictionContext
 };
 
 std::unique_ptr<DerivationBuilder> makeDerivationBuilder(
-    Store & store,
-    std::unique_ptr<DerivationBuilderCallbacks> miscMethods,
-    DerivationBuilderParams params);
+    Store & store, std::unique_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params);
 
-}
+} // namespace nix

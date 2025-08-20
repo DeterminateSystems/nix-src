@@ -6,12 +6,7 @@
 namespace nix {
 
 // See: https://github.com/NixOS/nix/issues/9730
-void printAmbiguous(
-    EvalState & state,
-    Value & v,
-    std::ostream & str,
-    std::set<const void *> * seen,
-    int depth)
+void printAmbiguous(EvalState & state, Value & v, std::ostream & str, std::set<const void *> * seen, int depth)
 {
     checkInterrupt();
 
@@ -54,11 +49,13 @@ void printAmbiguous(
         break;
     }
     case nList:
-        if (seen && v.listSize() && !seen->insert(v.listElems()).second)
+        /* Use pointer to the Value instead of pointer to the elements, because
+           that would need to explicitly handle the case of SmallList. */
+        if (seen && v.listSize() && !seen->insert(&v).second)
             str << "«repeated»";
         else {
             str << "[ ";
-            for (auto v2 : v.listItems()) {
+            for (auto v2 : v.listView()) {
                 if (v2)
                     printAmbiguous(state, *v2, str, seen, depth - 1);
                 else
@@ -102,4 +99,4 @@ void printAmbiguous(
     }
 }
 
-}
+} // namespace nix

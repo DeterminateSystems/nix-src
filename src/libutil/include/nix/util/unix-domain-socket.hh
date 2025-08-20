@@ -9,6 +9,8 @@
 #endif
 #include <unistd.h>
 
+#include <filesystem>
+
 namespace nix {
 
 /**
@@ -78,11 +80,16 @@ void bind(Socket fd, const std::string & path);
 /**
  * Connect to a Unix domain socket.
  */
-void connect(Socket fd, const std::string & path);
+void connect(Socket fd, const std::filesystem::path & path);
 
 /**
  * Connect to a Unix domain socket.
  */
 AutoCloseFD connect(const std::filesystem::path & path);
 
-}
+/**
+ * Connect to a Unix domain socket.
+ */
+AutoCloseFD connect(const std::filesystem::path & path);
+
+} // namespace nix

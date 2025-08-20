@@ -10,9 +10,7 @@
 
 namespace nix {
 
-
 MakeError(BadHash, Error);
-
 
 enum struct HashAlgorithm : char { MD5 = 42, SHA1, SHA256, SHA512, BLAKE3 };
 
@@ -38,7 +36,7 @@ enum struct HashFormat : int {
     /// @brief Lowercase hexadecimal encoding. @see base16Chars
     Base16,
     /// @brief "<hash algo>:<Base 64 hash>", format of the SRI integrity attribute.
-    /// @see W3C recommendation [Subresource Intergrity](https://www.w3.org/TR/SRI/).
+    /// @see W3C recommendation [Subresource Integrity](https://www.w3.org/TR/SRI/).
     SRI
 };
 
@@ -68,7 +66,7 @@ struct Hash
 
     /**
      * Parse a hash from a string representation like the above, except the
-     * type prefix is mandatory is there is no separate arguement.
+     * type prefix is mandatory is there is no separate argument.
      */
     static Hash parseAnyPrefixed(std::string_view s);
 
@@ -91,12 +89,12 @@ public:
     /**
      * Check whether two hashes are equal.
      */
-    bool operator == (const Hash & h2) const noexcept;
+    bool operator==(const Hash & h2) const noexcept;
 
     /**
      * Compare how two hashes are ordered.
      */
-    std::strong_ordering operator <=> (const Hash & h2) const noexcept;
+    std::strong_ordering operator<=>(const Hash & h2) const noexcept;
 
     /**
      * Returns the length of a base-16 representation of this hash.
@@ -160,7 +158,8 @@ std::string printHash16or32(const Hash & hash);
 /**
  * Compute the hash of the given string.
  */
-Hash hashString(HashAlgorithm ha, std::string_view s, const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
+Hash hashString(
+    HashAlgorithm ha, std::string_view s, const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
 
 /**
  * Compute the hash of the given file, hashing its contents directly.
@@ -240,5 +239,4 @@ public:
     HashResult currentHash();
 };
 
-
-}
+} // namespace nix

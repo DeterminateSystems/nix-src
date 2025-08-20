@@ -60,8 +60,6 @@ if bdw_gc.found()
     define_value = cxx.has_function(funcspec).to_int()
     configdata_priv.set(define_name, define_value)
   endforeach
-  # Affects ABI, because it changes what bdw_gc itself does!
-  configdata_pub.set('GC_THREADS', 1)
 endif
 # Used in public header. Affects ABI!
 configdata_pub.set('NIX_USE_BOEHMGC', bdw_gc.found().to_int())
@@ -140,6 +138,8 @@ sources = files(
   'eval-cache.cc',
   'eval-error.cc',
   'eval-gc.cc',
+  'eval-profiler-settings.cc',
+  'eval-profiler.cc',
   'eval-settings.cc',
   'eval.cc',
   'function-trace.cc',

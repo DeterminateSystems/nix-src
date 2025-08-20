@@ -23,6 +23,8 @@ dot = find_program('dot', native : true, required : false)
 
 nix_bin_dir = fs.parent(nix.full_path())
 
+subdir('nix-meson-build-support/default-system-cpu')
+
 test_confdata = {
   'bindir': nix_bin_dir,
   'coreutils': fs.parent(coreutils.full_path()),
@@ -30,7 +32,7 @@ test_confdata = {
   'bash': bash.full_path(),
   'sandbox_shell': busybox.found() ? busybox.full_path() : '',
   'PACKAGE_VERSION': meson.project_version(),
-  'system': host_machine.cpu_family() + '-' + host_machine.system(),
+  'system': nix_system_cpu + '-' + host_machine.system(),
 }
 
 # Just configures `common/vars-and-functions.sh.in`.
@@ -73,6 +75,7 @@ suites = [
       'gc-runtime.sh',
       'tarball.sh',
       'fetchGit.sh',
+      'fetchGitShallow.sh',
       'fetchurl.sh',
       'fetchPath.sh',
       'fetchTree-file.sh',
@@ -133,6 +136,7 @@ suites = [
       'post-hook.sh',
       'function-trace.sh',
       'formatter.sh',
+      'flamegraph-profiler.sh',
       'eval-store.sh',
       'why-depends.sh',
       'derivation-json.sh',

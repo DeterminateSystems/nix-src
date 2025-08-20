@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nix/expr/value.hh"
+#include "nix/expr/symbol-table.hh"
 
 namespace nix {
 
@@ -14,11 +15,6 @@ namespace nix {
  *
  * See: https://github.com/NixOS/nix/issues/9730
  */
-void printAmbiguous(
-    EvalState & state,
-    Value & v,
-    std::ostream & str,
-    std::set<const void *> * seen,
-    int depth);
+void printAmbiguous(EvalState & state, Value & v, std::ostream & str, std::set<const void *> * seen, int depth);
 
-}
+} // namespace nix

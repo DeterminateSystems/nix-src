@@ -46,7 +46,9 @@ public:
         std::string_view host,
         std::string_view keyFile,
         std::string_view sshPublicHostKey,
-        bool useMaster, bool compress, Descriptor logFD = INVALID_DESCRIPTOR);
+        bool useMaster,
+        bool compress,
+        Descriptor logFD = INVALID_DESCRIPTOR);
 
     struct Connection
     {
@@ -62,7 +64,7 @@ public:
          *
          * Current implementation is to use `fcntl` with `F_SETPIPE_SZ`,
          * which is Linux-only. For this implementation, `size` must
-         * convertable to an `int`. In other words, it must be within
+         * convertible to an `int`. In other words, it must be within
          * `[0, INT_MAX]`.
          */
         void trySetBufferSize(size_t size);
@@ -75,9 +77,7 @@ public:
      * execute). Will not be used when "fake SSHing" to the local
      * machine.
      */
-    std::unique_ptr<Connection> startCommand(
-        Strings && command,
-        Strings && extraSshArgs = {});
+    std::unique_ptr<Connection> startCommand(Strings && command, Strings && extraSshArgs = {});
 };
 
-}
+} // namespace nix

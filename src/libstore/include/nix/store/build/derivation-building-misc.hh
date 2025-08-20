@@ -1,6 +1,6 @@
 #pragma once
 /**
- * @file Misc type defitions for both local building and remote (RPC building)
+ * @file Misc type definitions for both local building and remote (RPC building)
  */
 
 #include "nix/util/hash.hh"
@@ -25,6 +25,7 @@ struct InitialOutputStatus
 {
     StorePath path;
     PathStatus status;
+
     /**
      * Valid in the store, and additionally non-corrupt if we are repairing
      */
@@ -32,6 +33,7 @@ struct InitialOutputStatus
     {
         return status == PathStatus::Valid;
     }
+
     /**
      * Merely present, allowed to be corrupt
      */
@@ -55,4 +57,4 @@ void runPostBuildHook(Store & store, Logger & logger, const StorePath & drvPath,
  */
 std::string showKnownOutputs(Store & store, const Derivation & drv);
 
-}
+} // namespace nix
