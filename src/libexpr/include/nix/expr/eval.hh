@@ -52,6 +52,7 @@ struct AsyncPathWriter;
 namespace eval_cache {
 class EvalCache;
 }
+struct Executor;
 
 /**
  * Increments a count on construction and decrements on destruction.
@@ -221,6 +222,9 @@ class EvalState : public std::enable_shared_from_this<EvalState>
 public:
     const fetchers::Settings & fetchSettings;
     const EvalSettings & settings;
+
+    ref<Executor> executor;
+
     SymbolTable symbols;
     PosTable positions;
 
@@ -369,19 +373,13 @@ private:
     Sync<std::unordered_map<SourcePath, StorePath>> srcToStore;
 
     /**
-     * A cache from path names to parse trees.
+     * A cache that maps paths to "resolved" paths for importing Nix
+     * expressions, i.e. `/foo` to `/foo/default.nix`.
      */
-    typedef std::unordered_map<
-        SourcePath,
-        Expr *,
-        std::hash<SourcePath>,
-        std::equal_to<SourcePath>,
-        traceable_allocator<std::pair<const SourcePath, Expr *>>>
-        FileParseCache;
-    FileParseCache fileParseCache;
+    SharedSync<std::unordered_map<SourcePath, SourcePath>> importResolutionCache;
 
     /**
-     * A cache from path names to values.
+     * A cache from resolved paths to values.
      */
     typedef std::unordered_map<
         SourcePath,
@@ -390,13 +388,13 @@ private:
         std::equal_to<SourcePath>,
         traceable_allocator<std::pair<const SourcePath, Value>>>
         FileEvalCache;
-    FileEvalCache fileEvalCache;
+    SharedSync<FileEvalCache> fileEvalCache;
 
     /**
      * Associate source positions of certain AST nodes with their preceding doc comment, if they have one.
      * Grouped by file.
      */
-    std::unordered_map<SourcePath, DocCommentMap> positionToDocComment;
+    SharedSync<std::unordered_map<SourcePath, DocCommentMap>> positionToDocComment;
 
     LookupPath lookupPath;
 
@@ -406,18 +404,6 @@ private:
      * Cache used by prim_match().
      */
     std::shared_ptr<RegexCache> regexCache;
-
-#if NIX_USE_BOEHMGC
-    /**
-     * Allocation cache for GC'd Value objects.
-     */
-    std::shared_ptr<void *> valueAllocCache;
-
-    /**
-     * Allocation cache for size-1 Env objects.
-     */
-    std::shared_ptr<void *> env1AllocCache;
-#endif
 
 public:
 
@@ -545,7 +531,10 @@ public:
      * application, call the function and overwrite `v` with the
      * result.  Otherwise, this is a no-op.
      */
-    inline void forceValue(Value & v, const PosIdx pos);
+    inline void forceValue(Value & v, const PosIdx pos)
+    {
+        v.force(*this, pos);
+    }
 
     void tryFixupBlackHolePos(Value & v, PosIdx pos);
 
@@ -781,10 +770,11 @@ private:
         std::shared_ptr<StaticEnv> & staticEnv);
 
     /**
-     * Current Nix call stack depth, used with `max-call-depth` setting to throw stack overflow hopefully before we run
-     * out of system stack.
+     * Current Nix call stack depth, used with `max-call-depth`
+     * setting to throw stack overflow hopefully before we run out of
+     * system stack.
      */
-    size_t callDepth = 0;
+    thread_local static size_t callDepth;
 
 public:
 
@@ -960,20 +950,29 @@ private:
      */
     std::string mkSingleDerivedPathStringRaw(const SingleDerivedPath & p);
 
-    unsigned long nrEnvs = 0;
-    unsigned long nrValuesInEnvs = 0;
-    unsigned long nrValues = 0;
-    unsigned long nrListElems = 0;
-    unsigned long nrLookups = 0;
-    unsigned long nrAttrsets = 0;
-    unsigned long nrAttrsInAttrsets = 0;
-    unsigned long nrAvoided = 0;
-    unsigned long nrOpUpdates = 0;
-    unsigned long nrOpUpdateValuesCopied = 0;
-    unsigned long nrListConcats = 0;
-    unsigned long nrPrimOpCalls = 0;
-    unsigned long nrFunctionCalls = 0;
+    std::atomic<uint64_t> nrEnvs = 0;
+    std::atomic<uint64_t> nrValuesInEnvs = 0;
+    std::atomic<uint64_t> nrValues = 0;
+    std::atomic<uint64_t> nrListElems = 0;
+    std::atomic<uint64_t> nrLookups = 0;
+    std::atomic<uint64_t> nrAttrsets = 0;
+    std::atomic<uint64_t> nrAttrsInAttrsets = 0;
+    std::atomic<uint64_t> nrAvoided = 0;
+    std::atomic<uint64_t> nrOpUpdates = 0;
+    std::atomic<uint64_t> nrOpUpdateValuesCopied = 0;
+    std::atomic<uint64_t> nrListConcats = 0;
+    std::atomic<uint64_t> nrPrimOpCalls = 0;
+    std::atomic<uint64_t> nrFunctionCalls = 0;
 
+public:
+    std::atomic<uint64_t> nrThunksAwaited{0};
+    std::atomic<uint64_t> nrThunksAwaitedSlow{0};
+    std::atomic<uint64_t> microsecondsWaiting{0};
+    std::atomic<uint64_t> currentlyWaiting{0};
+    std::atomic<uint64_t> maxWaiting{0};
+    std::atomic<uint64_t> nrSpuriousWakeups{0};
+
+private:
     bool countCalls;
 
     typedef std::map<std::string, size_t> PrimOpCalls;
