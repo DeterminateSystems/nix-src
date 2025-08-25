@@ -4,7 +4,7 @@
   mkMesonLibrary,
 
   unixtools,
-  darwin,
+  apple-sdk,
 
   nix-util,
   boost,
@@ -32,15 +32,17 @@ let
 in
 
 mkMesonLibrary (finalAttrs: {
-  pname = "nix-store";
+  pname = "determinate-nix-store";
   inherit version;
 
   workDir = ./.;
   fileset = fileset.unions [
     ../../nix-meson-build-support
     ./nix-meson-build-support
+    # FIXME: get rid of these symlinks.
     ../../.version
     ./.version
+    ../../.version-determinate
     ./meson.build
     ./meson.options
     ./include/nix/store/meson.build
@@ -66,7 +68,7 @@ mkMesonLibrary (finalAttrs: {
     ]
     ++ lib.optional stdenv.hostPlatform.isLinux libseccomp
     # There have been issues building these dependencies
-    ++ lib.optional stdenv.hostPlatform.isDarwin darwin.apple_sdk.libs.sandbox
+    ++ lib.optional stdenv.hostPlatform.isDarwin apple-sdk
     ++ lib.optional withAWS aws-sdk-cpp;
 
   propagatedBuildInputs = [

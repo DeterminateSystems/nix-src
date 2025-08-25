@@ -15,10 +15,7 @@ class AccessKeysTest : public ::testing::Test
 protected:
 
 public:
-    void SetUp() override
-    {
-        experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
-    }
+    void SetUp() override {}
 
     void TearDown() override {}
 };

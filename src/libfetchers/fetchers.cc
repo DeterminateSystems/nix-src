@@ -5,6 +5,7 @@
 #include "nix/util/json-utils.hh"
 #include "nix/fetchers/store-path-accessor.hh"
 #include "nix/fetchers/fetch-settings.hh"
+#include "nix/util/forwarding-source-accessor.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -191,35 +192,30 @@ bool Input::contains(const Input & other) const
 }
 
 // FIXME: remove
-std::pair<StorePath, Input> Input::fetchToStore(ref<Store> store) const
+std::tuple<StorePath, ref<SourceAccessor>, Input> Input::fetchToStore(ref<Store> store) const
 {
     if (!scheme)
         throw Error("cannot fetch unsupported input '%s'", attrsToJSON(toAttrs()));
 
-    auto [storePath, input] = [&]() -> std::pair<StorePath, Input> {
-        try {
-            auto [accessor, result] = getAccessorUnchecked(store);
+    try {
+        auto [accessor, result] = getAccessorUnchecked(store);
 
-            auto storePath =
-                nix::fetchToStore(*settings, *store, SourcePath(accessor), FetchMode::Copy, result.getName());
+        auto storePath = nix::fetchToStore(*settings, *store, SourcePath(accessor), FetchMode::Copy, result.getName());
 
-            auto narHash = store->queryPathInfo(storePath)->narHash;
-            result.attrs.insert_or_assign("narHash", narHash.to_string(HashFormat::SRI, true));
+        auto narHash = store->queryPathInfo(storePath)->narHash;
+        result.attrs.insert_or_assign("narHash", narHash.to_string(HashFormat::SRI, true));
 
-            result.attrs.insert_or_assign("__final", Explicit<bool>(true));
+        result.attrs.insert_or_assign("__final", Explicit<bool>(true));
 
-            assert(result.isFinal());
+        assert(result.isFinal());
 
-            checkLocks(*this, result);
+        checkLocks(*this, result);
 
-            return {storePath, result};
-        } catch (Error & e) {
-            e.addTrace({}, "while fetching the input '%s'", to_string());
-            throw;
-        }
-    }();
-
-    return {std::move(storePath), input};
+        return {std::move(storePath), accessor, result};
+    } catch (Error & e) {
+        e.addTrace({}, "while fetching the input '%s'", to_string());
+        throw;
+    }
 }
 
 void Input::checkLocks(Input specified, Input & result)
@@ -236,6 +232,9 @@ void Input::checkLocks(Input specified, Input & result)
            instead of ''sha256-ri...Mw='). So fix that. */
         if (auto prevNarHash = specified.getNarHash())
             specified.attrs.insert_or_assign("narHash", prevNarHash->to_string(HashFormat::SRI, true));
+
+        if (auto narHash = result.getNarHash())
+            result.attrs.insert_or_assign("narHash", narHash->to_string(HashFormat::SRI, true));
 
         for (auto & field : specified.attrs) {
             auto field2 = result.attrs.find(field.first);
@@ -306,6 +305,21 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessor(ref<Store> store) const
     }
 }
 
+/**
+ * Helper class that ensures that paths in substituted source trees
+ * are rendered as `«input»/path` rather than
+ * `«input»/nix/store/<hash>-source/path`.
+ */
+struct SubstitutedSourceAccessor : ForwardingSourceAccessor
+{
+    using ForwardingSourceAccessor::ForwardingSourceAccessor;
+
+    std::string showPath(const CanonPath & path) override
+    {
+        return displayPrefix + path.abs() + displaySuffix;
+    }
+};
+
 std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(ref<Store> store) const
 {
     // FIXME: cache the accessor
@@ -332,10 +346,12 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(ref<Store> sto
 
             debug("using substituted/cached input '%s' in '%s'", to_string(), store->printStorePath(storePath));
 
-            auto accessor = makeStorePathAccessor(store, storePath);
+            auto accessor = make_ref<SubstitutedSourceAccessor>(makeStorePathAccessor(store, storePath));
 
             accessor->fingerprint = getFingerprint(store);
 
+            // FIXME: ideally we would use the `showPath()` of the
+            // "real" accessor for this fetcher type.
             accessor->setPathDisplay("«" + to_string() + "»");
 
             return {accessor, *this};
@@ -346,8 +362,10 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(ref<Store> sto
 
     auto [accessor, result] = scheme->getAccessor(store, *this);
 
-    assert(!accessor->fingerprint);
-    accessor->fingerprint = result.getFingerprint(store);
+    if (!accessor->fingerprint)
+        accessor->fingerprint = result.getFingerprint(store);
+    else
+        result.cachedFingerprint = accessor->fingerprint;
 
     return {accessor, std::move(result)};
 }

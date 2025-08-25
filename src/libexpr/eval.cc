@@ -16,11 +16,13 @@
 #include "nix/expr/print.hh"
 #include "nix/fetchers/filtering-source-accessor.hh"
 #include "nix/util/memory-source-accessor.hh"
+#include "nix/util/mounted-source-accessor.hh"
 #include "nix/expr/gc-small-vector.hh"
 #include "nix/util/url.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/fetchers/tarball.hh"
 #include "nix/fetchers/input-cache.hh"
+#include "nix/store/async-path-writer.hh"
 
 #include "parser-tab.hh"
 
@@ -280,7 +282,7 @@ EvalState::EvalState(
                    exception, and make union source accessor
                    catch it, so we don't need to do this hack.
                  */
-                {CanonPath(store->storeDir), store->getFSAccessor(settings.pureEval)},
+                {CanonPath(store->storeDir), makeFSSourceAccessor(dirOf(store->toRealPath(StorePath::dummy)))}
             }))
     , rootFS(
         ({
@@ -295,12 +297,9 @@ EvalState::EvalState(
                /nix/store while using a chroot store. */
             auto accessor = getFSSourceAccessor();
 
-            auto realStoreDir = dirOf(store->toRealPath(StorePath::dummy));
-            if (settings.pureEval || store->storeDir != realStoreDir) {
-                accessor = settings.pureEval
-                    ? storeFS
-                    : makeUnionSourceAccessor({accessor, storeFS});
-            }
+            accessor = settings.pureEval
+                ? storeFS.cast<SourceAccessor>()
+                : makeUnionSourceAccessor({accessor, storeFS});
 
             /* Apply access control if needed. */
             if (settings.restrictEval || settings.pureEval)
@@ -326,6 +325,7 @@ EvalState::EvalState(
     , debugRepl(nullptr)
     , debugStop(false)
     , trylevel(0)
+    , asyncPathWriter(AsyncPathWriter::make(store))
     , regexCache(makeRegexCache())
 #if NIX_USE_BOEHMGC
     , valueAllocCache(std::allocate_shared<void *>(traceable_allocator<void *>(), nullptr))
@@ -977,7 +977,13 @@ void EvalState::mkPos(Value & v, PosIdx p)
     auto origin = positions.originOf(p);
     if (auto path = std::get_if<SourcePath>(&origin)) {
         auto attrs = buildBindings(3);
-        attrs.alloc(sFile).mkString(path->path.abs());
+        if (path->accessor == rootFS && store->isInStore(path->path.abs()))
+            // FIXME: only do this for virtual store paths?
+            attrs.alloc(sFile).mkString(
+                path->path.abs(),
+                {NixStringContextElem::Path{.storePath = store->toStorePath(path->path.abs()).first}});
+        else
+            attrs.alloc(sFile).mkString(path->path.abs());
         makePositionThunks(*this, p, attrs.alloc(sLine), attrs.alloc(sColumn));
         v.mkAttrs(attrs);
     } else
@@ -1024,6 +1030,7 @@ std::string EvalState::mkSingleDerivedPathStringRaw(const SingleDerivedPath & p)
                 auto optStaticOutputPath = std::visit(
                     overloaded{
                         [&](const SingleDerivedPath::Opaque & o) {
+                            waitForPath(o.path);
                             auto drv = store->readDerivation(o.path);
                             auto i = drv.outputs.find(b.output);
                             if (i == drv.outputs.end())
@@ -2093,7 +2100,7 @@ void ExprConcatStrings::eval(EvalState & state, Env & env, Value & v)
     else if (firstType == nFloat)
         v.mkFloat(nf);
     else if (firstType == nPath) {
-        if (!context.empty())
+        if (hasContext(context))
             state.error<EvalError>("a string that refers to a store path cannot be appended to a path")
                 .atPos(pos)
                 .withFrame(env, *this)
@@ -2297,10 +2304,15 @@ std::string_view EvalState::forceStringNoCtx(Value & v, const PosIdx pos, std::s
 {
     auto s = forceString(v, pos, errorCtx);
     if (v.context()) {
-        error<EvalError>(
-            "the string '%1%' is not allowed to refer to a store path (such as '%2%')", v.string_view(), v.context()[0])
-            .withTrace(pos, errorCtx)
-            .debugThrow();
+        NixStringContext context;
+        copyContext(v, context);
+        if (hasContext(context))
+            error<EvalError>(
+                "the string '%1%' is not allowed to refer to a store path (such as '%2%')",
+                v.string_view(),
+                v.context()[0])
+                .withTrace(pos, errorCtx)
+                .debugThrow();
     }
     return s;
 }
@@ -2355,12 +2367,21 @@ BackedStringView EvalState::coerceToString(
     }
 
     if (v.type() == nPath) {
+        // FIXME: instead of copying the path to the store, we could
+        // return a virtual store path that lazily copies the path to
+        // the store in devirtualize().
         return !canonicalizePath && !copyToStore
                    ? // FIXME: hack to preserve path literals that end in a
                      // slash, as in /foo/${x}.
                    v.pathStr()
-                   : copyToStore ? store->printStorePath(copyPathToStore(context, v.path()))
-                                 : std::string(v.path().path.abs());
+                   : copyToStore ? store->printStorePath(copyPathToStore(context, v.path(), v.determinePos(pos))) : ({
+                         auto path = v.path();
+                         if (path.accessor == rootFS && store->isInStore(path.path.abs())) {
+                             context.insert(
+                                 NixStringContextElem::Path{.storePath = store->toStorePath(path.path.abs()).first});
+                         }
+                         std::string(path.path.abs());
+                     });
     }
 
     if (v.type() == nAttrs) {
@@ -2431,7 +2452,7 @@ BackedStringView EvalState::coerceToString(
         .debugThrow();
 }
 
-StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePath & path)
+StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePath & path, PosIdx pos)
 {
     if (nix::isDerivation(path.path.abs()))
         error<EvalError>("file names are not allowed to end in '%1%'", drvExtension).debugThrow();
@@ -2444,7 +2465,7 @@ StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePat
             *store,
             path.resolveSymlinks(SymlinkResolution::Ancestors),
             settings.readOnlyMode ? FetchMode::DryRun : FetchMode::Copy,
-            path.baseName(),
+            computeBaseName(path, pos),
             ContentAddressMethod::Raw::NixArchive,
             nullptr,
             repair);
@@ -2496,7 +2517,9 @@ EvalState::coerceToStorePath(const PosIdx pos, Value & v, NixStringContext & con
     auto path = coerceToString(pos, v, context, errorCtx, false, false, true).toOwned();
     if (auto storePath = store->maybeParseStorePath(path))
         return *storePath;
-    error<EvalError>("path '%1%' is not in the Nix store", path).withTrace(pos, errorCtx).debugThrow();
+    error<EvalError>("cannot coerce '%s' to a store path because it is not a subpath of the Nix store", path)
+        .withTrace(pos, errorCtx)
+        .debugThrow();
 }
 
 std::pair<SingleDerivedPath, std::string_view> EvalState::coerceToSingleDerivedPathUnchecked(
@@ -2520,6 +2543,9 @@ std::pair<SingleDerivedPath, std::string_view> EvalState::coerceToSingleDerivedP
                     .debugThrow();
             },
             [&](NixStringContextElem::Built && b) -> SingleDerivedPath { return std::move(b); },
+            [&](NixStringContextElem::Path && p) -> SingleDerivedPath {
+                error<EvalError>("string '%s' has no context", s).withTrace(pos, errorCtx).debugThrow();
+            },
         },
         ((NixStringContextElem &&) *context.begin()).raw);
     return {
@@ -3111,6 +3137,11 @@ SourcePath EvalState::findFile(const LookupPath & lookupPath, const std::string_
         auto res = (r / CanonPath(suffix)).resolveSymlinks();
         if (res.pathExists())
             return res;
+
+        // Backward compatibility hack: throw an exception if access
+        // to this path is not allowed.
+        if (auto accessor = res.accessor.dynamic_pointer_cast<FilteringSourceAccessor>())
+            accessor->checkAccess(res.path);
     }
 
     if (hasPrefix(path, "nix/"))
@@ -3177,6 +3208,11 @@ std::optional<SourcePath> EvalState::resolveLookupPathPath(const LookupPath::Pat
         if (path.resolveSymlinks().pathExists())
             return finish(std::move(path));
         else {
+            // Backward compatibility hack: throw an exception if access
+            // to this path is not allowed.
+            if (auto accessor = path.accessor.dynamic_pointer_cast<FilteringSourceAccessor>())
+                accessor->checkAccess(path.path);
+
             logWarning({.msg = HintFmt("Nix search path entry '%1%' does not exist, ignoring", value)});
         }
     }
@@ -3247,6 +3283,26 @@ void forceNoNullByte(std::string_view s, std::function<Pos()> pos)
         }
         throw error;
     }
+}
+
+void EvalState::waitForPath(const StorePath & path)
+{
+    asyncPathWriter->waitForPath(path);
+}
+
+void EvalState::waitForPath(const SingleDerivedPath & path)
+{
+    std::visit(
+        overloaded{
+            [&](const DerivedPathOpaque & p) { waitForPath(p.path); },
+            [&](const SingleDerivedPathBuilt & p) { waitForPath(*p.drvPath); },
+        },
+        path.raw());
+}
+
+void EvalState::waitForAllPaths()
+{
+    asyncPathWriter->waitForAllPaths();
 }
 
 } // namespace nix

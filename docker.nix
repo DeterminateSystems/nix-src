@@ -333,7 +333,7 @@ let
           globalFlakeRegistryPath="$nixCacheDir/flake-registry.json"
           ln -s ${flake-registry-path} $out$globalFlakeRegistryPath
           mkdir -p $out/nix/var/nix/gcroots/auto
-          rootName=$(${lib.getExe' nix "nix"} --extra-experimental-features nix-command hash file --type sha1 --base32 <(echo -n $globalFlakeRegistryPath))
+          rootName=$(${lib.getExe' nix "nix"} hash file --type sha1 --base32 <(echo -n $globalFlakeRegistryPath))
           ln -s $globalFlakeRegistryPath $out/nix/var/nix/gcroots/auto/$rootName
         '')
       );

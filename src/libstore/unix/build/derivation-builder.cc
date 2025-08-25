@@ -212,6 +212,12 @@ protected:
     }
 
     /**
+     * Throw an exception if we can't do this derivation because of
+     * missing system features.
+     */
+    virtual void checkSystem();
+
+    /**
      * Return the paths that should be made available in the sandbox.
      * This includes:
      *
@@ -695,13 +701,8 @@ static bool checkNotWorldWritable(std::filesystem::path path)
     return true;
 }
 
-void DerivationBuilderImpl::startBuilder()
+void DerivationBuilderImpl::checkSystem()
 {
-    /* Make sure that no other processes are executing under the
-       sandbox uids. This must be done before any chownToBuilder()
-       calls. */
-    prepareUser();
-
     /* Right platform? */
     if (!drvOptions.canBuildLocally(store, drv)) {
         auto msg =
@@ -725,6 +726,16 @@ void DerivationBuilderImpl::startBuilder()
 
         throw BuildError(msg);
     }
+}
+
+void DerivationBuilderImpl::startBuilder()
+{
+    checkSystem();
+
+    /* Make sure that no other processes are executing under the
+       sandbox uids. This must be done before any chownToBuilder()
+       calls. */
+    prepareUser();
 
     auto buildDir = getLocalStore(store).config->getBuildDir();
 
@@ -894,15 +905,27 @@ DerivationBuilderImpl::PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
             optional = true;
             i.pop_back();
         }
+
         size_t p = i.find('=');
-        if (p == std::string::npos)
-            pathsInChroot[i] = {i, optional};
-        else
-            pathsInChroot[i.substr(0, p)] = {i.substr(p + 1), optional};
+        std::string inside, outside;
+        if (p == std::string::npos) {
+            inside = i;
+            outside = i;
+        } else {
+            inside = i.substr(0, p);
+            outside = i.substr(p + 1);
+        }
+
+        if (!optional && !maybeLstat(outside))
+            throw SysError(
+                "path '%s' is configured as part of the `sandbox-paths` option, but is inaccessible", outside);
+
+        pathsInChroot[inside] = {outside, optional};
     }
-    if (hasPrefix(store.storeDir, tmpDirInSandbox())) {
+
+    if (hasPrefix(store.storeDir, tmpDirInSandbox()))
         throw Error("`sandbox-build-dir` must not contain the storeDir");
-    }
+
     pathsInChroot[tmpDirInSandbox()] = tmpDir;
 
     /* Add the closure of store paths to the chroot. */
@@ -1035,7 +1058,7 @@ void DerivationBuilderImpl::processSandboxSetupMessages()
                     "while waiting for the build environment for '%s' to initialize (%s, previous messages: %s)",
                     store.printStorePath(drvPath),
                     statusToString(status),
-                    concatStringsSep("|", msgs));
+                    concatStringsSep("\n", msgs));
                 throw;
             }
         }();
@@ -1317,6 +1340,7 @@ void DerivationBuilderImpl::runChild()
         BuiltinBuilderContext ctx{
             .drv = drv,
             .tmpDirInSandbox = tmpDirInSandbox(),
+            .parsedDrv = parsedDrv,
         };
 
         if (drv.isBuiltin() && drv.builder == "builtin:fetchurl") {
@@ -1768,6 +1792,13 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
                             store.printStorePath(drvPath),
                             wanted.to_string(HashFormat::SRI, true),
                             got.to_string(HashFormat::SRI, true)));
+                        act->result(
+                            resHashMismatch,
+                            {
+                                {"storePath", store.printStorePath(drvPath)},
+                                {"wanted", wanted},
+                                {"got", got},
+                            });
                     }
                     if (!newInfo0.references.empty()) {
                         auto numViolations = newInfo.references.size();
@@ -2161,12 +2192,16 @@ StorePath DerivationBuilderImpl::makeFallbackPath(const StorePath & path)
 // FIXME: do this properly
 #include "linux-derivation-builder.cc"
 #include "darwin-derivation-builder.cc"
+#include "external-derivation-builder.cc"
 
 namespace nix {
 
 std::unique_ptr<DerivationBuilder> makeDerivationBuilder(
     Store & store, std::unique_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
 {
+    if (auto builder = ExternalDerivationBuilder::newIfSupported(store, miscMethods, params))
+        return builder;
+
     bool useSandbox = false;
 
     /* Are we doing a sandboxed build? */
