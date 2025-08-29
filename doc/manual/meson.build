@@ -5,6 +5,8 @@ project(
   license : 'LGPL-2.1-or-later',
 )
 
+fs = import('fs')
+
 nix = find_program('nix', native : true)
 
 mdbook = find_program('mdbook', native : true)
@@ -22,7 +24,7 @@ nix_env_for_docs = {
   'NIX_CONFIG' : 'cores = 0',
 }
 
-nix_for_docs = [ nix, '--experimental-features', 'nix-command' ]
+nix_for_docs = [ nix ]
 nix_eval_for_docs_common = nix_for_docs + [
   'eval',
   '-I',
@@ -97,7 +99,7 @@ manual = custom_target(
       python.full_path(),
       mdbook.full_path(),
       meson.current_build_dir(),
-      meson.project_version(),
+      fs.read('../../.version-determinate').strip(),
       rsync.full_path(),
     ),
   ],
