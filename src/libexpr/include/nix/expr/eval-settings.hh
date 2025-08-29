@@ -347,11 +347,26 @@ struct EvalSettings : Config
           This is not backward compatible with older versions of Nix.
           If disabled, lock file entries always contain a NAR hash.
         )"};
+
+    Setting<unsigned int> evalCores{
+        this,
+        1,
+        "eval-cores",
+        R"(
+          The number of threads used to evaluate Nix expressions.
+
+          The value `0` causes Nix to use all available CPU cores in the system.
+        )"};
 };
 
 /**
  * Conventionally part of the default nix path in impure mode.
  */
 Path getNixDefExpr();
+
+/**
+ * Stack size for evaluator threads.
+ */
+constexpr size_t evalStackSize = 64 * 1024 * 1024;
 
 } // namespace nix
