@@ -24,9 +24,9 @@ typedef struct Store Store;
 /** @brief Nix store path */
 typedef struct StorePath StorePath;
 /** @brief Nix Derivation */
-typedef struct Derivation Derivation;
+typedef struct nix_derivation nix_derivation;
 /** @brief Nix Derivation Output */
-typedef struct DerivationOutput DerivationOutput;
+typedef struct nix_derivation_output nix_derivatio_noutput;
 
 /**
  * @brief Initializes the Nix store library
@@ -212,6 +212,32 @@ nix_err
 nix_store_get_version(nix_c_context * context, Store * store, nix_get_string_callback callback, void * user_data);
 
 /**
+ * @brief Create a `nix_derivation` from a JSON representation of that derivation.
+ *
+ * @param[out] context Optional, stores error information.
+ * @param[in] store nix store reference.
+ * @param[in] json JSON of the derivation as a string.
+ */
+nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store, const char * json);
+
+/**
+ * @brief Add the given `nix_derivation` to the given store
+ *
+ * @param[out] context Optional, stores error information.
+ * @param[in] store nix store reference. The derivation will be inserted here.
+ * @param[in] derivation nix_derivation to insert into the given store.
+ */
+StorePath * nix_add_derivation(nix_c_context * context, Store * store, nix_derivation * derivation);
+
+/**
+ * @brief Deallocate a `nix_derivation'
+ *
+ * Does not fail.
+ * @param[in] drv the derivation to free
+ */
+void nix_derivation_free(nix_derivation * drv);
+
+/**
  * @brief Copy the closure of `path` from `srcStore` to `dstStore`.
  *
  * @param[out] context Optional, stores error information
@@ -260,24 +286,8 @@ nix_err nix_store_drv_from_path(
     nix_c_context * context,
     Store * store,
     const StorePath * path,
-    void (*callback)(void * userdata, const Derivation * drv),
+    void (*callback)(void * userdata, const nix_derivation * drv),
     void * userdata);
-
-/**
- * @brief Copy of a Derivation
- *
- * @param[in] d the derivation to copy
- * @return a new Derivation
- */
-Derivation * nix_drv_clone(const Derivation * d);
-
-/**
- * @brief Deallocate a Derivation
- *
- * Does not fail.
- * @param[in] p the derivation to free
- */
-void nix_drv_free(Derivation * d);
 
 /**
  * @brief Iterate through all of the outputs in a derivation
@@ -289,10 +299,10 @@ void nix_drv_free(Derivation * d);
  * @param[in] callback The function to call on every output
  * @param[in] userdata Userdata to pass to the callback
  */
-nix_err nix_drv_get_outputs(
+nix_err nix_derivation_get_outputs(
     nix_c_context * context,
-    const Derivation * drv,
-    void (*callback)(void * userdata, const char * name, const DerivationOutput * drv_output),
+    const nix_derivation * drv,
+    void (*callback)(void * userdata, const char * name, const nix_derivation_output * drv_output),
     void * userdata);
 
 /**
@@ -306,28 +316,28 @@ nix_err nix_drv_get_outputs(
  * @param[in] callback The function to call on every output and store path
  * @param[in] userdata The userdata to pass to the callback
  */
-nix_err nix_drv_get_outputs_and_optpaths(
+nix_err nix_derivation_get_outputs_and_optpaths(
     nix_c_context * context,
-    const Derivation * drv,
+    const nix_derivation * drv,
     const Store * store,
-    void (*callback)(void * userdata, const char * name, const DerivationOutput * drv_output, const StorePath * path),
+    void (*callback)(void * userdata, const char * name, const nix_derivation_output * drv_output, const StorePath * path),
     void * userdata);
 
 /**
- * @brief Copy of a DerivationOutput
+ * @brief Copy of a 'nix_derivation_output'
  *
  * @param[in] o the derivation output to copy
- * @return a new DerivationOutput
+ * @return a new 'nix_derivation_output'
  */
-DerivationOutput * nix_drv_output_clone(const DerivationOutput * o);
+nix_derivation_output * nix_derivation_output_clone(const nix_derivation_output * o);
 
 /**
- * @brief Deallocate a DerivationOutput
+ * @brief Deallocate a 'nix_derivation_output'
  *
  * Does not fail.
  * @param[in] o the derivation output to free
  */
-void nix_drv_output_free(DerivationOutput * o);
+void nix_derivation_output_free(nix_derivation_output * o);
 
 // cffi end
 #ifdef __cplusplus

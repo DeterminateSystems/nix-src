@@ -164,9 +164,42 @@ void nix_store_path_free(StorePath * sp)
     delete sp;
 }
 
+void nix_derivation_free(nix_derivation * drv)
+{
+    delete drv;
+}
+
 StorePath * nix_store_path_clone(const StorePath * p)
 {
     return new StorePath{p->path};
+}
+
+nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store, const char * json)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        auto drv = nix::Derivation::fromJSON(*store->ptr, nlohmann::json::parse(json));
+
+        auto drvPath = nix::writeDerivation(*store->ptr, drv, nix::NoRepair, /* read only */ true);
+
+        drv.checkInvariants(*store->ptr, drvPath);
+
+        return new nix_derivation{drv};
+    }
+    NIXC_CATCH_ERRS_NULL
+}
+
+StorePath * nix_add_derivation(nix_c_context * context, Store * store, nix_derivation * derivation)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        auto ret = nix::writeDerivation(*store->ptr, derivation->drv, nix::NoRepair);
+
+        return new StorePath{ret};
+    }
+    NIXC_CATCH_ERRS_NULL
 }
 
 nix_err nix_store_copy_closure(nix_c_context * context, Store * srcStore, Store * dstStore, StorePath * path)
@@ -213,7 +246,7 @@ nix_err nix_store_drv_from_path(
     nix_c_context * context,
     Store * store,
     const StorePath * path,
-    void (*callback)(void * userdata, const Derivation * drv),
+    void (*callback)(void * userdata, const nix_derivation * drv),
     void * userdata)
 {
     if (context)
@@ -221,27 +254,17 @@ nix_err nix_store_drv_from_path(
     try {
         nix::Derivation drv = store->ptr->derivationFromPath(path->path);
         if (callback) {
-            const Derivation tmp{drv};
+            const nix_derivation tmp{drv};
             callback(userdata, &tmp);
         }
     }
     NIXC_CATCH_ERRS
 }
 
-Derivation * nix_drv_clone(const Derivation * d)
-{
-    return new Derivation{d->drv};
-}
-
-void nix_drv_free(Derivation * d)
-{
-    delete d;
-}
-
-nix_err nix_drv_get_outputs(
+nix_err nix_derivation_get_outputs(
     nix_c_context * context,
-    const Derivation * drv,
-    void (*callback)(void * userdata, const char * name, const DerivationOutput * drv_output),
+    const nix_derivation * drv,
+    void (*callback)(void * userdata, const char * name, const nix_derivation_output * drv_output),
     void * userdata)
 {
     if (context)
@@ -249,7 +272,7 @@ nix_err nix_drv_get_outputs(
     try {
         if (callback) {
             for (const auto & [name, result] : drv->drv.outputs) {
-                const DerivationOutput tmp{result};
+                const nix_derivation_output tmp{result};
                 callback(userdata, name.c_str(), &tmp);
             }
         }
@@ -257,11 +280,11 @@ nix_err nix_drv_get_outputs(
     NIXC_CATCH_ERRS
 }
 
-nix_err nix_drv_get_outputs_and_optpaths(
+nix_err nix_derivation_get_outputs_and_optpaths(
     nix_c_context * context,
-    const Derivation * drv,
+    const nix_derivation * drv,
     const Store * store,
-    void (*callback)(void * userdata, const char * name, const DerivationOutput * drv_output, const StorePath * path),
+    void (*callback)(void * userdata, const char * name, const nix_derivation_output * drv_output, const StorePath * path),
     void * userdata)
 {
     if (context)
@@ -270,7 +293,7 @@ nix_err nix_drv_get_outputs_and_optpaths(
         auto value = drv->drv.outputsAndOptPaths(store->ptr->config);
         if (callback) {
             for (const auto & [name, result] : value) {
-                const DerivationOutput tmp_output{result.first};
+                const nix_derivation_output tmp_output{result.first};
 
                 if (auto store_path = result.second) {
                     const StorePath tmp_path{*store_path};
@@ -284,12 +307,12 @@ nix_err nix_drv_get_outputs_and_optpaths(
     NIXC_CATCH_ERRS
 }
 
-DerivationOutput * nix_drv_output_clone(const DerivationOutput * o)
+nix_derivation_output * nix_drv_output_clone(const nix_derivation_output * o)
 {
-    return new DerivationOutput{o->drv_out};
+    return new nix_derivation_output{o->drv_out};
 }
 
-void nix_drv_output_free(DerivationOutput * o)
+void nix_drv_output_free(nix_derivation_output * o)
 {
     delete o;
 }
