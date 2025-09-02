@@ -1,7 +1,7 @@
 #ifndef NIX_API_STORE_INTERNAL_H
 #define NIX_API_STORE_INTERNAL_H
-#include "nix/store/derivations.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/derivations.hh"
 
 struct Store
 {
@@ -13,12 +13,12 @@ struct StorePath
     nix::StorePath path;
 };
 
-struct Derivation
+struct nix_derivation
 {
     nix::Derivation drv;
 };
 
-struct DerivationOutput
+struct nix_derivation_output
 {
     nix::DerivationOutput drv_out;
 };
