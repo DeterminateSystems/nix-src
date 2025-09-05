@@ -197,6 +197,12 @@ protected:
     }
 
     /**
+     * Throw an exception if we can't do this derivation because of
+     * missing system features.
+     */
+    virtual void checkSystem();
+
+    /**
      * Return the paths that should be made available in the sandbox.
      * This includes:
      *
@@ -665,13 +671,8 @@ static bool checkNotWorldWritable(std::filesystem::path path)
     return true;
 }
 
-void DerivationBuilderImpl::startBuilder()
+void DerivationBuilderImpl::checkSystem()
 {
-    /* Make sure that no other processes are executing under the
-       sandbox uids. This must be done before any chownToBuilder()
-       calls. */
-    prepareUser();
-
     /* Right platform? */
     if (!drvOptions.canBuildLocally(store, drv)) {
         auto msg =
@@ -695,6 +696,16 @@ void DerivationBuilderImpl::startBuilder()
 
         throw BuildError(msg);
     }
+}
+
+void DerivationBuilderImpl::startBuilder()
+{
+    checkSystem();
+
+    /* Make sure that no other processes are executing under the
+       sandbox uids. This must be done before any chownToBuilder()
+       calls. */
+    prepareUser();
 
     auto buildDir = store.config->getBuildDir();
 
@@ -838,6 +849,11 @@ PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
        host file system. */
     PathsInChroot pathsInChroot = defaultPathsInChroot;
 
+    for (auto & p : pathsInChroot)
+        if (!p.second.optional && !maybeLstat(p.second.source))
+            throw SysError(
+                "path '%s' is configured as part of the `sandbox-paths` option, but is inaccessible", p.second.source);
+
     if (hasPrefix(store.storeDir, tmpDirInSandbox())) {
         throw Error("`sandbox-build-dir` must not contain the storeDir");
     }
@@ -957,7 +973,7 @@ void DerivationBuilderImpl::processSandboxSetupMessages()
                     "while waiting for the build environment for '%s' to initialize (%s, previous messages: %s)",
                     store.printStorePath(drvPath),
                     statusToString(status),
-                    concatStringsSep("|", msgs));
+                    concatStringsSep("\n", msgs));
                 throw;
             }
         }();
@@ -1664,6 +1680,13 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
                             store.printStorePath(drvPath),
                             wanted.to_string(HashFormat::SRI, true),
                             got.to_string(HashFormat::SRI, true)));
+                        act->result(
+                            resHashMismatch,
+                            {
+                                {"storePath", store.printStorePath(drvPath)},
+                                {"wanted", wanted},
+                                {"got", got},
+                            });
                     }
                     if (!newInfo0.references.empty()) {
                         auto numViolations = newInfo.references.size();
@@ -2054,12 +2077,16 @@ StorePath DerivationBuilderImpl::makeFallbackPath(const StorePath & path)
 #include "chroot-derivation-builder.cc"
 #include "linux-derivation-builder.cc"
 #include "darwin-derivation-builder.cc"
+#include "external-derivation-builder.cc"
 
 namespace nix {
 
 std::unique_ptr<DerivationBuilder> makeDerivationBuilder(
     LocalStore & store, std::unique_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
 {
+    if (auto builder = ExternalDerivationBuilder::newIfSupported(store, miscMethods, params))
+        return builder;
+
     bool useSandbox = false;
 
     /* Are we doing a sandboxed build? */

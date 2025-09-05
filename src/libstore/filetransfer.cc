@@ -357,7 +357,7 @@ struct curlFileTransfer : public FileTransfer
             curl_easy_setopt(
                 req,
                 CURLOPT_USERAGENT,
-                ("curl/" LIBCURL_VERSION " Nix/" + nixVersion
+                ("curl/" LIBCURL_VERSION " Nix/" + nixVersion + " DeterminateNix/" + determinateNixVersion
                  + (fileTransferSettings.userAgentSuffix != "" ? " " + fileTransferSettings.userAgentSuffix.get() : ""))
                     .c_str());
 #if LIBCURL_VERSION_NUM >= 0x072b00
@@ -835,24 +835,29 @@ struct curlFileTransfer : public FileTransfer
     }
 };
 
-ref<curlFileTransfer> makeCurlFileTransfer()
-{
-    return make_ref<curlFileTransfer>();
-}
+static Sync<std::shared_ptr<curlFileTransfer>> _fileTransfer;
 
 ref<FileTransfer> getFileTransfer()
 {
-    static ref<curlFileTransfer> fileTransfer = makeCurlFileTransfer();
+    auto fileTransfer(_fileTransfer.lock());
 
-    if (fileTransfer->state_.lock()->quit)
-        fileTransfer = makeCurlFileTransfer();
+    if (!*fileTransfer || (*fileTransfer)->state_.lock()->quit)
+        *fileTransfer = std::make_shared<curlFileTransfer>();
 
-    return fileTransfer;
+    return ref<FileTransfer>(*fileTransfer);
 }
 
 ref<FileTransfer> makeFileTransfer()
 {
-    return makeCurlFileTransfer();
+    return make_ref<curlFileTransfer>();
+}
+
+std::shared_ptr<FileTransfer> resetFileTransfer()
+{
+    auto fileTransfer(_fileTransfer.lock());
+    std::shared_ptr<curlFileTransfer> prev;
+    fileTransfer->swap(prev);
+    return prev;
 }
 
 std::future<FileTransferResult> FileTransfer::enqueueFileTransfer(const FileTransferRequest & request)

@@ -9,8 +9,6 @@ namespace nix {
 
 TEST(parseFlakeRef, path)
 {
-    experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
-
     fetchers::Settings fetchSettings;
 
     {
@@ -59,8 +57,6 @@ TEST(parseFlakeRef, path)
 
 TEST(parseFlakeRef, GitArchiveInput)
 {
-    experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
-
     fetchers::Settings fetchSettings;
 
     {

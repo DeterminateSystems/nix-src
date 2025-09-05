@@ -1,5 +1,6 @@
 #include "nix/util/config-global.hh"
 #include "nix/expr/eval.hh"
+#include "nix/fetchers/fetch-settings.hh"
 #include "nix/cmd/installable-flake.hh"
 #include "nix/cmd/command-installable-value.hh"
 #include "nix/main/common-args.hh"
@@ -647,7 +648,7 @@ struct CmdDevelop : Common, MixEnvironment
                 nixpkgs = i->nixpkgsFlakeRef();
 
             auto bashInstallable = make_ref<InstallableFlake>(
-                this,
+                nullptr, //< Don't barf when the command is run with --arg/--argstr
                 state,
                 std::move(nixpkgs),
                 "bashInteractive",

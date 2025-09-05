@@ -395,9 +395,6 @@ void completeFlakeRefWithFragment(
 
 void completeFlakeRef(AddCompletions & completions, ref<Store> store, std::string_view prefix)
 {
-    if (!experimentalFeatureSettings.isEnabled(Xp::Flakes))
-        return;
-
     if (prefix == "")
         completions.add(".");
 
@@ -869,8 +866,11 @@ InstallableCommand::InstallableCommand()
     });
 }
 
+void InstallableCommand::preRun(ref<Store> store) {}
+
 void InstallableCommand::run(ref<Store> store)
 {
+    preRun(store);
     auto installable = parseInstallable(store, _installable);
     run(store, std::move(installable));
 }
