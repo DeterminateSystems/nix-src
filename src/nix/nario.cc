@@ -36,7 +36,7 @@ struct CmdNarioExport : StorePathsCommand
     {
         addFlag({
             .longName = "format",
-            .description = "Version of the nario format to use. Must be `1`.",
+            .description = "Version of the nario format to use. Must be `1` or `2`.",
             .labels = {"nario-format"},
             .handler = {&version},
             .required = true,

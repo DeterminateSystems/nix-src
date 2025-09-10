@@ -4,10 +4,12 @@
 #include "nix/util/archive.hh"
 #include "nix/store/common-protocol.hh"
 #include "nix/store/common-protocol-impl.hh"
+#include "nix/store/worker-protocol.hh"
 
 namespace nix {
 
 static const uint32_t exportMagicV1 = 0x4558494e;
+static const uint64_t exportMagicV2 = 0x324f4952414e; // = 'NARIO2'
 
 void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, unsigned int version)
 {
@@ -43,6 +45,22 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, unsigne
             CommonProto::write(store, CommonProto::WriteConn{.to = sink}, info->references);
             sink << (info->deriver ? store.printStorePath(*info->deriver) : "") << 0;
         }
+        sink << 0;
+        break;
+
+    case 2:
+        sink << exportMagicV2;
+
+        for (auto & path : sorted) {
+            Activity act(*logger, lvlTalkative, actUnknown, fmt("exporting path '%s'", store.printStorePath(path)));
+            sink << 1;
+            auto info = store.queryPathInfo(path);
+            // FIXME: move to CommonProto?
+            WorkerProto::Serialise<ValidPathInfo>::write(
+                store, WorkerProto::WriteConn{.to = sink, .version = 16}, *info);
+            dumpNar(*info);
+        }
+
         sink << 0;
         break;
 
@@ -107,6 +125,27 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
             if (n != 1)
                 throw Error("input doesn't look like a nario");
         }
+        break;
+
+    case exportMagicV2:
+        while (true) {
+            auto n = readNum<uint64_t>(source);
+            if (n == 0)
+                break;
+            if (n != 1)
+                throw Error("input doesn't look like a nario");
+
+            auto info = WorkerProto::Serialise<ValidPathInfo>::read(
+                store, WorkerProto::ReadConn{.from = source, .version = 16});
+
+            Activity act(
+                *logger, lvlTalkative, actUnknown, fmt("importing path '%s'", store.printStorePath(info.path)));
+
+            store.addToStore(info, source, NoRepair, checkSigs);
+
+            res.push_back(info.path);
+        }
+
         break;
 
     default:
