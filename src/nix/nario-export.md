@@ -23,6 +23,8 @@ Paths are exported in topographically sorted order (i.e. if path `X` refers to `
 
 You must specify the desired `nario` version. Currently the following versions are supported:
 
-* `1`: This version is compatible with the legacy `nix-store --export` and `nix-store --import` commands.
+* `1`: This version is compatible with the legacy `nix-store --export` and `nix-store --import` commands. It should be avoided because it is not memory-efficient on import.
+
+* `2`: The latest version. Recommended.
 
 )""
