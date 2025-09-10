@@ -202,6 +202,7 @@ public:
         Strings labels;
         Handler handler;
         CompleterClosure completer;
+        bool required = false;
 
         std::optional<ExperimentalFeature> experimentalFeature;
     };

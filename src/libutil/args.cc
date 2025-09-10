@@ -318,6 +318,7 @@ void RootArgs::parseCmdline(const Strings & _cmdline, bool allowShebang)
         } catch (SystemError &) {
         }
     }
+
     for (auto pos = cmdline.begin(); pos != cmdline.end();) {
 
         auto arg = *pos;
