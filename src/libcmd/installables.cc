@@ -178,10 +178,16 @@ MixFlakeOptions::MixFlakeOptions()
             for (auto & [inputName, input] : flake.lockFile.root->inputs) {
                 auto input2 = flake.lockFile.findInput({inputName}); // resolve 'follows' nodes
                 if (auto input3 = std::dynamic_pointer_cast<const flake::LockedNode>(input2)) {
+                    fetchers::Attrs extraAttrs;
+
+                    if (!input3->lockedRef.subdir.empty()) {
+                        extraAttrs["dir"] = input3->lockedRef.subdir;
+                    }
+
                     overrideRegistry(
                         fetchers::Input::fromAttrs(fetchSettings, {{"type", "indirect"}, {"id", inputName}}),
                         input3->lockedRef.input,
-                        {});
+                        extraAttrs);
                 }
             }
         }},
@@ -395,9 +401,6 @@ void completeFlakeRefWithFragment(
 
 void completeFlakeRef(AddCompletions & completions, ref<Store> store, std::string_view prefix)
 {
-    if (!experimentalFeatureSettings.isEnabled(Xp::Flakes))
-        return;
-
     if (prefix == "")
         completions.add(".");
 
@@ -869,8 +872,11 @@ InstallableCommand::InstallableCommand()
     });
 }
 
+void InstallableCommand::preRun(ref<Store> store) {}
+
 void InstallableCommand::run(ref<Store> store)
 {
+    preRun(store);
     auto installable = parseInstallable(store, _installable);
     run(store, std::move(installable));
 }

@@ -94,6 +94,11 @@ struct DerivationBuilderParams
      */
     StringMap extraFiles;
 
+    /**
+     * The activity corresponding to the build.
+     */
+    std::unique_ptr<Activity> & act;
+
     DerivationBuilderParams(
         const StorePath & drvPath,
         const BuildMode & buildMode,
@@ -104,7 +109,8 @@ struct DerivationBuilderParams
         std::map<std::string, InitialOutput> & initialOutputs,
         PathsInChroot defaultPathsInChroot,
         std::map<std::string, EnvEntry, std::less<>> finalEnv,
-        StringMap extraFiles)
+        StringMap extraFiles,
+        std::unique_ptr<Activity> & act)
         : drvPath{drvPath}
         , buildResult{buildResult}
         , drv{drv}
@@ -115,6 +121,7 @@ struct DerivationBuilderParams
         , defaultPathsInChroot{std::move(defaultPathsInChroot)}
         , finalEnv{std::move(finalEnv)}
         , extraFiles{std::move(extraFiles)}
+        , act{act}
     {
     }
 
