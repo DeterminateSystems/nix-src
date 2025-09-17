@@ -315,14 +315,11 @@ protected:
         }
     };
 
-    struct State
-    {
-        LRUCache<std::string, PathInfoCacheValue> pathInfoCache;
-    };
-
     void invalidatePathInfoCacheFor(const StorePath & path);
 
-    SharedSync<State> state;
+    // Note: this is a `ref` to avoid false sharing with immutable
+    // bits of `Store`.
+    ref<SharedSync<LRUCache<std::string, PathInfoCacheValue>>> pathInfoCache;
 
     std::shared_ptr<NarInfoDiskCache> diskCache;
 
@@ -349,7 +346,9 @@ public:
     StorePath followLinksToStorePath(std::string_view path) const;
 
     /**
-     * Check whether a path is valid.
+     * Check whether a path is valid. NOTE: this function does not
+     * generally cache whether a path is valid. You may want to use
+     * `maybeQueryPathInfo()`, which does cache.
      */
     bool isValidPath(const StorePath & path);
 
@@ -389,9 +388,16 @@ public:
 
     /**
      * Query information about a valid path. It is permitted to omit
-     * the name part of the store path.
+     * the name part of the store path. Throws an exception if the
+     * path is not valid.
      */
     ref<const ValidPathInfo> queryPathInfo(const StorePath & path);
+
+    /**
+     * Like `queryPathInfo()`, but returns `nullptr` if the path is
+     * not valid.
+     */
+    std::shared_ptr<const ValidPathInfo> maybeQueryPathInfo(const StorePath & path);
 
     /**
      * Asynchronous version of queryPathInfo().
@@ -865,7 +871,7 @@ public:
      */
     void clearPathInfoCache()
     {
-        state.lock()->pathInfoCache.clear();
+        pathInfoCache->lock()->clear();
     }
 
     /**

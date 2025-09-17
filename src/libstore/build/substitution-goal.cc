@@ -8,6 +8,8 @@
 
 #include <coroutine>
 
+#include <nlohmann/json.hpp>
+
 namespace nix {
 
 PathSubstitutionGoal::PathSubstitutionGoal(
@@ -34,6 +36,12 @@ Goal::Done PathSubstitutionGoal::done(ExitCode result, BuildResult::Status statu
         debug(*errorMsg);
         buildResult.errorMsg = *errorMsg;
     }
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+
     return amDone(result);
 }
 
