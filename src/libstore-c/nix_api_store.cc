@@ -284,7 +284,8 @@ nix_err nix_derivation_get_outputs_and_optpaths(
     nix_c_context * context,
     const nix_derivation * drv,
     const Store * store,
-    void (*callback)(void * userdata, const char * name, const nix_derivation_output * drv_output, const StorePath * path),
+    void (*callback)(
+        void * userdata, const char * name, const nix_derivation_output * drv_output, const StorePath * path),
     void * userdata)
 {
     if (context)
@@ -307,27 +308,28 @@ nix_err nix_derivation_get_outputs_and_optpaths(
     NIXC_CATCH_ERRS
 }
 
-const char * nix_derivation_get_structured_attrs(
-    nix_c_context * context,
-    const nix_derivation * drv)
+nix_err nix_derivation_get_structured_attrs(
+    nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata)
 {
     if (context)
         context->last_err_code = NIX_OK;
     try {
         if (auto structuredAttrs = drv->drv.structuredAttrs) {
-            return structuredAttrs->structuredAttrs.dump().c_str();
+            if (callback) {
+                auto result = structuredAttrs->structuredAttrs.dump();
+                callback(result.data(), result.size(), userdata);
+            }
         }
-        return nullptr;
     }
-    NIXC_CATCH_ERRS_NULL
+    NIXC_CATCH_ERRS
 }
 
-nix_derivation_output * nix_drv_output_clone(const nix_derivation_output * o)
+nix_derivation_output * nix_derivation_output_clone(const nix_derivation_output * o)
 {
     return new nix_derivation_output{o->drv_out};
 }
 
-void nix_drv_output_free(nix_derivation_output * o)
+void nix_derivation_output_free(nix_derivation_output * o)
 {
     delete o;
 }

@@ -26,7 +26,7 @@ typedef struct StorePath StorePath;
 /** @brief Nix Derivation */
 typedef struct nix_derivation nix_derivation;
 /** @brief Nix Derivation Output */
-typedef struct nix_derivation_output nix_derivatio_noutput;
+typedef struct nix_derivation_output nix_derivation_noutput;
 
 /**
  * @brief Initializes the Nix store library
@@ -320,18 +320,20 @@ nix_err nix_derivation_get_outputs_and_optpaths(
     nix_c_context * context,
     const nix_derivation * drv,
     const Store * store,
-    void (*callback)(void * userdata, const char * name, const nix_derivation_output * drv_output, const StorePath * path),
+    void (*callback)(
+        void * userdata, const char * name, const nix_derivation_output * drv_output, const StorePath * path),
     void * userdata);
 
 /**
- * @brief Return the structured attrs of derivation as a JSON string
+ * @brief Gets the structured attrs of derivation as a JSON string
  *
  * @param[out] context Optional, stores error information
  * @param[in] drv The derivation
+ * @param[in] callback Called with the JSON string
+ * @param[in] user_data Arbitrary data passed to the callback
  */
-const char * nix_derivation_get_structured_attrs(
-    nix_c_context * context,
-    const nix_derivation * drv);
+nix_err nix_derivation_get_structured_attrs(
+    nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata);
 
 /**
  * @brief Copy of a 'nix_derivation_output'
