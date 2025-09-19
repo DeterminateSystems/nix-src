@@ -128,4 +128,8 @@ scope: {
             ./patches/libgit2-packbuilder-callback-interruptible.patch
           ];
       });
+
+  wasmedge = pkgs.wasmedge.overrideAttrs (attrs: {
+    cmakeFlags = attrs.cmakeFlags or [ ] ++ [ "-DWASMEDGE_USE_LLVM=OFF" ];
+  });
 }
