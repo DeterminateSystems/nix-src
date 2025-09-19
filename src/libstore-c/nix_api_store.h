@@ -324,6 +324,16 @@ nix_err nix_derivation_get_outputs_and_optpaths(
     void * userdata);
 
 /**
+ * @brief Return the structured attrs of derivation as a JSON string
+ *
+ * @param[out] context Optional, stores error information
+ * @param[in] drv The derivation
+ */
+const char * nix_derivation_get_structured_attrs(
+    nix_c_context * context,
+    const nix_derivation * drv);
+
+/**
  * @brief Copy of a 'nix_derivation_output'
  *
  * @param[in] o the derivation output to copy

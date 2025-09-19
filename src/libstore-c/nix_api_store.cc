@@ -307,6 +307,21 @@ nix_err nix_derivation_get_outputs_and_optpaths(
     NIXC_CATCH_ERRS
 }
 
+const char * nix_derivation_get_structured_attrs(
+    nix_c_context * context,
+    const nix_derivation * drv)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        if (auto structuredAttrs = drv->drv.structuredAttrs) {
+            return structuredAttrs->structuredAttrs.dump().c_str();
+        }
+        return nullptr;
+    }
+    NIXC_CATCH_ERRS_NULL
+}
+
 nix_derivation_output * nix_drv_output_clone(const nix_derivation_output * o)
 {
     return new nix_derivation_output{o->drv_out};
