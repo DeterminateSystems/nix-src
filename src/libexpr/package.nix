@@ -14,6 +14,7 @@
   boehmgc,
   nlohmann_json,
   toml11,
+  wasmedge,
 
   # Configuration Options
 
@@ -64,6 +65,7 @@ mkMesonLibrary (finalAttrs: {
 
   buildInputs = [
     toml11
+    wasmedge
   ];
 
   propagatedBuildInputs = [

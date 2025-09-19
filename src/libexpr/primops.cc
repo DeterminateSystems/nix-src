@@ -156,7 +156,7 @@ StringMap EvalState::realiseContext(const NixStringContext & context, StorePathS
     return res;
 }
 
-static SourcePath realisePath(
+SourcePath realisePath(
     EvalState & state,
     const PosIdx pos,
     Value & v,

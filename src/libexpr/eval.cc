@@ -52,7 +52,7 @@ using json = nlohmann::json;
 
 namespace nix {
 
-static char * allocString(size_t size)
+char * allocString(size_t size)
 {
     char * t;
     t = (char *) GC_MALLOC_ATOMIC(size);

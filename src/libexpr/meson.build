@@ -180,7 +180,7 @@ this_library = library(
   generated_headers,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
-  link_args : linker_export_flags,
+  link_args : linker_export_flags + [ '-lwasmedge' ],
   prelink : true, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
