@@ -174,6 +174,11 @@ StorePath * nix_store_path_clone(const StorePath * p)
     return new StorePath{p->path};
 }
 
+nix_derivation * nix_derivation_clone(const nix_derivation * d)
+{
+    return new nix_derivation{d->drv};
+}
+
 nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store, const char * json)
 {
     if (context)

@@ -238,6 +238,14 @@ StorePath * nix_add_derivation(nix_c_context * context, Store * store, nix_deriv
 void nix_derivation_free(nix_derivation * drv);
 
 /**
+ * @brief Copy a `nix_derivation`
+ *
+ * @param[in] d the derivation to copy
+ * @return a new `nix_derivation`
+ */
+nix_derivation * nix_derivation_clone(const nix_derivation * d);
+
+/**
  * @brief Copy the closure of `path` from `srcStore` to `dstStore`.
  *
  * @param[out] context Optional, stores error information
