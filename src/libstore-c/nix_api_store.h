@@ -238,6 +238,14 @@ StorePath * nix_add_derivation(nix_c_context * context, Store * store, nix_deriv
 void nix_derivation_free(nix_derivation * drv);
 
 /**
+ * @brief Copy a `nix_derivation`
+ *
+ * @param[in] d the derivation to copy
+ * @return a new `nix_derivation`
+ */
+nix_derivation * nix_derivation_clone(const nix_derivation * d);
+
+/**
  * @brief Copy the closure of `path` from `srcStore` to `dstStore`.
  *
  * @param[out] context Optional, stores error information
@@ -290,6 +298,22 @@ nix_err nix_store_drv_from_path(
     void * userdata);
 
 /**
+ * @brief Queries for the nix store path info.
+ *
+ * @param[out] context Optional, stores error information
+ * @param[in] store nix store reference
+ * @param[in] path A store path
+ * @param[in] userdata The data to pass to the callback
+ * @param[in] callback Called for when the path info is resolved
+ */
+nix_err nix_store_query_path_info(
+    nix_c_context * context,
+    Store * store,
+    const StorePath * store_path,
+    void * userdata,
+    void (*callback)(void * userdata, const StorePath * derived_path));
+
+/**
  * @brief Iterate through all of the outputs in a derivation
  *
  * @note The callback borrows the DerivationOutput only for the duration of the call.
@@ -325,15 +349,20 @@ nix_err nix_derivation_get_outputs_and_optpaths(
     void * userdata);
 
 /**
- * @brief Gets the structured attrs of derivation as a JSON string
+ * @brief Gets the derivation as a JSON string
  *
  * @param[out] context Optional, stores error information
  * @param[in] drv The derivation
+ * @param[in] store The nix store
  * @param[in] callback Called with the JSON string
  * @param[in] user_data Arbitrary data passed to the callback
  */
-nix_err nix_derivation_get_structured_attrs(
-    nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata);
+nix_err nix_derivation_to_json(
+    nix_c_context * context,
+    const nix_derivation * drv,
+    const Store * store,
+    nix_get_string_callback callback,
+    void * userdata);
 
 /**
  * @brief Copy of a 'nix_derivation_output'

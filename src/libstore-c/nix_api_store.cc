@@ -174,6 +174,11 @@ StorePath * nix_store_path_clone(const StorePath * p)
     return new StorePath{p->path};
 }
 
+nix_derivation * nix_derivation_clone(const nix_derivation * d)
+{
+    return new nix_derivation{d->drv};
+}
+
 nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store, const char * json)
 {
     if (context)
@@ -261,6 +266,29 @@ nix_err nix_store_drv_from_path(
     NIXC_CATCH_ERRS
 }
 
+nix_err nix_store_query_path_info(
+    nix_c_context * context,
+    Store * store,
+    const StorePath * store_path,
+    void * userdata,
+    void (*callback)(void * userdata, const StorePath * derived_path))
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        auto info = store->ptr->queryPathInfo(store_path->path);
+        if (callback) {
+            if (auto deriver = info->deriver) {
+                const StorePath deriver_tmp{*info->deriver};
+                callback(userdata, &deriver_tmp);
+            } else {
+                callback(userdata, nullptr);
+            }
+        }
+    }
+    NIXC_CATCH_ERRS
+}
+
 nix_err nix_derivation_get_outputs(
     nix_c_context * context,
     const nix_derivation * drv,
@@ -308,17 +336,19 @@ nix_err nix_derivation_get_outputs_and_optpaths(
     NIXC_CATCH_ERRS
 }
 
-nix_err nix_derivation_get_structured_attrs(
-    nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata)
+nix_err nix_derivation_to_json(
+    nix_c_context * context,
+    const nix_derivation * drv,
+    const Store * store,
+    nix_get_string_callback callback,
+    void * userdata)
 {
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        if (auto structuredAttrs = drv->drv.structuredAttrs) {
-            if (callback) {
-                auto result = structuredAttrs->structuredAttrs.dump();
-                callback(result.data(), result.size(), userdata);
-            }
+        auto result = drv->drv.toJSON(store->ptr->config).dump();
+        if (callback) {
+            callback(result.data(), result.size(), userdata);
         }
     }
     NIXC_CATCH_ERRS
