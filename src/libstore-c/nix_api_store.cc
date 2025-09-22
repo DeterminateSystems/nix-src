@@ -195,6 +195,31 @@ nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store
     NIXC_CATCH_ERRS_NULL
 }
 
+nix_err nix_derivation_make_outputs(
+    nix_c_context * context,
+    Store * store,
+    const char * json,
+    void (*callback)(void * userdata, const char * output_name, const char * path),
+    void * userdata)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        auto drv = nix::Derivation::fromJSON(*store->ptr, nlohmann::json::parse(json));
+        auto hashesModulo = hashDerivationModulo(*store->ptr, drv, true);
+
+        for (auto & output : drv.outputs) {
+            nix::Hash h = hashesModulo.hashes.at(output.first);
+            auto outPath = store->ptr->makeOutputPath(output.first, h, drv.name);
+
+            if (callback) {
+                callback(userdata, output.first.c_str(), store->ptr->printStorePath(outPath).c_str());
+            }
+        }
+    }
+    NIXC_CATCH_ERRS
+}
+
 StorePath * nix_add_derivation(nix_c_context * context, Store * store, nix_derivation * derivation)
 {
     if (context)

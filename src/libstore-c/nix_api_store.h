@@ -221,6 +221,22 @@ nix_store_get_version(nix_c_context * context, Store * store, nix_get_string_cal
 nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store, const char * json);
 
 /**
+ * @brief Hashes the derivation and gives the output paths
+ *
+ * @param[in] context Optional, stores error information.
+ * @param[in] store nix store reference.
+ * @param[in] json JSON of the derivation as a string.
+ * @param[in] callback Called for every output to provide the output path.
+ * @param[in] userdata User data to pass to the callback.
+ */
+nix_err nix_derivation_make_outputs(
+    nix_c_context * context,
+    Store * store,
+    const char * json,
+    void (*callback)(void * userdata, const char * output_name, const char * path),
+    void * userdata);
+
+/**
  * @brief Add the given `nix_derivation` to the given store
  *
  * @param[out] context Optional, stores error information.
