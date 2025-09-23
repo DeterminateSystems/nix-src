@@ -26,7 +26,7 @@ typedef struct StorePath StorePath;
 /** @brief Nix Derivation */
 typedef struct nix_derivation nix_derivation;
 /** @brief Nix Derivation Output */
-typedef struct nix_derivation_output nix_derivation_noutput;
+typedef struct nix_derivation_output nix_derivation_output;
 
 /**
  * @brief Initializes the Nix store library
@@ -295,7 +295,7 @@ nix_err nix_store_get_fs_closure(
     void * userdata,
     void (*callback)(void * userdata, const StorePath * store_path));
 
-/*
+/**
  * @brief Returns the derivation associated with the store path
  *
  * @note The callback borrows the Derivation only for the duration of the call.
@@ -392,7 +392,7 @@ nix_err nix_derivation_get_outputs_and_optpaths(
  * @param[in] drv The derivation
  * @param[in] store The nix store
  * @param[in] callback Called with the JSON string
- * @param[in] user_data Arbitrary data passed to the callback
+ * @param[in] userdata Arbitrary data passed to the callback
  */
 nix_err nix_derivation_to_json(
     nix_c_context * context,
