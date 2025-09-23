@@ -330,6 +330,27 @@ nix_err nix_store_query_path_info(
     void (*callback)(void * userdata, const StorePath * derived_path));
 
 /**
+ * @brief Builds the paths, if they are a derivation then they get built.
+ *
+ * @note Path and result for the callback only exist for the lifetime of
+ * the call. Result is a string containing the build result in JSON.
+ *
+ * @param[out] context Optional, stores error information
+ * @param[in] store nix store reference
+ * @param[in] store_paths Pointer to list of nix store paths
+ * @param[in] num_store_paths Number of nix store paths
+ * @param[in] callback The callback to trigger for build results
+ * @param[in] userdata User data to pass to the callback
+ */
+nix_err nix_store_build_paths(
+    nix_c_context * context,
+    Store * store,
+    const StorePath ** store_paths,
+    unsigned int num_store_paths,
+    void (*callback)(void * userdata, const char * path, const char * result),
+    void * userdata);
+
+/**
  * @brief Iterate through all of the outputs in a derivation
  *
  * @note The callback borrows the DerivationOutput only for the duration of the call.

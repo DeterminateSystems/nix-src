@@ -314,6 +314,35 @@ nix_err nix_store_query_path_info(
     NIXC_CATCH_ERRS
 }
 
+nix_err nix_store_build_paths(
+    nix_c_context * context,
+    Store * store,
+    const StorePath ** store_paths,
+    unsigned int num_store_paths,
+    void (*callback)(void * userdata, const char * path, const char * result),
+    void * userdata)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        std::vector<nix::DerivedPath> derived_paths;
+        for (size_t i = 0; i < num_store_paths; i++) {
+            const StorePath * store_path = store_paths[i];
+            derived_paths.push_back(nix::SingleDerivedPath::Opaque{store_path->path});
+        }
+
+        auto results = store->ptr->buildPathsWithResults(derived_paths);
+        for (auto & result : results) {
+            if (callback) {
+                nlohmann::json json;
+                nix::to_json(json, result);
+                callback(userdata, result.path.to_string(store->ptr->config).c_str(), json.dump().c_str());
+            }
+        }
+    }
+    NIXC_CATCH_ERRS
+}
+
 nix_err nix_derivation_get_outputs(
     nix_c_context * context,
     const nix_derivation * drv,
