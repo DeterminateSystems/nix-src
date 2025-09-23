@@ -156,3 +156,13 @@ nix_err call_nix_get_string_callback(const std::string str, nix_get_string_callb
     callback(str.c_str(), str.size(), user_data);
     return NIX_OK;
 }
+
+nix_err nix_set_verbosity(nix_c_context * context, const char * level)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        nix::verbosity = nix::parseVerbosity(level);
+    }
+    NIXC_CATCH_ERRS
+}
