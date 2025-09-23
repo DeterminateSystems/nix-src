@@ -23,10 +23,7 @@ unsigned int Executor::getEvalCores(const EvalSettings & evalSettings)
 Executor::Executor(const EvalSettings & evalSettings)
     : evalCores(getEvalCores(evalSettings))
     , enabled(evalCores > 1)
-    , interruptCallback(createInterruptCallback([&]() {
-        for (auto & domain : waiterDomains)
-            domain.lock()->cv.notify_all();
-    }))
+    , interruptCallback(createInterruptCallback([&]() { wakeAll(); }))
 {
     debug("executor using %d threads", evalCores);
     auto state(state_.lock());
@@ -48,6 +45,22 @@ Executor::~Executor()
 
     for (auto & thr : threads)
         thr.join();
+
+    assert(state_.lock()->nrTotalThreads == 0);
+    assert(state_.lock()->nrInactiveThreads == 0);
+}
+
+void Executor::wakeAll()
+{
+    for (auto & domain : waiterDomains)
+        domain.lock()->cv.notify_all();
+}
+
+bool Executor::checkDeadlock(State & state, size_t extraActiveThreads)
+{
+    return nrUnblocked == 0
+           && (state.queue.empty() ? state.nrInactiveThreads < state.nrTotalThreads + extraActiveThreads
+                                   : state.nrInactiveThreads == 0);
 }
 
 void Executor::createWorker(State & state)
@@ -65,6 +78,8 @@ void Executor::createWorker(State & state)
         GC_unregister_my_thread();
 #endif
     }));
+    state.nrTotalThreads++;
+    state.nrInactiveThreads++;
 }
 
 void Executor::worker()
@@ -74,29 +89,45 @@ void Executor::worker()
     unix::interruptCheck = [&]() { return (bool) quit; };
 
     amWorkerThread = true;
+    bool markInactive = false;
 
     while (true) {
         Item item;
 
         while (true) {
             auto state(state_.lock());
+            if (markInactive) {
+                markInactive = false;
+                state->nrInactiveThreads++;
+            }
+            if (checkDeadlock(*state, 0)) {
+                deadlocked = true;
+                wakeAll();
+            }
             if (quit) {
                 // Set an `Interrupted` exception on all promises so
                 // we get a nicer error than "std::future_error:
                 // Broken promise".
-                auto ex = std::make_exception_ptr(Interrupted("interrupted by the user"));
+                auto ex = std::make_exception_ptr(Interrupted("interrupted by the user2"));
                 for (auto & item : state->queue)
                     item.second.promise.set_exception(ex);
                 state->queue.clear();
+                state->nrTotalThreads--;
+                state->nrInactiveThreads--;
                 return;
             }
             if (!state->queue.empty()) {
                 item = std::move(state->queue.begin()->second);
                 state->queue.erase(state->queue.begin());
+                state->nrInactiveThreads--;
+                markInactive = true;
+                nrUnblocked++;
                 break;
             }
             state.wait(wakeup);
         }
+
+        Finally f = [&]() { nrUnblocked--; };
 
         try {
             item.work();
@@ -187,12 +218,18 @@ static Sync<WaiterDomain> & getWaiterDomain(detail::ValueBase & v)
     return waiterDomains[domain];
 }
 
+static void throwInfiniteRecursion(EvalState & state, Value & v)
+{
+    state.error<InfiniteRecursionError>("infinite recursion encountered").atPos(v.determinePos(noPos)).debugThrow();
+}
+
 template<>
 ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, bool awaited)
 {
     state.nrThunksAwaited++;
 
-    auto domain = getWaiterDomain(*this).lock();
+    auto & _domain = getWaiterDomain(*this);
+    auto domain = _domain.lock();
 
     if (awaited) {
         /* Make sure that the value is still awaited, now that we're
@@ -224,13 +261,33 @@ ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOn
 
     /* Wait for another thread to finish this value. */
     if (state.executor->evalCores <= 1)
-        state.error<InfiniteRecursionError>("infinite recursion encountered")
-            .atPos(((Value &) *this).determinePos(noPos))
-            .debugThrow();
+        throwInfiniteRecursion(state, (Value &) *this);
 
     state.nrThunksAwaitedSlow++;
     state.currentlyWaiting++;
     state.maxWaiting = std::max<uint64_t>(state.maxWaiting, state.currentlyWaiting);
+
+    /* Deadlock detection. */
+    Finally incrUnblocked = [&]() {
+        if (Executor::amWorkerThread)
+            state.executor->nrUnblocked++;
+    };
+    /* Handle the case where we're evaluating on a non-worker thread
+       (typically the main thread). Ideally those threads would
+       increment `nrUnblocked`... */
+    auto active = Executor::amWorkerThread ? --state.executor->nrUnblocked : 0;
+    assert(active >= 0);
+    if (active == 0) {
+        if (state.executor->deadlocked
+            || state.executor->checkDeadlock(*state.executor->state_.lock(), Executor::amWorkerThread ? 0 : 1)) {
+            state.executor->deadlocked = true;
+            domain->cv.notify_all();
+            for (auto & d : waiterDomains)
+                if (&d != &_domain)
+                    d.lock()->cv.notify_all();
+            throwInfiniteRecursion(state, (Value &) *this);
+        }
+    }
 
     auto now1 = std::chrono::steady_clock::now();
 
@@ -247,6 +304,8 @@ ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOn
         }
         state.nrSpuriousWakeups++;
         checkInterrupt();
+        if (state.executor->deadlocked)
+            throwInfiniteRecursion(state, (Value &) *this);
     }
 }
 

@@ -33,9 +33,12 @@ struct Executor
     {
         std::multimap<uint64_t, Item> queue;
         std::vector<boost::thread> threads;
+        size_t nrInactiveThreads{0};
+        size_t nrTotalThreads{0};
     };
 
     std::atomic_bool quit{false};
+    std::atomic_bool deadlocked{false};
 
     const unsigned int evalCores;
 
@@ -46,6 +49,8 @@ struct Executor
     Sync<State> state_;
 
     std::condition_variable wakeup;
+
+    std::atomic<int32_t> nrUnblocked{0};
 
     static unsigned int getEvalCores(const EvalSettings & evalSettings);
 
@@ -58,6 +63,10 @@ struct Executor
     void worker();
 
     std::vector<std::future<void>> spawn(std::vector<std::pair<work_t, uint8_t>> && items);
+
+    bool checkDeadlock(State & state, size_t extraActiveThreads);
+
+    void wakeAll();
 
     static thread_local bool amWorkerThread;
 };
