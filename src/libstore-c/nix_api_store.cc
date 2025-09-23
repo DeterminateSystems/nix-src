@@ -176,7 +176,7 @@ StorePath * nix_store_path_clone(const StorePath * p)
 
 nix_derivation * nix_derivation_clone(const nix_derivation * d)
 {
-    return new nix_derivation{d->drv};
+    return new nix_derivation{d->drv, d->store};
 }
 
 nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store, const char * json)
@@ -190,7 +190,7 @@ nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store
 
         drv.checkInvariants(*store->ptr, drvPath);
 
-        return new nix_derivation{drv};
+        return new nix_derivation{drv, store};
     }
     NIXC_CATCH_ERRS_NULL
 }
@@ -284,7 +284,7 @@ nix_err nix_store_drv_from_path(
     try {
         nix::Derivation drv = store->ptr->derivationFromPath(path->path);
         if (callback) {
-            const nix_derivation tmp{drv};
+            const nix_derivation tmp{drv, store};
             callback(userdata, &tmp);
         }
     }
@@ -391,16 +391,12 @@ nix_err nix_derivation_get_outputs_and_optpaths(
 }
 
 nix_err nix_derivation_to_json(
-    nix_c_context * context,
-    const nix_derivation * drv,
-    const Store * store,
-    nix_get_string_callback callback,
-    void * userdata)
+    nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata)
 {
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        auto result = drv->drv.toJSON(store->ptr->config).dump();
+        auto result = drv->drv.toJSON(drv->store->ptr->config).dump();
         if (callback) {
             callback(result.data(), result.size(), userdata);
         }

@@ -16,6 +16,7 @@ struct StorePath
 struct nix_derivation
 {
     nix::Derivation drv;
+    Store * store;
 };
 
 struct nix_derivation_output

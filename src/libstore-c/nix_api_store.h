@@ -390,16 +390,11 @@ nix_err nix_derivation_get_outputs_and_optpaths(
  *
  * @param[out] context Optional, stores error information
  * @param[in] drv The derivation
- * @param[in] store The nix store
  * @param[in] callback Called with the JSON string
  * @param[in] userdata Arbitrary data passed to the callback
  */
 nix_err nix_derivation_to_json(
-    nix_c_context * context,
-    const nix_derivation * drv,
-    const Store * store,
-    nix_get_string_callback callback,
-    void * userdata);
+    nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata);
 
 /**
  * @brief Copy of a 'nix_derivation_output'
