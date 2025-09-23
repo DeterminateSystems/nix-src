@@ -367,4 +367,6 @@ inline void warn(const std::string & fs, const Args &... args)
 
 void writeToStderr(std::string_view s);
 
+Verbosity parseVerbosity(const std::string & verbosityStr);
+
 } // namespace nix

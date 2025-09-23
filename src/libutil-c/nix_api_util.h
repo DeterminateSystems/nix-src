@@ -317,6 +317,14 @@ nix_err nix_set_err_msg(nix_c_context * context, nix_err err, const char * msg);
 void nix_clear_err(nix_c_context * context);
 
 /**
+ * @brief Sets the verbosity level from the string name
+ *
+ * @param[out] context Optional, additional error context.
+ * @param[in] level Verbosity level as a string
+ */
+nix_err nix_set_verbosity(nix_c_context * context, const char * level);
+
+/**
  *  @}
  */
 

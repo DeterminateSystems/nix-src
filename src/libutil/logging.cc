@@ -488,4 +488,25 @@ Activity::~Activity()
     }
 }
 
+Verbosity parseVerbosity(const std::string & verbosityStr)
+{
+    if (verbosityStr == "error")
+        return Verbosity::lvlError;
+    else if (verbosityStr == "warn")
+        return Verbosity::lvlWarn;
+    else if (verbosityStr == "notice")
+        return Verbosity::lvlNotice;
+    else if (verbosityStr == "info")
+        return Verbosity::lvlInfo;
+    else if (verbosityStr == "talkative")
+        return Verbosity::lvlTalkative;
+    else if (verbosityStr == "chatty")
+        return Verbosity::lvlChatty;
+    else if (verbosityStr == "debug")
+        return Verbosity::lvlDebug;
+    else if (verbosityStr == "vomit")
+        return Verbosity::lvlVomit;
+    throw Error("verbosity has an invalid value '%s'", verbosityStr);
+}
+
 } // namespace nix
