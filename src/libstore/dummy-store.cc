@@ -65,7 +65,7 @@ struct DummyStore : virtual Store
     /**
      * The dummy store is incapable of *not* trusting! :)
      */
-    virtual std::optional<TrustedFlag> isTrustedClient() override
+    std::optional<TrustedFlag> isTrustedClient() override
     {
         return Trusted;
     }
@@ -80,7 +80,7 @@ struct DummyStore : virtual Store
         unsupported("addToStore");
     }
 
-    virtual StorePath addToStoreFromDump(
+    StorePath addToStoreFromDump(
         Source & dump,
         std::string_view name,
         FileSerialisationMethod dumpMethod = FileSerialisationMethod::NixArchive,
@@ -103,7 +103,7 @@ struct DummyStore : virtual Store
         callback(nullptr);
     }
 
-    virtual ref<SourceAccessor> getFSAccessor(bool requireValidPath) override
+    ref<SourceAccessor> getFSAccessor(bool requireValidPath) override
     {
         return makeEmptySourceAccessor();
     }
