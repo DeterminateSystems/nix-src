@@ -805,7 +805,7 @@ private:
      * state, wait for it to finish. Returns the first word of the
      * value.
      */
-    PackedPointer waitOnThunk(EvalState & state, bool awaited);
+    PackedPointer waitOnThunk(EvalState & state, PackedPointer p0);
 
     /**
      * Wake up any threads that are waiting on this value.
@@ -817,7 +817,8 @@ template<>
 void ValueStorage<sizeof(void *)>::notifyWaiters();
 
 template<>
-ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, bool awaited);
+ValueStorage<sizeof(void *)>::PackedPointer
+ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer p0);
 
 template<>
 bool ValueStorage<sizeof(void *)>::isTrivial() const;

@@ -187,14 +187,20 @@ static Sync<WaiterDomain> & getWaiterDomain(detail::ValueBase & v)
     return waiterDomains[domain];
 }
 
+static std::atomic<uint32_t> nextEvalThreadId{1};
+thread_local uint32_t myEvalThreadId(nextEvalThreadId++);
+
 template<>
-ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, bool awaited)
+ValueStorage<sizeof(void *)>::PackedPointer
+ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer expectedP0)
 {
     state.nrThunksAwaited++;
 
     auto domain = getWaiterDomain(*this).lock();
 
-    if (awaited) {
+    auto threadId = expectedP0 >> discriminatorBits;
+
+    if (static_cast<PrimaryDiscriminator>(expectedP0 & discriminatorMask) == pdAwaited) {
         /* Make sure that the value is still awaited, now that we're
            holding the domain lock. */
         auto p0_ = p0.load(std::memory_order_acquire);
@@ -208,8 +214,12 @@ ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOn
         }
     } else {
         /* Mark this value as being waited on. */
-        PackedPointer p0_ = pdPending;
-        if (!p0.compare_exchange_strong(p0_, pdAwaited, std::memory_order_acquire, std::memory_order_acquire)) {
+        PackedPointer p0_ = expectedP0;
+        if (!p0.compare_exchange_strong(
+                p0_,
+                pdAwaited | (threadId << discriminatorBits),
+                std::memory_order_acquire,
+                std::memory_order_acquire)) {
             /* If the value has been finalized in the meantime (i.e. is
                no longer pending), we're done. */
             auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
@@ -223,7 +233,7 @@ ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOn
     }
 
     /* Wait for another thread to finish this value. */
-    if (state.executor->evalCores <= 1)
+    if (threadId == myEvalThreadId)
         state.error<InfiniteRecursionError>("infinite recursion encountered")
             .atPos(((Value &) *this).determinePos(noPos))
             .debugThrow();

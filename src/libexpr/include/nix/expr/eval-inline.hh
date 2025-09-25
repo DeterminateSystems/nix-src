@@ -88,6 +88,13 @@ Env & EvalState::allocEnv(size_t size)
     return *env;
 }
 
+/**
+ * An identifier of the current thread for deadlock detection, stored
+ * in p0 of pending/awaited thunks. We're not using std::thread::id
+ * because it's not guaranteed to fit.
+ */
+extern thread_local uint32_t myEvalThreadId;
+
 template<std::size_t ptrSize>
 void ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptrSize>>>::force(
     EvalState & state, PosIdx pos)
@@ -103,12 +110,16 @@ void ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptr
             auto p1_ = p1;
 
             // Atomically set the thunk to "pending".
-            if (!p0.compare_exchange_strong(p0_, pdPending, std::memory_order_acquire, std::memory_order_acquire)) {
+            if (!p0.compare_exchange_strong(
+                    p0_,
+                    pdPending | (myEvalThreadId << discriminatorBits),
+                    std::memory_order_acquire,
+                    std::memory_order_acquire)) {
                 pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
                 if (pd == pdPending || pd == pdAwaited) {
                     // The thunk is already "pending" or "awaited", so
                     // we need to wait for it.
-                    p0_ = waitOnThunk(state, pd == pdAwaited);
+                    p0_ = waitOnThunk(state, p0_);
                     goto done;
                 }
                 assert(pd != pdThunk);
@@ -134,7 +145,7 @@ void ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptr
     }
 
     else if (pd == pdPending || pd == pdAwaited)
-        p0_ = waitOnThunk(state, pd == pdAwaited);
+        p0_ = waitOnThunk(state, p0_);
 
 done:
     if (InternalType(p0_ & 0xff) == tFailed)
