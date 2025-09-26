@@ -327,7 +327,7 @@ nix_err nix_store_query_path_info(
     Store * store,
     const StorePath * store_path,
     void * userdata,
-    void (*callback)(void * userdata, const StorePath * derived_path));
+    nix_get_string_callback callback);
 
 /**
  * @brief Builds the paths, if they are a derivation then they get built.
