@@ -180,3 +180,31 @@ nix_err nix_store_copy_closure(nix_c_context * context, Store * srcStore, Store 
     }
     NIXC_CATCH_ERRS
 }
+
+nix_err nix_store_get_fs_closure(
+    nix_c_context * context,
+    Store * store,
+    const StorePath * store_path,
+    bool flip_direction,
+    bool include_outputs,
+    bool include_derivers,
+    void * userdata,
+    void (*callback)(void * userdata, const StorePath * store_path))
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        const auto nixStore = store->ptr;
+
+        nix::StorePathSet set;
+        nixStore->computeFSClosure(store_path->path, set, flip_direction, include_outputs, include_derivers);
+
+        if (callback) {
+            for (const auto & path : set) {
+                const StorePath tmp{path};
+                callback(userdata, &tmp);
+            }
+        }
+    }
+    NIXC_CATCH_ERRS
+}

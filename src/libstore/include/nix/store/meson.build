@@ -10,6 +10,7 @@ config_pub_h = configure_file(
 )
 
 headers = [ config_pub_h ] + files(
+  'async-path-writer.hh',
   'binary-cache-store.hh',
   'build-result.hh',
   'build/derivation-builder.hh',
@@ -33,6 +34,7 @@ headers = [ config_pub_h ] + files(
   'derived-path-map.hh',
   'derived-path.hh',
   'downstream-placeholder.hh',
+  'export-import.hh',
   'filetransfer.hh',
   'gc-store.hh',
   'globals.hh',

@@ -16,6 +16,7 @@
 #include "nix/expr/search-path.hh"
 #include "nix/expr/repl-exit-status.hh"
 #include "nix/util/ref.hh"
+#include "nix/expr/counter.hh"
 
 // For `NIX_USE_BOEHMGC`, and if that's set, `GC_THREADS`
 #include "nix/expr/config.hh"
@@ -38,6 +39,7 @@ class Store;
 namespace fetchers {
 struct Settings;
 struct InputCache;
+struct Input;
 } // namespace fetchers
 struct EvalSettings;
 class EvalState;
@@ -45,10 +47,13 @@ class StorePath;
 struct SingleDerivedPath;
 enum RepairFlag : bool;
 struct MemorySourceAccessor;
+struct MountedSourceAccessor;
+struct AsyncPathWriter;
 
 namespace eval_cache {
 class EvalCache;
 }
+struct Executor;
 
 /**
  * Increments a count on construction and decrements on destruction.
@@ -185,7 +190,7 @@ std::ostream & operator<<(std::ostream & os, const ValueType t);
 
 struct RegexCache;
 
-std::shared_ptr<RegexCache> makeRegexCache();
+ref<RegexCache> makeRegexCache();
 
 struct DebugTrace
 {
@@ -218,6 +223,9 @@ class EvalState : public std::enable_shared_from_this<EvalState>
 public:
     const fetchers::Settings & fetchSettings;
     const EvalSettings & settings;
+
+    ref<Executor> executor;
+
     SymbolTable symbols;
     PosTable positions;
 
@@ -276,7 +284,7 @@ public:
     /**
      * The accessor corresponding to `store`.
      */
-    const ref<SourceAccessor> storeFS;
+    const ref<MountedSourceAccessor> storeFS;
 
     /**
      * The accessor for the root filesystem.
@@ -320,6 +328,8 @@ public:
     std::list<DebugTrace> debugTraces;
     std::map<const Expr *, const std::shared_ptr<const StaticEnv>> exprEnvs;
 
+    ref<AsyncPathWriter> asyncPathWriter;
+
     const std::shared_ptr<const StaticEnv> getStaticEnv(const Expr & expr) const
     {
         auto i = exprEnvs.find(&expr);
@@ -361,58 +371,37 @@ private:
 
     /* Cache for calls to addToStore(); maps source paths to the store
        paths. */
-    Sync<std::unordered_map<SourcePath, StorePath>> srcToStore;
+    struct SrcToStore;
+    ref<SrcToStore> srcToStore;
 
     /**
-     * A cache from path names to parse trees.
+     * A cache that maps paths to "resolved" paths for importing Nix
+     * expressions, i.e. `/foo` to `/foo/default.nix`.
      */
-    typedef std::unordered_map<
-        SourcePath,
-        Expr *,
-        std::hash<SourcePath>,
-        std::equal_to<SourcePath>,
-        traceable_allocator<std::pair<const SourcePath, Expr *>>>
-        FileParseCache;
-    FileParseCache fileParseCache;
+    struct ImportResolutionCache;
+    ref<ImportResolutionCache> importResolutionCache;
 
     /**
-     * A cache from path names to values.
+     * A cache from resolved paths to values.
      */
-    typedef std::unordered_map<
-        SourcePath,
-        Value,
-        std::hash<SourcePath>,
-        std::equal_to<SourcePath>,
-        traceable_allocator<std::pair<const SourcePath, Value>>>
-        FileEvalCache;
-    FileEvalCache fileEvalCache;
+    struct FileEvalCache;
+    ref<FileEvalCache> fileEvalCache;
 
     /**
      * Associate source positions of certain AST nodes with their preceding doc comment, if they have one.
      * Grouped by file.
      */
-    std::unordered_map<SourcePath, DocCommentMap> positionToDocComment;
+    SharedSync<std::unordered_map<SourcePath, DocCommentMap>> positionToDocComment;
 
     LookupPath lookupPath;
 
+    // FIXME: make thread-safe.
     std::map<std::string, std::optional<SourcePath>> lookupPathResolved;
 
     /**
      * Cache used by prim_match().
      */
-    std::shared_ptr<RegexCache> regexCache;
-
-#if NIX_USE_BOEHMGC
-    /**
-     * Allocation cache for GC'd Value objects.
-     */
-    std::shared_ptr<void *> valueAllocCache;
-
-    /**
-     * Allocation cache for size-1 Env objects.
-     */
-    std::shared_ptr<void *> env1AllocCache;
-#endif
+    ref<RegexCache> regexCache;
 
 public:
 
@@ -473,6 +462,16 @@ public:
     void checkURI(const std::string & uri);
 
     /**
+     * Mount an input on the Nix store.
+     */
+    StorePath mountInput(
+        fetchers::Input & input,
+        const fetchers::Input & originalInput,
+        ref<SourceAccessor> accessor,
+        bool requireLockable,
+        bool forceNarHash = false);
+
+    /**
      * Parse a Nix expression from the specified file.
      */
     Expr * parseExprFromFile(const SourcePath & path);
@@ -531,7 +530,10 @@ public:
      * application, call the function and overwrite `v` with the
      * result.  Otherwise, this is a no-op.
      */
-    inline void forceValue(Value & v, const PosIdx pos);
+    inline void forceValue(Value & v, const PosIdx pos)
+    {
+        v.force(*this, pos);
+    }
 
     void tryFixupBlackHolePos(Value & v, PosIdx pos);
 
@@ -589,6 +591,12 @@ public:
     std::optional<std::string> tryAttrsToString(
         const PosIdx pos, Value & v, NixStringContext & context, bool coerceMore = false, bool copyToStore = true);
 
+    StorePath devirtualize(const StorePath & path, StringMap * rewrites = nullptr);
+
+    SingleDerivedPath devirtualize(const SingleDerivedPath & path, StringMap * rewrites = nullptr);
+
+    std::string devirtualize(std::string_view s, const NixStringContext & context);
+
     /**
      * String coercion.
      *
@@ -606,7 +614,19 @@ public:
         bool copyToStore = true,
         bool canonicalizePath = true);
 
-    StorePath copyPathToStore(NixStringContext & context, const SourcePath & path);
+    StorePath copyPathToStore(NixStringContext & context, const SourcePath & path, PosIdx pos);
+
+    /**
+     * Compute the base name for a `SourcePath`. For non-store paths,
+     * this is just `SourcePath::baseName()`. But for store paths, for
+     * backwards compatibility, it needs to be `<hash>-source`,
+     * i.e. as if the path were copied to the Nix store. This results
+     * in a "double-copied" store path like
+     * `/nix/store/<hash1>-<hash2>-source`. We don't need to
+     * materialize /nix/store/<hash2>-source though. Still, this
+     * requires reading/hashing the path twice.
+     */
+    std::string computeBaseName(const SourcePath & path, PosIdx pos);
 
     /**
      * Path coercion.
@@ -749,10 +769,11 @@ private:
         std::shared_ptr<StaticEnv> & staticEnv);
 
     /**
-     * Current Nix call stack depth, used with `max-call-depth` setting to throw stack overflow hopefully before we run
-     * out of system stack.
+     * Current Nix call stack depth, used with `max-call-depth`
+     * setting to throw stack overflow hopefully before we run out of
+     * system stack.
      */
-    size_t callDepth = 0;
+    thread_local static size_t callDepth;
 
 public:
 
@@ -907,6 +928,10 @@ public:
 
     DocComment getDocCommentForPos(PosIdx pos);
 
+    void waitForPath(const StorePath & path);
+    void waitForPath(const SingleDerivedPath & path);
+    void waitForAllPaths();
+
 private:
 
     /**
@@ -924,22 +949,32 @@ private:
      */
     std::string mkSingleDerivedPathStringRaw(const SingleDerivedPath & p);
 
-    unsigned long nrEnvs = 0;
-    unsigned long nrValuesInEnvs = 0;
-    unsigned long nrValues = 0;
-    unsigned long nrListElems = 0;
-    unsigned long nrLookups = 0;
-    unsigned long nrAttrsets = 0;
-    unsigned long nrAttrsInAttrsets = 0;
-    unsigned long nrAvoided = 0;
-    unsigned long nrOpUpdates = 0;
-    unsigned long nrOpUpdateValuesCopied = 0;
-    unsigned long nrListConcats = 0;
-    unsigned long nrPrimOpCalls = 0;
-    unsigned long nrFunctionCalls = 0;
+    Counter nrEnvs;
+    Counter nrValuesInEnvs;
+    Counter nrValues;
+    Counter nrListElems;
+    Counter nrLookups;
+    Counter nrAttrsets;
+    Counter nrAttrsInAttrsets;
+    Counter nrAvoided;
+    Counter nrOpUpdates;
+    Counter nrOpUpdateValuesCopied;
+    Counter nrListConcats;
+    Counter nrPrimOpCalls;
+    Counter nrFunctionCalls;
 
+public:
+    Counter nrThunksAwaited;
+    Counter nrThunksAwaitedSlow;
+    Counter microsecondsWaiting;
+    Counter currentlyWaiting;
+    Counter maxWaiting;
+    Counter nrSpuriousWakeups;
+
+private:
     bool countCalls;
 
+    // FIXME: make thread-safe.
     typedef std::map<std::string, size_t> PrimOpCalls;
     PrimOpCalls primOpCalls;
 
@@ -951,6 +986,7 @@ private:
 
     void incrFunctionCall(ExprLambda * fun);
 
+    // FIXME: make thread-safe.
     typedef std::map<PosIdx, size_t> AttrSelects;
     AttrSelects attrSelects;
 

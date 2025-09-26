@@ -53,11 +53,6 @@ enum CheckSigsFlag : bool { NoCheckSigs = false, CheckSigs = true };
 
 enum SubstituteFlag : bool { NoSubstitute = false, Substitute = true };
 
-/**
- * Magic header of exportPath() output (obsolete).
- */
-const uint32_t exportMagic = 0x4558494e;
-
 enum BuildMode : uint8_t { bmNormal, bmRepair, bmCheck };
 
 enum TrustedFlag : bool { NotTrusted = false, Trusted = true };
@@ -315,14 +310,11 @@ protected:
         }
     };
 
-    struct State
-    {
-        LRUCache<std::string, PathInfoCacheValue> pathInfoCache;
-    };
-
     void invalidatePathInfoCacheFor(const StorePath & path);
 
-    SharedSync<State> state;
+    // Note: this is a `ref` to avoid false sharing with immutable
+    // bits of `Store`.
+    ref<SharedSync<LRUCache<std::string, PathInfoCacheValue>>> pathInfoCache;
 
     std::shared_ptr<NarInfoDiskCache> diskCache;
 
@@ -349,7 +341,9 @@ public:
     StorePath followLinksToStorePath(std::string_view path) const;
 
     /**
-     * Check whether a path is valid.
+     * Check whether a path is valid. NOTE: this function does not
+     * generally cache whether a path is valid. You may want to use
+     * `maybeQueryPathInfo()`, which does cache.
      */
     bool isValidPath(const StorePath & path);
 
@@ -389,9 +383,16 @@ public:
 
     /**
      * Query information about a valid path. It is permitted to omit
-     * the name part of the store path.
+     * the name part of the store path. Throws an exception if the
+     * path is not valid.
      */
     ref<const ValidPathInfo> queryPathInfo(const StorePath & path);
+
+    /**
+     * Like `queryPathInfo()`, but returns `nullptr` if the path is
+     * not valid.
+     */
+    std::shared_ptr<const ValidPathInfo> maybeQueryPathInfo(const StorePath & path);
 
     /**
      * Asynchronous version of queryPathInfo().
@@ -812,21 +813,6 @@ public:
      */
     StorePaths topoSortPaths(const StorePathSet & paths);
 
-    /**
-     * Export multiple paths in the format expected by ‘nix-store
-     * --import’.
-     */
-    void exportPaths(const StorePathSet & paths, Sink & sink);
-
-    void exportPath(const StorePath & path, Sink & sink);
-
-    /**
-     * Import a sequence of NAR dumps created by exportPaths() into the
-     * Nix store. Optionally, the contents of the NARs are preloaded
-     * into the specified FS accessor to speed up subsequent access.
-     */
-    StorePaths importPaths(Source & source, CheckSigsFlag checkSigs = CheckSigs);
-
     struct Stats
     {
         std::atomic<uint64_t> narInfoRead{0};
@@ -865,7 +851,7 @@ public:
      */
     void clearPathInfoCache()
     {
-        state.lock()->pathInfoCache.clear();
+        pathInfoCache->lock()->clear();
     }
 
     /**
