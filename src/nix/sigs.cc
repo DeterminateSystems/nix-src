@@ -152,7 +152,7 @@ static auto rCmdSign = registerCommand2<CmdSign>({"store", "sign"});
 
 struct CmdKeyGenerateSecret : Command
 {
-    std::optional<std::string> keyName;
+    std::string keyName;
 
     CmdKeyGenerateSecret()
     {
@@ -161,6 +161,7 @@ struct CmdKeyGenerateSecret : Command
             .description = "Identifier of the key (e.g. `cache.example.org-1`).",
             .labels = {"name"},
             .handler = {&keyName},
+            .required = true,
         });
     }
 
@@ -178,11 +179,8 @@ struct CmdKeyGenerateSecret : Command
 
     void run() override
     {
-        if (!keyName)
-            throw UsageError("required argument '--key-name' is missing");
-
         logger->stop();
-        writeFull(getStandardOutput(), SecretKey::generate(*keyName).to_string());
+        writeFull(getStandardOutput(), SecretKey::generate(keyName).to_string());
     }
 };
 

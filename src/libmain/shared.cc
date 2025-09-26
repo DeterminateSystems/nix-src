@@ -334,7 +334,7 @@ int handleExceptions(const std::string & programName, std::function<void()> fun)
             return e.status;
         } catch (UsageError & e) {
             logError(e.info());
-            printError("Try '%1% --help' for more information.", programName);
+            printError("\nTry '%1% --help' for more information.", programName);
             return 1;
         } catch (BaseError & e) {
             logError(e.info());
