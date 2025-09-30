@@ -204,7 +204,7 @@ static std::pair<std::map<FlakeId, FlakeInput>, fetchers::Attrs> parseFlakeInput
     return {inputs, selfAttrs};
 }
 
-static Flake readFlake(
+Flake readFlake(
     EvalState & state,
     const FlakeRef & originalRef,
     const FlakeRef & resolvedRef,
@@ -376,16 +376,12 @@ static LockFile readLockFile(const fetchers::Settings & fetchSettings, const Sou
                                      : LockFile();
 }
 
-/* Compute an in-memory lock file for the specified top-level flake,
-   and optionally write it to file, if the flake is writable. */
-LockedFlake
-lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags)
+LockedFlake lockFlake(
+    const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags, Flake flake)
 {
     auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
     auto useRegistriesTop = useRegistries ? fetchers::UseRegistries::All : fetchers::UseRegistries::No;
     auto useRegistriesInputs = useRegistries ? fetchers::UseRegistries::Limited : fetchers::UseRegistries::No;
-
-    auto flake = getFlake(state, topRef, useRegistriesTop, {}, lockFlags.requireLockable);
 
     if (lockFlags.applyNixConfig) {
         flake.config.apply(settings);
@@ -895,6 +891,16 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
         e.addTrace({}, "while updating the lock file of flake '%s'", flake.lockedRef.to_string());
         throw;
     }
+}
+
+LockedFlake
+lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags)
+{
+    auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
+    auto useRegistriesTop = useRegistries ? fetchers::UseRegistries::All : fetchers::UseRegistries::No;
+
+    return lockFlake(
+        settings, state, topRef, lockFlags, getFlake(state, topRef, useRegistriesTop, {}, lockFlags.requireLockable));
 }
 
 static ref<SourceAccessor> makeInternalFS()

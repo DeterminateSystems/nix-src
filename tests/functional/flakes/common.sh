@@ -2,7 +2,7 @@
 
 source ../common.sh
 
-export _NIX_TEST_BARF_ON_UNCACHEABLE=1
+#export _NIX_TEST_BARF_ON_UNCACHEABLE=1
 
 # shellcheck disable=SC2034 # this variable is used by tests that source this file
 registry=$TEST_ROOT/registry.json
@@ -95,7 +95,13 @@ writeIfdFlake() {
     cat > "$flakeDir/flake.nix" <<EOF
 {
   outputs = { self }: {
-    packages.$system.default = import ./ifd.nix;
+    packages.$system.default =
+      with import ./config.nix;
+      mkDerivation {
+        name = "top";
+        system = "$system";
+        ifd = import ./ifd.nix;
+      };
   };
 }
 EOF
