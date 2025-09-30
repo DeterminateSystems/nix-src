@@ -103,7 +103,7 @@ static void wasm_get_type(
     WasmEdge_Value * out)
 {
     ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    auto value = **nixCtx.values.at(valueId);
+    auto & value = **nixCtx.values.at(valueId);
     nixCtx.state.forceValue(value, noPos);
     auto t = value.type();
     out[0] = WasmEdge_ValueGenI64(
@@ -138,8 +138,8 @@ static void wasm_get_int(
     WasmEdge_Value * out)
 {
     ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    auto value = nixCtx.values.at(valueId);
-    auto n = nixCtx.state.forceInt(**value, noPos, "while evaluating a value from WASM");
+    auto & value = **nixCtx.values.at(valueId);
+    auto n = nixCtx.state.forceInt(value, noPos, "while evaluating a value from WASM");
     out[0] = WasmEdge_ValueGenI64(n.value);
 }
 
@@ -198,7 +198,7 @@ static void wasm_get_string_length(
     WasmEdge_Value * out)
 {
     ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    auto value = nixCtx.values.at(valueId);
+    auto & value = nixCtx.values.at(valueId);
     auto s = nixCtx.state.forceString(**value, noPos, "while getting a string length from WASM");
     out[0] = WasmEdge_ValueGenI64(s.size());
 }
@@ -213,9 +213,9 @@ static void wasm_copy_string(
     int32_t ptr = WasmEdge_ValueGetI32(in[1]);
     int32_t len = WasmEdge_ValueGetI32(in[2]);
 
-    auto value = nixCtx.values.at(valueId);
+    auto & value = **nixCtx.values.at(valueId);
 
-    auto s = nixCtx.state.forceString(**value, noPos, "while evaluating a value from WASM");
+    auto s = nixCtx.state.forceString(value, noPos, "while evaluating a value from WASM");
 
     assert((size_t) len == s.size());
 
@@ -305,6 +305,8 @@ static void wasm_copy_list(
     ValueId valueId = WasmEdge_ValueGetI32(in[0]);
     int32_t ptr = WasmEdge_ValueGetI32(in[1]);
     int32_t len = WasmEdge_ValueGetI32(in[2]);
+
+    if (!len) return;
 
     auto & value = **nixCtx.values.at(valueId);
     nixCtx.state.forceList(value, noPos, "while copying a list into WASM");
