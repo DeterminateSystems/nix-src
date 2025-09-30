@@ -25,8 +25,6 @@ typedef struct Store Store;
 typedef struct StorePath StorePath;
 /** @brief Nix Derivation */
 typedef struct nix_derivation nix_derivation;
-/** @brief Nix Derivation Output */
-typedef struct nix_derivation_output nix_derivation_output;
 
 /**
  * @brief Initializes the Nix store library
@@ -318,7 +316,7 @@ nix_err nix_store_drv_from_path(
  *
  * @param[out] context Optional, stores error information
  * @param[in] store nix store reference
- * @param[in] path A store path
+ * @param[in] store_path A store path
  * @param[in] userdata The data to pass to the callback
  * @param[in] callback Called for when the path info is resolved
  */
@@ -351,25 +349,9 @@ nix_err nix_store_build_paths(
     void * userdata);
 
 /**
- * @brief Iterate through all of the outputs in a derivation
+ * @brief Iterate and get all of the store paths for each output.
  *
- * @note The callback borrows the DerivationOutput only for the duration of the call.
- *
- * @param[out] context Optional, stores error information
- * @param[in] drv The derivation
- * @param[in] callback The function to call on every output
- * @param[in] userdata Userdata to pass to the callback
- */
-nix_err nix_derivation_get_outputs(
-    nix_c_context * context,
-    const nix_derivation * drv,
-    void (*callback)(void * userdata, const char * name, const nix_derivation_output * drv_output),
-    void * userdata);
-
-/**
- * @brief Iterate and get all of the derivation outputs and their store paths.
- *
- * @note The callback borrows the DerivationOutput and StorePath only for the duration of the call.
+ * @note The callback borrows the StorePath only for the duration of the call.
  *
  * @param[out] context Optional, stores error information
  * @param[in] drv The derivation
@@ -381,8 +363,7 @@ nix_err nix_derivation_get_outputs_and_optpaths(
     nix_c_context * context,
     const nix_derivation * drv,
     const Store * store,
-    void (*callback)(
-        void * userdata, const char * name, const nix_derivation_output * drv_output, const StorePath * path),
+    void (*callback)(void * userdata, const char * name, const StorePath * path),
     void * userdata);
 
 /**
@@ -395,22 +376,6 @@ nix_err nix_derivation_get_outputs_and_optpaths(
  */
 nix_err nix_derivation_to_json(
     nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata);
-
-/**
- * @brief Copy of a 'nix_derivation_output'
- *
- * @param[in] o the derivation output to copy
- * @return a new 'nix_derivation_output'
- */
-nix_derivation_output * nix_derivation_output_clone(const nix_derivation_output * o);
-
-/**
- * @brief Deallocate a 'nix_derivation_output'
- *
- * Does not fail.
- * @param[in] o the derivation output to free
- */
-void nix_derivation_output_free(nix_derivation_output * o);
 
 // cffi end
 #ifdef __cplusplus

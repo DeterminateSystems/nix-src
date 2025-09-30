@@ -19,9 +19,4 @@ struct nix_derivation
     Store * store;
 };
 
-struct nix_derivation_output
-{
-    nix::DerivationOutput drv_out;
-};
-
 #endif
