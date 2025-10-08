@@ -243,7 +243,6 @@ EvalState::EvalState(
     std::shared_ptr<Store> buildStore)
     : fetchSettings{fetchSettings}
     , settings{settings}
-    , executor{make_ref<Executor>(settings)}
     , sWith(symbols.create("<with>"))
     , sOutPath(symbols.create("outPath"))
     , sDrvPath(symbols.create("drvPath"))
@@ -377,6 +376,7 @@ EvalState::EvalState(
     , baseEnv(allocEnv(BASE_ENV_SIZE))
 #endif
     , staticBaseEnv{std::make_shared<StaticEnv>(nullptr, nullptr)}
+    , executor{make_ref<Executor>(settings)}
 {
     corepkgsFS->setPathDisplay("<nix", ">");
     internalFS->setPathDisplay("«nix-internal»", "");
