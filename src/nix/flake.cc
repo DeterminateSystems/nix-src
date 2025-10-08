@@ -801,156 +801,136 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
 
         auto inventory = cache->getRoot()->getAttr("inventory");
 
-        if (json) {
-            std::function<void(ref<eval_cache::AttrCursor> node, nlohmann::json & obj)> visit;
+        FutureVector futures(*state->executor);
 
-            visit = [&](ref<eval_cache::AttrCursor> node, nlohmann::json & obj) {
-                flake_schemas::visit(
-                    showAllSystems ? std::optional<std::string>() : localSystem,
-                    node,
+        std::function<void(ref<eval_cache::AttrCursor> node, nlohmann::json & obj)> visit;
 
-                    [&](ref<eval_cache::AttrCursor> leaf) {
-                        obj.emplace("leaf", true);
+        visit = [&](ref<eval_cache::AttrCursor> node, nlohmann::json & obj) {
+            flake_schemas::visit(
+                showAllSystems ? std::optional<std::string>() : localSystem,
+                node,
 
-                        if (auto what = flake_schemas::what(leaf))
-                            obj.emplace("what", *what);
+                [&](ref<eval_cache::AttrCursor> leaf) {
+                    obj.emplace("leaf", true);
 
-                        if (auto shortDescription = flake_schemas::shortDescription(leaf))
-                            obj.emplace("shortDescription", *shortDescription);
+                    if (auto what = flake_schemas::what(leaf))
+                        obj.emplace("what", *what);
 
-                        if (auto drv = flake_schemas::derivation(leaf))
-                            obj.emplace("derivationName", drv->getAttr(state->sName)->getString());
+                    if (auto shortDescription = flake_schemas::shortDescription(leaf))
+                        obj.emplace("shortDescription", *shortDescription);
 
-                        // FIXME: add more stuff
-                    },
+                    if (auto drv = flake_schemas::derivation(leaf))
+                        obj.emplace("derivationName", drv->getAttr(state->sName)->getString());
 
-                    [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
-                        auto children = nlohmann::json::object();
-                        forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
-                            auto j = nlohmann::json::object();
-                            try {
-                                visit(node, j);
-                            } catch (EvalError & e) {
-                                // FIXME: make it a flake schema attribute whether to ignore evaluation errors.
-                                if (node->root->state.symbols[node->getAttrPath()[0]] == "legacyPackages")
-                                    j.emplace("failed", true);
-                                else
-                                    throw;
-                            }
-                            children.emplace(state->symbols[attrName], std::move(j));
-                        });
-                        obj.emplace("children", std::move(children));
-                    },
+                    // FIXME: add more stuff
+                },
 
-                    [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
-                        obj.emplace("filtered", true);
+                [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
+                    auto children = nlohmann::json::object();
+                    forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
+                        auto j = nlohmann::json::object();
+                        try {
+                            visit(node, j);
+                        } catch (EvalError & e) {
+                            // FIXME: make it a flake schema attribute whether to ignore evaluation errors.
+                            if (node->root->state.symbols[node->getAttrPath()[0]] == "legacyPackages")
+                                j.emplace("failed", true);
+                            else
+                                throw;
+                        }
+                        children.emplace(state->symbols[attrName], std::move(j));
                     });
-            };
+                    obj.emplace("children", std::move(children));
+                },
 
-            auto res = nlohmann::json::object();
-
-            flake_schemas::forEachOutput(
-                inventory,
-                [&](Symbol outputName,
-                    std::shared_ptr<eval_cache::AttrCursor> output,
-                    const std::string & doc,
-                    bool isLast) {
-                    auto j = nlohmann::json::object();
-
-                    if (!showLegacy && state->symbols[outputName] == "legacyPackages") {
-                        j.emplace("skipped", true);
-                    } else if (output) {
-                        j.emplace("doc", doc);
-                        auto j2 = nlohmann::json::object();
-                        visit(ref(output), j2);
-                        j.emplace("output", std::move(j2));
-                    } else
-                        j.emplace("unknown", true);
-
-                    res.emplace(state->symbols[outputName], j);
+                [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
+                    obj.emplace("filtered", true);
                 });
+        };
 
-            logger->cout("%s", res.dump());
-        }
+        auto res = nlohmann::json::object();
 
+        flake_schemas::forEachOutput(
+            inventory,
+            [&](Symbol outputName,
+                std::shared_ptr<eval_cache::AttrCursor> output,
+                const std::string & doc,
+                bool isLast) {
+                auto j = nlohmann::json::object();
+
+                if (!showLegacy && state->symbols[outputName] == "legacyPackages") {
+                    j.emplace("skipped", true);
+                } else if (output) {
+                    j.emplace("doc", doc);
+                    auto j2 = nlohmann::json::object();
+                    visit(ref(output), j2);
+                    j.emplace("output", std::move(j2));
+                } else
+                    j.emplace("unknown", true);
+
+                res.emplace(state->symbols[outputName], j);
+            });
+
+        if (json)
+            printJSON(res);
         else {
-            logger->cout(ANSI_BOLD "%s" ANSI_NORMAL, flake->flake.lockedRef);
 
-            std::function<void(
-                ref<eval_cache::AttrCursor> node, const std::string & headerPrefix, const std::string & prevPrefix)>
-                visit;
+            // Render the JSON into a tree representation.
+            std::function<void(nlohmann::json j, const std::string & headerPrefix, const std::string & nextPrefix)>
+                render;
 
-            visit = [&](ref<eval_cache::AttrCursor> node,
-                        const std::string & headerPrefix,
-                        const std::string & prevPrefix) {
-                flake_schemas::visit(
-                    showAllSystems ? std::optional<std::string>() : localSystem,
-                    node,
+            render = [&](nlohmann::json j, const std::string & headerPrefix, const std::string & nextPrefix) {
+                auto what = j.find("what");
+                auto filtered = j.find("filtered");
+                auto derivationName = j.find("derivationName");
 
-                    [&](ref<eval_cache::AttrCursor> leaf) {
-                        auto s = headerPrefix;
+                auto s = headerPrefix;
 
-                        if (auto what = flake_schemas::what(leaf))
-                            s += fmt(": %s", *what);
+                if (what != j.end())
+                    s += fmt(": %s", (std::string) *what);
 
-                        if (auto drv = flake_schemas::derivation(leaf))
-                            s += fmt(ANSI_ITALIC " [%s]" ANSI_NORMAL, drv->getAttr(state->sName)->getString());
+                if (derivationName != j.end())
+                    s += fmt(ANSI_ITALIC " [%s]" ANSI_NORMAL, (std::string) *derivationName);
 
-                        logger->cout(s);
-                    },
+                if (filtered != j.end() && (bool) *filtered)
+                    s += " " ANSI_WARNING "omitted" ANSI_NORMAL " (use '--all-systems' to show)";
 
-                    [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
-                        logger->cout(headerPrefix);
-                        forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
-                            visit(
-                                node,
-                                fmt(ANSI_GREEN "%s%s" ANSI_NORMAL ANSI_BOLD "%s" ANSI_NORMAL,
-                                    prevPrefix,
-                                    isLast ? treeLast : treeConn,
-                                    state->symbols[attrName]),
-                                prevPrefix + (isLast ? treeNull : treeLine));
-                        });
-                    },
+                logger->cout(s);
 
-                    [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
-                        logger->cout(fmt(
-                            "%s " ANSI_WARNING "omitted" ANSI_NORMAL " (use '--all-systems' to show)", headerPrefix));
-                    });
+                auto children = j.find("children");
+
+                if (children != j.end()) {
+                    for (const auto & [i, child] : enumerate(children->items())) {
+                        bool last = i + 1 == children->size();
+                        render(
+                            child.value(),
+                            fmt(ANSI_GREEN "%s%s" ANSI_NORMAL ANSI_BOLD "%s" ANSI_NORMAL,
+                                nextPrefix,
+                                last ? treeLast : treeConn,
+                                child.key()),
+                            nextPrefix + (last ? treeNull : treeLine));
+                    }
+                }
             };
 
-            flake_schemas::forEachOutput(
-                inventory,
-                [&](Symbol outputName,
-                    std::shared_ptr<eval_cache::AttrCursor> output,
-                    const std::string & doc,
-                    bool isLast) {
-                    auto headerPrefix =
-                        fmt(ANSI_GREEN "%s" ANSI_NORMAL ANSI_BOLD "%s" ANSI_NORMAL,
-                            isLast ? treeLast : treeConn,
-                            state->symbols[outputName]);
+            logger->cout("%s", fmt(ANSI_BOLD "%s" ANSI_NORMAL, flake->flake.lockedRef));
 
-                    if (!showLegacy && state->symbols[outputName] == "legacyPackages") {
-                        logger->cout(headerPrefix);
-                        logger->cout(
-                            ANSI_GREEN
-                            "%s"
-                            "%s" ANSI_NORMAL ANSI_ITALIC "%s" ANSI_NORMAL,
-                            isLast ? treeNull : treeLine,
-                            treeLast,
-                            "(skipped; use '--legacy' to show)");
-                    } else if (output) {
-                        visit(ref(output), headerPrefix, isLast ? treeNull : treeLine);
-                    } else {
-                        logger->cout(headerPrefix);
-                        logger->cout(
-                            ANSI_GREEN
-                            "%s"
-                            "%s" ANSI_NORMAL ANSI_ITALIC "%s" ANSI_NORMAL,
-                            isLast ? treeNull : treeLine,
-                            treeLast,
-                            "(unknown flake output)");
-                    }
-                });
+            for (const auto & [i, child] : enumerate(res.items())) {
+                bool last = i + 1 == res.size();
+                auto nextPrefix = last ? treeNull : treeLine;
+                render(
+                    child.value()["output"],
+                    fmt(ANSI_GREEN "%s%s" ANSI_NORMAL ANSI_BOLD "%s" ANSI_NORMAL,
+                        "",
+                        last ? treeLast : treeConn,
+                        child.key()),
+                    nextPrefix);
+                if (child.value().contains("unknown"))
+                    logger->cout(
+                        ANSI_GREEN "%s%s" ANSI_NORMAL ANSI_ITALIC "(unknown flake output)" ANSI_NORMAL,
+                        nextPrefix,
+                        treeLast);
+            }
         }
     }
 };
