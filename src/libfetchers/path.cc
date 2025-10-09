@@ -1,7 +1,6 @@
 #include "nix/fetchers/fetchers.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/archive.hh"
-#include "nix/fetchers/store-path-accessor.hh"
 #include "nix/fetchers/cache.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/fetchers/fetch-settings.hh"
@@ -20,7 +19,7 @@ struct PathInputScheme : InputScheme
 
         Input input{settings};
         input.attrs.insert_or_assign("type", "path");
-        input.attrs.insert_or_assign("path", url.path);
+        input.attrs.insert_or_assign("path", renderUrlPathEnsureLegal(url.path));
 
         for (auto & [name, value] : url.query)
             if (name == "rev" || name == "narHash")
@@ -74,7 +73,7 @@ struct PathInputScheme : InputScheme
         query.erase("__final");
         return ParsedURL{
             .scheme = "path",
-            .path = getStrAttr(input.attrs, "path"),
+            .path = splitString<std::vector<std::string>>(getStrAttr(input.attrs, "path"), "/"),
             .query = query,
         };
     }
@@ -139,7 +138,7 @@ struct PathInputScheme : InputScheme
             storePath = store->addToStoreFromDump(*src, "source");
         }
 
-        auto accessor = makeStorePathAccessor(store, *storePath);
+        auto accessor = ref{store->getFSAccessor(*storePath)};
 
         // To prevent `fetchToStore()` copying the path again to Nix
         // store, pre-create an entry in the fetcher cache.

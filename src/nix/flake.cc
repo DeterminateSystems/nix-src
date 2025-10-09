@@ -536,7 +536,7 @@ struct CmdFlakeCheck : FlakeCommand
         auto checkNixOSConfiguration = [&](const std::string & attrPath, Value & v, const PosIdx pos) {
             try {
                 Activity act(*logger, lvlInfo, actUnknown, fmt("checking NixOS configuration '%s'", attrPath));
-                Bindings & bindings(*state->allocBindings(0));
+                Bindings & bindings = Bindings::emptyBindings;
                 auto vToplevel = findAlongAttrPath(*state, "config.system.build.toplevel", bindings, v).first;
                 state->forceValue(*vToplevel, pos);
                 if (!state->isDerivation(*vToplevel))
@@ -807,35 +807,33 @@ struct CmdFlakeCheck : FlakeCommand
         futures.finishAll();
 
         if (build && !drvPaths.empty()) {
-            // FIXME: should start building while evaluating.
-            Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", drvPaths.size()));
-
+            // TODO: This filtering of substitutable paths is a temporary workaround until
+            // https://github.com/NixOS/nix/issues/5025 (union stores) is implemented.
+            //
+            // Once union stores are available, this code should be replaced with a proper
+            // union store configuration. Ideally, we'd use a union of multiple destination
+            // stores to preserve the current behavior where different substituters can
+            // cache different check results.
+            //
+            // For now, we skip building derivations whose outputs are already available
+            // via substitution, as `nix flake check` only needs to verify buildability,
+            // not actually produce the outputs.
             state->waitForAllPaths();
-
             auto missing = store->queryMissing(drvPaths);
+            // Only occurs if `drvPaths` contains a `DerivedPath::Opaque`, which should never happen
+            assert(missing.unknown.empty());
 
-            /* This command doesn't need to actually substitute
-               derivation outputs if they're missing but
-               substitutable. So filter out derivations that are
-               substitutable or already built. */
             std::vector<DerivedPath> toBuild;
-            for (auto & path : drvPaths) {
-                std::visit(
-                    overloaded{
-                        [&](const DerivedPath::Built & bfd) {
-                            auto drvPathP = std::get_if<DerivedPath::Opaque>(&*bfd.drvPath);
-                            if (!drvPathP || missing.willBuild.contains(drvPathP->path)
-                                || missing.unknown.contains(drvPathP->path))
-                                toBuild.push_back(path);
-                        },
-                        [&](const DerivedPath::Opaque & bo) {
-                            if (!missing.willSubstitute.contains(bo.path))
-                                toBuild.push_back(path);
-                        },
-                    },
-                    path.raw());
+            for (auto & path : missing.willBuild) {
+                toBuild.emplace_back(
+                    DerivedPath::Built{
+                        .drvPath = makeConstantStorePathRef(path),
+                        .outputs = OutputsSpec::All{},
+                    });
             }
 
+            // FIXME: should start building while evaluating.
+            Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", toBuild.size()));
             store->buildPaths(toBuild);
         }
 
@@ -1210,10 +1208,10 @@ struct CmdFlakeShow : FlakeCommand, MixJSON
                 };
 
                 auto showDerivation = [&]() {
-                    auto name = visitor.getAttr(state->sName)->getString();
+                    auto name = visitor.getAttr(state->s.name)->getString();
                     std::optional<std::string> description;
-                    if (auto aMeta = visitor.maybeGetAttr(state->sMeta)) {
-                        if (auto aDescription = aMeta->maybeGetAttr(state->sDescription))
+                    if (auto aMeta = visitor.maybeGetAttr(state->s.meta)) {
+                        if (auto aDescription = aMeta->maybeGetAttr(state->s.description))
                             description = aDescription->getString();
                     }
                     j.emplace("type", "derivation");
@@ -1309,8 +1307,8 @@ struct CmdFlakeShow : FlakeCommand, MixJSON
                     || (attrPath.size() == 3 && attrPathS[0] == "apps")) {
                     auto aType = visitor.maybeGetAttr("type");
                     std::optional<std::string> description;
-                    if (auto aMeta = visitor.maybeGetAttr(state->sMeta)) {
-                        if (auto aDescription = aMeta->maybeGetAttr(state->sDescription))
+                    if (auto aMeta = visitor.maybeGetAttr(state->s.meta)) {
+                        if (auto aDescription = aMeta->maybeGetAttr(state->s.description))
                             description = aDescription->getString();
                     }
                     if (!aType || aType->getString() != "app")

@@ -8,8 +8,32 @@
 #include "nix/store/parsed-derivations.hh"
 #include "nix/util/processes.hh"
 #include "nix/store/restricted-store.hh"
+#include "nix/store/build/derivation-env-desugar.hh"
 
 namespace nix {
+
+/**
+ * Denotes a build failure that stemmed from the builder exiting with a
+ * failing exist status.
+ */
+struct BuilderFailureError : BuildError
+{
+    int builderStatus;
+
+    std::string extraMsgAfter;
+
+    BuilderFailureError(BuildResult::Failure::Status status, int builderStatus, std::string extraMsgAfter)
+        : BuildError{
+            status,
+              /* No message for now, because the caller will make for
+                 us, with extra context */
+              "",
+          }
+        , builderStatus{std::move(builderStatus)}
+        , extraMsgAfter{std::move(extraMsgAfter)}
+    {
+    }
+};
 
 /**
  * Stuff we need to pass to initChild().
@@ -52,10 +76,7 @@ struct DerivationBuilderParams
      */
     const StorePathSet & inputPaths;
 
-    /**
-     * @note we do in fact mutate this
-     */
-    std::map<std::string, InitialOutput> & initialOutputs;
+    const std::map<std::string, InitialOutput> & initialOutputs;
 
     const BuildMode & buildMode;
 
@@ -65,67 +86,20 @@ struct DerivationBuilderParams
      */
     PathsInChroot defaultPathsInChroot;
 
-    struct EnvEntry
-    {
-        /**
-         * Actually, this should be passed as a file, but with a custom
-         * name (rather than hash-derived name for usual "pass as file").
-         */
-        std::optional<std::string> nameOfPassAsFile;
-
-        /**
-         * String value of env var, or contents of the file
-         */
-        std::string value;
-    };
-
     /**
-     * The final environment variables to additionally set, possibly
-     * indirectly via a file.
+     * May be used to control various platform-specific functionality.
      *
-     * This is used by the caller to desugar the "structured attrs"
-     * mechanism, so `DerivationBuilder` doesn't need to know about it.
+     * For example, on Linux, the `kvm` system feature controls whether
+     * `/dev/kvm` should be exposed to the builder within the sandbox.
      */
-    std::map<std::string, EnvEntry, std::less<>> finalEnv;
+    StringSet systemFeatures;
 
-    /**
-     * Inserted in the temp dir, but no file names placed in env, unlike
-     * `EnvEntry::nameOfPassAsFile` above.
-     */
-    StringMap extraFiles;
+    DesugaredEnv desugaredEnv;
 
     /**
      * The activity corresponding to the build.
      */
     std::unique_ptr<Activity> & act;
-
-    DerivationBuilderParams(
-        const StorePath & drvPath,
-        const BuildMode & buildMode,
-        BuildResult & buildResult,
-        const Derivation & drv,
-        const DerivationOptions & drvOptions,
-        const StorePathSet & inputPaths,
-        std::map<std::string, InitialOutput> & initialOutputs,
-        PathsInChroot defaultPathsInChroot,
-        std::map<std::string, EnvEntry, std::less<>> finalEnv,
-        StringMap extraFiles,
-        std::unique_ptr<Activity> & act)
-        : drvPath{drvPath}
-        , buildResult{buildResult}
-        , drv{drv}
-        , drvOptions{drvOptions}
-        , inputPaths{inputPaths}
-        , initialOutputs{initialOutputs}
-        , buildMode{buildMode}
-        , defaultPathsInChroot{std::move(defaultPathsInChroot)}
-        , finalEnv{std::move(finalEnv)}
-        , extraFiles{std::move(extraFiles)}
-        , act{act}
-    {
-    }
-
-    DerivationBuilderParams(DerivationBuilderParams &&) = default;
 };
 
 /**
@@ -145,24 +119,10 @@ struct DerivationBuilderCallbacks
      */
     virtual void closeLogFile() = 0;
 
-    virtual void appendLogTailErrorMsg(std::string & msg) = 0;
-
-    /**
-     * Hook up `builderOut` to some mechanism to ingest the log
-     *
-     * @todo this should be reworked
-     */
-    virtual void childStarted(Descriptor builderOut) = 0;
-
     /**
      * @todo this should be reworked
      */
     virtual void childTerminated() = 0;
-
-    virtual void noteHashMismatch(void) = 0;
-    virtual void noteCheckMismatch(void) = 0;
-
-    virtual void markContentsGood(const StorePath & path) = 0;
 };
 
 /**
@@ -178,11 +138,6 @@ struct DerivationBuilderCallbacks
  */
 struct DerivationBuilder : RestrictionContext
 {
-    /**
-     * The process ID of the builder.
-     */
-    Pid pid;
-
     DerivationBuilder() = default;
     virtual ~DerivationBuilder() = default;
 
@@ -197,15 +152,15 @@ struct DerivationBuilder : RestrictionContext
      * locks as needed). After this is run, the builder should be
      * started.
      *
-     * @returns true if successful, false if we could not acquire a build
-     * user. In that case, the caller must wait and then try again.
+     * @returns logging pipe if successful, `std::nullopt` if we could
+     * not acquire a build user. In that case, the caller must wait and
+     * then try again.
+     *
+     * @note "success" just means that we were able to set up the environment
+     * and start the build. The builder could have immediately exited with
+     * failure, and that would still be considered a successful start.
      */
-    virtual bool prepareBuild() = 0;
-
-    /**
-     * Start building a derivation.
-     */
-    virtual void startBuilder() = 0;
+    virtual std::optional<Descriptor> startBuild() = 0;
 
     /**
      * Tear down build environment after the builder exits (either on
@@ -215,25 +170,18 @@ struct DerivationBuilder : RestrictionContext
      * processing. A status code and exception are returned, providing
      * more information. The second case indicates success, and
      * realisations for each output of the derivation are returned.
+     *
+     * @throws BuildError
      */
-    virtual std::variant<std::pair<BuildResult::Status, Error>, SingleDrvOutputs> unprepareBuild() = 0;
+    virtual SingleDrvOutputs unprepareBuild() = 0;
 
     /**
-     * Stop the in-process nix daemon thread.
-     * @see startDaemon
+     * Forcibly kill the child process, if any.
+     *
+     * @returns whether the child was still alive and needed to be
+     * killed.
      */
-    virtual void stopDaemon() = 0;
-
-    /**
-     * Delete the temporary directory, if we have one.
-     */
-    virtual void deleteTmpDir(bool force) = 0;
-
-    /**
-     * Kill any processes running under the build user UID or in the
-     * cgroup of the build.
-     */
-    virtual void killSandbox(bool getStats) = 0;
+    virtual bool killChild() = 0;
 };
 
 #ifndef _WIN32 // TODO enable `DerivationBuilder` on Windows

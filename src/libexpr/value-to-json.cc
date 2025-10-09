@@ -88,7 +88,7 @@ json printValueAsJSON(
                 res = *maybeString;
                 break;
             }
-            if (auto i = v.attrs()->get(state.sOutPath))
+            if (auto i = v.attrs()->get(state.s.outPath))
                 return recurse(res, *i->value, i->pos);
             else {
                 res = json::object();

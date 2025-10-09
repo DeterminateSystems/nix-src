@@ -997,7 +997,10 @@ void LocalStore::registerValidPaths(const ValidPathInfos & infos)
             }},
             {[&](const StorePath & path, const StorePath & parent) {
                 return BuildError(
-                    "cycle detected in the references of '%s' from '%s'", printStorePath(path), printStorePath(parent));
+                    BuildResult::Failure::OutputRejected,
+                    "cycle detected in the references of '%s' from '%s'",
+                    printStorePath(path),
+                    printStorePath(parent));
             }});
 
         txn.commit();
@@ -1308,7 +1311,7 @@ StorePath LocalStore::addToStoreFromDump(
                 syncParent(realPath);
             }
 
-            ValidPathInfo info{*this, name, std::move(desc), narHash.hash};
+            auto info = ValidPathInfo::makeFromCA(*this, name, std::move(desc), narHash.hash);
             info.narSize = narHash.numBytesDigested;
             registerValidPath(info);
         }

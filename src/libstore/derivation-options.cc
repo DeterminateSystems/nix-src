@@ -265,7 +265,10 @@ DerivationOptions::getParsedExportReferencesGraph(const StoreDirConfig & store) 
         StorePathSet storePaths;
         for (auto & storePathS : ss) {
             if (!store.isInStore(storePathS))
-                throw BuildError("'exportReferencesGraph' contains a non-store path '%1%'", storePathS);
+                throw BuildError(
+                    BuildResult::Failure::InputRejected,
+                    "'exportReferencesGraph' contains a non-store path '%1%'",
+                    storePathS);
             storePaths.insert(store.toStorePath(storePathS).first);
         }
         res.insert_or_assign(fileName, storePaths);
@@ -355,7 +358,7 @@ DerivationOptions adl_serializer<DerivationOptions>::from_json(const json & json
     };
 }
 
-void adl_serializer<DerivationOptions>::to_json(json & json, DerivationOptions o)
+void adl_serializer<DerivationOptions>::to_json(json & json, const DerivationOptions & o)
 {
     json["outputChecks"] = std::visit(
         overloaded{
@@ -397,7 +400,7 @@ DerivationOptions::OutputChecks adl_serializer<DerivationOptions::OutputChecks>:
     };
 }
 
-void adl_serializer<DerivationOptions::OutputChecks>::to_json(json & json, DerivationOptions::OutputChecks c)
+void adl_serializer<DerivationOptions::OutputChecks>::to_json(json & json, const DerivationOptions::OutputChecks & c)
 {
     json["ignoreSelfRefs"] = c.ignoreSelfRefs;
     json["allowedReferences"] = c.allowedReferences;
