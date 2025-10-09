@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.31 and Determinate Nix 3.11.2.<!-- differences -->
+This section lists the differences between upstream Nix 2.31 and Determinate Nix 3.11.3.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -127,3 +127,34 @@ This section lists the differences between upstream Nix 2.31 and Determinate Nix
 * Fix some interactions with the registry and flakes that include a `?dir=` parameter [DeterminateSystems/nix-src#196](https://github.com/DeterminateSystems/nix-src/pull/196), [DeterminateSystems/nix-src#199](https://github.com/DeterminateSystems/nix-src/pull/199)
 
 * Only try to substitute input if fetching from its original location fails [DeterminateSystems/nix-src#202](https://github.com/DeterminateSystems/nix-src/pull/202)
+
+<!-- Determinate Nix version 3.11.3 -->
+
+* Disable parallel eval if the debugger is enabled by @edolstra in [DeterminateSystems/nix-src#205](https://github.com/DeterminateSystems/nix-src/pull/205)
+
+* Make threads waiting on thunks interruptible by @edolstra in [DeterminateSystems/nix-src#206](https://github.com/DeterminateSystems/nix-src/pull/206)
+
+* don't include derivation name in temporary build directories by @edolstra in [DeterminateSystems/nix-src#207](https://github.com/DeterminateSystems/nix-src/pull/207)
+
+* Sync with upstream 2.31.2 by @edolstra in [DeterminateSystems/nix-src#208](https://github.com/DeterminateSystems/nix-src/pull/208)
+
+* libstore-c: add nix_store_get_fs_closure by @RossComputerGuy in [DeterminateSystems/nix-src#209](https://github.com/DeterminateSystems/nix-src/pull/209)
+
+* Upstream changes to prepare for the nario command by @edolstra in [DeterminateSystems/nix-src#214](https://github.com/DeterminateSystems/nix-src/pull/214)
+
+* Fix infinite recursion detection by @edolstra in [DeterminateSystems/nix-src#213](https://github.com/DeterminateSystems/nix-src/pull/213)
+
+* C API: add log format and verbosity functions by @RossComputerGuy in [DeterminateSystems/nix-src#211](https://github.com/DeterminateSystems/nix-src/pull/211)
+
+* libstore-c: add derivation functions by @RossComputerGuy in [DeterminateSystems/nix-src#210](https://github.com/DeterminateSystems/nix-src/pull/210)
+
+* Fix segfault in ~EvalState when using builtins.parallel by @edolstra in [DeterminateSystems/nix-src#218](https://github.com/DeterminateSystems/nix-src/pull/218)
+
+* libstore: fixup fakeSSH check by @cole-h in [DeterminateSystems/nix-src#219](https://github.com/DeterminateSystems/nix-src/pull/219)
+
+* exportReferencesGraph: Handle heterogeneous arrays by @edolstra in [DeterminateSystems/nix-src#221](https://github.com/DeterminateSystems/nix-src/pull/221)
+
+* Backport changes from upstream #14189 by @edolstra in [DeterminateSystems/nix-src#225](https://github.com/DeterminateSystems/nix-src/pull/225)
+
+
+* @RossComputerGuy made their first contribution in [DeterminateSystems/nix-src#209](https://github.com/DeterminateSystems/nix-src/pull/209)
