@@ -3276,8 +3276,8 @@ Expr * EvalState::parse(
     auto * docComments = &tmpDocComments;
 
     if (auto sourcePath = std::get_if<SourcePath>(&origin)) {
-        auto [it, _] = positionToDocComment.lock()->try_emplace(*sourcePath);
-        docComments = &it->second;
+        auto [it, _] = positionToDocComment.lock()->try_emplace(*sourcePath, make_ref<DocCommentMap>());
+        docComments = &*it->second;
     }
 
     auto result = parseExprFromBuf(
@@ -3301,8 +3301,8 @@ DocComment EvalState::getDocCommentForPos(PosIdx pos)
     if (table == positionToDocComment_->end())
         return {};
 
-    auto it = table->second.find(pos);
-    if (it == table->second.end())
+    auto it = table->second->find(pos);
+    if (it == table->second->end())
         return {};
     return it->second;
 }
