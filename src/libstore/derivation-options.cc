@@ -232,7 +232,7 @@ DerivationOptions::fromStructuredAttrs(const StringMap & env, const StructuredAt
                     for (auto & [key, value] : getObject(*e)) {
                         StringSet ss;
                         flatten(value, ss);
-                        ret.insert_or_assign(key, ss);
+                        ret.insert_or_assign(key, std::move(ss));
                     }
                 } else {
                     auto s = getOr(env, "exportReferencesGraph", "");
