@@ -91,9 +91,11 @@ using UpdateQueue = SmallTemporaryValueVector<conservativeStackReservation>;
 
 class Exprs
 {
-    std::pmr::monotonic_buffer_resource buffer;
+    // FIXME: use std::pmr::monotonic_buffer_resource when parallel
+    // eval is disabled?
+    std::pmr::synchronized_pool_resource pool;
 public:
-    std::pmr::polymorphic_allocator<char> alloc{&buffer};
+    std::pmr::polymorphic_allocator<char> alloc{&pool};
 };
 
 /* Abstract syntax of Nix expressions. */
