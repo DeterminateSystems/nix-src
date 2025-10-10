@@ -426,7 +426,7 @@ struct GitHubInputScheme : GitArchiveInputScheme
         return DownloadUrl{url, headers};
     }
 
-    void clone(const Input & input, const Path & destDir) const override
+    void clone(const Input & input, const std::filesystem::path & destDir) const override
     {
         auto host = getHost(input);
         Input::fromURL(*input.settings, fmt("git+https://%s/%s/%s.git", host, getOwner(input), getRepo(input)))
@@ -506,7 +506,7 @@ struct GitLabInputScheme : GitArchiveInputScheme
         return DownloadUrl{url, headers};
     }
 
-    void clone(const Input & input, const Path & destDir) const override
+    void clone(const Input & input, const std::filesystem::path & destDir) const override
     {
         auto host = maybeGetStrAttr(input.attrs, "host").value_or("gitlab.com");
         // FIXME: get username somewhere
@@ -598,7 +598,7 @@ struct SourceHutInputScheme : GitArchiveInputScheme
         return DownloadUrl{url, headers};
     }
 
-    void clone(const Input & input, const Path & destDir) const override
+    void clone(const Input & input, const std::filesystem::path & destDir) const override
     {
         auto host = maybeGetStrAttr(input.attrs, "host").value_or("git.sr.ht");
         Input::fromURL(

@@ -1024,7 +1024,7 @@ struct CmdFlakeNew : CmdFlakeInitCommon
 
 struct CmdFlakeClone : FlakeCommand
 {
-    Path destDir;
+    std::filesystem::path destDir;
 
     std::string description() override
     {
