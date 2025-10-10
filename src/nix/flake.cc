@@ -1054,7 +1054,7 @@ struct CmdFlakeClone : FlakeCommand
         if (destDir.empty())
             throw Error("missing flag '--dest'");
 
-        getFlakeRef().resolve(store).input.clone(destDir);
+        getFlakeRef().resolve(store).input.clone(store, destDir);
     }
 };
 

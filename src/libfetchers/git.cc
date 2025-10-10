@@ -283,7 +283,7 @@ struct GitInputScheme : InputScheme
         return res;
     }
 
-    void clone(const Input & input, const std::filesystem::path & destDir) const override
+    void clone(ref<Store> store, const Input & input, const std::filesystem::path & destDir) const override
     {
         auto repoInfo = getRepoInfo(input);
 
