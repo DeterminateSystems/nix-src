@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.31 and Determinate Nix 3.11.2.<!-- differences -->
+This section lists the differences between upstream Nix 2.31 and Determinate Nix 3.11.3.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -127,3 +127,6 @@ This section lists the differences between upstream Nix 2.31 and Determinate Nix
 * Fix some interactions with the registry and flakes that include a `?dir=` parameter [DeterminateSystems/nix-src#196](https://github.com/DeterminateSystems/nix-src/pull/196), [DeterminateSystems/nix-src#199](https://github.com/DeterminateSystems/nix-src/pull/199)
 
 * Only try to substitute input if fetching from its original location fails [DeterminateSystems/nix-src#202](https://github.com/DeterminateSystems/nix-src/pull/202)
+
+<!-- Determinate Nix version 3.11.3 -->
+

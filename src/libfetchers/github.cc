@@ -427,12 +427,12 @@ struct GitHubInputScheme : GitArchiveInputScheme
         return DownloadUrl{parseURL(url), headers};
     }
 
-    void clone(const Input & input, const Path & destDir) const override
+    void clone(ref<Store> store, const Input & input, const std::filesystem::path & destDir) const override
     {
         auto host = getHost(input);
         Input::fromURL(*input.settings, fmt("git+https://%s/%s/%s.git", host, getOwner(input), getRepo(input)))
             .applyOverrides(input.getRef(), input.getRev())
-            .clone(destDir);
+            .clone(store, destDir);
     }
 };
 
@@ -507,7 +507,7 @@ struct GitLabInputScheme : GitArchiveInputScheme
         return DownloadUrl{parseURL(url), headers};
     }
 
-    void clone(const Input & input, const Path & destDir) const override
+    void clone(ref<Store> store, const Input & input, const std::filesystem::path & destDir) const override
     {
         auto host = maybeGetStrAttr(input.attrs, "host").value_or("gitlab.com");
         // FIXME: get username somewhere
@@ -515,7 +515,7 @@ struct GitLabInputScheme : GitArchiveInputScheme
             *input.settings,
             fmt("git+https://%s/%s/%s.git", host, getStrAttr(input.attrs, "owner"), getStrAttr(input.attrs, "repo")))
             .applyOverrides(input.getRef(), input.getRev())
-            .clone(destDir);
+            .clone(store, destDir);
     }
 };
 
@@ -599,14 +599,14 @@ struct SourceHutInputScheme : GitArchiveInputScheme
         return DownloadUrl{parseURL(url), headers};
     }
 
-    void clone(const Input & input, const Path & destDir) const override
+    void clone(ref<Store> store, const Input & input, const std::filesystem::path & destDir) const override
     {
         auto host = maybeGetStrAttr(input.attrs, "host").value_or("git.sr.ht");
         Input::fromURL(
             *input.settings,
             fmt("git+https://%s/%s/%s", host, getStrAttr(input.attrs, "owner"), getStrAttr(input.attrs, "repo")))
             .applyOverrides(input.getRef(), input.getRev())
-            .clone(destDir);
+            .clone(store, destDir);
     }
 };
 
