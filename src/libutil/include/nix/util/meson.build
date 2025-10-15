@@ -43,6 +43,7 @@ headers = files(
   'hash.hh',
   'hilite.hh',
   'json-impls.hh',
+  'json-non-null.hh',
   'json-utils.hh',
   'logging.hh',
   'lru-cache.hh',

@@ -38,12 +38,12 @@ void ExprFloat::show(const SymbolTable & symbols, std::ostream & str) const
 
 void ExprString::show(const SymbolTable & symbols, std::ostream & str) const
 {
-    printLiteralString(str, s);
+    printLiteralString(str, v.string_view());
 }
 
 void ExprPath::show(const SymbolTable & symbols, std::ostream & str) const
 {
-    str << s;
+    str << v.pathStr();
 }
 
 void ExprVar::show(const SymbolTable & symbols, std::ostream & str) const
@@ -55,7 +55,7 @@ void ExprSelect::show(const SymbolTable & symbols, std::ostream & str) const
 {
     str << "(";
     e->show(symbols, str);
-    str << ")." << showAttrPath(symbols, attrPath);
+    str << ")." << showAttrPath(symbols, getAttrPath());
     if (def) {
         str << " or (";
         def->show(symbols, str);
@@ -259,7 +259,7 @@ void ExprPos::show(const SymbolTable & symbols, std::ostream & str) const
     str << "__curPos";
 }
 
-std::string showAttrPath(const SymbolTable & symbols, const AttrPath & attrPath)
+std::string showAttrPath(const SymbolTable & symbols, std::span<const AttrName> attrPath)
 {
     std::ostringstream out;
     bool first = true;
@@ -360,7 +360,7 @@ void ExprSelect::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv>
     e->bindVars(es, env);
     if (def)
         def->bindVars(es, env);
-    for (auto & i : attrPath)
+    for (auto & i : getAttrPath())
         if (!i.symbol)
             i.expr->bindVars(es, env);
 }

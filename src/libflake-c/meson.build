@@ -32,6 +32,7 @@ deps_public_maybe_subproject = [
 subdir('nix-meson-build-support/subprojects')
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/asan-options')
 
 sources = files(
   'nix_api_flake.cc',
@@ -53,6 +54,7 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixflakec',
   sources,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

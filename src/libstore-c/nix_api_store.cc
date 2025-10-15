@@ -10,6 +10,8 @@
 
 #include "nix/store/globals.hh"
 
+extern "C" {
+
 nix_err nix_libstore_init(nix_c_context * context)
 {
     if (context)
@@ -143,9 +145,11 @@ nix_err nix_store_realise(
 
         if (callback) {
             for (const auto & result : results) {
-                for (const auto & [outputName, realisation] : result.builtOutputs) {
-                    StorePath p{realisation.outPath};
-                    callback(userdata, outputName.c_str(), &p);
+                if (auto * success = result.tryGetSuccess()) {
+                    for (const auto & [outputName, realisation] : success->builtOutputs) {
+                        StorePath p{realisation.outPath};
+                        callback(userdata, outputName.c_str(), &p);
+                    }
                 }
             }
         }
@@ -184,13 +188,13 @@ nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        auto drv = nix::Derivation::fromJSON(*store->ptr, nlohmann::json::parse(json));
+        auto drv = static_cast<nix::Derivation>(nlohmann::json::parse(json));
 
         auto drvPath = nix::writeDerivation(*store->ptr, drv, nix::NoRepair, /* read only */ true);
 
         drv.checkInvariants(*store->ptr, drvPath);
 
-        return new nix_derivation{drv, store};
+        return new nix_derivation{drv};
     }
     NIXC_CATCH_ERRS_NULL
 }
@@ -205,7 +209,7 @@ nix_err nix_derivation_make_outputs(
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        auto drv = nix::Derivation::fromJSON(*store->ptr, nlohmann::json::parse(json));
+        auto drv = nix::Derivation::fromJSON(nlohmann::json::parse(json));
         auto hashesModulo = hashDerivationModulo(*store->ptr, drv, true);
 
         for (auto & output : drv.outputs) {
@@ -370,10 +374,12 @@ nix_err nix_derivation_to_json(
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        auto result = drv->drv.toJSON(drv->store->ptr->config).dump();
+        auto result = drv->drv.toJSON().dump();
         if (callback) {
             callback(result.data(), result.size(), userdata);
         }
     }
     NIXC_CATCH_ERRS
 }
+
+} // extern "C"

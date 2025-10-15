@@ -11,7 +11,6 @@
 #include "nix/expr/value-to-json.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/fetchers/input-cache.hh"
-#include "nix/util/mounted-source-accessor.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -31,7 +30,7 @@ void emitTreeAttrs(
 {
     auto attrs = state.buildBindings(100);
 
-    state.mkStorePathString(storePath, attrs.alloc(state.sOutPath));
+    state.mkStorePathString(storePath, attrs.alloc(state.s.outPath));
 
     // FIXME: support arbitrary input attributes.
 
@@ -97,7 +96,7 @@ static void fetchTree(
 
         fetchers::Attrs attrs;
 
-        if (auto aType = args[0]->attrs()->get(state.sType)) {
+        if (auto aType = args[0]->attrs()->get(state.s.type)) {
             if (type)
                 state.error<EvalError>("unexpected argument 'type'").atPos(pos).debugThrow();
             type = state.forceStringNoCtx(
@@ -108,14 +107,14 @@ static void fetchTree(
         attrs.emplace("type", type.value());
 
         for (auto & attr : *args[0]->attrs()) {
-            if (attr.name == state.sType)
+            if (attr.name == state.s.type)
                 continue;
             state.forceValue(*attr.value, attr.pos);
             if (attr.value->type() == nPath || attr.value->type() == nString) {
                 auto s = state.coerceToString(attr.pos, *attr.value, context, "", false, false).toOwned();
                 attrs.emplace(
                     state.symbols[attr.name],
-                    params.isFetchGit && state.symbols[attr.name] == "url" ? fixGitURL(s) : s);
+                    params.isFetchGit && state.symbols[attr.name] == "url" ? fixGitURL(s).to_string() : s);
             } else if (attr.value->type() == nBool)
                 attrs.emplace(state.symbols[attr.name], Explicit<bool>{attr.value->boolean()});
             else if (attr.value->type() == nInt) {
@@ -177,7 +176,7 @@ static void fetchTree(
         if (params.isFetchGit) {
             fetchers::Attrs attrs;
             attrs.emplace("type", "git");
-            attrs.emplace("url", fixGitURL(url));
+            attrs.emplace("url", fixGitURL(url).to_string());
             if (!attrs.contains("exportIgnore")
                 && (!attrs.contains("submodules") || !*fetchers::maybeGetBoolAttr(attrs, "submodules"))) {
                 attrs.emplace("exportIgnore", Explicit<bool>{true});
@@ -555,14 +554,22 @@ static void fetch(
                 .hash = *expectedHash,
                 .references = {}});
 
-        if (state.store->isValidPath(expectedPath)) {
+        // Try to get the path from the local store or substituters
+        try {
+            state.store->ensurePath(expectedPath);
+            debug("using substituted/cached path '%s' for '%s'", state.store->printStorePath(expectedPath), *url);
             state.allowAndSetStorePathString(expectedPath, v);
             return;
+        } catch (Error & e) {
+            debug(
+                "substitution of '%s' failed, will try to download: %s",
+                state.store->printStorePath(expectedPath),
+                e.what());
+            // Fall through to download
         }
     }
 
-    // TODO: fetching may fail, yet the path may be substitutable.
-    //       https://github.com/NixOS/nix/issues/4313
+    // Download the file/tarball if substitution failed or no hash was provided
     auto storePath = unpack ? fetchToStore(
                                   state.fetchSettings,
                                   *state.store,

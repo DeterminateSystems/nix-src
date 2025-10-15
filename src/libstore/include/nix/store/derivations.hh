@@ -11,7 +11,7 @@
 #include "nix/util/sync.hh"
 #include "nix/util/variant-wrapper.hh"
 
-#include <map>
+#include <boost/unordered/concurrent_flat_map_fwd.hpp>
 #include <variant>
 
 namespace nix {
@@ -136,16 +136,12 @@ struct DerivationOutput
     std::optional<StorePath>
     path(const StoreDirConfig & store, std::string_view drvName, OutputNameView outputName) const;
 
-    nlohmann::json toJSON(const StoreDirConfig & store, std::string_view drvName, OutputNameView outputName) const;
+    nlohmann::json toJSON() const;
     /**
      * @param xpSettings Stop-gap to avoid globals during unit tests.
      */
-    static DerivationOutput fromJSON(
-        const StoreDirConfig & store,
-        std::string_view drvName,
-        OutputNameView outputName,
-        const nlohmann::json & json,
-        const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
+    static DerivationOutput
+    fromJSON(const nlohmann::json & json, const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
 };
 
 typedef std::map<std::string, DerivationOutput> DerivationOutputs;
@@ -395,11 +391,9 @@ struct Derivation : BasicDerivation
     {
     }
 
-    nlohmann::json toJSON(const StoreDirConfig & store) const;
-    static Derivation fromJSON(
-        const StoreDirConfig & store,
-        const nlohmann::json & json,
-        const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
+    nlohmann::json toJSON() const;
+    static Derivation
+    fromJSON(const nlohmann::json & json, const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
 
     bool operator==(const Derivation &) const = default;
     // TODO libc++ 16 (used by darwin) missing `std::map::operator <=>`, can't do yet.
@@ -518,13 +512,23 @@ DrvHash hashDerivationModulo(Store & store, const Derivation & drv, bool maskOut
  */
 std::map<std::string, Hash> staticOutputHashes(Store & store, const Derivation & drv);
 
+struct DrvHashFct
+{
+    using is_avalanching = std::true_type;
+
+    std::size_t operator()(const StorePath & path) const noexcept
+    {
+        return std::hash<std::string_view>{}(path.to_string());
+    }
+};
+
 /**
  * Memoisation of hashDerivationModulo().
  */
-typedef std::map<StorePath, DrvHash> DrvHashes;
+typedef boost::concurrent_flat_map<StorePath, DrvHash, DrvHashFct> DrvHashes;
 
 // FIXME: global, though at least thread-safe.
-extern Sync<DrvHashes> drvHashes;
+extern DrvHashes drvHashes;
 
 struct Source;
 struct Sink;
@@ -543,3 +547,6 @@ void writeDerivation(Sink & out, const StoreDirConfig & store, const BasicDeriva
 std::string hashPlaceholder(const OutputNameView outputName);
 
 } // namespace nix
+
+JSON_IMPL(nix::DerivationOutput)
+JSON_IMPL(nix::Derivation)

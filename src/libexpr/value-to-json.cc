@@ -26,7 +26,7 @@ static void parallelForceDeep(EvalState & state, Value & v, PosIdx pos)
         NixStringContext context;
         if (state.tryAttrsToString(pos, v, context, false, false))
             return;
-        if (v.attrs()->get(state.sOutPath))
+        if (v.attrs()->get(state.s.outPath))
             return;
         for (auto & a : *v.attrs())
             work.emplace_back(
@@ -89,7 +89,7 @@ json printValueAsJSON(
                 res = *maybeString;
                 break;
             }
-            if (auto i = v.attrs()->get(state.sOutPath))
+            if (auto i = v.attrs()->get(state.s.outPath))
                 return recurse(res, *i->value, i->pos);
             else {
                 res = json::object();

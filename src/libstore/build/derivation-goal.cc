@@ -94,7 +94,7 @@ Goal::Co DerivationGoal::haveDerivation()
 
         /* If they are all valid, then we're done. */
         if (checkResult && checkResult->second == PathStatus::Valid && buildMode == bmNormal) {
-            co_return done(BuildResult::AlreadyValid, checkResult->first);
+            co_return doneSuccess(BuildResult::Success::AlreadyValid, checkResult->first);
         }
 
         Goals waitees;
@@ -122,12 +122,10 @@ Goal::Co DerivationGoal::haveDerivation()
         assert(!drv->type().isImpure());
 
         if (nrFailed > 0 && nrFailed > nrNoSubstituters && !settings.tryFallback) {
-            co_return done(
-                BuildResult::TransientFailure,
-                {},
-                Error(
-                    "some substitutes for the outputs of derivation '%s' failed (usually happens due to networking issues); try '--fallback' to build derivation from source ",
-                    worker.store.printStorePath(drvPath)));
+            co_return doneFailure(BuildError(
+                BuildResult::Failure::TransientFailure,
+                "some substitutes for the outputs of derivation '%s' failed (usually happens due to networking issues); try '--fallback' to build derivation from source ",
+                worker.store.printStorePath(drvPath)));
         }
 
         nrFailed = nrNoSubstituters = 0;
@@ -137,7 +135,7 @@ Goal::Co DerivationGoal::haveDerivation()
         bool allValid = checkResult && checkResult->second == PathStatus::Valid;
 
         if (buildMode == bmNormal && allValid) {
-            co_return done(BuildResult::Substituted, checkResult->first);
+            co_return doneSuccess(BuildResult::Success::Substituted, checkResult->first);
         }
         if (buildMode == bmRepair && allValid) {
             co_return repairClosure();
@@ -165,25 +163,27 @@ Goal::Co DerivationGoal::haveDerivation()
 
     buildResult = g->buildResult;
 
-    if (buildMode == bmCheck) {
-        /* In checking mode, the builder will not register any outputs.
-           So we want to make sure the ones that we wanted to check are
-           properly there. */
-        buildResult.builtOutputs = {{wantedOutput, assertPathValidity()}};
-    } else {
-        /* Otherwise the builder will give us info for out output, but
-           also for other outputs. Filter down to just our output so as
-           not to leak info on unrelated things. */
-        for (auto it = buildResult.builtOutputs.begin(); it != buildResult.builtOutputs.end();) {
-            if (it->first != wantedOutput) {
-                it = buildResult.builtOutputs.erase(it);
-            } else {
-                ++it;
+    if (auto * successP = buildResult.tryGetSuccess()) {
+        auto & success = *successP;
+        if (buildMode == bmCheck) {
+            /* In checking mode, the builder will not register any outputs.
+               So we want to make sure the ones that we wanted to check are
+               properly there. */
+            success.builtOutputs = {{wantedOutput, assertPathValidity()}};
+        } else {
+            /* Otherwise the builder will give us info for out output, but
+               also for other outputs. Filter down to just our output so as
+               not to leak info on unrelated things. */
+            for (auto it = success.builtOutputs.begin(); it != success.builtOutputs.end();) {
+                if (it->first != wantedOutput) {
+                    it = success.builtOutputs.erase(it);
+                } else {
+                    ++it;
+                }
             }
-        }
 
-        if (buildResult.success())
-            assert(buildResult.builtOutputs.count(wantedOutput) > 0);
+            assert(success.builtOutputs.count(wantedOutput) > 0);
+        }
     }
 
     co_return amDone(g->exitCode, g->ex);
@@ -272,16 +272,17 @@ Goal::Co DerivationGoal::repairClosure()
                 bmRepair));
     }
 
+    bool haveWaitees = !waitees.empty();
     co_await await(std::move(waitees));
 
-    if (!waitees.empty()) {
+    if (haveWaitees) {
         trace("closure repaired");
         if (nrFailed > 0)
             throw Error(
                 "some paths in the output closure of derivation '%s' could not be repaired",
                 worker.store.printStorePath(drvPath));
     }
-    co_return done(BuildResult::AlreadyValid, assertPathValidity());
+    co_return doneSuccess(BuildResult::Success::AlreadyValid, assertPathValidity());
 }
 
 std::optional<std::pair<Realisation, PathStatus>> DerivationGoal::checkPathValidity()
@@ -339,37 +340,12 @@ Realisation DerivationGoal::assertPathValidity()
     return checkResult->first;
 }
 
-Goal::Done
-DerivationGoal::done(BuildResult::Status status, std::optional<Realisation> builtOutput, std::optional<Error> ex)
+Goal::Done DerivationGoal::doneSuccess(BuildResult::Success::Status status, Realisation builtOutput)
 {
-    buildResult.status = status;
-    if (ex)
-        buildResult.errorMsg = fmt("%s", Uncolored(ex->info().msg));
-    if (buildResult.status == BuildResult::TimedOut)
-        worker.timedOut = true;
-    if (buildResult.status == BuildResult::PermanentFailure)
-        worker.permanentFailure = true;
-
-    mcExpectedBuilds.reset();
-
-    if (buildResult.success()) {
-        assert(builtOutput);
-        buildResult.builtOutputs = {{wantedOutput, std::move(*builtOutput)}};
-        if (status == BuildResult::Built)
-            worker.doneBuilds++;
-    } else {
-        if (status != BuildResult::DependencyFailed)
-            worker.failedBuilds++;
-    }
-
-    worker.updateProgress();
-
-    auto traceBuiltOutputsFile = getEnv("_NIX_TRACE_BUILT_OUTPUTS").value_or("");
-    if (traceBuiltOutputsFile != "") {
-        std::fstream fs;
-        fs.open(traceBuiltOutputsFile, std::fstream::out);
-        fs << worker.store.printStorePath(drvPath) << "\t" << buildResult.toString() << std::endl;
-    }
+    buildResult.inner = BuildResult::Success{
+        .status = status,
+        .builtOutputs = {{wantedOutput, std::move(builtOutput)}},
+    };
 
     logger->result(
         getCurActivity(),
@@ -378,7 +354,42 @@ DerivationGoal::done(BuildResult::Status status, std::optional<Realisation> buil
             buildResult,
             DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
-    return amDone(buildResult.success() ? ecSuccess : ecFailed, std::move(ex));
+    mcExpectedBuilds.reset();
+
+    if (status == BuildResult::Success::Built)
+        worker.doneBuilds++;
+
+    worker.updateProgress();
+
+    return amDone(ecSuccess, std::nullopt);
+}
+
+Goal::Done DerivationGoal::doneFailure(BuildError ex)
+{
+    buildResult.inner = BuildResult::Failure{
+        .status = ex.status,
+        .errorMsg = fmt("%s", Uncolored(ex.info().msg)),
+    };
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
+    mcExpectedBuilds.reset();
+
+    if (ex.status == BuildResult::Failure::TimedOut)
+        worker.timedOut = true;
+    if (ex.status == BuildResult::Failure::PermanentFailure)
+        worker.permanentFailure = true;
+    if (ex.status != BuildResult::Failure::DependencyFailed)
+        worker.failedBuilds++;
+
+    worker.updateProgress();
+
+    return amDone(ecFailed, {std::move(ex)});
 }
 
 } // namespace nix

@@ -52,6 +52,7 @@ gtest = dependency('gmock')
 deps_private += gtest
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/asan-options')
 
 sources = files(
   'common-protocol.cc',
@@ -60,6 +61,7 @@ sources = files(
   'derivation.cc',
   'derived-path.cc',
   'downstream-placeholder.cc',
+  'dummy-store.cc',
   'http-binary-cache-store.cc',
   'legacy-ssh-store.cc',
   'local-binary-cache-store.cc',
@@ -73,9 +75,10 @@ sources = files(
   'outputs-spec.cc',
   'path-info.cc',
   'path.cc',
+  'realisation.cc',
   'references.cc',
   's3-binary-cache-store.cc',
-  's3.cc',
+  's3-url.cc',
   'serve-protocol.cc',
   'ssh-store.cc',
   'store-reference.cc',
@@ -102,7 +105,7 @@ this_exe = executable(
 test(
   meson.project_name(),
   this_exe,
-  env : {
+  env : asan_test_options_env + {
     '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
     'HOME' : meson.current_build_dir() / 'test-home',
     'NIX_REMOTE' : meson.current_build_dir() / 'test-home' / 'store',
@@ -131,10 +134,13 @@ if get_option('benchmarks')
     link_args : linker_export_flags,
     install : true,
     cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
-    cpp_args : [
-      '-DNIX_UNIT_TEST_DATA="' + meson.current_source_dir() + '/data"',
-    ],
   )
 
-  benchmark('nix-store-benchmarks', benchmark_exe)
+  benchmark(
+    'nix-store-benchmarks',
+    benchmark_exe,
+    env : asan_test_options_env + {
+      '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
+    },
+  )
 endif

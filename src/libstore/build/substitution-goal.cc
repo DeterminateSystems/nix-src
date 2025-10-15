@@ -29,13 +29,27 @@ PathSubstitutionGoal::~PathSubstitutionGoal()
     cleanup();
 }
 
-Goal::Done PathSubstitutionGoal::done(ExitCode result, BuildResult::Status status, std::optional<std::string> errorMsg)
+Goal::Done PathSubstitutionGoal::doneSuccess(BuildResult::Success::Status status)
 {
-    buildResult.status = status;
-    if (errorMsg) {
-        debug(*errorMsg);
-        buildResult.errorMsg = *errorMsg;
-    }
+    buildResult.inner = BuildResult::Success{
+        .status = status,
+    };
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+
+    return amDone(ecSuccess);
+}
+
+Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failure::Status status, std::string errorMsg)
+{
+    debug(errorMsg);
+    buildResult.inner = BuildResult::Failure{
+        .status = status,
+        .errorMsg = std::move(errorMsg),
+    };
 
     logger->result(
         getCurActivity(),
@@ -53,7 +67,7 @@ Goal::Co PathSubstitutionGoal::init()
 
     /* If the path already exists we're done. */
     if (!repair && worker.store.isValidPath(storePath)) {
-        co_return done(ecSuccess, BuildResult::AlreadyValid);
+        co_return doneSuccess(BuildResult::Success::AlreadyValid);
     }
 
     if (settings.readOnlyMode)
@@ -63,9 +77,14 @@ Goal::Co PathSubstitutionGoal::init()
     auto subs = settings.useSubstitutes ? getDefaultSubstituters() : std::list<ref<Store>>();
 
     bool substituterFailed = false;
+    std::optional<Error> lastStoresException = std::nullopt;
 
     for (const auto & sub : subs) {
         trace("trying next substituter");
+        if (lastStoresException.has_value()) {
+            logError(lastStoresException->info());
+            lastStoresException.reset();
+        }
 
         cleanup();
 
@@ -88,19 +107,13 @@ Goal::Co PathSubstitutionGoal::init()
         try {
             // FIXME: make async
             info = sub->queryPathInfo(subPath ? *subPath : storePath);
-        } catch (InvalidPath &) {
+        } catch (InvalidPath & e) {
             continue;
         } catch (SubstituterDisabled & e) {
-            if (settings.tryFallback)
-                continue;
-            else
-                throw e;
+            continue;
         } catch (Error & e) {
-            if (settings.tryFallback) {
-                logError(e.info());
-                continue;
-            } else
-                throw e;
+            lastStoresException = std::make_optional(std::move(e));
+            continue;
         }
 
         if (info->path != storePath) {
@@ -164,13 +177,19 @@ Goal::Co PathSubstitutionGoal::init()
         worker.failedSubstitutions++;
         worker.updateProgress();
     }
+    if (lastStoresException.has_value()) {
+        if (!settings.tryFallback) {
+            throw *lastStoresException;
+        } else
+            logError(lastStoresException->info());
+    }
 
     /* Hack: don't indicate failure if there were no substituters.
        In that case the calling derivation should just do a
        build. */
-    co_return done(
+    co_return doneFailure(
         substituterFailed ? ecFailed : ecNoSubstituters,
-        BuildResult::NoSubstituters,
+        BuildResult::Failure::NoSubstituters,
         fmt("path '%s' is required, but there is no substituter that can build it",
             worker.store.printStorePath(storePath)));
 }
@@ -181,9 +200,9 @@ Goal::Co PathSubstitutionGoal::tryToRun(
     trace("all references realised");
 
     if (nrFailed > 0) {
-        co_return done(
+        co_return doneFailure(
             nrNoSubstituters > 0 ? ecNoSubstituters : ecFailed,
-            BuildResult::DependencyFailed,
+            BuildResult::Failure::DependencyFailed,
             fmt("some references of path '%s' could not be realised", worker.store.printStorePath(storePath)));
     }
 
@@ -300,7 +319,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
 
     worker.updateProgress();
 
-    co_return done(ecSuccess, BuildResult::Substituted);
+    co_return doneSuccess(BuildResult::Success::Substituted);
 }
 
 void PathSubstitutionGoal::handleEOF(Descriptor fd)

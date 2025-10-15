@@ -136,10 +136,10 @@ static void prim_fromTOML(EvalState & state, const PosIdx pos, Value ** args, Va
                 normalizeDatetimeFormat(t);
 #endif
                 auto attrs = state.buildBindings(2);
-                attrs.alloc("_type").mkString("timestamp");
+                attrs.alloc("_type").mkStringNoCopy("timestamp");
                 std::ostringstream s;
                 s << t;
-                auto str = toView(s);
+                auto str = s.view();
                 forceNoNullByte(str);
                 attrs.alloc("value").mkString(str);
                 v.mkAttrs(attrs);

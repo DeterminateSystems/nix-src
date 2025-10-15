@@ -3,8 +3,8 @@
 #include "nix/util/source-path.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/json-utils.hh"
-#include "nix/fetchers/store-path-accessor.hh"
 #include "nix/fetchers/fetch-settings.hh"
+#include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/forwarding-source-accessor.hh"
 #include "nix/util/archive.hh"
 
@@ -333,9 +333,18 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(ref<Store> sto
         storePath = computeStorePath(*store);
 
     auto makeStoreAccessor = [&]() -> std::pair<ref<SourceAccessor>, Input> {
-        auto accessor = make_ref<SubstitutedSourceAccessor>(makeStorePathAccessor(store, *storePath));
+        auto accessor = make_ref<SubstitutedSourceAccessor>(ref{store->getFSAccessor(*storePath)});
 
         accessor->fingerprint = getFingerprint(store);
+
+        // Store a cache entry for the substituted tree so later fetches
+        // can reuse the existing nar instead of copying the unpacked
+        // input back into the store on every evaluation.
+        if (accessor->fingerprint) {
+            settings->getCache()->upsert(
+                makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
+                {{"hash", store->queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
+        }
 
         // FIXME: ideally we would use the `showPath()` of the
         // "real" accessor for this fetcher type.
@@ -549,7 +558,7 @@ fetchers::PublicKey adl_serializer<fetchers::PublicKey>::from_json(const json & 
     return res;
 }
 
-void adl_serializer<fetchers::PublicKey>::to_json(json & json, fetchers::PublicKey p)
+void adl_serializer<fetchers::PublicKey>::to_json(json & json, const fetchers::PublicKey & p)
 {
     json["type"] = p.type;
     json["key"] = p.key;

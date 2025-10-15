@@ -132,6 +132,8 @@ inline std::size_t hash_value(const SourcePath & path)
 template<>
 struct std::hash<nix::SourcePath>
 {
+    using is_avalanching = std::true_type;
+
     std::size_t operator()(const nix::SourcePath & s) const noexcept
     {
         return nix::hash_value(s);

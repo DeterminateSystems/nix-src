@@ -1,5 +1,6 @@
-#include <unordered_set>
 #include <queue>
+
+#include <boost/unordered/unordered_flat_set.hpp>
 
 #include "nix/cmd/command.hh"
 #include "nix/expr/eval.hh"
@@ -72,7 +73,7 @@ struct CmdShell : InstallablesCommand, MixEnvironment
         auto outPaths =
             Installable::toStorePaths(getEvalStore(), store, Realise::Outputs, OperateOn::Output, installables);
 
-        std::unordered_set<StorePath> done;
+        boost::unordered_flat_set<StorePath, std::hash<StorePath>> done;
         std::queue<StorePath> todo;
         for (auto & path : outPaths)
             todo.push(path);

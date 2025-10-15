@@ -39,6 +39,8 @@ struct ContiguousArena
     size_t allocate(size_t bytes);
 };
 
+class StaticSymbolTable;
+
 /**
  * Symbols have the property that they can be compared efficiently
  * (using an equality test), because the symbol table stores only one
@@ -48,39 +50,43 @@ class Symbol
 {
     friend class SymbolStr;
     friend class SymbolTable;
+    friend class StaticSymbolTable;
 
 private:
     /// The offset of the symbol in `SymbolTable::arena`.
     uint32_t id;
 
-    explicit Symbol(uint32_t id) noexcept
+    explicit constexpr Symbol(uint32_t id) noexcept
         : id(id)
     {
     }
 
 public:
-    Symbol() noexcept
+    constexpr Symbol() noexcept
         : id(0)
     {
     }
 
     [[gnu::always_inline]]
-    explicit operator bool() const noexcept
+    constexpr explicit operator bool() const noexcept
     {
         return id > 0;
     }
 
-    auto operator<=>(const Symbol other) const noexcept
+    /**
+     * The ID is a private implementation detail that should generally not be observed. However, we expose here just for
+     * sake of `switch...case`, which needs to dispatch on numbers. */
+    [[gnu::always_inline]]
+    constexpr uint32_t getId() const noexcept
     {
-        return id <=> other.id;
+        return id;
     }
 
-    bool operator==(const Symbol other) const noexcept
-    {
-        return id == other.id;
-    }
+    constexpr auto operator<=>(const Symbol & other) const noexcept = default;
 
     friend class std::hash<Symbol>;
+
+    constexpr static size_t alignment = alignof(SymbolValue);
 };
 
 /**
@@ -191,6 +197,47 @@ public:
             return operator()(b, a);
         }
     };
+
+    constexpr static size_t computeSize(std::string_view s)
+    {
+        auto rawSize = sizeof(Value) + s.size() + 1;
+        return ((rawSize + Symbol::alignment - 1) / Symbol::alignment) * Symbol::alignment;
+    }
+};
+
+class SymbolTable;
+
+/**
+ * Convenience class to statically assign symbol identifiers at compile-time.
+ */
+class StaticSymbolTable
+{
+    static constexpr std::size_t maxSize = 1024;
+
+    struct StaticSymbolInfo
+    {
+        std::string_view str;
+        Symbol sym;
+    };
+
+    std::array<StaticSymbolInfo, maxSize> symbols;
+    std::size_t size = 0;
+    std::size_t nextId = alignof(SymbolValue);
+
+public:
+    constexpr StaticSymbolTable() = default;
+
+    constexpr Symbol create(std::string_view str)
+    {
+        /* No need to check bounds because out of bounds access is
+           a compilation error. */
+        auto sym = Symbol(nextId);
+        symbols[size++] = {str, sym};
+        nextId += SymbolStr::computeSize(str);
+        return sym;
+    }
+
+    void copyIntoSymbolTable(SymbolTable & symtab) const;
 };
 
 /**
@@ -213,14 +260,13 @@ private:
     boost::concurrent_flat_set<SymbolStr, SymbolStr::Hash, SymbolStr::Equal> symbols;
 
 public:
-
-    constexpr static size_t alignment = alignof(SymbolValue);
-
-    SymbolTable()
+    SymbolTable(const StaticSymbolTable & staticSymtab)
         : arena(1 << 30)
     {
         // Reserve symbol ID 0 and ensure alignment of the first allocation.
-        arena.allocate(alignment);
+        arena.allocate(Symbol::alignment);
+
+        staticSymtab.copyIntoSymbolTable(*this);
     }
 
     /**
@@ -259,7 +305,7 @@ public:
     void dump(T callback) const
     {
         std::string_view left{arena.data, arena.size};
-        left = left.substr(alignment);
+        left = left.substr(Symbol::alignment);
         while (true) {
             if (left.empty())
                 break;
@@ -270,10 +316,20 @@ public:
             callback(sym);
             // skip alignment padding
             auto n = sym.size() + 1;
-            left = left.substr(n + (n % alignment ? alignment - (n % alignment) : 0));
+            left = left.substr(n + (n % Symbol::alignment ? Symbol::alignment - (n % Symbol::alignment) : 0));
         }
     }
 };
+
+inline void StaticSymbolTable::copyIntoSymbolTable(SymbolTable & symtab) const
+{
+    for (std::size_t i = 0; i < size; ++i) {
+        auto [str, staticSym] = symbols[i];
+        auto sym = symtab.create(str);
+        if (sym != staticSym) [[unlikely]]
+            unreachable();
+    }
+}
 
 } // namespace nix
 

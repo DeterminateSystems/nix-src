@@ -27,11 +27,6 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
         return {};
     }
 
-    bool prepareBuild() override
-    {
-        return DerivationBuilderImpl::prepareBuild();
-    }
-
     Path tmpDirInSandbox() override
     {
         /* In a sandbox, for determinism, always use the same temporary
@@ -45,20 +40,7 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
         createDir(tmpDir, 0700);
     }
 
-    void prepareUser() override
-    {
-        DerivationBuilderImpl::prepareUser();
-    }
-
-    void setUser() override
-    {
-        DerivationBuilderImpl::setUser();
-    }
-
-    void checkSystem() override
-    {
-        // FIXME: should check system features.
-    }
+    void checkSystem() override {}
 
     void startChild() override
     {
@@ -67,6 +49,7 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
 
         auto json = nlohmann::json::object();
 
+        json.emplace("version", 1);
         json.emplace("builder", drv.builder);
         {
             auto l = nlohmann::json::array();
@@ -86,6 +69,18 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
         json.emplace("storeDir", store.storeDir);
         json.emplace("realStoreDir", store.config->realStoreDir.get());
         json.emplace("system", drv.platform);
+        {
+            auto l = nlohmann::json::array();
+            for (auto & i : inputPaths)
+                l.push_back(store.printStorePath(i));
+            json.emplace("inputPaths", std::move(l));
+        }
+        {
+            auto l = nlohmann::json::object();
+            for (auto & i : scratchOutputs)
+                l.emplace(i.first, store.printStorePath(i.second));
+            json.emplace("outputs", std::move(l));
+        }
 
         // TODO(cole-h): writing this to stdin is too much effort right now, if we want to revisit
         // that, see this comment by Eelco about how to make it not suck:

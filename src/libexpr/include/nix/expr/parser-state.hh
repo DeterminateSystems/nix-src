@@ -24,7 +24,6 @@ struct StringToken
     }
 };
 
-// This type must be trivially copyable; see YYLTYPE_IS_TRIVIAL in parser.y.
 struct ParserLocation
 {
     int beginOffset;
@@ -44,9 +43,6 @@ struct ParserLocation
         beginOffset = stashedBeginOffset;
         endOffset = stashedEndOffset;
     }
-
-    /** Latest doc comment position, or 0. */
-    int doc_comment_first_column, doc_comment_last_column;
 };
 
 struct LexerState
@@ -71,7 +67,7 @@ struct LexerState
     /**
      * @brief Maps some positions to a DocComment, where the comment is relevant to the location.
      */
-    std::unordered_map<PosIdx, DocComment> & positionToDocComment;
+    DocCommentMap & positionToDocComment;
 
     PosTable & positions;
     PosTable::Origin origin;
@@ -82,13 +78,14 @@ struct LexerState
 struct ParserState
 {
     const LexerState & lexerState;
+    std::pmr::polymorphic_allocator<char> & alloc;
     SymbolTable & symbols;
     PosTable & positions;
     Expr * result;
     SourcePath basePath;
     PosTable::Origin origin;
     const ref<SourceAccessor> rootFS;
-    const Expr::AstSymbols & s;
+    static constexpr Expr::AstSymbols s = StaticEvalSymbols::create().exprSymbols;
     const EvalSettings & settings;
 
     void dupAttr(const AttrPath & attrPath, const PosIdx pos, const PosIdx prevPos);
@@ -327,7 +324,7 @@ ParserState::stripIndentation(const PosIdx pos, std::vector<std::pair<PosIdx, st
 
         // Ignore empty strings for a minor optimisation and AST simplification
         if (s2 != "") {
-            es2->emplace_back(i->first, new ExprString(std::move(s2)));
+            es2->emplace_back(i->first, new ExprString(alloc, s2));
         }
     };
     for (; i != es.end(); ++i, --n) {

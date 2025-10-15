@@ -100,7 +100,7 @@ struct curlFileTransfer : public FileTransfer
                   lvlTalkative,
                   actFileTransfer,
                   fmt("%sing '%s'", request.verb(), request.uri),
-                  {request.uri},
+                  {request.uri.to_string()},
                   request.parentAct)
             , callback(std::move(callback))
             , finalSink([this](std::string_view data) {
@@ -121,7 +121,7 @@ struct curlFileTransfer : public FileTransfer
                     this->result.data.append(data);
             })
         {
-            result.urls.push_back(request.uri);
+            result.urls.push_back(request.uri.to_string());
 
             requestHeaders = curl_slist_append(requestHeaders, "Accept-Encoding: zstd, br, gzip, deflate, bzip2, xz");
             if (!request.expectedETag.empty())
@@ -350,7 +350,7 @@ struct curlFileTransfer : public FileTransfer
                 curl_easy_setopt(req, CURLOPT_DEBUGFUNCTION, TransferItem::debugCallback);
             }
 
-            curl_easy_setopt(req, CURLOPT_URL, request.uri.c_str());
+            curl_easy_setopt(req, CURLOPT_URL, request.uri.to_string().c_str());
             curl_easy_setopt(req, CURLOPT_FOLLOWLOCATION, 1L);
             curl_easy_setopt(req, CURLOPT_MAXREDIRS, 10);
             curl_easy_setopt(req, CURLOPT_NOSIGNAL, 1);
@@ -594,10 +594,24 @@ struct curlFileTransfer : public FileTransfer
             }
         };
 
-        bool quit = false;
         std::
             priority_queue<std::shared_ptr<TransferItem>, std::vector<std::shared_ptr<TransferItem>>, EmbargoComparator>
                 incoming;
+    private:
+        bool quitting = false;
+    public:
+        void quit()
+        {
+            quitting = true;
+            /* We wil not be processing any more incoming requests */
+            while (!incoming.empty())
+                incoming.pop();
+        }
+
+        bool isQuitting()
+        {
+            return quitting;
+        }
     };
 
     Sync<State> state_;
@@ -649,7 +663,7 @@ struct curlFileTransfer : public FileTransfer
         /* Signal the worker thread to exit. */
         {
             auto state(state_.lock());
-            state->quit = true;
+            state->quit();
         }
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
         writeFull(wakeupPipe.writeSide.get(), " ", false);
@@ -750,7 +764,7 @@ struct curlFileTransfer : public FileTransfer
                         break;
                     }
                 }
-                quit = state->quit;
+                quit = state->isQuitting();
             }
 
             for (auto & item : incoming) {
@@ -767,29 +781,31 @@ struct curlFileTransfer : public FileTransfer
 
     void workerThreadEntry()
     {
+        // Unwinding or because someone called `quit`.
+        bool normalExit = true;
         try {
             workerThreadMain();
         } catch (nix::Interrupted & e) {
+            normalExit = false;
         } catch (std::exception & e) {
             printError("unexpected error in download thread: %s", e.what());
+            normalExit = false;
         }
 
-        {
+        if (!normalExit) {
             auto state(state_.lock());
-            while (!state->incoming.empty())
-                state->incoming.pop();
-            state->quit = true;
+            state->quit();
         }
     }
 
     void enqueueItem(std::shared_ptr<TransferItem> item)
     {
-        if (item->request.data && !hasPrefix(item->request.uri, "http://") && !hasPrefix(item->request.uri, "https://"))
-            throw nix::Error("uploading to '%s' is not supported", item->request.uri);
+        if (item->request.data && item->request.uri.scheme() != "http" && item->request.uri.scheme() != "https")
+            throw nix::Error("uploading to '%s' is not supported", item->request.uri.to_string());
 
         {
             auto state(state_.lock());
-            if (state->quit)
+            if (state->isQuitting())
                 throw nix::Error("cannot enqueue download request because the download thread is shutting down");
             state->incoming.push(item);
         }
@@ -801,11 +817,11 @@ struct curlFileTransfer : public FileTransfer
     void enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) override
     {
         /* Ugly hack to support s3:// URIs. */
-        if (hasPrefix(request.uri, "s3://")) {
+        if (request.uri.scheme() == "s3") {
             // FIXME: do this on a worker thread
             try {
 #if NIX_WITH_S3_SUPPORT
-                auto parsed = ParsedS3URL::parse(request.uri);
+                auto parsed = ParsedS3URL::parse(request.uri.parsed());
 
                 std::string profile = parsed.profile.value_or("");
                 std::string region = parsed.region.value_or(Aws::Region::US_EAST_1);
@@ -815,15 +831,16 @@ struct curlFileTransfer : public FileTransfer
                 S3Helper s3Helper(profile, region, scheme, endpoint);
 
                 // FIXME: implement ETag
-                auto s3Res = s3Helper.getObject(parsed.bucket, parsed.key);
+                auto s3Res = s3Helper.getObject(parsed.bucket, encodeUrlPath(parsed.key));
                 FileTransferResult res;
                 if (!s3Res.data)
                     throw FileTransferError(NotFound, {}, "S3 object '%s' does not exist", request.uri);
                 res.data = std::move(*s3Res.data);
-                res.urls.push_back(request.uri);
+                res.urls.push_back(request.uri.to_string());
                 callback(std::move(res));
 #else
-                throw nix::Error("cannot download '%s' because Nix is not built with S3 support", request.uri);
+                throw nix::Error(
+                    "cannot download '%s' because Nix is not built with S3 support", request.uri.to_string());
 #endif
             } catch (...) {
                 callback.rethrow();
@@ -841,7 +858,7 @@ ref<FileTransfer> getFileTransfer()
 {
     auto fileTransfer(_fileTransfer.lock());
 
-    if (!*fileTransfer || (*fileTransfer)->state_.lock()->quit)
+    if (!*fileTransfer || (*fileTransfer)->state_.lock()->isQuitting())
         *fileTransfer = std::make_shared<curlFileTransfer>();
 
     return ref<FileTransfer>(*fileTransfer);

@@ -244,7 +244,7 @@ nix_err nix_derivation_make_outputs(
 StorePath * nix_add_derivation(nix_c_context * context, Store * store, nix_derivation * derivation);
 
 /**
- * @brief Deallocate a `nix_derivation'
+ * @brief Deallocate a `nix_derivation`
  *
  * Does not fail.
  * @param[in] drv the derivation to free

@@ -32,6 +32,7 @@ config_priv_h = configure_file(
 )
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/asan-options')
 
 sources = files(
   'nix_api_util.cc',
@@ -53,6 +54,7 @@ this_library = library(
   'nixutilc',
   sources,
   config_priv_h,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,
