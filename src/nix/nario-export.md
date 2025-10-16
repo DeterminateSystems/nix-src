@@ -2,13 +2,13 @@ R""(
 
 # Examples
 
-* Export the closure of building `nixpkgs#hello`:
+* Export the closure of the build of `nixpkgs#hello`:
 
   ```console
   # nix nario export --format 1 -r nixpkgs#hello > dump
   ```
 
-  It can be imported in another store:
+  It can be imported into another store:
 
   ```console
   # nix nario import < dump
@@ -16,7 +16,7 @@ R""(
 
 # Description
 
-This command prints on standard output a serialization of the specified store paths in `nario` format. This serialization can be imported into another store using `nix nario import`.
+This command prints to standard output a serialization of the specified store paths in `nario` format. This serialization can be imported into another store using `nix nario import`.
 
 References of a path are not exported by default; use `-r` to export a complete closure.
 Paths are exported in topologically sorted order (i.e. if path `X` refers to `Y`, then `Y` appears before `X`).
