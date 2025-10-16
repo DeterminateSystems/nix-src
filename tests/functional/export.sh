@@ -9,6 +9,7 @@ clearStore
 outPath=$(nix-build dependencies.nix --no-out-link)
 
 nix-store --export $outPath > $TEST_ROOT/exp
+expectStderr 1 nix nario export "$outPath" | grepQuiet "required argument.*missing"
 nix nario export --format 1 "$outPath" > $TEST_ROOT/exp2
 cmp "$TEST_ROOT/exp" "$TEST_ROOT/exp2"
 
@@ -22,7 +23,6 @@ if nix-store --export $outPath >/dev/full ; then
     exit 1
 fi
 
-
 clearStore
 
 if nix-store --import < $TEST_ROOT/exp; then
@@ -30,13 +30,11 @@ if nix-store --import < $TEST_ROOT/exp; then
     exit 1
 fi
 
-
 clearStore
 
 nix-store --import < $TEST_ROOT/exp_all
 
 nix-store --export $(nix-store -qR $outPath) > $TEST_ROOT/exp_all2
-
 
 clearStore
 
@@ -44,12 +42,11 @@ clearStore
 # cause a failure.
 nix-store --import < $TEST_ROOT/exp_all2
 
-
 # Test `nix nario import` on files created by `nix-store --export`.
 clearStore
-nix nario import < $TEST_ROOT/exp_all
+expectStderr 1 nix nario import < $TEST_ROOT/exp_all | grepQuiet "lacks a signature"
+nix nario import --no-check-sigs < $TEST_ROOT/exp_all
 nix path-info "$outPath"
-
 
 # Test `nix nario list`.
 nix nario list < $TEST_ROOT/exp_all | grepQuiet "dependencies-input-0: .* bytes"

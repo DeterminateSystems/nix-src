@@ -64,7 +64,7 @@ struct CmdNarioExport : StorePathsCommand
 
 static auto rCmdNarioExport = registerCommand2<CmdNarioExport>({"nario", "export"});
 
-struct CmdNarioImport : StoreCommand
+struct CmdNarioImport : StoreCommand, MixNoCheckSigs
 {
     std::string description() override
     {
@@ -81,7 +81,7 @@ struct CmdNarioImport : StoreCommand
     void run(ref<Store> store) override
     {
         FdSource source(getStandardInput());
-        importPaths(*store, source, NoCheckSigs); // FIXME
+        importPaths(*store, source, checkSigs);
     }
 };
 
