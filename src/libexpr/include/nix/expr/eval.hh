@@ -224,8 +224,6 @@ public:
     const fetchers::Settings & fetchSettings;
     const EvalSettings & settings;
 
-    ref<Executor> executor;
-
     SymbolTable symbols;
     PosTable positions;
 
@@ -1004,6 +1002,17 @@ private:
 
     friend struct Value;
     friend class ListBuilder;
+
+public:
+    /**
+     * Worker threads manager.
+     *
+     * Note: keep this last to ensure that it's destroyed first, so we
+     * don't have any background work items (e.g. from
+     * `builtins.parallel`) referring to a partially destroyed
+     * `EvalState`.
+     */
+    ref<Executor> executor;
 };
 
 struct DebugTraceStacker
