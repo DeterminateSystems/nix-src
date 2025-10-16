@@ -50,3 +50,13 @@ nix path-info "$outPath"
 
 # Test `nix nario list`.
 nix nario list < $TEST_ROOT/exp_all | grepQuiet "dependencies-input-0: .* bytes"
+
+# Test format 2 (including signatures).
+nix key generate-secret --key-name my-key > $TEST_ROOT/secret
+public_key=$(nix key convert-secret-to-public < $TEST_ROOT/secret)
+nix store sign --key-file "$TEST_ROOT/secret" -r "$outPath"
+nix nario export --format 2 -r "$outPath" > $TEST_ROOT/exp_all
+clearStore
+expectStderr 1 nix nario import < $TEST_ROOT/exp_all | grepQuiet "lacks a signature"
+nix nario import --trusted-public-keys "$public_key" < $TEST_ROOT/exp_all
+[[ $(nix path-info --json "$outPath" | jq -r .[].signatures[]) =~ my-key: ]]
