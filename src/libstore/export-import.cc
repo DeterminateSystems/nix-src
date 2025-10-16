@@ -57,7 +57,7 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, unsigne
             auto info = store.queryPathInfo(path);
             // FIXME: move to CommonProto?
             WorkerProto::Serialise<ValidPathInfo>::write(
-                store, WorkerProto::WriteConn{.to = sink, .version = 16}, *info);
+                store, WorkerProto::WriteConn{.to = sink, .version = 16, .shortStorePaths = true}, *info);
             dumpNar(*info);
         }
 
@@ -136,7 +136,7 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
                 throw Error("input doesn't look like a nario");
 
             auto info = WorkerProto::Serialise<ValidPathInfo>::read(
-                store, WorkerProto::ReadConn{.from = source, .version = 16});
+                store, WorkerProto::ReadConn{.from = source, .version = 16, .shortStorePaths = true});
 
             Activity act(
                 *logger, lvlTalkative, actUnknown, fmt("importing path '%s'", store.printStorePath(info.path)));
