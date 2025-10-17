@@ -5,13 +5,13 @@ R""(
 * Export the closure of the build of `nixpkgs#hello`:
 
   ```console
-  # nix nario export --format 1 -r nixpkgs#hello > dump
+  # nix nario export --format 2 -r nixpkgs#hello > dump.nario
   ```
 
   It can be imported into another store:
 
   ```console
-  # nix nario import < dump
+  # nix nario import --no-check-sigs < dump.nario
   ```
 
 # Description

@@ -5,7 +5,7 @@ R""(
 * Import store paths from the file named `dump`:
 
   ```console
-  # nix nario import < dump
+  # nix nario import < dump.nario
   ```
 
 # Description
