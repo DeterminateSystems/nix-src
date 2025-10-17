@@ -154,9 +154,7 @@ struct CmdNarioList : Command
             addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override
             {
                 logger->cout(fmt("%s: %d bytes", printStorePath(info.path), info.narSize));
-                // Discard the NAR.
-                NullFileSystemObjectSink parseSink;
-                parseDump(parseSink, source);
+                source.skip(info.narSize);
             }
 
             StorePath addToStoreFromDump(
