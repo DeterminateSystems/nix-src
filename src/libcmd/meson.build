@@ -67,6 +67,7 @@ config_priv_h = configure_file(
 )
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/generate-header')
 
 sources = files(
   'built-path.cc',
@@ -74,6 +75,7 @@ sources = files(
   'command.cc',
   'common-eval-args.cc',
   'editor-for.cc',
+  'flake-schemas.cc',
   'installable-attr-path.cc',
   'installable-derived-path.cc',
   'installable-flake.cc',
@@ -85,6 +87,11 @@ sources = files(
   'repl-interacter.cc',
   'repl.cc',
 )
+
+sources += [
+  gen_header.process('call-flake-schemas.nix'),
+  gen_header.process('builtin-flake-schemas.nix'),
+]
 
 subdir('include/nix/cmd')
 
