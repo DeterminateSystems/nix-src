@@ -7,6 +7,7 @@ TODO_NixOS
 clearStore
 
 outPath=$(nix-build dependencies.nix --no-out-link)
+drvPath=$(nix path-info --json "$outPath" | jq -r .\""$outPath"\".deriver)
 
 nix-store --export $outPath > $TEST_ROOT/exp
 expectStderr 1 nix nario export "$outPath" | grepQuiet "required argument.*missing"
@@ -60,3 +61,5 @@ clearStore
 expectStderr 1 nix nario import < $TEST_ROOT/exp_all | grepQuiet "lacks a signature"
 nix nario import --trusted-public-keys "$public_key" < $TEST_ROOT/exp_all
 [[ $(nix path-info --json "$outPath" | jq -r .[].signatures[]) =~ my-key: ]]
+
+[[ $(nix nario list --json < "$TEST_ROOT/exp_all" | jq -r ".paths.\"$outPath\".deriver") = $drvPath ]]

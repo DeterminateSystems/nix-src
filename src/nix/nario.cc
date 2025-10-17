@@ -6,6 +6,8 @@
 #include "nix/util/fs-sink.hh"
 #include "nix/util/archive.hh"
 
+#include <nlohmann/json.hpp>
+
 using namespace nix;
 
 struct CmdNario : NixMultiCommand
@@ -98,7 +100,7 @@ struct CmdNarioImport : StoreCommand, MixNoCheckSigs
 
 static auto rCmdNarioImport = registerCommand2<CmdNarioImport>({"nario", "import"});
 
-struct CmdNarioList : Command
+struct CmdNarioList : Command, MixJSON
 {
     std::string description() override
     {
@@ -129,6 +131,8 @@ struct CmdNarioList : Command
 
         struct ListingStore : Store
         {
+            std::optional<nlohmann::json> json;
+
             ListingStore(ref<const Config> config)
                 : Store{*config}
             {
@@ -153,7 +157,12 @@ struct CmdNarioList : Command
             void
             addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override
             {
-                logger->cout(fmt("%s: %d bytes", printStorePath(info.path), info.narSize));
+                if (json) {
+                    auto obj = info.toJSON(*this, true, HashFormat::SRI);
+                    ;
+                    json->emplace(printStorePath(info.path), std::move(obj));
+                } else
+                    logger->cout(fmt("%s: %d bytes", printStorePath(info.path), info.narSize));
                 source.skip(info.narSize);
             }
 
@@ -189,7 +198,15 @@ struct CmdNarioList : Command
         auto source{getNarioSource()};
         auto config = make_ref<Config>(StoreConfig::Params());
         ListingStore lister(config);
+        if (json)
+            lister.json = nlohmann::json::object();
         importPaths(lister, source, NoCheckSigs);
+        if (json) {
+            auto j = nlohmann::json::object();
+            j["version"] = 1;
+            j["paths"] = std::move(*lister.json);
+            printJSON(j);
+        }
     }
 };
 
