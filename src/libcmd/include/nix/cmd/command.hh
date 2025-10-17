@@ -214,6 +214,8 @@ struct InstallableCommand : virtual Args, SourceExprCommand
 {
     InstallableCommand();
 
+    virtual void preRun(ref<Store> store);
+
     virtual void run(ref<Store> store, ref<Installable> installable) = 0;
 
     void run(ref<Store> store) override;
@@ -348,6 +350,20 @@ struct MixEnvironment : virtual Args
      * become invalid.
      */
     void setEnviron();
+};
+
+struct MixNoCheckSigs : virtual Args
+{
+    CheckSigsFlag checkSigs = CheckSigs;
+
+    MixNoCheckSigs()
+    {
+        addFlag({
+            .longName = "no-check-sigs",
+            .description = "Do not require that paths are signed by trusted keys.",
+            .handler = {&checkSigs, NoCheckSigs},
+        });
+    }
 };
 
 void completeFlakeInputAttrPath(

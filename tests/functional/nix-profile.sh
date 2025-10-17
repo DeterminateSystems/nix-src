@@ -58,8 +58,8 @@ nix profile list | grep -A4 'Name:.*flake1' | grep 'Locked flake URL:.*narHash'
 [ -e $TEST_HOME/.nix-profile/share/man ]
 (! [ -e $TEST_HOME/.nix-profile/include ])
 nix profile history
-nix profile history | grep "packages.$system.default: ∅ -> 1.0"
-nix profile diff-closures | grep 'env-manifest.nix: ε → ∅'
+nix profile history | grep "packages.$system.default: 1.0, 1.0-man added"
+nix profile diff-closures | grep 'env-manifest.nix: (no version) removed'
 
 # Test XDG Base Directories support
 export NIX_CONFIG="use-xdg-base-directories = true"
@@ -94,6 +94,7 @@ printf 1.0 > $flake1Dir/version
 # Test --all exclusivity.
 assertStderr nix --offline profile upgrade --all foo << EOF
 error: --all cannot be used with package names or regular expressions.
+
 Try 'nix --help' for more information.
 EOF
 
@@ -128,7 +129,7 @@ nix profile rollback
 [ -e $TEST_HOME/.nix-profile/bin/foo ]
 nix profile remove foo 2>&1 | grep 'removed 1 packages'
 (! [ -e $TEST_HOME/.nix-profile/bin/foo ])
-nix profile history | grep 'foo: 1.0 -> ∅'
+nix profile history | grep 'foo: 1.0 removed'
 nix profile diff-closures | grep 'Version 3 -> 4'
 
 # Test installing a non-flake package.

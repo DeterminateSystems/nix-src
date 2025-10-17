@@ -78,29 +78,26 @@ SSHMaster::SSHMaster(
         oss << authority.host;
         return std::move(oss).str();
     }())
-    , fakeSSH(authority.host == "localhost")
+    , fakeSSH(authority.to_string() == "localhost")
     , keyFile(keyFile)
     , sshPublicHostKey(parsePublicHostKey(authority.host, sshPublicHostKey))
     , useMaster(useMaster && !fakeSSH)
     , compress(compress)
     , logFD(logFD)
+    , tmpDir(make_ref<AutoDelete>(createTempDir("", "nix", 0700)))
 {
     checkValidAuthority(authority);
-    auto state(state_.lock());
-    state->tmpDir = std::make_unique<AutoDelete>(createTempDir("", "nix", 0700));
 }
 
 void SSHMaster::addCommonSSHOpts(Strings & args)
 {
-    auto state(state_.lock());
-
     auto sshArgs = getNixSshOpts();
     args.insert(args.end(), sshArgs.begin(), sshArgs.end());
 
     if (!keyFile.empty())
         args.insert(args.end(), {"-i", keyFile});
     if (!sshPublicHostKey.empty()) {
-        std::filesystem::path fileName = state->tmpDir->path() / "host-key";
+        std::filesystem::path fileName = tmpDir->path() / "host-key";
         writeFile(fileName.string(), authority.host + " " + sshPublicHostKey + "\n");
         args.insert(args.end(), {"-oUserKnownHostsFile=" + fileName.string()});
     }
@@ -241,7 +238,7 @@ Path SSHMaster::startMaster()
     if (state->sshMaster != INVALID_DESCRIPTOR)
         return state->socketPath;
 
-    state->socketPath = (Path) *state->tmpDir + "/ssh.sock";
+    state->socketPath = (Path) *tmpDir + "/ssh.sock";
 
     Pipe out;
     out.create();
