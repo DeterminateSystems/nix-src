@@ -66,6 +66,7 @@ struct WorkerProto
     {
         Source & from;
         Version version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -76,6 +77,7 @@ struct WorkerProto
     {
         Sink & to;
         Version version;
+        bool shortStorePaths = false;
     };
 
     /**
