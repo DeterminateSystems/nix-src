@@ -61,7 +61,7 @@ struct CmdNarioExport : StorePathsCommand
     {
         auto fd = getStandardOutput();
         if (isatty(fd))
-            throw UsageError("refusing to write nario to standard output");
+            throw UsageError("refusing to write nario to a terminal");
         FdSink sink(std::move(fd));
         exportPaths(*store, StorePathSet(storePaths.begin(), storePaths.end()), sink, version);
     }
@@ -73,7 +73,7 @@ static FdSource getNarioSource()
 {
     auto fd = getStandardInput();
     if (isatty(fd))
-        throw UsageError("refusing to read nario from standard input");
+        throw UsageError("refusing to read nario from a terminal");
     return FdSource(std::move(fd));
 }
 
