@@ -513,7 +513,7 @@ void Args::checkArgs()
 {
     for (auto & [name, flag] : longFlags) {
         if (flag->required && flag->timesUsed == 0)
-            throw UsageError("required argument '--%s' is missing", name);
+            throw UsageError("required argument '%s' is missing", "--" + name);
     }
 }
 
