@@ -6,6 +6,8 @@
 #include "nix/util/fs-sink.hh"
 #include "nix/util/archive.hh"
 
+#include <nlohmann/json.hpp>
+
 using namespace nix;
 
 struct CmdNario : NixMultiCommand
@@ -59,7 +61,7 @@ struct CmdNarioExport : StorePathsCommand
     {
         auto fd = getStandardOutput();
         if (isatty(fd))
-            throw UsageError("refusing to write nario to standard output");
+            throw UsageError("refusing to write nario to a terminal");
         FdSink sink(std::move(fd));
         exportPaths(*store, StorePathSet(storePaths.begin(), storePaths.end()), sink, version);
     }
@@ -71,7 +73,7 @@ static FdSource getNarioSource()
 {
     auto fd = getStandardInput();
     if (isatty(fd))
-        throw UsageError("refusing to read nario from standard input");
+        throw UsageError("refusing to read nario from a terminal");
     return FdSource(std::move(fd));
 }
 
@@ -98,8 +100,103 @@ struct CmdNarioImport : StoreCommand, MixNoCheckSigs
 
 static auto rCmdNarioImport = registerCommand2<CmdNarioImport>({"nario", "import"});
 
-struct CmdNarioList : Command
+nlohmann::json listNar(Source & source)
 {
+    struct : FileSystemObjectSink
+    {
+        nlohmann::json root = nlohmann::json::object();
+
+        nlohmann::json & makeObject(const CanonPath & path, std::string_view type)
+        {
+            auto * cur = &root;
+            for (auto & c : path) {
+                assert((*cur)["type"] == "directory");
+                auto i = (*cur)["entries"].emplace(c, nlohmann::json::object()).first;
+                cur = &i.value();
+            }
+            auto inserted = cur->emplace("type", type).second;
+            assert(inserted);
+            return *cur;
+        }
+
+        void createDirectory(const CanonPath & path) override
+        {
+            auto & j = makeObject(path, "directory");
+            j["entries"] = nlohmann::json::object();
+        }
+
+        void createRegularFile(const CanonPath & path, std::function<void(CreateRegularFileSink &)> func) override
+        {
+            struct : CreateRegularFileSink
+            {
+                bool executable = false;
+                std::optional<uint64_t> size;
+
+                void operator()(std::string_view data) override {}
+
+                void preallocateContents(uint64_t s) override
+                {
+                    size = s;
+                }
+
+                void isExecutable() override
+                {
+                    executable = true;
+                }
+            } crf;
+
+            crf.skipContents = true;
+
+            func(crf);
+
+            auto & j = makeObject(path, "regular");
+            j.emplace("size", crf.size.value());
+            if (crf.executable)
+                j.emplace("executable", true);
+        }
+
+        void createSymlink(const CanonPath & path, const std::string & target) override
+        {
+            auto & j = makeObject(path, "symlink");
+            j.emplace("target", target);
+        }
+
+    } parseSink;
+
+    parseDump(parseSink, source);
+
+    return parseSink.root;
+}
+
+void renderNarListing(std::string_view prefix, const nlohmann::json & root)
+{
+    std::function<void(const nlohmann::json & json, const CanonPath & path)> recurse;
+    recurse = [&](const nlohmann::json & json, const CanonPath & path) {
+        logger->cout(fmt("%s.%s", prefix, path));
+        auto type = json["type"];
+        if (type == "directory") {
+            for (auto & entry : json["entries"].items()) {
+                recurse(entry.value(), path / entry.key());
+            }
+        }
+    };
+
+    recurse(root, CanonPath::root);
+}
+
+struct CmdNarioList : Command, MixJSON
+{
+    bool listContents = true;
+
+    CmdNarioList()
+    {
+        addFlag({
+            .longName = "no-contents",
+            .description = "Do not list the contents of store paths.",
+            .handler = {&listContents, false},
+        });
+    }
+
     std::string description() override
     {
         return "list the contents of a nario file";
@@ -129,8 +226,12 @@ struct CmdNarioList : Command
 
         struct ListingStore : Store
         {
-            ListingStore(ref<const Config> config)
+            std::optional<nlohmann::json> json;
+            bool listContents;
+
+            ListingStore(ref<const Config> config, bool listContents)
                 : Store{*config}
+                , listContents(listContents)
             {
             }
 
@@ -153,10 +254,22 @@ struct CmdNarioList : Command
             void
             addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override
             {
-                logger->cout(fmt("%s: %d bytes", printStorePath(info.path), info.narSize));
-                // Discard the NAR.
-                NullFileSystemObjectSink parseSink;
-                parseDump(parseSink, source);
+                std::optional<nlohmann::json> contents;
+                if (listContents)
+                    contents = listNar(source);
+                else
+                    source.skip(info.narSize);
+
+                if (json) {
+                    auto obj = info.toJSON(*this, true, HashFormat::SRI);
+                    if (contents)
+                        obj.emplace("contents", *contents);
+                    json->emplace(printStorePath(info.path), std::move(obj));
+                } else {
+                    logger->cout(fmt(ANSI_BOLD "%s:" ANSI_NORMAL " %d bytes", printStorePath(info.path), info.narSize));
+                    if (contents)
+                        renderNarListing("  ", *contents);
+                }
             }
 
             StorePath addToStoreFromDump(
@@ -190,8 +303,16 @@ struct CmdNarioList : Command
 
         auto source{getNarioSource()};
         auto config = make_ref<Config>(StoreConfig::Params());
-        ListingStore lister(config);
+        ListingStore lister(config, listContents);
+        if (json)
+            lister.json = nlohmann::json::object();
         importPaths(lister, source, NoCheckSigs);
+        if (json) {
+            auto j = nlohmann::json::object();
+            j["version"] = 1;
+            j["paths"] = std::move(*lister.json);
+            printJSON(j);
+        }
     }
 };
 
