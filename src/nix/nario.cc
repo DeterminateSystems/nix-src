@@ -57,12 +57,23 @@ struct CmdNarioExport : StorePathsCommand
 
     void run(ref<Store> store, StorePaths && storePaths) override
     {
-        FdSink sink(getStandardOutput());
+        auto fd = getStandardOutput();
+        if (isatty(fd))
+            throw UsageError("refusing to write nario to standard output");
+        FdSink sink(std::move(fd));
         exportPaths(*store, StorePathSet(storePaths.begin(), storePaths.end()), sink, version);
     }
 };
 
 static auto rCmdNarioExport = registerCommand2<CmdNarioExport>({"nario", "export"});
+
+static FdSource getNarioSource()
+{
+    auto fd = getStandardInput();
+    if (isatty(fd))
+        throw UsageError("refusing to read nario from standard input");
+    return FdSource(std::move(fd));
+}
 
 struct CmdNarioImport : StoreCommand, MixNoCheckSigs
 {
@@ -80,7 +91,7 @@ struct CmdNarioImport : StoreCommand, MixNoCheckSigs
 
     void run(ref<Store> store) override
     {
-        FdSource source(getStandardInput());
+        auto source{getNarioSource()};
         importPaths(*store, source, checkSigs);
     }
 };
@@ -177,7 +188,7 @@ struct CmdNarioList : Command
             }
         };
 
-        FdSource source(getStandardInput());
+        auto source{getNarioSource()};
         auto config = make_ref<Config>(StoreConfig::Params());
         ListingStore lister(config);
         importPaths(lister, source, NoCheckSigs);
