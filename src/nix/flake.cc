@@ -821,17 +821,18 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
                     auto children = nlohmann::json::object();
                     forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
-                        auto j = nlohmann::json::object();
-                        try {
-                            visit(node, j);
-                        } catch (EvalError & e) {
-                            // FIXME: make it a flake schema attribute whether to ignore evaluation errors.
-                            if (node->root->state.symbols[node->getAttrPath()[0]] == "legacyPackages")
-                                j.emplace("failed", true);
-                            else
-                                throw;
-                        }
-                        children.emplace(state->symbols[attrName], std::move(j));
+                        auto & j = children.emplace(state->symbols[attrName], nlohmann::json::object()).first.value();
+                        futures.spawn(1, [&visit, &j, node]() {
+                            try {
+                                visit(node, j);
+                            } catch (EvalError & e) {
+                                // FIXME: make it a flake schema attribute whether to ignore evaluation errors.
+                                if (node->root->state.symbols[node->getAttrPath()[0]] == "legacyPackages")
+                                    j.emplace("failed", true);
+                                else
+                                    throw;
+                            }
+                        });
                     });
                     obj.emplace("children", std::move(children));
                 },
@@ -849,20 +850,19 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 std::shared_ptr<eval_cache::AttrCursor> output,
                 const std::string & doc,
                 bool isLast) {
-                auto j = nlohmann::json::object();
+                auto & j = res.emplace(state->symbols[outputName], nlohmann::json::object()).first.value();
 
                 if (!showLegacy && state->symbols[outputName] == "legacyPackages") {
                     j.emplace("skipped", true);
                 } else if (output) {
                     j.emplace("doc", doc);
-                    auto j2 = nlohmann::json::object();
-                    visit(ref(output), j2);
-                    j.emplace("output", std::move(j2));
+                    auto & j2 = j.emplace("output", nlohmann::json::object()).first.value();
+                    futures.spawn(1, [&visit, output, &j2]() { visit(ref(output), j2); });
                 } else
                     j.emplace("unknown", true);
-
-                res.emplace(state->symbols[outputName], j);
             });
+
+        futures.finishAll();
 
         if (json)
             printJSON(res);
