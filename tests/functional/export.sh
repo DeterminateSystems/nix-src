@@ -51,7 +51,10 @@ nix path-info "$outPath"
 
 # Test `nix nario list`.
 nix nario list < $TEST_ROOT/exp_all
-nix nario list < $TEST_ROOT/exp_all | grepQuiet ".*dependencies-input-0.*bytes"
+nix nario list < $TEST_ROOT/exp_all | grepQuiet ".*dependencies-input-0"
+nix nario list -l < $TEST_ROOT/exp_all | grepQuiet "dr-xr-xr-x .*0 $outPath"
+nix nario list -l < $TEST_ROOT/exp_all | grepQuiet "lrwxrwxrwx .*0 $outPath/self -> $outPath"
+nix nario list -l < $TEST_ROOT/exp_all | grepQuiet -- "-r--r--r-- .*7 $outPath/foobar"
 
 # Test format 2 (including signatures).
 nix key generate-secret --key-name my-key > $TEST_ROOT/secret
