@@ -168,11 +168,11 @@ nlohmann::json listNar(Source & source)
     return parseSink.root;
 }
 
-void renderNarListing(std::string_view prefix, const nlohmann::json & root)
+void renderNarListing(const CanonPath & prefix, const nlohmann::json & root)
 {
     std::function<void(const nlohmann::json & json, const CanonPath & path)> recurse;
     recurse = [&](const nlohmann::json & json, const CanonPath & path) {
-        logger->cout(fmt("%s.%s", prefix, path));
+        logger->cout(fmt("%s", prefix / path));
         auto type = json["type"];
         if (type == "directory") {
             for (auto & entry : json["entries"].items()) {
@@ -266,9 +266,10 @@ struct CmdNarioList : Command, MixJSON
                         obj.emplace("contents", *contents);
                     json->emplace(printStorePath(info.path), std::move(obj));
                 } else {
-                    logger->cout(fmt(ANSI_BOLD "%s:" ANSI_NORMAL " %d bytes", printStorePath(info.path), info.narSize));
                     if (contents)
-                        renderNarListing("  ", *contents);
+                        renderNarListing(CanonPath(printStorePath(info.path)), *contents);
+                    else
+                        logger->cout(fmt("%s: %d bytes", printStorePath(info.path), info.narSize));
                 }
             }
 
