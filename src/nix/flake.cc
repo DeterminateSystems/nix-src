@@ -348,8 +348,9 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
 
         auto inventory = cache->getRoot()->getAttr("inventory");
 
-        std::vector<DerivedPath> drvPaths;
+        FutureVector futures(*state->executor);
 
+        Sync<std::vector<DerivedPath>> drvPaths_;
         Sync<std::set<std::string>> uncheckedOutputs;
         Sync<std::set<std::string>> omittedSystems;
 
@@ -392,7 +393,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                         if (auto isFlakeCheck = leaf->maybeGetAttr("isFlakeCheck")) {
                             if (isFlakeCheck->getBool()) {
                                 auto drvPath = drv->forceDerivation();
-                                drvPaths.push_back(
+                                drvPaths_.lock()->push_back(
                                     DerivedPath::Built{
                                         .drvPath = makeConstantStorePathRef(drvPath),
                                         .outputs = OutputsSpec::All{},
@@ -403,7 +404,9 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                 },
 
                 [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
-                    forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) { visit(node); });
+                    forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
+                        futures.spawn(2, [&visit, node]() { visit(node); });
+                    });
                 },
 
                 [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
@@ -418,31 +421,33 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                 std::shared_ptr<eval_cache::AttrCursor> output,
                 const std::string & doc,
                 bool isLast) {
-                if (output) {
-                    visit(ref(output));
-                } else
+                if (output)
+                    futures.spawn(1, [&visit, output(ref(output))]() { visit(output); });
+                else
                     uncheckedOutputs.lock()->insert(std::string(state->symbols[outputName]));
             });
 
-        if (!uncheckedOutputs.lock()->empty())
-            warn(
-                "The following flake outputs are unchecked: %s.",
-                concatStringsSep(", ", *uncheckedOutputs.lock())); // FIXME: quote
+        futures.finishAll();
 
-        if (build && !drvPaths.empty()) {
+        if (!uncheckedOutputs.lock()->empty())
+            warn("The following flake outputs are unchecked: %s.", concatStringsSep(", ", *uncheckedOutputs.lock()));
+
+        auto drvPaths(drvPaths_.lock());
+
+        if (build && !drvPaths->empty()) {
             // FIXME: should start building while evaluating.
-            Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", drvPaths.size()));
+            Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", drvPaths->size()));
 
             state->waitForAllPaths();
 
-            auto missing = store->queryMissing(drvPaths);
+            auto missing = store->queryMissing(*drvPaths);
 
             /* This command doesn't need to actually substitute
                derivation outputs if they're missing but
                substitutable. So filter out derivations that are
                substitutable or already built. */
             std::vector<DerivedPath> toBuild;
-            for (auto & path : drvPaths) {
+            for (auto & path : *drvPaths) {
                 std::visit(
                     overloaded{
                         [&](const DerivedPath::Built & bfd) {
