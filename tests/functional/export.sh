@@ -7,6 +7,7 @@ TODO_NixOS
 clearStore
 
 outPath=$(nix-build dependencies.nix --no-out-link)
+drvPath=$(nix path-info --json "$outPath" | jq -r .\""$outPath"\".deriver)
 
 nix-store --export $outPath > $TEST_ROOT/exp
 expectStderr 1 nix nario export "$outPath" | grepQuiet "required argument.*missing"
@@ -49,7 +50,8 @@ nix nario import --no-check-sigs < $TEST_ROOT/exp_all
 nix path-info "$outPath"
 
 # Test `nix nario list`.
-nix nario list < $TEST_ROOT/exp_all | grepQuiet "dependencies-input-0: .* bytes"
+nix nario list < $TEST_ROOT/exp_all
+nix nario list < $TEST_ROOT/exp_all | grepQuiet ".*dependencies-input-0.*bytes"
 
 # Test format 2 (including signatures).
 nix key generate-secret --key-name my-key > $TEST_ROOT/secret
@@ -60,3 +62,14 @@ clearStore
 expectStderr 1 nix nario import < $TEST_ROOT/exp_all | grepQuiet "lacks a signature"
 nix nario import --trusted-public-keys "$public_key" < $TEST_ROOT/exp_all
 [[ $(nix path-info --json "$outPath" | jq -r .[].signatures[]) =~ my-key: ]]
+
+# Test json listing.
+json=$(nix nario list --json < "$TEST_ROOT/exp_all")
+[[ $(printf "%s" "$json" | jq -r ".paths.\"$outPath\".deriver") = "$drvPath" ]]
+[[ $(printf "%s" "$json" | jq -r ".paths.\"$outPath\".contents.type") = directory ]]
+[[ $(printf "%s" "$json" | jq -r ".paths.\"$outPath\".contents.entries.foobar.type") = regular ]]
+[[ $(printf "%s" "$json" | jq ".paths.\"$outPath\".contents.entries.foobar.size") = 7 ]]
+
+json=$(nix nario list --json --no-contents < "$TEST_ROOT/exp_all")
+[[ $(printf "%s" "$json" | jq -r ".paths.\"$outPath\".deriver") = "$drvPath" ]]
+[[ $(printf "%s" "$json" | jq -r ".paths.\"$outPath\".contents.type") = null ]]
