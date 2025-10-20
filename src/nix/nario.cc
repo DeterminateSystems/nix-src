@@ -199,14 +199,15 @@ void renderNarListing(const CanonPath & prefix, const nlohmann::json & root, boo
 
 struct CmdNarioList : Command, MixJSON, MixLongListing
 {
-    bool listContents = true;
+    bool listContents = false;
 
     CmdNarioList()
     {
         addFlag({
-            .longName = "no-contents",
-            .description = "Do not list the contents of store paths.",
-            .handler = {&listContents, false},
+            .longName = "recursive",
+            .shortName = 'R',
+            .description = "List the contents of NARs inside the nario.",
+            .handler = {&listContents, true},
         });
     }
 
