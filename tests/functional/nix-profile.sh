@@ -96,6 +96,7 @@ printf 1.0 > "$flake1Dir"/version
 # Test --all exclusivity.
 assertStderr nix --offline profile upgrade --all foo << EOF
 error: --all cannot be used with package names or regular expressions.
+
 Try 'nix --help' for more information.
 EOF
 
