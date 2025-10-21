@@ -6,6 +6,8 @@
 #include "nix/util/fs-sink.hh"
 #include "nix/util/archive.hh"
 
+#include "ls.hh"
+
 #include <nlohmann/json.hpp>
 
 using namespace nix;
@@ -168,12 +170,23 @@ nlohmann::json listNar(Source & source)
     return parseSink.root;
 }
 
-void renderNarListing(std::string_view prefix, const nlohmann::json & root)
+void renderNarListing(const CanonPath & prefix, const nlohmann::json & root, bool longListing)
 {
     std::function<void(const nlohmann::json & json, const CanonPath & path)> recurse;
     recurse = [&](const nlohmann::json & json, const CanonPath & path) {
-        logger->cout(fmt("%s.%s", prefix, path));
         auto type = json["type"];
+
+        if (longListing) {
+            auto tp = type == "regular"   ? (json.find("executable") != json.end() ? "-r-xr-xr-x" : "-r--r--r--")
+                      : type == "symlink" ? "lrwxrwxrwx"
+                                          : "dr-xr-xr-x";
+            auto line = fmt("%s %9d %s", tp, type == "regular" ? (uint64_t) json["size"] : 0, prefix / path);
+            if (type == "symlink")
+                line += " -> " + (std::string) json["target"];
+            logger->cout(line);
+        } else
+            logger->cout(fmt("%s", prefix / path));
+
         if (type == "directory") {
             for (auto & entry : json["entries"].items()) {
                 recurse(entry.value(), path / entry.key());
@@ -184,16 +197,17 @@ void renderNarListing(std::string_view prefix, const nlohmann::json & root)
     recurse(root, CanonPath::root);
 }
 
-struct CmdNarioList : Command, MixJSON
+struct CmdNarioList : Command, MixJSON, MixLongListing
 {
-    bool listContents = true;
+    bool listContents = false;
 
     CmdNarioList()
     {
         addFlag({
-            .longName = "no-contents",
-            .description = "Do not list the contents of store paths.",
-            .handler = {&listContents, false},
+            .longName = "recursive",
+            .shortName = 'R',
+            .description = "List the contents of NARs inside the nario.",
+            .handler = {&listContents, true},
         });
     }
 
@@ -227,11 +241,11 @@ struct CmdNarioList : Command, MixJSON
         struct ListingStore : Store
         {
             std::optional<nlohmann::json> json;
-            bool listContents;
+            CmdNarioList & cmd;
 
-            ListingStore(ref<const Config> config, bool listContents)
+            ListingStore(ref<const Config> config, CmdNarioList & cmd)
                 : Store{*config}
-                , listContents(listContents)
+                , cmd(cmd)
             {
             }
 
@@ -255,7 +269,7 @@ struct CmdNarioList : Command, MixJSON
             addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override
             {
                 std::optional<nlohmann::json> contents;
-                if (listContents)
+                if (cmd.listContents)
                     contents = listNar(source);
                 else
                     source.skip(info.narSize);
@@ -266,9 +280,10 @@ struct CmdNarioList : Command, MixJSON
                         obj.emplace("contents", *contents);
                     json->emplace(printStorePath(info.path), std::move(obj));
                 } else {
-                    logger->cout(fmt(ANSI_BOLD "%s:" ANSI_NORMAL " %d bytes", printStorePath(info.path), info.narSize));
                     if (contents)
-                        renderNarListing("  ", *contents);
+                        renderNarListing(CanonPath(printStorePath(info.path)), *contents, cmd.longListing);
+                    else
+                        logger->cout(fmt("%s: %d bytes", printStorePath(info.path), info.narSize));
                 }
             }
 
@@ -313,7 +328,7 @@ struct CmdNarioList : Command, MixJSON
 
         auto source{getNarioSource()};
         auto config = make_ref<Config>(StoreConfig::Params());
-        ListingStore lister(config, listContents);
+        ListingStore lister(config, *this);
         if (json)
             lister.json = nlohmann::json::object();
         importPaths(lister, source, NoCheckSigs);

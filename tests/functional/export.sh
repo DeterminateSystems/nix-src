@@ -54,6 +54,9 @@ nix path-info "$outPath"
 # Test `nix nario list`.
 nix nario list < "$TEST_ROOT"/exp_all
 nix nario list < "$TEST_ROOT"/exp_all | grepQuiet ".*dependencies-input-0.*bytes"
+nix nario list -lR < "$TEST_ROOT"/exp_all | grepQuiet "dr-xr-xr-x .*0 $outPath"
+nix nario list -lR < "$TEST_ROOT"/exp_all | grepQuiet "lrwxrwxrwx .*0 $outPath/self -> $outPath"
+nix nario list -lR < "$TEST_ROOT"/exp_all | grepQuiet -- "-r--r--r-- .*7 $outPath/foobar"
 
 # Test format 2 (including signatures).
 nix key generate-secret --key-name my-key > "$TEST_ROOT"/secret
@@ -66,12 +69,12 @@ nix nario import --trusted-public-keys "$public_key" < "$TEST_ROOT"/exp_all
 [[ $(nix path-info --json "$outPath" | jq -r .[].signatures[]) =~ my-key: ]]
 
 # Test json listing.
-json=$(nix nario list --json < "$TEST_ROOT/exp_all")
+json=$(nix nario list --json -R < "$TEST_ROOT/exp_all")
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$outPath\".deriver") = "$drvPath" ]]
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$outPath\".contents.type") = directory ]]
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$outPath\".contents.entries.foobar.type") = regular ]]
 [[ $(printf "%s" "$json" | jq ".paths.\"$outPath\".contents.entries.foobar.size") = 7 ]]
 
-json=$(nix nario list --json --no-contents < "$TEST_ROOT/exp_all")
+json=$(nix nario list --json < "$TEST_ROOT/exp_all")
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$outPath\".deriver") = "$drvPath" ]]
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$outPath\".contents.type") = null ]]
