@@ -9,6 +9,8 @@
 
 #include "nix_api_util_config.h"
 
+extern "C" {
+
 nix_c_context * nix_c_context_create()
 {
     return new nix_c_context();
@@ -168,3 +170,5 @@ nix_err nix_set_verbosity(nix_c_context * context, nix_verbosity level)
     }
     NIXC_CATCH_ERRS
 }
+
+} // extern "C"

@@ -24,11 +24,6 @@
 
 namespace nix {
 
-MakeError(SubstError, Error);
-/**
- * denotes a permanent build failure
- */
-MakeError(BuildError, Error);
 MakeError(InvalidPath, Error);
 MakeError(Unsupported, Error);
 MakeError(SubstituteGone, Error);
@@ -612,10 +607,7 @@ public:
      * floating-ca derivations and their dependencies as there's no way to
      * retrieve this information otherwise.
      */
-    virtual void registerDrvOutput(const Realisation & output)
-    {
-        unsupported("registerDrvOutput");
-    }
+    virtual void registerDrvOutput(const Realisation & output) = 0;
 
     virtual void registerDrvOutput(const Realisation & output, CheckSigsFlag checkSigs)
     {
@@ -731,9 +723,19 @@ public:
     };
 
     /**
-     * @return An object to access files in the Nix store.
+     * @return An object to access files in the Nix store, across all
+     * store objects.
      */
     virtual ref<SourceAccessor> getFSAccessor(bool requireValidPath = true) = 0;
+
+    /**
+     * @return An object to access files for a specific store object in
+     * the Nix store.
+     *
+     * @return nullptr if the store doesn't contain an object at the
+     * givine path.
+     */
+    virtual std::shared_ptr<SourceAccessor> getFSAccessor(const StorePath & path, bool requireValidPath = true) = 0;
 
     /**
      * Repair the contents of the given path by redownloading it using

@@ -336,7 +336,7 @@ AttrCursor::AttrCursor(
 AttrKey AttrCursor::getKey()
 {
     if (!parent)
-        return {0, root->state.sEpsilon};
+        return {0, root->state.s.epsilon};
     if (!parent->first->cachedValue) {
         parent->first->cachedValue = root->db->getAttr(parent->first->getKey());
         assert(parent->first->cachedValue);
@@ -724,7 +724,7 @@ bool AttrCursor::isDerivation()
 
 StorePath AttrCursor::forceDerivation()
 {
-    auto aDrvPath = getAttr(root->state.sDrvPath);
+    auto aDrvPath = getAttr(root->state.s.drvPath);
     auto drvPath = root->state.store->parseStorePath(aDrvPath->getString());
     drvPath.requireDerivation();
     if (!root->state.store->isValidPath(drvPath) && !settings.readOnlyMode) {

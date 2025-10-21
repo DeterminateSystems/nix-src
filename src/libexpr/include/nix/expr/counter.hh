@@ -5,7 +5,12 @@
 
 namespace nix {
 
-// Counters are aligned on cache lines to prevent false sharing.
+/**
+ * An atomic counter aligned on a cache line to prevent false sharing.
+ * The counter is only enabled when the `NIX_SHOW_STATS` environment
+ * variable is set. This is to prevent contention on these counters
+ * when multi-threaded evaluation is enabled.
+ */
 struct alignas(64) Counter
 {
     using value_type = uint64_t;

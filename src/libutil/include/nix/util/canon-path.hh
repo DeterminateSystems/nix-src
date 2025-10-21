@@ -276,6 +276,8 @@ inline std::size_t hash_value(const CanonPath & path)
 template<>
 struct std::hash<nix::CanonPath>
 {
+    using is_avalanching = std::true_type;
+
     std::size_t operator()(const nix::CanonPath & path) const noexcept
     {
         return nix::hash_value(path);

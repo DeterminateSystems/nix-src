@@ -240,7 +240,7 @@ static void prim_getContext(EvalState & state, const PosIdx pos, Value ** args, 
             auto list = state.buildList(info.second.outputs.size());
             for (const auto & [i, output] : enumerate(info.second.outputs))
                 (list[i] = state.allocValue())->mkString(output);
-            infoAttrs.alloc(state.sOutputs).mkList(list);
+            infoAttrs.alloc(state.s.outputs).mkList(list);
         }
         attrs.alloc(state.store->printStorePath(info.first)).mkAttrs(infoAttrs);
     }
@@ -321,7 +321,7 @@ static void prim_appendContext(EvalState & state, const PosIdx pos, Value ** arg
             }
         }
 
-        if (auto attr = i.value->attrs()->get(state.sOutputs)) {
+        if (auto attr = i.value->attrs()->get(state.s.outputs)) {
             state.forceList(*attr->value, attr->pos, "while evaluating the `outputs` attribute of a string context");
             if (attr->value->listSize() && !isDerivation(name)) {
                 state

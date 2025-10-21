@@ -138,10 +138,13 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
             auto info = WorkerProto::Serialise<ValidPathInfo>::read(
                 store, WorkerProto::ReadConn{.from = source, .version = 16, .shortStorePaths = true});
 
-            Activity act(
-                *logger, lvlTalkative, actUnknown, fmt("importing path '%s'", store.printStorePath(info.path)));
+            if (!store.isValidPath(info.path)) {
+                Activity act(
+                    *logger, lvlTalkative, actUnknown, fmt("importing path '%s'", store.printStorePath(info.path)));
 
-            store.addToStore(info, source, NoRepair, checkSigs);
+                store.addToStore(info, source, NoRepair, checkSigs);
+            } else
+                source.skip(info.narSize);
 
             res.push_back(info.path);
         }

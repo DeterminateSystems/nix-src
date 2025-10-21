@@ -436,34 +436,35 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
 
         if (build && !drvPaths->empty()) {
             // FIXME: should start building while evaluating.
-            Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", drvPaths->size()));
 
             state->waitForAllPaths();
 
+            // TODO: This filtering of substitutable paths is a temporary workaround until
+            // https://github.com/NixOS/nix/issues/5025 (union stores) is implemented.
+            //
+            // Once union stores are available, this code should be replaced with a proper
+            // union store configuration. Ideally, we'd use a union of multiple destination
+            // stores to preserve the current behavior where different substituters can
+            // cache different check results.
+            //
+            // For now, we skip building derivations whose outputs are already available
+            // via substitution, as `nix flake check` only needs to verify buildability,
+            // not actually produce the outputs.
             auto missing = store->queryMissing(*drvPaths);
+            // Only occurs if `drvPaths` contains a `DerivedPath::Opaque`, which should never happen
+            assert(missing.unknown.empty());
 
-            /* This command doesn't need to actually substitute
-               derivation outputs if they're missing but
-               substitutable. So filter out derivations that are
-               substitutable or already built. */
             std::vector<DerivedPath> toBuild;
-            for (auto & path : *drvPaths) {
-                std::visit(
-                    overloaded{
-                        [&](const DerivedPath::Built & bfd) {
-                            auto drvPathP = std::get_if<DerivedPath::Opaque>(&*bfd.drvPath);
-                            if (!drvPathP || missing.willBuild.contains(drvPathP->path)
-                                || missing.unknown.contains(drvPathP->path))
-                                toBuild.push_back(path);
-                        },
-                        [&](const DerivedPath::Opaque & bo) {
-                            if (!missing.willSubstitute.contains(bo.path))
-                                toBuild.push_back(path);
-                        },
-                    },
-                    path.raw());
+            for (auto & path : missing.willBuild) {
+                toBuild.emplace_back(
+                    DerivedPath::Built{
+                        .drvPath = makeConstantStorePathRef(path),
+                        .outputs = OutputsSpec::All{},
+                    });
             }
 
+            // FIXME: should start building while evaluating.
+            Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", toBuild.size()));
             store->buildPaths(toBuild);
         }
 
@@ -818,7 +819,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                         obj.emplace("shortDescription", *shortDescription);
 
                     if (auto drv = flake_schemas::derivation(leaf))
-                        obj.emplace("derivationName", drv->getAttr(state->sName)->getString());
+                        obj.emplace("derivationName", drv->getAttr(state->s.name)->getString());
 
                     // FIXME: add more stuff
                 },

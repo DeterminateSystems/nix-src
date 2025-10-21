@@ -25,7 +25,7 @@ static void downloadToSink(
     std::string sha256Expected,
     size_t sizeExpected)
 {
-    FileTransferRequest request(url);
+    FileTransferRequest request(parseURL(url));
     Headers headers;
     if (authHeader.has_value())
         headers.push_back({"Authorization", *authHeader});
@@ -69,7 +69,8 @@ static LfsApiInfo getLfsApi(const ParsedURL & url)
 
         args.push_back("--");
         args.push_back("git-lfs-authenticate");
-        args.push_back(url.path);
+        // FIXME %2F encode slashes? Does this command take/accept percent encoding?
+        args.push_back(url.renderPath(/*encode=*/false));
         args.push_back("download");
 
         auto [status, output] = runProgram({.program = "ssh", .args = args});
@@ -179,7 +180,7 @@ Fetch::Fetch(git_repository * repo, git_oid rev)
 
     const auto remoteUrl = lfs::getLfsEndpointUrl(repo);
 
-    this->url = nix::parseURL(nix::fixGitURL(remoteUrl)).canonicalise();
+    this->url = nix::fixGitURL(remoteUrl).canonicalise();
 }
 
 bool Fetch::shouldFetch(const CanonPath & path) const
@@ -207,7 +208,7 @@ std::vector<nlohmann::json> Fetch::fetchUrls(const std::vector<Pointer> & pointe
     auto api = lfs::getLfsApi(this->url);
     auto url = api.endpoint + "/objects/batch";
     const auto & authHeader = api.authHeader;
-    FileTransferRequest request(url);
+    FileTransferRequest request(parseURL(url));
     request.post = true;
     Headers headers;
     if (authHeader.has_value())

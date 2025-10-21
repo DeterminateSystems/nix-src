@@ -226,7 +226,7 @@ Flake readFlake(
         .path = flakePath,
     };
 
-    if (auto description = vInfo.attrs()->get(state.sDescription)) {
+    if (auto description = vInfo.attrs()->get(state.s.description)) {
         expectType(state, nString, *description->value, description->pos);
         flake.description = description->value->c_str();
     }
@@ -247,7 +247,7 @@ Flake readFlake(
 
         if (outputs->value->isLambda() && outputs->value->lambda().fun->hasFormals()) {
             for (auto & formal : outputs->value->lambda().fun->formals->formals) {
-                if (formal.name != state.sSelf)
+                if (formal.name != state.s.self)
                     flake.inputs.emplace(
                         state.symbols[formal.name],
                         FlakeInput{.ref = parseFlakeRef(state.fetchSettings, std::string(state.symbols[formal.name]))});
@@ -299,7 +299,8 @@ Flake readFlake(
     }
 
     for (auto & attr : *vInfo.attrs()) {
-        if (attr.name != state.sDescription && attr.name != sInputs && attr.name != sOutputs && attr.name != sNixConfig)
+        if (attr.name != state.s.description && attr.name != sInputs && attr.name != sOutputs
+            && attr.name != sNixConfig)
             throw Error(
                 "flake '%s' has an unsupported attribute '%s', at %s",
                 resolvedRef,
