@@ -314,6 +314,16 @@ struct CmdNarioList : Command, MixJSON, MixLongListing
             {
                 return makeEmptySourceAccessor();
             }
+
+            std::shared_ptr<SourceAccessor> getFSAccessor(const StorePath & path, bool requireValidPath) override
+            {
+                unsupported("getFSAccessor");
+            }
+
+            void registerDrvOutput(const Realisation & output) override
+            {
+                unsupported("registerDrvOutput");
+            }
         };
 
         auto source{getNarioSource()};

@@ -44,8 +44,7 @@ Symbol SymbolTable::create(std::string_view s)
 
 SymbolStr::SymbolStr(const SymbolStr::Key & key)
 {
-    auto rawSize = sizeof(Value) + key.s.size() + 1;
-    auto size = ((rawSize + SymbolTable::alignment - 1) / SymbolTable::alignment) * SymbolTable::alignment;
+    auto size = SymbolStr::computeSize(key.s);
 
     auto id = key.arena.allocate(size);
 
@@ -55,7 +54,7 @@ SymbolStr::SymbolStr(const SymbolStr::Key & key)
     memcpy(s, key.s.data(), key.s.size());
     s[key.s.size()] = 0;
 
-    v->mkString(s, nullptr);
+    v->mkStringNoCopy(s, nullptr);
 
     this->s = v;
 }

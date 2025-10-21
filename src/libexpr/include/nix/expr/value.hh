@@ -13,6 +13,7 @@
 #include "nix/expr/print-options.hh"
 #include "nix/util/checked-arithmetic.hh"
 
+#include <boost/unordered/unordered_flat_map_fwd.hpp>
 #include <nlohmann/json_fwd.hpp>
 
 namespace nix {
@@ -191,7 +192,7 @@ class ListBuilder
     Value * inlineElems[2] = {nullptr, nullptr};
 public:
     Value ** elems;
-    ListBuilder(EvalState & state, size_t size);
+    ListBuilder(size_t size);
 
     // NOTE: Can be noexcept because we are just copying integral values and
     // raw pointers.
@@ -412,7 +413,7 @@ namespace detail {
 /* Whether to use a specialization of ValueStorage that does bitpacking into
    alignment niches. */
 template<std::size_t ptrSize>
-inline constexpr bool useBitPackedValueStorage = (ptrSize == 8) && (__STDCPP_DEFAULT_NEW_ALIGNMENT__ >= 8);
+inline constexpr bool useBitPackedValueStorage = (ptrSize == 8) && (__STDCPP_DEFAULT_NEW_ALIGNMENT__ >= 16);
 
 } // namespace detail
 
@@ -421,7 +422,8 @@ inline constexpr bool useBitPackedValueStorage = (ptrSize == 8) && (__STDCPP_DEF
  * Packs discriminator bits into the pointer alignment niches.
  */
 template<std::size_t ptrSize>
-class ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptrSize>>> : public detail::ValueBase
+class alignas(16) ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptrSize>>>
+    : public detail::ValueBase
 {
     /* Needs a dependent type name in order for member functions (and
      * potentially ill-formed bit casts) to be SFINAE'd out.
@@ -1010,6 +1012,35 @@ struct Value : public ValueStorage<sizeof(void *)>
 {
     friend std::string showType(const Value & v);
 
+    /**
+     * Empty list constant.
+     *
+     * This is _not_ a singleton. Pointer equality is _not_ sufficient.
+     */
+    static Value vEmptyList;
+
+    /**
+     * `null` constant.
+     *
+     * This is _not_ a singleton. Pointer equality is _not_ sufficient.
+     */
+    static Value vNull;
+
+    /**
+     * `true` constant.
+     *
+     * This is _not_ a singleton. Pointer equality is _not_ sufficient.
+     */
+    static Value vTrue;
+
+    /**
+     * `true` constant.
+     *
+     * This is _not_ a singleton. Pointer equality is _not_ sufficient.
+     */
+    static Value vFalse;
+
+private:
     template<InternalType... discriminator>
     bool isa() const noexcept
     {
@@ -1150,7 +1181,7 @@ public:
         setStorage(b);
     }
 
-    inline void mkString(const char * s, const char ** context = 0) noexcept
+    void mkStringNoCopy(const char * s, const char ** context = 0) noexcept
     {
         setStorage(StringWithContext{.c_str = s, .context = context});
     }
@@ -1162,7 +1193,6 @@ public:
     void mkStringMove(const char * s, const NixStringContext & context);
 
     void mkPath(const SourcePath & path);
-    void mkPath(std::string_view path);
 
     inline void mkPath(SourceAccessor * accessor, const char * path) noexcept
     {
@@ -1183,12 +1213,20 @@ public:
 
     void mkList(const ListBuilder & builder) noexcept
     {
-        if (builder.size == 1)
+        switch (builder.size) {
+        case 0:
+            setStorage(List{.size = 0, .elems = nullptr});
+            break;
+        case 1:
             setStorage(std::array<Value *, 2>{builder.inlineElems[0], nullptr});
-        else if (builder.size == 2)
+            break;
+        case 2:
             setStorage(std::array<Value *, 2>{builder.inlineElems[0], builder.inlineElems[1]});
-        else
+            break;
+        default:
             setStorage(List{.size = builder.size, .elems = builder.elems});
+            break;
+        }
     }
 
     inline void mkThunk(Env * e, Expr * ex) noexcept
@@ -1339,7 +1377,7 @@ public:
 };
 
 typedef std::vector<Value *, traceable_allocator<Value *>> ValueVector;
-typedef std::unordered_map<
+typedef boost::unordered_flat_map<
     Symbol,
     Value *,
     std::hash<Symbol>,

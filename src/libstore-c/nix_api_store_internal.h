@@ -3,6 +3,8 @@
 #include "nix/store/store-api.hh"
 #include "nix/store/derivations.hh"
 
+extern "C" {
+
 struct Store
 {
     nix::ref<nix::Store> ptr;
@@ -18,5 +20,7 @@ struct nix_derivation
     nix::Derivation drv;
     Store * store;
 };
+
+} // extern "C"
 
 #endif

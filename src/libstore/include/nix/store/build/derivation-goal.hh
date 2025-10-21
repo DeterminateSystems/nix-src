@@ -14,9 +14,6 @@ namespace nix {
 
 using std::map;
 
-/** Used internally */
-void runPostBuildHook(Store & store, Logger & logger, const StorePath & drvPath, const StorePathSet & outputPaths);
-
 /**
  * A goal for realising a single output of a derivation. Various sorts of
  * fetching (which will be done by other goal types) is tried, and if none of
@@ -102,13 +99,9 @@ private:
 
     Co repairClosure();
 
-    /**
-     * @param builtOutput Must be set if `status` is successful.
-     */
-    Done done(
-        BuildResult::Status status,
-        std::optional<Realisation> builtOutput = std::nullopt,
-        std::optional<Error> ex = {});
+    Done doneSuccess(BuildResult::Success::Status status, Realisation builtOutput);
+
+    Done doneFailure(BuildError ex);
 };
 
 } // namespace nix

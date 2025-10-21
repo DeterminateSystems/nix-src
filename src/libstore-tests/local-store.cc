@@ -36,7 +36,7 @@ TEST(LocalStore, constructConfig_rootPath)
 TEST(LocalStore, constructConfig_to_string)
 {
     LocalStoreConfig config{"local", "", {}};
-    EXPECT_EQ(config.getReference().render(), "local");
+    EXPECT_EQ(config.getReference().to_string(), "local");
 }
 
 } // namespace nix

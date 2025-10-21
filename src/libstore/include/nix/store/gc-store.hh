@@ -1,9 +1,9 @@
 #pragma once
 ///@file
 
-#include <unordered_set>
-
 #include "nix/store/store-api.hh"
+#include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/unordered/unordered_flat_set.hpp>
 
 namespace nix {
 
@@ -11,7 +11,11 @@ namespace nix {
 // several root types.
 using GcRootInfo = std::string;
 
-typedef std::unordered_map<StorePath, std::unordered_set<GcRootInfo>> Roots;
+typedef boost::unordered_flat_map<
+    StorePath,
+    boost::unordered_flat_set<GcRootInfo, StringViewHash, std::equal_to<>>,
+    std::hash<StorePath>>
+    Roots;
 
 struct GCOptions
 {
