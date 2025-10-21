@@ -101,23 +101,26 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
 
             auto references = CommonProto::Serialise<StorePathSet>::read(store, CommonProto::ReadConn{.from = source});
             auto deriver = readString(source);
-            auto narHash = hashString(HashAlgorithm::SHA256, saved.s);
-
-            ValidPathInfo info{path, narHash};
-            if (deriver != "")
-                info.deriver = store.parseStorePath(deriver);
-            info.references = references;
-            info.narSize = saved.s.size();
 
             // Ignore optional legacy signature.
             if (readInt(source) == 1)
                 readString(source);
 
-            // Can't use underlying source, which would have been exhausted.
-            auto source2 = StringSource(saved.s);
-            store.addToStore(info, source2, NoRepair, checkSigs);
+            if (!store.isValidPath(path)) {
+                auto narHash = hashString(HashAlgorithm::SHA256, saved.s);
 
-            res.push_back(info.path);
+                ValidPathInfo info{path, narHash};
+                if (deriver != "")
+                    info.deriver = store.parseStorePath(deriver);
+                info.references = references;
+                info.narSize = saved.s.size();
+
+                // Can't use underlying source, which would have been exhausted.
+                auto source2 = StringSource(saved.s);
+                store.addToStore(info, source2, NoRepair, checkSigs);
+            }
+
+            res.push_back(path);
 
             auto n = readNum<uint64_t>(source);
             if (n == 0)
