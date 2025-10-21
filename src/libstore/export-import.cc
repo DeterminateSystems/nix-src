@@ -84,11 +84,15 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
         /* Empty version 1 nario, nothing to do. */
         break;
 
-    case 1:
+    case 1: {
+        /* Reuse a string buffer to avoid kernel overhead allocating
+           memory for large strings. */
+        StringSink saved;
+
         /* Non-empty version 1 nario. */
         while (true) {
             /* Extract the NAR from the source. */
-            StringSink saved;
+            saved.s.clear();
             TeeSource tee{source, saved};
             NullFileSystemObjectSink ether;
             parseDump(ether, tee);
@@ -129,6 +133,7 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
                 throw Error("input doesn't look like a nario");
         }
         break;
+    }
 
     case exportMagicV2:
         while (true) {
