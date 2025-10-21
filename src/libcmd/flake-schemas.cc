@@ -2,6 +2,7 @@
 #include "nix/expr/eval-settings.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/memory-source-accessor.hh"
+#include "nix/util/mounted-source-accessor.hh"
 
 namespace nix::flake_schemas {
 
@@ -19,17 +20,18 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
 #include "builtin-flake-schemas.nix.gen.hh"
     );
 
-    // FIXME: remove this when we have lazy trees.
-    auto storePath = fetchToStore(state.fetchSettings, *state.store, {accessor}, FetchMode::Copy);
-    state.allowPath(storePath);
+    auto [storePath, narHash] = state.store->computeStorePath("source", {accessor});
+
+    state.allowPath(storePath); // FIXME: should just whitelist the entire virtual store
+
+    state.storeFS->mount(CanonPath(state.store->printStorePath(storePath)), accessor);
 
     // Construct a dummy flakeref.
     auto flakeRef = parseFlakeRef(
         fetchSettings,
-        fmt("tarball+https://builtin-flake-schemas?narHash=%s",
-            state.store->queryPathInfo(storePath)->narHash.to_string(HashFormat::SRI, true)));
+        fmt("tarball+https://builtin-flake-schemas?narHash=%s", narHash.to_string(HashFormat::SRI, true)));
 
-    auto flake = readFlake(state, flakeRef, flakeRef, flakeRef, state.rootPath(state.store->toRealPath(storePath)), {});
+    auto flake = readFlake(state, flakeRef, flakeRef, flakeRef, state.storePath(storePath), {});
 
     return lockFlake(flakeSettings, state, flakeRef, {}, flake);
 }
