@@ -290,9 +290,14 @@ void parseCmdLine(
     LegacyArgs(programName, parseArg).parseCmdline(args);
 }
 
+std::string version()
+{
+    return fmt("(Determinate Nix %s) %s", determinateNixVersion, nixVersion);
+}
+
 void printVersion(const std::string & programName)
 {
-    std::cout << fmt("%s (Determinate Nix %s) %s", programName, determinateNixVersion, nixVersion) << std::endl;
+    std::cout << fmt("%s %s", programName, version()) << std::endl;
     if (verbosity > lvlInfo) {
         Strings cfg;
 #if NIX_USE_BOEHMGC
