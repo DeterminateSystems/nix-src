@@ -55,8 +55,6 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 
 * Proactively cache more flake inputs and fetches by @edolstra in [DeterminateSystems/nix-src#93](https://github.com/DeterminateSystems/nix-src/pull/93)
 
-* Fix the link to `builders-use-substitutes` documentation for `builders` by @lucperkins in [DeterminateSystems/nix-src#102](https://github.com/DeterminateSystems/nix-src/pull/102)
-
 * Improve caching of inputs in dry-run mode by @edolstra in [DeterminateSystems/nix-src#98](https://github.com/DeterminateSystems/nix-src/pull/98)
 
 <!-- Determinate Nix version 3.6.6 -->
@@ -64,8 +62,6 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 <!-- Determinate Nix version 3.6.7 -->
 
 <!-- Determinate Nix version 3.6.8 -->
-
-* Fix fetchToStore() caching with --impure, improve testing by @edolstra in [DeterminateSystems/nix-src#117](https://github.com/DeterminateSystems/nix-src/pull/117)
 
 * Add lazy-locks setting by @edolstra in [DeterminateSystems/nix-src#113](https://github.com/DeterminateSystems/nix-src/pull/113)
 
@@ -75,20 +71,13 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 
 <!-- Determinate Nix version 3.8.0 -->
 
-* nix flake check: Skip substitutable derivations by @edolstra in [DeterminateSystems/nix-src#134](https://github.com/DeterminateSystems/nix-src/pull/134)
-
 <!-- Determinate Nix version 3.8.1 -->
-
-* Address ifdef problem with macOS/BSD sandboxing by @gustavderdrache in [DeterminateSystems/nix-src#142](https://github.com/DeterminateSystems/nix-src/pull/142)
 
 <!-- Determinate Nix version 3.8.2 -->
 
 * ci: don't run the full test suite for x86_64-darwin by @grahamc in [DeterminateSystems/nix-src#144](https://github.com/DeterminateSystems/nix-src/pull/144)
 
 <!-- Determinate Nix version 3.8.3 -->
-
-* Add an `external-builders` experimental feature [DeterminateSystems/nix-src#141](https://github.com/DeterminateSystems/nix-src/pull/141),
-[DeterminateSystems/nix-src#78](https://github.com/DeterminateSystems/nix-src/pull/78)
 
 <!-- Determinate Nix version 3.8.4 -->
 
@@ -133,24 +122,10 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 
 <!-- Determinate Nix version 3.12.0 -->
 
-* nix flake clone: Support all input types by @edolstra in [DeterminateSystems/nix-src#229](https://github.com/DeterminateSystems/nix-src/pull/229)
+* `nix flake clone` supports arbitrary input types. [DeterminateSystems/nix-src#229](https://github.com/DeterminateSystems/nix-src/pull/229)
 
-* printValueAsJSON(): Don't wait for futures by @edolstra in [DeterminateSystems/nix-src#230](https://github.com/DeterminateSystems/nix-src/pull/230)
+* A new command `nix nario` that replaces `nix-store --export|--export`. It also has a new file format (`--format 2`) that supports store path attributes such as signatures, and that can be imported more efficiently.
+[DeterminateSystems/nix-src#215](https://github.com/DeterminateSystems/nix-src/pull/215)
 
-* builtins.parallel: Register values as GC roots by @edolstra in [DeterminateSystems/nix-src#231](https://github.com/DeterminateSystems/nix-src/pull/231)
+* Determinate Nix prints the Nix version when using `-vv` or higher verbosity. [DeterminateSystems/nix-src#237](https://github.com/DeterminateSystems/nix-src/pull/237)
 
-* Add `nix nario` command  by @edolstra in [DeterminateSystems/nix-src#215](https://github.com/DeterminateSystems/nix-src/pull/215)
-
-* `nix nario list` improvements by @edolstra in [DeterminateSystems/nix-src#232](https://github.com/DeterminateSystems/nix-src/pull/232)
-
-* More `nix nario list` improvements by @edolstra in [DeterminateSystems/nix-src#234](https://github.com/DeterminateSystems/nix-src/pull/234)
-
-* importPaths(): Seek over paths that are already in the store by @edolstra in [DeterminateSystems/nix-src#236](https://github.com/DeterminateSystems/nix-src/pull/236)
-
-* Sync with upstream 2.32.1 by @edolstra in [DeterminateSystems/nix-src#226](https://github.com/DeterminateSystems/nix-src/pull/226)
-
-* Print the Nix version when using `-vv` (or more) verbosity by @cole-h in [DeterminateSystems/nix-src#237](https://github.com/DeterminateSystems/nix-src/pull/237)
-
-* nario v1 optimizations by @edolstra in [DeterminateSystems/nix-src#238](https://github.com/DeterminateSystems/nix-src/pull/238)
-
-* nix flake check: Fix output rendering by @edolstra in [DeterminateSystems/nix-src#239](https://github.com/DeterminateSystems/nix-src/pull/239)
