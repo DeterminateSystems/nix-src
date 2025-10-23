@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.31 and Determinate Nix 3.11.3.<!-- differences -->
+This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.12.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -130,3 +130,27 @@ This section lists the differences between upstream Nix 2.31 and Determinate Nix
 
 <!-- Determinate Nix version 3.11.3 -->
 
+
+<!-- Determinate Nix version 3.12.0 -->
+
+* nix flake clone: Support all input types by @edolstra in [DeterminateSystems/nix-src#229](https://github.com/DeterminateSystems/nix-src/pull/229)
+
+* printValueAsJSON(): Don't wait for futures by @edolstra in [DeterminateSystems/nix-src#230](https://github.com/DeterminateSystems/nix-src/pull/230)
+
+* builtins.parallel: Register values as GC roots by @edolstra in [DeterminateSystems/nix-src#231](https://github.com/DeterminateSystems/nix-src/pull/231)
+
+* Add `nix nario` command  by @edolstra in [DeterminateSystems/nix-src#215](https://github.com/DeterminateSystems/nix-src/pull/215)
+
+* `nix nario list` improvements by @edolstra in [DeterminateSystems/nix-src#232](https://github.com/DeterminateSystems/nix-src/pull/232)
+
+* More `nix nario list` improvements by @edolstra in [DeterminateSystems/nix-src#234](https://github.com/DeterminateSystems/nix-src/pull/234)
+
+* importPaths(): Seek over paths that are already in the store by @edolstra in [DeterminateSystems/nix-src#236](https://github.com/DeterminateSystems/nix-src/pull/236)
+
+* Sync with upstream 2.32.1 by @edolstra in [DeterminateSystems/nix-src#226](https://github.com/DeterminateSystems/nix-src/pull/226)
+
+* Print the Nix version when using `-vv` (or more) verbosity by @cole-h in [DeterminateSystems/nix-src#237](https://github.com/DeterminateSystems/nix-src/pull/237)
+
+* nario v1 optimizations by @edolstra in [DeterminateSystems/nix-src#238](https://github.com/DeterminateSystems/nix-src/pull/238)
+
+* nix flake check: Fix output rendering by @edolstra in [DeterminateSystems/nix-src#239](https://github.com/DeterminateSystems/nix-src/pull/239)
