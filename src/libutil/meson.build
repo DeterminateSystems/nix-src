@@ -57,7 +57,12 @@ deps_private += blake3
 
 boost = dependency(
   'boost',
-  modules : [ 'context', 'coroutine', 'iostreams', 'url' ],
+  modules : [
+    'context',
+    'coroutine',
+    'iostreams',
+    'url',
+  ],
   include_type : 'system',
   version : '>=1.82.0',
 )
@@ -113,6 +118,7 @@ config_priv_h = configure_file(
 )
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/asan-options')
 
 sources = [ config_priv_h ] + files(
   'archive.cc',
@@ -192,6 +198,7 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixutil',
   sources,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

@@ -120,7 +120,7 @@ public:
      * Fetch the entire input into the Nix store, returning the
      * location in the Nix store and the locked input.
      */
-    std::pair<StorePath, Input> fetchToStore(ref<Store> store) const;
+    std::tuple<StorePath, ref<SourceAccessor>, Input> fetchToStore(ref<Store> store) const;
 
     /**
      * Check the locking attributes in `result` against
@@ -150,7 +150,7 @@ public:
 
     Input applyOverrides(std::optional<std::string> ref, std::optional<Hash> rev) const;
 
-    void clone(const Path & destDir) const;
+    void clone(ref<Store> store, const std::filesystem::path & destDir) const;
 
     std::optional<std::filesystem::path> getSourcePath() const;
 
@@ -223,7 +223,7 @@ struct InputScheme
 
     virtual Input applyOverrides(const Input & input, std::optional<std::string> ref, std::optional<Hash> rev) const;
 
-    virtual void clone(const Input & input, const Path & destDir) const;
+    virtual void clone(ref<Store> store, const Input & input, const std::filesystem::path & destDir) const;
 
     virtual std::optional<std::filesystem::path> getSourcePath(const Input & input) const;
 

@@ -15,6 +15,7 @@
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/util/archive.hh"
+#include "nix/util/mounted-source-accessor.hh"
 
 #include <regex>
 #include <string.h>
@@ -163,8 +164,8 @@ struct GitInputScheme : InputScheme
 {
     std::optional<Input> inputFromURL(const Settings & settings, const ParsedURL & url, bool requireTree) const override
     {
-        if (url.scheme != "git" && url.scheme != "git+http" && url.scheme != "git+https" && url.scheme != "git+ssh"
-            && url.scheme != "git+file")
+        auto parsedScheme = parseUrlScheme(url.scheme);
+        if (parsedScheme.application != "git")
             return {};
 
         auto url2(url);
@@ -233,9 +234,7 @@ struct GitInputScheme : InputScheme
 
         Input input{settings};
         input.attrs = attrs;
-        auto url = fixGitURL(getStrAttr(attrs, "url"));
-        parseURL(url);
-        input.attrs["url"] = url;
+        input.attrs["url"] = fixGitURL(getStrAttr(attrs, "url")).to_string();
         getShallowAttr(input);
         getSubmodulesAttr(input);
         getAllRefsAttr(input);
@@ -282,7 +281,7 @@ struct GitInputScheme : InputScheme
         return res;
     }
 
-    void clone(const Input & input, const Path & destDir) const override
+    void clone(ref<Store> store, const Input & input, const std::filesystem::path & destDir) const override
     {
         auto repoInfo = getRepoInfo(input);
 
@@ -406,10 +405,10 @@ struct GitInputScheme : InputScheme
         {
             if (workdirInfo.isDirty) {
                 if (!settings.allowDirty)
-                    throw Error("Git tree '%s' is dirty", locationToArg());
+                    throw Error("Git tree '%s' has uncommitted changes", locationToArg());
 
                 if (settings.warnDirty)
-                    warn("Git tree '%s' is dirty", locationToArg());
+                    warn("Git tree '%s' has uncommitted changes", locationToArg());
             }
         }
 
@@ -464,8 +463,8 @@ struct GitInputScheme : InputScheme
 
         // Why are we checking for bare repository?
         // well if it's a bare repository we want to force a git fetch rather than copying the folder
-        bool isBareRepository = url.scheme == "file" && pathExists(url.path) && !pathExists(url.path + "/.git");
-        //
+        auto isBareRepository = [](PathView path) { return pathExists(path) && !pathExists(path + "/.git"); };
+
         // FIXME: here we turn a possibly relative path into an absolute path.
         // This allows relative git flake inputs to be resolved against the
         // **current working directory** (as in POSIX), which tends to work out
@@ -474,8 +473,10 @@ struct GitInputScheme : InputScheme
         //
         // See: https://discourse.nixos.org/t/57783 and #9708
         //
-        if (url.scheme == "file" && !forceHttp && !isBareRepository) {
-            if (!isAbsolute(url.path)) {
+        if (url.scheme == "file" && !forceHttp && !isBareRepository(renderUrlPathEnsureLegal(url.path))) {
+            auto path = renderUrlPathEnsureLegal(url.path);
+
+            if (!isAbsolute(path)) {
                 warn(
                     "Fetching Git repository '%s', which uses a path relative to the current directory. "
                     "This is not supported and will stop working in a future release. "
@@ -485,10 +486,10 @@ struct GitInputScheme : InputScheme
 
             // If we don't check here for the path existence, then we can give libgit2 any directory
             // and it will initialize them as git directories.
-            if (!pathExists(url.path)) {
-                throw Error("The path '%s' does not exist.", url.path);
+            if (!pathExists(path)) {
+                throw Error("The path '%s' does not exist.", path);
             }
-            repoInfo.location = std::filesystem::absolute(url.path);
+            repoInfo.location = std::filesystem::absolute(path);
         } else {
             if (url.scheme == "file")
                 /* Query parameters are meaningless for file://, but
@@ -892,8 +893,7 @@ struct GitInputScheme : InputScheme
             return makeFingerprint(*rev);
         else {
             auto repoInfo = getRepoInfo(input);
-            if (auto repoPath = repoInfo.getPath();
-                repoPath && repoInfo.workdirInfo.headRev && repoInfo.workdirInfo.submodules.empty()) {
+            if (auto repoPath = repoInfo.getPath(); repoPath && repoInfo.workdirInfo.submodules.empty()) {
                 /* Calculate a fingerprint that takes into account the
                    deleted and modified/added files. */
                 HashSink hashSink{HashAlgorithm::SHA512};
@@ -906,7 +906,7 @@ struct GitInputScheme : InputScheme
                     writeString("deleted:", hashSink);
                     writeString(file.abs(), hashSink);
                 }
-                return makeFingerprint(*repoInfo.workdirInfo.headRev)
+                return makeFingerprint(repoInfo.workdirInfo.headRev.value_or(nullRev))
                        + ";d=" + hashSink.finish().hash.to_string(HashFormat::Base16, false);
             }
             return std::nullopt;

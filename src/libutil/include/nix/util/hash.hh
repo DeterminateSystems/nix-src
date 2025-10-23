@@ -6,6 +6,8 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/file-system.hh"
 
+#include <nlohmann/json_fwd.hpp>
+
 namespace nix {
 
 MakeError(BadHash, Error);
@@ -89,6 +91,15 @@ struct Hash
      * The type is passed in to disambiguate.
      */
     static Hash parseNonSRIUnprefixed(std::string_view s, HashAlgorithm algo);
+
+    /**
+     * Like `parseNonSRIUnprefixed`, but the hash format has been
+     * explicitly given.
+     *
+     * @param explicitFormat cannot be SRI, but must be one of the
+     * "bases".
+     */
+    static Hash parseExplicitFormatUnprefixed(std::string_view s, HashAlgorithm algo, HashFormat explicitFormat);
 
     static Hash parseSRI(std::string_view original);
 
@@ -190,6 +201,11 @@ std::optional<HashAlgorithm> parseHashAlgoOpt(std::string_view s);
  * And the reverse.
  */
 std::string_view printHashAlgo(HashAlgorithm ha);
+
+/**
+ * Write a JSON serialisation of the format `{"algo":"<sha1|...>","base16":"<hex>"}`.
+ */
+void to_json(nlohmann::json & json, const Hash & hash);
 
 struct AbstractHashSink : virtual Sink
 {

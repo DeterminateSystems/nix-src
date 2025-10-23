@@ -26,7 +26,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
     pname = "shell-for-" + attrs.pname;
 
     # Remove the version suffix to avoid unnecessary attempts to substitute in nix develop
-    version = lib.fileContents ../.version;
+    version = lib.fileContents ../.version-determinate;
     name = attrs.pname;
 
     installFlags = "sysconfdir=$(out)/etc";
@@ -118,6 +118,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
         modular.pre-commit.settings.package
         (pkgs.writeScriptBin "pre-commit-hooks-install" modular.pre-commit.settings.installationScript)
         pkgs.buildPackages.nixfmt-rfc-style
+        pkgs.buildPackages.shellcheck
         pkgs.buildPackages.gdb
       ]
       ++ lib.optional (stdenv.cc.isClang && stdenv.hostPlatform == stdenv.buildPlatform) (

@@ -132,6 +132,11 @@ static void parseContents(CreateRegularFileSink & sink, Source & source)
 
     sink.preallocateContents(size);
 
+    if (sink.skipContents) {
+        source.skip(size + (size % 8 ? 8 - (size % 8) : 0));
+        return;
+    }
+
     uint64_t left = size;
     std::array<char, 65536> buf;
 
@@ -166,7 +171,7 @@ static void parse(FileSystemObjectSink & sink, Source & source, const CanonPath 
     auto expectTag = [&](std::string_view expected) {
         auto tag = getString();
         if (tag != expected)
-            throw badArchive("expected tag '%s', got '%s'", expected, tag);
+            throw badArchive("expected tag '%s', got '%s'", expected, tag.substr(0, 1024));
     };
 
     expectTag("(");
@@ -187,8 +192,10 @@ static void parse(FileSystemObjectSink & sink, Source & source, const CanonPath 
                 tag = getString();
             }
 
-            if (tag == "contents")
-                parseContents(crf, source);
+            if (tag != "contents")
+                throw badArchive("expected tag 'contents', got '%s'", tag);
+
+            parseContents(crf, source);
 
             expectTag(")");
         });

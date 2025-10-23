@@ -121,7 +121,7 @@ public:
         std::ostringstream oss;
         showErrorInfo(oss, ei, loggerSettings.showTrace.get());
 
-        log(ei.level, toView(oss));
+        log(ei.level, oss.view());
     }
 
     void startActivity(
@@ -334,6 +334,16 @@ struct JSONLogger : Logger
         json["id"] = act;
         json["type"] = type;
         addFields(json, fields);
+        write(json);
+    }
+
+    void result(ActivityId act, ResultType type, const nlohmann::json & j) override
+    {
+        nlohmann::json json;
+        json["action"] = "result";
+        json["id"] = act;
+        json["type"] = type;
+        json["payload"] = j;
         write(json);
     }
 };

@@ -74,6 +74,7 @@ UnresolvedApp InstallableValue::toApp(EvalState & state)
                 std::visit(
                     overloaded{
                         [&](const NixStringContextElem::DrvDeep & d) -> DerivedPath {
+                            state.waitForPath(d.drvPath);
                             /* We want all outputs of the drv */
                             return DerivedPath::Built{
                                 .drvPath = makeConstantStorePathRef(d.drvPath),
@@ -81,6 +82,7 @@ UnresolvedApp InstallableValue::toApp(EvalState & state)
                             };
                         },
                         [&](const NixStringContextElem::Built & b) -> DerivedPath {
+                            state.waitForPath(*b.drvPath);
                             return DerivedPath::Built{
                                 .drvPath = b.drvPath,
                                 .outputs = OutputsSpec::Names{b.output},
@@ -90,6 +92,9 @@ UnresolvedApp InstallableValue::toApp(EvalState & state)
                             return DerivedPath::Opaque{
                                 .path = o.path,
                             };
+                        },
+                        [&](const NixStringContextElem::Path & p) -> DerivedPath {
+                            throw Error("'program' attribute of an 'app' output cannot have no context");
                         },
                     },
                     c.raw));
@@ -103,11 +108,11 @@ UnresolvedApp InstallableValue::toApp(EvalState & state)
 
     else if (type == "derivation") {
         auto drvPath = cursor->forceDerivation();
-        auto outPath = cursor->getAttr(state.sOutPath)->getString();
-        auto outputName = cursor->getAttr(state.sOutputName)->getString();
-        auto name = cursor->getAttr(state.sName)->getString();
+        auto outPath = cursor->getAttr(state.s.outPath)->getString();
+        auto outputName = cursor->getAttr(state.s.outputName)->getString();
+        auto name = cursor->getAttr(state.s.name)->getString();
         auto aPname = cursor->maybeGetAttr("pname");
-        auto aMeta = cursor->maybeGetAttr(state.sMeta);
+        auto aMeta = cursor->maybeGetAttr(state.s.meta);
         auto aMainProgram = aMeta ? aMeta->maybeGetAttr("mainProgram") : nullptr;
         auto mainProgram = aMainProgram ? aMainProgram->getString() : aPname ? aPname->getString() : DrvName(name).name;
         auto program = outPath + "/bin/" + mainProgram;

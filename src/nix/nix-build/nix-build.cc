@@ -285,10 +285,10 @@ static void main_nix_build(int argc, char ** argv)
                         execArgs,
                         interpreter,
                         escapeShellArgAlways(script),
-                        toView(joined));
+                        joined.view());
             } else {
                 envCommand =
-                    fmt("exec %1% %2% %3% %4%", execArgs, interpreter, escapeShellArgAlways(script), toView(joined));
+                    fmt("exec %1% %2% %3% %4%", execArgs, interpreter, escapeShellArgAlways(script), joined.view());
             }
         }
 
@@ -451,7 +451,9 @@ static void main_nix_build(int argc, char ** argv)
             throw UsageError("nix-shell requires a single derivation");
 
         auto & packageInfo = drvs.front();
-        auto drv = evalStore->derivationFromPath(packageInfo.requireDrvPath());
+        auto drvPath = packageInfo.requireDrvPath();
+        state->waitForPath(drvPath);
+        auto drv = evalStore->derivationFromPath(drvPath);
 
         std::vector<DerivedPath> pathsToBuild;
         RealisedPath::Set pathsToCopy;
@@ -475,6 +477,7 @@ static void main_nix_build(int argc, char ** argv)
                     throw Error("the 'bashInteractive' attribute in <nixpkgs> did not evaluate to a derivation");
 
                 auto bashDrv = drv->requireDrvPath();
+                state->waitForPath(bashDrv);
                 pathsToBuild.push_back(
                     DerivedPath::Built{
                         .drvPath = makeConstantStorePathRef(bashDrv),
@@ -683,6 +686,7 @@ static void main_nix_build(int argc, char ** argv)
 
         for (auto & packageInfo : drvs) {
             auto drvPath = packageInfo.requireDrvPath();
+            state->waitForPath(drvPath);
 
             auto outputName = packageInfo.queryOutputName();
             if (outputName == "")

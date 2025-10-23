@@ -125,11 +125,8 @@ void BinaryCacheStore::writeNarInfo(ref<NarInfo> narInfo)
 
     upsertFile(narInfoFile, narInfo->to_string(*this), "text/x-nix-narinfo");
 
-    {
-        auto state_(state.lock());
-        state_->pathInfoCache.upsert(
-            std::string(narInfo->path.to_string()), PathInfoCacheValue{.value = std::shared_ptr<NarInfo>(narInfo)});
-    }
+    pathInfoCache->lock()->upsert(
+        std::string(narInfo->path.to_string()), PathInfoCacheValue{.value = std::shared_ptr<NarInfo>(narInfo)});
 
     if (diskCache)
         diskCache->upsertNarInfo(
@@ -369,7 +366,7 @@ StorePath BinaryCacheStore::addToStoreFromDump(
                repair,
                CheckSigs,
                [&](HashResult nar) {
-                   ValidPathInfo info{
+                   auto info = ValidPathInfo::makeFromCA(
                        *this,
                        name,
                        ContentAddressWithReferences::fromParts(
@@ -381,8 +378,7 @@ StorePath BinaryCacheStore::addToStoreFromDump(
                                // without modulus
                                .self = false,
                            }),
-                       nar.hash,
-                   };
+                       nar.hash);
                    info.narSize = nar.numBytesDigested;
                    return info;
                })
@@ -487,7 +483,7 @@ StorePath BinaryCacheStore::addToStore(
                repair,
                CheckSigs,
                [&](HashResult nar) {
-                   ValidPathInfo info{
+                   auto info = ValidPathInfo::makeFromCA(
                        *this,
                        name,
                        ContentAddressWithReferences::fromParts(
@@ -499,8 +495,7 @@ StorePath BinaryCacheStore::addToStore(
                                // without modulus
                                .self = false,
                            }),
-                       nar.hash,
-                   };
+                       nar.hash);
                    info.narSize = nar.numBytesDigested;
                    return info;
                })
@@ -520,8 +515,14 @@ void BinaryCacheStore::queryRealisationUncached(
             if (!data)
                 return (*callbackPtr)({});
 
-            auto realisation = Realisation::fromJSON(nlohmann::json::parse(*data), outputInfoFilePath);
-            return (*callbackPtr)(std::make_shared<const Realisation>(realisation));
+            std::shared_ptr<const Realisation> realisation;
+            try {
+                realisation = std::make_shared<const Realisation>(nlohmann::json::parse(*data));
+            } catch (Error & e) {
+                e.addTrace({}, "while parsing file '%s' as a realisation", outputInfoFilePath);
+                throw;
+            }
+            return (*callbackPtr)(std::move(realisation));
         } catch (...) {
             callbackPtr->rethrow();
         }
@@ -535,12 +536,22 @@ void BinaryCacheStore::registerDrvOutput(const Realisation & info)
     if (diskCache)
         diskCache->upsertRealisation(config.getReference().render(/*FIXME withParams=*/false), info);
     auto filePath = realisationsPrefix + "/" + info.id.to_string() + ".doi";
-    upsertFile(filePath, info.toJSON().dump(), "application/json");
+    upsertFile(filePath, static_cast<nlohmann::json>(info).dump(), "application/json");
+}
+
+ref<RemoteFSAccessor> BinaryCacheStore::getRemoteFSAccessor(bool requireValidPath)
+{
+    return make_ref<RemoteFSAccessor>(ref<Store>(shared_from_this()), requireValidPath, config.localNarCache);
 }
 
 ref<SourceAccessor> BinaryCacheStore::getFSAccessor(bool requireValidPath)
 {
-    return make_ref<RemoteFSAccessor>(ref<Store>(shared_from_this()), requireValidPath, config.localNarCache);
+    return getRemoteFSAccessor(requireValidPath);
+}
+
+std::shared_ptr<SourceAccessor> BinaryCacheStore::getFSAccessor(const StorePath & storePath, bool requireValidPath)
+{
+    return getRemoteFSAccessor(requireValidPath)->accessObject(storePath);
 }
 
 void BinaryCacheStore::addSignatures(const StorePath & storePath, const StringSet & sigs)

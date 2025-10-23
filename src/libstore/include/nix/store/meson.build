@@ -10,11 +10,14 @@ config_pub_h = configure_file(
 )
 
 headers = [ config_pub_h ] + files(
+  'async-path-writer.hh',
+  'aws-creds.hh',
   'binary-cache-store.hh',
   'build-result.hh',
   'build/derivation-builder.hh',
   'build/derivation-building-goal.hh',
   'build/derivation-building-misc.hh',
+  'build/derivation-env-desugar.hh',
   'build/derivation-goal.hh',
   'build/derivation-trampoline-goal.hh',
   'build/drv-output-substitution-goal.hh',
@@ -33,6 +36,9 @@ headers = [ config_pub_h ] + files(
   'derived-path-map.hh',
   'derived-path.hh',
   'downstream-placeholder.hh',
+  'dummy-store-impl.hh',
+  'dummy-store.hh',
+  'export-import.hh',
   'filetransfer.hh',
   'gc-store.hh',
   'globals.hh',
@@ -69,6 +75,7 @@ headers = [ config_pub_h ] + files(
   'remote-store.hh',
   'restricted-store.hh',
   's3-binary-cache-store.hh',
+  's3-url.hh',
   's3.hh',
   'serve-protocol-connection.hh',
   'serve-protocol-impl.hh',

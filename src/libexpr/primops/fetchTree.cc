@@ -10,6 +10,7 @@
 #include "nix/util/url.hh"
 #include "nix/expr/value-to-json.hh"
 #include "nix/fetchers/fetch-to-store.hh"
+#include "nix/fetchers/input-cache.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -29,7 +30,7 @@ void emitTreeAttrs(
 {
     auto attrs = state.buildBindings(100);
 
-    state.mkStorePathString(storePath, attrs.alloc(state.sOutPath));
+    state.mkStorePathString(storePath, attrs.alloc(state.s.outPath));
 
     // FIXME: support arbitrary input attributes.
 
@@ -95,7 +96,7 @@ static void fetchTree(
 
         fetchers::Attrs attrs;
 
-        if (auto aType = args[0]->attrs()->get(state.sType)) {
+        if (auto aType = args[0]->attrs()->get(state.s.type)) {
             if (type)
                 state.error<EvalError>("unexpected argument 'type'").atPos(pos).debugThrow();
             type = state.forceStringNoCtx(
@@ -106,14 +107,14 @@ static void fetchTree(
         attrs.emplace("type", type.value());
 
         for (auto & attr : *args[0]->attrs()) {
-            if (attr.name == state.sType)
+            if (attr.name == state.s.type)
                 continue;
             state.forceValue(*attr.value, attr.pos);
             if (attr.value->type() == nPath || attr.value->type() == nString) {
                 auto s = state.coerceToString(attr.pos, *attr.value, context, "", false, false).toOwned();
                 attrs.emplace(
                     state.symbols[attr.name],
-                    params.isFetchGit && state.symbols[attr.name] == "url" ? fixGitURL(s) : s);
+                    params.isFetchGit && state.symbols[attr.name] == "url" ? fixGitURL(s).to_string() : s);
             } else if (attr.value->type() == nBool)
                 attrs.emplace(state.symbols[attr.name], Explicit<bool>{attr.value->boolean()});
             else if (attr.value->type() == nInt) {
@@ -175,24 +176,18 @@ static void fetchTree(
         if (params.isFetchGit) {
             fetchers::Attrs attrs;
             attrs.emplace("type", "git");
-            attrs.emplace("url", fixGitURL(url));
+            attrs.emplace("url", fixGitURL(url).to_string());
             if (!attrs.contains("exportIgnore")
                 && (!attrs.contains("submodules") || !*fetchers::maybeGetBoolAttr(attrs, "submodules"))) {
                 attrs.emplace("exportIgnore", Explicit<bool>{true});
             }
             input = fetchers::Input::fromAttrs(state.fetchSettings, std::move(attrs));
         } else {
-            if (!experimentalFeatureSettings.isEnabled(Xp::Flakes))
-                state
-                    .error<EvalError>(
-                        "passing a string argument to '%s' requires the 'flakes' experimental feature", fetcher)
-                    .atPos(pos)
-                    .debugThrow();
             input = fetchers::Input::fromURL(state.fetchSettings, url);
         }
     }
 
-    if (!state.settings.pureEval && !input.isDirect() && experimentalFeatureSettings.isEnabled(Xp::Flakes))
+    if (!state.settings.pureEval && !input.isDirect())
         input = lookupInRegistries(state.store, input, fetchers::UseRegistries::Limited).first;
 
     if (state.settings.pureEval && !input.isLocked()) {
@@ -218,11 +213,11 @@ static void fetchTree(
             throw Error("input '%s' is not allowed to use the '__final' attribute", input.to_string());
     }
 
-    auto [storePath, input2] = input.fetchToStore(state.store);
+    auto cachedInput = state.inputCache->getAccessor(state.store, input, fetchers::UseRegistries::No);
 
-    state.allowPath(storePath);
+    auto storePath = state.mountInput(cachedInput.lockedInput, input, cachedInput.accessor, true);
 
-    emitTreeAttrs(state, storePath, input2, v, params.emptyRevFallback, false);
+    emitTreeAttrs(state, storePath, cachedInput.lockedInput, v, params.emptyRevFallback, false);
 }
 
 static void prim_fetchTree(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -420,7 +415,6 @@ static RegisterPrimOp primop_fetchTree({
       - `"mercurial"`
 
      *input* can also be a [URL-like reference](@docroot@/command-ref/new-cli/nix3-flake.md#flake-references).
-     The additional input types and the URL-like syntax requires the [`flakes` experimental feature](@docroot@/development/experimental-features.md#xp-feature-flakes) to be enabled.
 
       > **Example**
       >
@@ -457,7 +451,6 @@ static RegisterPrimOp primop_fetchTree({
       >   ```
     )",
     .fun = prim_fetchTree,
-    .experimentalFeature = Xp::FetchTree,
 });
 
 void prim_fetchFinalTree(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -561,14 +554,22 @@ static void fetch(
                 .hash = *expectedHash,
                 .references = {}});
 
-        if (state.store->isValidPath(expectedPath)) {
+        // Try to get the path from the local store or substituters
+        try {
+            state.store->ensurePath(expectedPath);
+            debug("using substituted/cached path '%s' for '%s'", state.store->printStorePath(expectedPath), *url);
             state.allowAndSetStorePathString(expectedPath, v);
             return;
+        } catch (Error & e) {
+            debug(
+                "substitution of '%s' failed, will try to download: %s",
+                state.store->printStorePath(expectedPath),
+                e.what());
+            // Fall through to download
         }
     }
 
-    // TODO: fetching may fail, yet the path may be substitutable.
-    //       https://github.com/NixOS/nix/issues/4313
+    // Download the file/tarball if substitution failed or no hash was provided
     auto storePath = unpack ? fetchToStore(
                                   state.fetchSettings,
                                   *state.store,
@@ -806,7 +807,7 @@ static RegisterPrimOp primop_fetchGit({
           name in the `ref` attribute.
 
           However, if the revision you're looking for is in a future
-          branch for the non-default branch you will need to specify the
+          branch for the non-default branch you need to specify the
           the `ref` attribute as well.
 
           ```nix

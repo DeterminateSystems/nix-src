@@ -4,12 +4,13 @@
   mkMesonLibrary,
 
   unixtools,
-  darwin,
+  apple-sdk,
 
   nix-util,
   boost,
   curl,
   aws-sdk-cpp,
+  aws-crt-cpp,
   libseccomp,
   nlohmann_json,
   sqlite,
@@ -25,6 +26,8 @@
   withAWS ?
     # Default is this way because there have been issues building this dependency
     stdenv.hostPlatform == stdenv.buildPlatform && (stdenv.isLinux || stdenv.isDarwin),
+
+  withCurlS3 ? false,
 }:
 
 let
@@ -32,15 +35,17 @@ let
 in
 
 mkMesonLibrary (finalAttrs: {
-  pname = "nix-store";
+  pname = "determinate-nix-store";
   inherit version;
 
   workDir = ./.;
   fileset = fileset.unions [
     ../../nix-meson-build-support
     ./nix-meson-build-support
+    # FIXME: get rid of these symlinks.
     ../../.version
     ./.version
+    ../../.version-determinate
     ./meson.build
     ./meson.options
     ./include/nix/store/meson.build
@@ -64,9 +69,8 @@ mkMesonLibrary (finalAttrs: {
     sqlite
   ]
   ++ lib.optional stdenv.hostPlatform.isLinux libseccomp
-  # There have been issues building these dependencies
-  ++ lib.optional stdenv.hostPlatform.isDarwin darwin.apple_sdk.libs.sandbox
-  ++ lib.optional withAWS aws-sdk-cpp;
+  ++ lib.optional withAWS aws-sdk-cpp
+  ++ lib.optional withCurlS3 aws-crt-cpp;
 
   propagatedBuildInputs = [
     nix-util
@@ -76,6 +80,7 @@ mkMesonLibrary (finalAttrs: {
   mesonFlags = [
     (lib.mesonEnable "seccomp-sandboxing" stdenv.hostPlatform.isLinux)
     (lib.mesonBool "embedded-sandbox-shell" embeddedSandboxShell)
+    (lib.mesonEnable "curl-s3-store" withCurlS3)
   ]
   ++ lib.optionals stdenv.hostPlatform.isLinux [
     (lib.mesonOption "sandbox-shell" "${busybox-sandbox-shell}/bin/busybox")

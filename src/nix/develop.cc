@@ -1,5 +1,6 @@
 #include "nix/util/config-global.hh"
 #include "nix/expr/eval.hh"
+#include "nix/fetchers/fetch-settings.hh"
 #include "nix/cmd/installable-flake.hh"
 #include "nix/cmd/command-installable-value.hh"
 #include "nix/main/common-args.hh"
@@ -227,11 +228,13 @@ const static std::string getEnvSh =
 #include "get-env.sh.gen.hh"
     ;
 
-/* Given an existing derivation, return the shell environment as
-   initialised by stdenv's setup script. We do this by building a
-   modified derivation with the same dependencies and nearly the same
-   initial environment variables, that just writes the resulting
-   environment to a file and exits. */
+/**
+ * Given an existing derivation, return the shell environment as
+ * initialised by stdenv's setup script. We do this by building a
+ * modified derivation with the same dependencies and nearly the same
+ * initial environment variables, that just writes the resulting
+ * environment to a file and exits.
+ */
 static StorePath getDerivationEnvironment(ref<Store> store, ref<Store> evalStore, const StorePath & drvPath)
 {
     auto drv = evalStore->derivationFromPath(drvPath);
@@ -297,12 +300,13 @@ static StorePath getDerivationEnvironment(ref<Store> store, ref<Store> evalStore
         bmNormal,
         evalStore);
 
+    // `get-env.sh` will write its JSON output to an arbitrary output
+    // path, so return the first non-empty output path.
     for (auto & [_0, optPath] : evalStore->queryPartialDerivationOutputMap(shellDrvPath)) {
         assert(optPath);
         auto & outPath = *optPath;
-        assert(store->isValidPath(outPath));
-        auto outPathS = store->toRealPath(outPath);
-        if (lstat(outPathS).st_size)
+        auto st = store->getFSAccessor()->lstat(CanonPath(outPath.to_string()));
+        if (st.fileSize.value_or(0))
             return outPath;
     }
 
@@ -492,17 +496,15 @@ struct Common : InstallableCommand, MixProfile
         }
     }
 
-    std::pair<BuildEnvironment, std::string> getBuildEnvironment(ref<Store> store, ref<Installable> installable)
+    std::pair<BuildEnvironment, StorePath> getBuildEnvironment(ref<Store> store, ref<Installable> installable)
     {
         auto shellOutPath = getShellOutPath(store, installable);
 
-        auto strPath = store->printStorePath(shellOutPath);
-
         updateProfile(shellOutPath);
 
-        debug("reading environment file '%s'", strPath);
+        debug("reading environment file '%s'", store->printStorePath(shellOutPath));
 
-        return {BuildEnvironment::parseJSON(readFile(store->toRealPath(shellOutPath))), strPath};
+        return {BuildEnvironment::parseJSON(store->getFSAccessor()->readFile(shellOutPath.to_string())), shellOutPath};
     }
 };
 
@@ -627,13 +629,12 @@ struct CmdDevelop : Common, MixEnvironment
                     fmt("[ -n \"$PS1\" ] && PS1+=%s;\n", escapeShellArgAlways(developSettings.bashPromptSuffix.get()));
         }
 
-        writeFull(rcFileFd.get(), script);
-
         setEnviron();
         // prevent garbage collection until shell exits
-        setEnv("NIX_GCROOT", gcroot.c_str());
+        setEnv("NIX_GCROOT", store->printStorePath(gcroot).c_str());
 
         Path shell = "bash";
+        bool foundInteractive = false;
 
         try {
             auto state = getEvalState();
@@ -656,19 +657,17 @@ struct CmdDevelop : Common, MixEnvironment
                 Strings{"legacyPackages." + settings.thisSystem.get() + "."},
                 nixpkgsLockFlags);
 
-            bool found = false;
-
             for (auto & path : Installable::toStorePathSet(
                      getEvalStore(), store, Realise::Outputs, OperateOn::Output, {bashInstallable})) {
                 auto s = store->printStorePath(path) + "/bin/bash";
                 if (pathExists(s)) {
                     shell = s;
-                    found = true;
+                    foundInteractive = true;
                     break;
                 }
             }
 
-            if (!found)
+            if (!foundInteractive)
                 throw Error("package 'nixpkgs#bashInteractive' does not provide a 'bin/bash'");
 
         } catch (Error &) {
@@ -678,6 +677,11 @@ struct CmdDevelop : Common, MixEnvironment
         // Override SHELL with the one chosen for this environment.
         // This is to make sure the system shell doesn't leak into the build environment.
         setEnv("SHELL", shell.c_str());
+        // https://github.com/NixOS/nix/issues/5873
+        script += fmt("SHELL=\"%s\"\n", shell);
+        if (foundInteractive)
+            script += fmt("PATH=\"%s${PATH:+:$PATH}\"\n", std::filesystem::path(shell).parent_path());
+        writeFull(rcFileFd.get(), script);
 
 #ifdef _WIN32 // TODO re-enable on Windows
         throw UnimplementedError("Cannot yet spawn processes on Windows");

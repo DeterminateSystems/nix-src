@@ -14,7 +14,8 @@ struct IndirectInputScheme : InputScheme
         if (url.scheme != "flake")
             return {};
 
-        auto path = tokenizeString<std::vector<std::string>>(url.path, "/");
+        /* This ignores empty path segments for back-compat. Older versions used a tokenizeString here. */
+        auto path = url.pathSegments(/*skipEmpty=*/true) | std::ranges::to<std::vector<std::string>>();
 
         std::optional<Hash> rev;
         std::optional<std::string> ref;
@@ -82,16 +83,15 @@ struct IndirectInputScheme : InputScheme
 
     ParsedURL toURL(const Input & input) const override
     {
-        ParsedURL url;
-        url.scheme = "flake";
-        url.path = getStrAttr(input.attrs, "id");
+        ParsedURL url{
+            .scheme = "flake",
+            .path = {getStrAttr(input.attrs, "id")},
+        };
         if (auto ref = input.getRef()) {
-            url.path += '/';
-            url.path += *ref;
+            url.path.push_back(*ref);
         };
         if (auto rev = input.getRev()) {
-            url.path += '/';
-            url.path += rev->gitRev();
+            url.path.push_back(rev->gitRev());
         };
         return url;
     }
@@ -109,11 +109,6 @@ struct IndirectInputScheme : InputScheme
     std::pair<ref<SourceAccessor>, Input> getAccessor(ref<Store> store, const Input & input) const override
     {
         throw Error("indirect input '%s' cannot be fetched directly", input.to_string());
-    }
-
-    std::optional<ExperimentalFeature> experimentalFeature() const override
-    {
-        return Xp::Flakes;
     }
 
     bool isDirect(const Input & input) const override

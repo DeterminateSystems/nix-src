@@ -1,5 +1,4 @@
 #include <limits>
-#include <unordered_set>
 #include <sstream>
 
 #include "nix/expr/print.hh"
@@ -9,6 +8,8 @@
 #include "nix/util/terminal.hh"
 #include "nix/util/english.hh"
 #include "nix/expr/eval.hh"
+
+#include <boost/unordered/unordered_flat_set.hpp>
 
 namespace nix {
 
@@ -81,7 +82,7 @@ std::ostream & printLiteralBool(std::ostream & str, bool boolean)
 // For example `or' doesn't need to be quoted.
 bool isReservedKeyword(const std::string_view str)
 {
-    static const std::unordered_set<std::string_view> reservedKeywords = {
+    static const boost::unordered_flat_set<std::string_view> reservedKeywords = {
         "if", "then", "else", "assert", "with", "let", "in", "rec", "inherit"};
     return reservedKeywords.contains(str);
 }
@@ -248,7 +249,11 @@ private:
 
     void printString(Value & v)
     {
-        printLiteralString(output, v.string_view(), options.maxStringLength, options.ansiColors);
+        NixStringContext context;
+        copyContext(v, context);
+        std::ostringstream s;
+        printLiteralString(s, v.string_view(), options.maxStringLength, options.ansiColors);
+        output << state.devirtualize(s.str(), context);
     }
 
     void printPath(Value & v)
@@ -272,7 +277,7 @@ private:
     void printDerivation(Value & v)
     {
         std::optional<StorePath> storePath;
-        if (auto i = v.attrs()->get(state.sDrvPath)) {
+        if (auto i = v.attrs()->get(state.s.drvPath)) {
             NixStringContext context;
             storePath =
                 state.coerceToStorePath(i->pos, *i->value, context, "while evaluating the drvPath of a derivation");
@@ -460,7 +465,7 @@ private:
 
                 std::ostringstream s;
                 s << state.positions[v.lambda().fun->pos];
-                output << " @ " << filterANSIEscapes(toView(s));
+                output << " @ " << filterANSIEscapes(s.view());
             }
         } else if (v.isPrimOp()) {
             if (v.primOp())
@@ -497,7 +502,7 @@ private:
             output << "«potential infinite recursion»";
             if (options.ansiColors)
                 output << ANSI_NORMAL;
-        } else if (v.isThunk() || v.isApp()) {
+        } else if (!v.isFinished()) {
             if (options.ansiColors)
                 output << ANSI_MAGENTA;
             output << "«thunk»";
@@ -506,6 +511,11 @@ private:
         } else {
             unreachable();
         }
+    }
+
+    void printFailed(Value & v)
+    {
+        output << "«failed»";
     }
 
     void printExternal(Value & v)
@@ -581,6 +591,10 @@ private:
 
             case nThunk:
                 printThunk(v);
+                break;
+
+            case nFailed:
+                printFailed(v);
                 break;
 
             case nExternal:

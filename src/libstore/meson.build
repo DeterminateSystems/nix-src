@@ -13,6 +13,8 @@ project(
   license : 'LGPL-2.1-or-later',
 )
 
+fs = import('fs')
+
 cxx = meson.get_compiler('cpp')
 
 subdir('nix-meson-build-support/deps-lists')
@@ -22,6 +24,11 @@ configdata_priv = configuration_data()
 
 # TODO rename, because it will conflict with downstream projects
 configdata_priv.set_quoted('PACKAGE_VERSION', meson.project_version())
+
+configdata_priv.set_quoted(
+  'DETERMINATE_NIX_VERSION',
+  fs.read('../../.version-determinate').strip(),
+)
 
 subdir('nix-meson-build-support/default-system-cpu')
 
@@ -101,7 +108,12 @@ subdir('nix-meson-build-support/libatomic')
 
 boost = dependency(
   'boost',
-  modules : [ 'container', 'regex' ],
+  modules : [
+    'container',
+    # Shouldn't list, because can header-only, and Meson currently looks for libs
+    #'regex',
+    'url',
+  ],
   include_type : 'system',
 )
 # boost is a public dependency, but not a pkg-config dependency unfortunately, so we
@@ -159,6 +171,33 @@ if aws_s3.found()
 endif
 deps_other += aws_s3
 
+# Curl-based S3 store support (alternative to AWS SDK)
+# Check if curl supports AWS SigV4 (requires >= 7.75.0)
+curl_supports_aws_sigv4 = curl.version().version_compare('>= 7.75.0')
+# AWS CRT C++ for lightweight credential management
+aws_crt_cpp = cxx.find_library('aws-crt-cpp', required : false)
+
+curl_s3_store_opt = get_option('curl-s3-store').require(
+  curl_supports_aws_sigv4,
+  error_message : 'curl-based S3 support requires curl >= 7.75.0',
+).require(
+  aws_crt_cpp.found(),
+  error_message : 'curl-based S3 support requires aws-crt-cpp',
+)
+
+# Make AWS SDK and curl-based S3 mutually exclusive
+if aws_s3.found() and curl_s3_store_opt.enabled()
+  error(
+    'Cannot enable both AWS SDK S3 support and curl-based S3 support. Please choose one.',
+  )
+endif
+
+if curl_s3_store_opt.enabled()
+  deps_other += aws_crt_cpp
+endif
+
+configdata_pub.set('NIX_WITH_CURL_S3', curl_s3_store_opt.enabled().to_int())
+
 subdir('nix-meson-build-support/generate-header')
 
 generated_headers = []
@@ -194,8 +233,6 @@ if get_option('embedded-sandbox-shell')
   )
   generated_headers += embedded_sandbox_shell_gen
 endif
-
-fs = import('fs')
 
 prefix = get_option('prefix')
 # For each of these paths, assume that it is relative to the prefix unless
@@ -260,11 +297,16 @@ config_priv_h = configure_file(
 )
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/asan-options')
 
 sources = files(
+  'async-path-writer.cc',
+  'aws-creds.cc',
   'binary-cache-store.cc',
   'build-result.cc',
   'build/derivation-building-goal.cc',
+  'build/derivation-check.cc',
+  'build/derivation-env-desugar.cc',
   'build/derivation-goal.cc',
   'build/derivation-trampoline-goal.cc',
   'build/drv-output-substitution-goal.cc',
@@ -321,7 +363,7 @@ sources = files(
   'remote-store.cc',
   'restricted-store.cc',
   's3-binary-cache-store.cc',
-  's3.cc',
+  's3-url.cc',
   'serve-protocol-connection.cc',
   'serve-protocol.cc',
   'sqlite.cc',
@@ -356,6 +398,7 @@ this_library = library(
   generated_headers,
   sources,
   config_priv_h,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

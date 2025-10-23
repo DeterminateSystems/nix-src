@@ -1,13 +1,21 @@
 #pragma once
 ///@file
 
-#include <unordered_set>
-
 #include "nix/store/store-api.hh"
+#include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/unordered/unordered_flat_set.hpp>
 
 namespace nix {
 
-typedef std::unordered_map<StorePath, std::unordered_set<std::string>> Roots;
+// FIXME: should turn this into an std::variant to represent the
+// several root types.
+using GcRootInfo = std::string;
+
+typedef boost::unordered_flat_map<
+    StorePath,
+    boost::unordered_flat_set<GcRootInfo, StringViewHash, std::equal_to<>>,
+    std::hash<StorePath>>
+    Roots;
 
 struct GCOptions
 {
@@ -51,6 +59,12 @@ struct GCOptions
      * Stop after at least `maxFreed` bytes have been freed.
      */
     uint64_t maxFreed{std::numeric_limits<uint64_t>::max()};
+
+    /**
+     * Whether to hide potentially sensitive information about GC
+     * roots (such as PIDs).
+     */
+    bool censor = false;
 };
 
 struct GCResults

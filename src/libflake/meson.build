@@ -29,6 +29,7 @@ nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/asan-options')
 
 subdir('nix-meson-build-support/generate-header')
 
@@ -58,6 +59,7 @@ this_library = library(
   'nixflake',
   sources,
   generated_headers,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

@@ -32,9 +32,11 @@ libgit2 = dependency('libgit2', version : '>= 1.9')
 deps_private += libgit2
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/asan-options')
 
 sources = files(
   'attrs.cc',
+  'builtin.cc',
   'cache.cc',
   'fetch-settings.cc',
   'fetch-to-store.cc',
@@ -49,7 +51,6 @@ sources = files(
   'mercurial.cc',
   'path.cc',
   'registry.cc',
-  'store-path-accessor.cc',
   'tarball.cc',
 )
 
@@ -61,6 +62,7 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixfetchers',
   sources,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

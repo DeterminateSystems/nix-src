@@ -158,7 +158,7 @@ static void loadSourceExpr(EvalState & state, const SourcePath & path, Value & v
        directory). */
     else if (st.type == SourceAccessor::tDirectory) {
         auto attrs = state.buildBindings(maxAttrs);
-        attrs.insert(state.symbols.create("_combineChannels"), &state.vEmptyList);
+        attrs.insert(state.symbols.create("_combineChannels"), &Value::vEmptyList);
         StringSet seen;
         getAllExprs(state, path, seen, attrs);
         v.mkAttrs(attrs);
@@ -746,6 +746,8 @@ static void opSet(Globals & globals, Strings opFlags, Strings opArgs)
         drv.setName(globals.forceName);
 
     auto drvPath = drv.queryDrvPath();
+    if (drvPath)
+        globals.state->waitForPath(*drvPath);
     std::vector<DerivedPath> paths{
         drvPath ? (DerivedPath) (DerivedPath::Built{
                       .drvPath = makeConstantStorePathRef(*drvPath),

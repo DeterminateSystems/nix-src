@@ -12,6 +12,7 @@ pushd "$flakeDir"
 # By default: Only show the packages content for the current system and no
 # legacyPackages at all
 nix flake show --json > show-output.json
+# shellcheck disable=SC2016
 nix eval --impure --expr '
 let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in
@@ -23,6 +24,7 @@ true
 
 # With `--all-systems`, show the packages for all systems
 nix flake show --json --all-systems > show-output.json
+# shellcheck disable=SC2016
 nix eval --impure --expr '
 let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in
@@ -33,6 +35,7 @@ true
 
 # With `--legacy`, show the legacy packages
 nix flake show --json --legacy > show-output.json
+# shellcheck disable=SC2016
 nix eval --impure --expr '
 let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in
@@ -59,13 +62,7 @@ cat >flake.nix <<EOF
   };
 }
 EOF
-nix flake show --json --all-systems > show-output.json
-nix eval --impure --expr '
-let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
-in
-assert show_output == { };
-true
-'
+[[ $(nix flake show --all-systems --legacy | wc -l) = 1 ]]
 
 # Test that attributes with errors are handled correctly.
 # nixpkgs.legacyPackages is a particularly prominent instance of this.
@@ -80,6 +77,7 @@ cat >flake.nix <<EOF
 }
 EOF
 nix flake show --json --legacy --all-systems > show-output.json
+# shellcheck disable=SC2016
 nix eval --impure --expr '
 let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in
@@ -91,11 +89,12 @@ true
 # Test that nix flake show doesn't fail if one of the outputs contains
 # an IFD
 popd
-writeIfdFlake $flakeDir
-pushd $flakeDir
+writeIfdFlake "$flakeDir"
+pushd "$flakeDir"
 
 
 nix flake show --json > show-output.json
+# shellcheck disable=SC2016
 nix eval --impure --expr '
 let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in

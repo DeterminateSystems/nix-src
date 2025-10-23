@@ -40,7 +40,11 @@ endforeach
 
 boost = dependency(
   'boost',
-  modules : [ 'container', 'context' ],
+  modules : [
+    'container',
+    'context',
+    'thread',
+  ],
   include_type : 'system',
 )
 # boost is a public dependency, but not a pkg-config dependency unfortunately, so we
@@ -50,17 +54,25 @@ deps_other += boost
 nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
 
-bdw_gc = dependency('bdw-gc', required : get_option('gc'))
+bdw_gc_required = get_option('gc').disable_if(
+  'address' in get_option('b_sanitize'),
+  error_message : 'Building with Boehm GC and ASAN is not supported',
+)
+
+bdw_gc = dependency('bdw-gc', required : bdw_gc_required)
 if bdw_gc.found()
   deps_public += bdw_gc
   foreach funcspec : [
-    'pthread_attr_get_np',
     'pthread_getattr_np',
   ]
     define_name = 'HAVE_' + funcspec.underscorify().to_upper()
     define_value = cxx.has_function(funcspec).to_int()
     configdata_priv.set(define_name, define_value)
   endforeach
+  if host_machine.system() == 'cygwin'
+    # undefined reference to `__wrap__Znwm'
+    configdata_pub.set('GC_NO_INLINE_STD_NEW', 1)
+  endif
 endif
 # Used in public header. Affects ABI!
 configdata_pub.set('NIX_USE_BOEHMGC', bdw_gc.found().to_int())
@@ -85,6 +97,7 @@ config_priv_h = configure_file(
 )
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/asan-options')
 
 parser_tab = custom_target(
   input : 'parser.y',
@@ -153,13 +166,16 @@ sources = files(
   'json-to-value.cc',
   'lexer-helpers.cc',
   'nixexpr.cc',
+  'parallel-eval.cc',
   'paths.cc',
   'primops.cc',
   'print-ambiguous.cc',
   'print.cc',
   'search-path.cc',
+  'symbol-table.cc',
   'value-to-json.cc',
   'value-to-xml.cc',
+  'value.cc',
   'value/context.cc',
 )
 
@@ -177,6 +193,7 @@ this_library = library(
   parser_tab,
   lexer_tab,
   generated_headers,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

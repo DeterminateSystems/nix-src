@@ -1,5 +1,3 @@
-#include <unordered_set>
-
 #include "nix/store/derivations.hh"
 #include "nix/store/parsed-derivations.hh"
 #include "nix/store/derivation-options.hh"
@@ -12,6 +10,8 @@
 #include "nix/util/closure.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/util/strings.hh"
+
+#include <boost/unordered/unordered_flat_set.hpp>
 
 namespace nix {
 
@@ -106,7 +106,7 @@ MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
 
     struct State
     {
-        std::unordered_set<std::string> done;
+        boost::unordered_flat_set<std::string> done;
         MissingPaths res;
     };
 
@@ -322,7 +322,10 @@ StorePaths Store::topoSortPaths(const StorePathSet & paths)
         }},
         {[&](const StorePath & path, const StorePath & parent) {
             return BuildError(
-                "cycle detected in the references of '%s' from '%s'", printStorePath(path), printStorePath(parent));
+                BuildResult::Failure::OutputRejected,
+                "cycle detected in the references of '%s' from '%s'",
+                printStorePath(path),
+                printStorePath(parent));
         }});
 }
 

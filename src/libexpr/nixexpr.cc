@@ -11,9 +11,7 @@
 
 namespace nix {
 
-unsigned long Expr::nrExprs = 0;
-
-ExprBlackHole eBlackHole;
+Counter Expr::nrExprs;
 
 // FIXME: remove, because *symbols* are abstract and do not have a single
 //        textual representation; see printIdentifier()
@@ -40,12 +38,12 @@ void ExprFloat::show(const SymbolTable & symbols, std::ostream & str) const
 
 void ExprString::show(const SymbolTable & symbols, std::ostream & str) const
 {
-    printLiteralString(str, s);
+    printLiteralString(str, v.string_view());
 }
 
 void ExprPath::show(const SymbolTable & symbols, std::ostream & str) const
 {
-    str << s;
+    str << v.pathStr();
 }
 
 void ExprVar::show(const SymbolTable & symbols, std::ostream & str) const
@@ -57,7 +55,7 @@ void ExprSelect::show(const SymbolTable & symbols, std::ostream & str) const
 {
     str << "(";
     e->show(symbols, str);
-    str << ")." << showAttrPath(symbols, attrPath);
+    str << ")." << showAttrPath(symbols, getAttrPath());
     if (def) {
         str << " or (";
         def->show(symbols, str);
@@ -261,7 +259,7 @@ void ExprPos::show(const SymbolTable & symbols, std::ostream & str) const
     str << "__curPos";
 }
 
-std::string showAttrPath(const SymbolTable & symbols, const AttrPath & attrPath)
+std::string showAttrPath(const SymbolTable & symbols, std::span<const AttrName> attrPath)
 {
     std::ostringstream out;
     bool first = true;
@@ -362,7 +360,7 @@ void ExprSelect::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv>
     e->bindVars(es, env);
     if (def)
         def->bindVars(es, env);
-    for (auto & i : attrPath)
+    for (auto & i : getAttrPath())
         if (!i.symbol)
             i.expr->bindVars(es, env);
 }
@@ -605,15 +603,6 @@ void ExprLambda::setDocComment(DocComment docComment)
         // belongs in the same conditional.
         body->setDocComment(docComment);
     }
-};
-
-/* Symbol table. */
-
-size_t SymbolTable::totalSize() const
-{
-    size_t n = 0;
-    dump([&](SymbolStr s) { n += s.size(); });
-    return n;
 }
 
 std::string DocComment::getInnerText(const PosTable & positions) const

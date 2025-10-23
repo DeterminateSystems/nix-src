@@ -27,7 +27,7 @@ let
     pkg-config
     ;
 
-  baseVersion = lib.fileContents ../.version;
+  baseVersion = lib.fileContents ../.version-determinate;
 
   versionSuffix = lib.optionalString (!officialRelease) "pre";
 
@@ -51,15 +51,6 @@ let
     exts: userFn: stdenv.mkDerivation (lib.extends (lib.composeManyExtensions exts) userFn);
 
   setVersionLayer = finalAttrs: prevAttrs: {
-    preConfigure =
-      prevAttrs.preConfigure or ""
-      +
-      # Update the repo-global .version file.
-      # Symlink ./.version points there, but by default only workDir is writable.
-      ''
-        chmod u+w ./.version
-        echo ${finalAttrs.version} > ./.version
-      '';
   };
 
   localSourceLayer =
@@ -164,6 +155,24 @@ let
   };
 
   mesonLibraryLayer = finalAttrs: prevAttrs: {
+    preConfigure =
+      let
+        interpositionFlags = [
+          "-fno-semantic-interposition"
+          "-Wl,-Bsymbolic-functions"
+        ];
+      in
+      # NOTE: By default GCC disables interprocedular optimizations (in particular inlining) for
+      # position-independent code and thus shared libraries.
+      # Since LD_PRELOAD tricks aren't worth losing out on optimizations, we disable it for good.
+      # This is not the case for Clang, where inlining is done by default even without -fno-semantic-interposition.
+      # https://reviews.llvm.org/D102453
+      # https://fedoraproject.org/wiki/Changes/PythonNoSemanticInterpositionSpeedup
+      prevAttrs.preConfigure or ""
+      + lib.optionalString stdenv.cc.isGNU ''
+        export CFLAGS="''${CFLAGS:-} ${toString interpositionFlags}"
+        export CXXFLAGS="''${CXXFLAGS:-} ${toString interpositionFlags}"
+      '';
     outputs = prevAttrs.outputs or [ "out" ] ++ [ "dev" ];
   };
 

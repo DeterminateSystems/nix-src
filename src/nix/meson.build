@@ -56,11 +56,13 @@ config_priv_h = configure_file(
 )
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/asan-options')
 subdir('nix-meson-build-support/generate-header')
 
 nix_sources = [ config_priv_h ] + files(
   'add-to-store.cc',
   'app.cc',
+  'asan-options.cc',
   'build.cc',
   'bundle.cc',
   'cat.cc',
@@ -78,6 +80,7 @@ nix_sources = [ config_priv_h ] + files(
   'env.cc',
   'eval.cc',
   'flake-prefetch-inputs.cc',
+  'flake-prefetch-inputs.cc',
   'flake.cc',
   'formatter.cc',
   'hash.cc',
@@ -87,6 +90,7 @@ nix_sources = [ config_priv_h ] + files(
   'make-content-addressed.cc',
   'man-pages.cc',
   'nar.cc',
+  'nario.cc',
   'optimise-store.cc',
   'path-from-hash-part.cc',
   'path-info.cc',

@@ -13,6 +13,7 @@ namespace nix {
 /* Note: you generally shouldn't change the protocol version. Define a
    new `WorkerProto::Feature` instead. */
 #define PROTOCOL_VERSION (1 << 8 | 38)
+#define MINIMUM_PROTOCOL_VERSION (1 << 8 | 18)
 #define GET_PROTOCOL_MAJOR(x) ((x) & 0xff00)
 #define GET_PROTOCOL_MINOR(x) ((x) & 0x00ff)
 
@@ -65,6 +66,7 @@ struct WorkerProto
     {
         Source & from;
         Version version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -75,6 +77,7 @@ struct WorkerProto
     {
         Sink & to;
         Version version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -152,7 +155,7 @@ enum struct WorkerProto::Op : uint64_t {
     AddIndirectRoot = 12,
     SyncWithGC = 13,
     FindRoots = 14,
-    ExportPath = 16,   // obsolete
+    // ExportPath = 16, // removed
     QueryDeriver = 18, // obsolete
     SetOptions = 19,
     CollectGarbage = 20,
@@ -162,7 +165,7 @@ enum struct WorkerProto::Op : uint64_t {
     QueryFailedPaths = 24,
     ClearFailedPaths = 25,
     QueryPathInfo = 26,
-    ImportPaths = 27,                // obsolete
+    // ImportPaths = 27, // removed
     QueryDerivationOutputNames = 28, // obsolete
     QueryPathFromHashPart = 29,
     QuerySubstitutablePathInfos = 30,

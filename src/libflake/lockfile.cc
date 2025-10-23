@@ -1,5 +1,3 @@
-#include <unordered_set>
-
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/flake/settings.hh"
 #include "nix/flake/lockfile.hh"
@@ -9,6 +7,7 @@
 #include <algorithm>
 #include <iomanip>
 
+#include <boost/unordered/unordered_flat_set.hpp>
 #include <iterator>
 #include <nlohmann/json.hpp>
 
@@ -38,6 +37,7 @@ LockedNode::LockedNode(const fetchers::Settings & fetchSettings, const nlohmann:
     : lockedRef(getFlakeRef(fetchSettings, json, "locked", "info")) // FIXME: remove "info"
     , originalRef(getFlakeRef(fetchSettings, json, "original", nullptr))
     , isFlake(json.find("flake") != json.end() ? (bool) json["flake"] : true)
+    , buildTime(json.find("buildTime") != json.end() ? (bool) json["buildTime"] : false)
     , parentInputAttrPath(
           json.find("parent") != json.end() ? (std::optional<InputAttrPath>) json["parent"] : std::nullopt)
 {
@@ -162,7 +162,7 @@ std::pair<nlohmann::json, LockFile::KeyMap> LockFile::toJSON() const
 {
     nlohmann::json nodes;
     KeyMap nodeKeys;
-    std::unordered_set<std::string> keys;
+    boost::unordered_flat_set<std::string> keys;
 
     std::function<std::string(const std::string & key, ref<const Node> node)> dumpNode;
 
@@ -210,6 +210,8 @@ std::pair<nlohmann::json, LockFile::KeyMap> LockFile::toJSON() const
             n["locked"].erase("__final");
             if (!lockedNode->isFlake)
                 n["flake"] = false;
+            if (lockedNode->buildTime)
+                n["buildTime"] = true;
             if (lockedNode->parentInputAttrPath)
                 n["parent"] = *lockedNode->parentInputAttrPath;
         }

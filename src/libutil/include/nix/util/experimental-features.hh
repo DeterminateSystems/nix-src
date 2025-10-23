@@ -3,6 +3,7 @@
 
 #include "nix/util/error.hh"
 #include "nix/util/types.hh"
+#include "nix/util/json-non-null.hh"
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -18,9 +19,7 @@ namespace nix {
 enum struct ExperimentalFeature {
     CaDerivations,
     ImpureDerivations,
-    Flakes,
     FetchTree,
-    NixCommand,
     GitHashing,
     RecursiveNix,
     NoUrlLiterals,
@@ -36,8 +35,13 @@ enum struct ExperimentalFeature {
     MountedSSHStore,
     VerifiedFetches,
     PipeOperators,
+    ExternalBuilders,
     BLAKE3Hashes,
+    BuildTimeFetchTree,
+    ParallelEval,
 };
+
+extern std::set<std::string> stabilizedFeatures;
 
 /**
  * Just because writing `ExperimentalFeature::CaDerivations` is way too long
@@ -88,6 +92,13 @@ public:
 
     MissingExperimentalFeature(ExperimentalFeature missingFeature);
 };
+
+/**
+ * `ExperimentalFeature` is always rendered as a string.
+ */
+template<>
+struct json_avoids_null<ExperimentalFeature> : std::true_type
+{};
 
 /**
  * Semi-magic conversion to and from json.

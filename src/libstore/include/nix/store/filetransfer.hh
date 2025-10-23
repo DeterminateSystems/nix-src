@@ -9,6 +9,7 @@
 #include "nix/util/ref.hh"
 #include "nix/util/configuration.hh"
 #include "nix/util/serialise.hh"
+#include "nix/util/url.hh"
 
 namespace nix {
 
@@ -30,9 +31,17 @@ struct FileTransferSettings : Config
         )",
         {"binary-caches-parallel-connections"}};
 
+    /* Do not set this too low. On glibc, getaddrinfo() contains fallback code
+       paths that deal with ill-behaved DNS servers. Setting this too low
+       prevents some fallbacks from occurring.
+
+       See description of options timeout, single-request, single-request-reopen
+       in resolv.conf(5). Also see https://github.com/NixOS/nix/pull/13985 for
+       details on the interaction between getaddrinfo(3) behavior and libcurl
+       CURLOPT_CONNECTTIMEOUT. */
     Setting<unsigned long> connectTimeout{
         this,
-        5,
+        15,
         "connect-timeout",
         R"(
           The timeout (in seconds) for establishing connections in the
@@ -70,7 +79,7 @@ extern const unsigned int RETRY_TIME_MS_DEFAULT;
 
 struct FileTransferRequest
 {
-    std::string uri;
+    VerbatimURL uri;
     Headers headers;
     std::string expectedETag;
     bool verifyTLS = true;
@@ -84,8 +93,8 @@ struct FileTransferRequest
     std::string mimeType;
     std::function<void(std::string_view data)> dataCallback;
 
-    FileTransferRequest(std::string_view uri)
-        : uri(uri)
+    FileTransferRequest(VerbatimURL uri)
+        : uri(std::move(uri))
         , parentAct(getCurActivity())
     {
     }
@@ -111,6 +120,9 @@ struct FileTransferResult
 
     /**
      * All URLs visited in the redirect chain.
+     *
+     * @note Intentionally strings and not `ParsedURL`s so we faithfully
+     * return what cURL gave us.
      */
     std::vector<std::string> urls;
 
@@ -178,6 +190,8 @@ ref<FileTransfer> getFileTransfer();
  * Prefer getFileTransfer() to this; see its docs for why.
  */
 ref<FileTransfer> makeFileTransfer();
+
+std::shared_ptr<FileTransfer> resetFileTransfer();
 
 class FileTransferError : public Error
 {

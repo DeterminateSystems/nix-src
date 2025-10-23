@@ -25,7 +25,6 @@ in
         virtualisation.writableStore = true;
         virtualisation.additionalPaths = [ pkgA ];
         environment.systemPackages = [ pkgB ];
-        nix.extraOptions = "experimental-features = nix-command";
       };
   };
 
