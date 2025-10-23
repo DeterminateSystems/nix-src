@@ -13,6 +13,10 @@ namespace nix::eval_cache {
 struct AttrDb;
 class AttrCursor;
 
+using AttrPath = std::vector<Symbol>;
+
+std::string toAttrPathStr(EvalState & state, const AttrPath & attrPath);
+
 struct CachedEvalError : EvalError
 {
     const ref<AttrCursor> cursor;
@@ -34,7 +38,13 @@ class EvalCache : public std::enable_shared_from_this<EvalCache>
     friend struct CachedEvalError;
 
     std::shared_ptr<AttrDb> db;
+
+public:
     EvalState & state;
+
+    std::function<AttrPath(AttrPath &&)> cleanupAttrPath = [](AttrPath && attrPath) { return std::move(attrPath); };
+
+private:
     typedef std::function<Value *()> RootLoader;
     RootLoader rootLoader;
     RootValue value;
@@ -81,24 +91,19 @@ typedef uint64_t AttrId;
 typedef std::pair<AttrId, Symbol> AttrKey;
 typedef std::pair<std::string, NixStringContext> string_t;
 
-typedef std::variant<
-    std::vector<Symbol>,
-    string_t,
-    placeholder_t,
-    missing_t,
-    misc_t,
-    failed_t,
-    bool,
-    int_t,
-    std::vector<std::string>>
-    AttrValue;
+typedef std::
+    variant<AttrPath, string_t, placeholder_t, missing_t, misc_t, failed_t, bool, int_t, std::vector<std::string>>
+        AttrValue;
 
 class AttrCursor : public std::enable_shared_from_this<AttrCursor>
 {
     friend class EvalCache;
     friend struct CachedEvalError;
 
+public:
     ref<EvalCache> root;
+
+private:
     using Parent = std::optional<std::pair<ref<AttrCursor>, Symbol>>;
     Parent parent;
     RootValue _value;
@@ -124,9 +129,13 @@ public:
         Value * value = nullptr,
         std::optional<std::pair<AttrId, AttrValue>> && cachedValue = {});
 
-    std::vector<Symbol> getAttrPath() const;
+    AttrPath getAttrPath() const;
 
-    std::vector<Symbol> getAttrPath(Symbol name) const;
+    AttrPath getAttrPathRaw() const;
+
+    AttrPath getAttrPath(Symbol name) const;
+
+    AttrPath getAttrPathRaw(Symbol name) const;
 
     std::string getAttrPathStr() const;
 
@@ -146,7 +155,7 @@ public:
      * Get an attribute along a chain of attrsets. Note that this does
      * not auto-call functors or functions.
      */
-    OrSuggestions<ref<AttrCursor>> findAlongAttrPath(const std::vector<Symbol> & attrPath);
+    OrSuggestions<ref<AttrCursor>> findAlongAttrPath(const AttrPath & attrPath);
 
     std::string getString();
 
@@ -158,7 +167,7 @@ public:
 
     std::vector<std::string> getListOfStrings();
 
-    std::vector<Symbol> getAttrs();
+    AttrPath getAttrs();
 
     bool isDerivation();
 
