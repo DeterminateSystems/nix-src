@@ -1382,7 +1382,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON
                         s = type;
                     }
 
-                    logger->cout("%s: %s '%s'", headerPrefix, type, s);
+                    logger->cout("%s: %s", headerPrefix, s);
                     return;
                 }
 
