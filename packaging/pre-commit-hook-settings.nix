@@ -42,7 +42,7 @@
         entry = "${pkgs.writeScript "format-meson" ''
           #!${pkgs.runtimeShell}
           for file in "$@"; do
-            ${lib.getExe meson} format -ic ${./meson.format} "$file"
+            ${lib.getExe meson} format -ic ${../meson.format} "$file"
           done
         ''}";
       };

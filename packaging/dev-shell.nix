@@ -73,9 +73,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
 
     env = {
       # For `make format`, to work without installing pre-commit
-      _NIX_PRE_COMMIT_HOOKS_CONFIG = "${(pkgs.formats.yaml { }).generate "pre-commit-config.yaml"
-        modular.settings
-      }";
+      _NIX_PRE_COMMIT_HOOKS_CONFIG = modular.shellHook;
     }
     // lib.optionalAttrs stdenv.hostPlatform.isLinux {
       CC_LD = "mold";
