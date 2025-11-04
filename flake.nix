@@ -78,12 +78,12 @@
         system:
         let
           pkgs = nixpkgsFor.${system}.native;
-          hooksConfig = import ./packaging/pre-commit-hook-settings.nix {
+          hookSettings = import ./packaging/pre-commit-hook-settings.nix {
             inherit pkgs lib;
             src = self;
           };
         in
-        inputs.git-hooks-nix.lib.${system}.run (hooksConfig // { src = self; });
+        inputs.git-hooks-nix.lib.${system}.run hookSettings;
 
       # Memoize nixpkgs for different platforms for efficiency.
       nixpkgsFor = forAllSystems (

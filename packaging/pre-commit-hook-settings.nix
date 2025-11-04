@@ -5,6 +5,8 @@
 }:
 
 {
+  inherit src;
+
   hooks = {
     check-merge-conflicts.enable = true;
     check-merge-conflicts-2 = {
