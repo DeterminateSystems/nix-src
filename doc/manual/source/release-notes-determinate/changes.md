@@ -133,5 +133,3 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 <!-- Determinate Nix version 3.12.1 -->
 
 * Allow access to the result of fetchClosure by @edolstra in [DeterminateSystems/nix-src#241](https://github.com/DeterminateSystems/nix-src/pull/241)
-
-* libstore/build: fixup JSON logger missing the resBuildResult result event by @cole-h in [DeterminateSystems/nix-src#246](https://github.com/DeterminateSystems/nix-src/pull/246)
