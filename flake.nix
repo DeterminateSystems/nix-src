@@ -7,10 +7,8 @@
   inputs.nixpkgs-23-11.url = "github:NixOS/nixpkgs/a62e6edd6d5e1fa0329b8653c801147986f8d446";
 
   # dev tooling
-  inputs.flake-parts.url = "https://flakehub.com/f/hercules-ci/flake-parts/0.1";
   inputs.git-hooks-nix.url = "https://flakehub.com/f/cachix/git-hooks.nix/0.1.941";
   # work around https://github.com/NixOS/nix/issues/7730
-  inputs.flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
   inputs.git-hooks-nix.inputs.nixpkgs.follows = "nixpkgs";
   # work around 7730 and https://github.com/NixOS/nix/issues/7807
   inputs.git-hooks-nix.inputs.gitignore.follows = "";
@@ -75,17 +73,21 @@
 
       forAllStdenvs = lib.genAttrs stdenvs;
 
-      # We don't apply flake-parts to the whole flake so that non-development attributes
-      # load without fetching any development inputs.
-      devFlake = inputs.flake-parts.lib.mkFlake { inherit inputs; } {
-        imports = [ ./maintainers/flake-module.nix ];
-        systems = lib.subtractLists crossSystems systems;
-        perSystem =
-          { system, ... }:
-          {
-            _module.args.pkgs = nixpkgsFor.${system}.native;
+      # Pre-commit hooks configuration
+      preCommitHooksFor =
+        system:
+        let
+          pkgs = nixpkgsFor.${system}.native;
+          hooksSettings = import ./packaging/pre-commit-hook-settings.nix {
+            inherit lib pkgs;
+            src = self;
           };
-      };
+          git-hooks = inputs.git-hooks-nix.lib.${system};
+        in
+        {
+          check = git-hooks.run hooksSettings;
+          settings = hooksSettings;
+        };
 
       # Memoize nixpkgs for different platforms for efficiency.
       nixpkgsFor = forAllSystems (
@@ -345,7 +347,9 @@
                 }
               )).componentTests
             )
-        // devFlake.checks.${system} or { }
+        // {
+          pre-commit-check = (preCommitHooksFor system).check;
+        }
       );
 
       packages = forAllSystems (
@@ -494,7 +498,7 @@
 
       devShells =
         let
-          makeShell = import ./packaging/dev-shell.nix { inherit lib devFlake; };
+          makeShell = import ./packaging/dev-shell.nix { inherit lib preCommitHooksFor; };
           prefixAttrs = prefix: lib.concatMapAttrs (k: v: { "${prefix}-${k}" = v; });
         in
         forAllSystems (

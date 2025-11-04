@@ -1,6 +1,6 @@
 {
   lib,
-  devFlake,
+  preCommitHooksFor,
 }:
 
 { pkgs }:
@@ -11,7 +11,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
   let
     stdenv = pkgs.nixDependencies2.stdenv;
     buildCanExecuteHost = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
-    modular = devFlake.getSystem stdenv.buildPlatform.system;
+    modular = preCommitHooksFor stdenv.buildPlatform.system;
     transformFlag =
       prefix: flag:
       assert builtins.isString flag;
@@ -74,7 +74,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
     env = {
       # For `make format`, to work without installing pre-commit
       _NIX_PRE_COMMIT_HOOKS_CONFIG = "${(pkgs.formats.yaml { }).generate "pre-commit-config.yaml"
-        modular.pre-commit.settings.rawConfig
+        modular.settings
       }";
     }
     // lib.optionalAttrs stdenv.hostPlatform.isLinux {
@@ -115,8 +115,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
         pkgs.buildPackages.gnused
         pkgs.buildPackages.shellcheck
         pkgs.buildPackages.changelog-d
-        modular.pre-commit.settings.package
-        (pkgs.writeScriptBin "pre-commit-hooks-install" modular.pre-commit.settings.installationScript)
+        pkgs.buildPackages.pre-commit
         pkgs.buildPackages.nixfmt-rfc-style
         pkgs.buildPackages.shellcheck
         pkgs.buildPackages.gdb
