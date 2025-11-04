@@ -344,7 +344,7 @@
               )).componentTests
             )
         // {
-          pre-commit-check = (preCommitHooksFor system).check;
+          pre-commit-check = preCommitHooksFor system;
         }
       );
 
