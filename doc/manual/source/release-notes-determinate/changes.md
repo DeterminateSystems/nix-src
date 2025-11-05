@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.12.1.<!-- differences -->
+This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.12.2.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -133,3 +133,17 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 <!-- Determinate Nix version 3.12.1 -->
 
 * Allow access to the result of fetchClosure by @edolstra in [DeterminateSystems/nix-src#241](https://github.com/DeterminateSystems/nix-src/pull/241)
+
+<!-- Determinate Nix version 3.12.2 -->
+
+* GitRepo::getRevCount(): Compute revcount in parallel by @edolstra in [DeterminateSystems/nix-src#245](https://github.com/DeterminateSystems/nix-src/pull/245)
+
+* Abbreviate flakerefs in error messages by @edolstra in [DeterminateSystems/nix-src#243](https://github.com/DeterminateSystems/nix-src/pull/243)
+
+* Sync with upstream 2.32.2 by @edolstra in [DeterminateSystems/nix-src#242](https://github.com/DeterminateSystems/nix-src/pull/242)
+
+* Test that `builtOutputs` is present in the JSON log by @cole-h in [DeterminateSystems/nix-src#248](https://github.com/DeterminateSystems/nix-src/pull/248)
+
+* Tell our users to file issues with us, not upstream by @cole-h in [DeterminateSystems/nix-src#251](https://github.com/DeterminateSystems/nix-src/pull/251)
+
+* nix flake check: Remove incorrect assertion by @edolstra in [DeterminateSystems/nix-src#252](https://github.com/DeterminateSystems/nix-src/pull/252)
