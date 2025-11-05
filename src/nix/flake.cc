@@ -437,8 +437,6 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
         if (build && !drvPaths->empty()) {
             // FIXME: should start building while evaluating.
 
-            state->waitForAllPaths();
-
             // TODO: This filtering of substitutable paths is a temporary workaround until
             // https://github.com/NixOS/nix/issues/5025 (union stores) is implemented.
             //
@@ -450,9 +448,8 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
             // For now, we skip building derivations whose outputs are already available
             // via substitution, as `nix flake check` only needs to verify buildability,
             // not actually produce the outputs.
+            state->waitForAllPaths();
             auto missing = store->queryMissing(*drvPaths);
-            // Only occurs if `drvPaths` contains a `DerivedPath::Opaque`, which should never happen
-            assert(missing.unknown.empty());
 
             std::vector<DerivedPath> toBuild;
             for (auto & path : missing.willBuild) {

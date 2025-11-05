@@ -1321,6 +1321,13 @@ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status stat
         .builtOutputs = std::move(builtOutputs),
     };
 
+    logger->result(
+        act ? act->id : getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
     mcRunningBuilds.reset();
 
     if (status == BuildResult::Success::Built)

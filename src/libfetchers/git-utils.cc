@@ -15,6 +15,7 @@
 
 #include <git2/attr.h>
 #include <git2/blob.h>
+#include <git2/branch.h>
 #include <git2/commit.h>
 #include <git2/config.h>
 #include <git2/describe.h>
@@ -31,14 +32,17 @@
 #include <git2/submodule.h>
 #include <git2/sys/odb_backend.h>
 #include <git2/sys/mempack.h>
+#include <git2/tag.h>
 #include <git2/tree.h>
 
+#include <boost/unordered/concurrent_flat_set.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/unordered/unordered_flat_set.hpp>
 #include <iostream>
 #include <queue>
 #include <regex>
 #include <span>
+#include <ranges>
 
 namespace std {
 
@@ -330,32 +334,57 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
         checkInterrupt();
     }
 
+    /**
+     * Return a connection pool for this repo. Useful for
+     * multithreaded access.
+     */
+    Pool<GitRepoImpl> getPool()
+    {
+        // TODO: as an optimization, it would be nice to include `this` in the pool.
+        return Pool<GitRepoImpl>(
+            std::numeric_limits<size_t>::max(), [this, useMempack(useMempack)]() -> ref<GitRepoImpl> {
+                return make_ref<GitRepoImpl>(path, false, bare, useMempack);
+            });
+    }
+
     uint64_t getRevCount(const Hash & rev) override
     {
-        boost::unordered_flat_set<git_oid, std::hash<git_oid>> done;
-        std::queue<Commit> todo;
+        boost::concurrent_flat_set<git_oid, std::hash<git_oid>> done;
 
-        todo.push(peelObject<Commit>(lookupObject(*this, hashToOID(rev)).get(), GIT_OBJECT_COMMIT));
+        auto startCommit = peelObject<Commit>(lookupObject(*this, hashToOID(rev)).get(), GIT_OBJECT_COMMIT);
+        auto startOid = *git_commit_id(startCommit.get());
+        done.insert(startOid);
 
-        while (auto commit = pop(todo)) {
-            if (!done.insert(*git_commit_id(commit->get())).second)
-                continue;
+        auto repoPool(getPool());
 
-            for (size_t n = 0; n < git_commit_parentcount(commit->get()); ++n) {
-                git_commit * parent;
-                if (git_commit_parent(&parent, commit->get(), n)) {
+        ThreadPool pool;
+
+        auto process = [&done, &pool, &repoPool](this const auto & process, const git_oid & oid) -> void {
+            auto repo(repoPool.get());
+
+            auto _commit = lookupObject(*repo, oid, GIT_OBJECT_COMMIT);
+            auto commit = (const git_commit *) &*_commit;
+
+            for (auto n : std::views::iota(0U, git_commit_parentcount(commit))) {
+                auto parentOid = git_commit_parent_id(commit, n);
+                if (!parentOid) {
                     throw Error(
                         "Failed to retrieve the parent of Git commit '%s': %s. "
                         "This may be due to an incomplete repository history. "
                         "To resolve this, either enable the shallow parameter in your flake URL (?shallow=1) "
                         "or add set the shallow parameter to true in builtins.fetchGit, "
                         "or fetch the complete history for this branch.",
-                        *git_commit_id(commit->get()),
+                        *git_commit_id(commit),
                         git_error_last()->message);
                 }
-                todo.push(Commit(parent));
+                if (done.insert(*parentOid))
+                    pool.enqueue(std::bind(process, *parentOid));
             }
-        }
+        };
+
+        pool.enqueue(std::bind(process, startOid));
+
+        pool.process();
 
         return done.size();
     }
@@ -1070,9 +1099,7 @@ struct GitFileSystemObjectSinkImpl : GitFileSystemObjectSink
 
     GitFileSystemObjectSinkImpl(ref<GitRepoImpl> repo)
         : repo(repo)
-        , repoPool(std::numeric_limits<size_t>::max(), [repo, useMempack(useMempack)]() -> ref<GitRepoImpl> {
-            return make_ref<GitRepoImpl>(repo->path, false, repo->bare, useMempack);
-        })
+        , repoPool(repo->getPool())
     {
     }
 
@@ -1388,55 +1415,13 @@ GitRepo::WorkdirInfo GitRepo::getCachedWorkdirInfo(const std::filesystem::path &
     return workdirInfo;
 }
 
-/**
- * Checks that the git reference is valid and normalizes slash '/' sequences.
- *
- * Accepts shorthand references (one-level refnames are allowed).
- */
-bool isValidRefNameAllowNormalizations(const std::string & refName)
-{
-    /* Unfortunately libgit2 doesn't expose the limit in headers, but its internal
-       limit is also 1024. */
-    std::array<char, 1024> normalizedRefBuffer;
-
-    /* It would be nice to have a better API like git_reference_name_is_valid, but
-     * with GIT_REFERENCE_FORMAT_REFSPEC_SHORTHAND flag. libgit2 uses it internally
-     * but doesn't expose it in public headers [1].
-     * [1]:
-     * https://github.com/libgit2/libgit2/blob/9d5f1bacc23594c2ba324c8f0d41b88bf0e9ef04/src/libgit2/refs.c#L1362-L1365
-     */
-
-    auto res = git_reference_normalize_name(
-        normalizedRefBuffer.data(),
-        normalizedRefBuffer.size(),
-        refName.c_str(),
-        GIT_REFERENCE_FORMAT_ALLOW_ONELEVEL | GIT_REFERENCE_FORMAT_REFSPEC_SHORTHAND);
-
-    return res == 0;
-}
-
 bool isLegalRefName(const std::string & refName)
 {
     initLibGit2();
 
-    /* Since `git_reference_normalize_name` is the best API libgit2 has for verifying
-     * reference names with shorthands (see comment in normalizeRefName), we need to
-     * ensure that exceptions to the validity checks imposed by normalization [1] are checked
-     * explicitly.
-     * [1]: https://git-scm.com/docs/git-check-ref-format#Documentation/git-check-ref-format.txt---normalize
-     */
-
     /* Check for cases that don't get rejected by libgit2.
      * FIXME: libgit2 should reject this. */
     if (refName == "@")
-        return false;
-
-    /* Leading slashes and consecutive slashes are stripped during normalizatiton. */
-    if (refName.starts_with('/') || refName.find("//") != refName.npos)
-        return false;
-
-    /* Refer to libgit2. */
-    if (!isValidRefNameAllowNormalizations(refName))
         return false;
 
     /* libgit2 doesn't barf on DEL symbol.
@@ -1444,7 +1429,19 @@ bool isLegalRefName(const std::string & refName)
     if (refName.find('\177') != refName.npos)
         return false;
 
-    return true;
+    for (auto * func : {
+             git_reference_name_is_valid,
+             git_branch_name_is_valid,
+             git_tag_name_is_valid,
+         }) {
+        int valid = 0;
+        if (func(&valid, refName.c_str()))
+            throw Error("checking git reference '%s': %s", refName, git_error_last()->message);
+        if (valid)
+            return true;
+    }
+
+    return false;
 }
 
 } // namespace nix

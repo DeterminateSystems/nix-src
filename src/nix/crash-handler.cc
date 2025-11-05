@@ -34,7 +34,7 @@ void logFatal(std::string const & s)
 void onTerminate()
 {
     logFatal(
-        "Nix crashed. This is a bug. Please report this at https://github.com/NixOS/nix/issues with the following information included:\n");
+        "Determinate Nix crashed. This is a bug. Please report this at https://github.com/DeterminateSystems/nix-src/issues with the following information included:\n");
     try {
         std::exception_ptr eptr = std::current_exception();
         if (eptr) {
