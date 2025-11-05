@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.12.1.<!-- differences -->
+This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.12.2.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -132,4 +132,10 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 
 <!-- Determinate Nix version 3.12.1 -->
 
-* Allow access to the result of fetchClosure by @edolstra in [DeterminateSystems/nix-src#241](https://github.com/DeterminateSystems/nix-src/pull/241)
+* During evaluation, you can read or import from the result of `builtins.fetchClosure`. [DeterminateSystems/nix-src#241](https://github.com/DeterminateSystems/nix-src/pull/241)
+
+<!-- Determinate Nix version 3.12.2 -->
+
+* Computing the `revCount` attribute is multi-threaded, making it much faster for repositories like Nixpkgs. [DeterminateSystems/nix-src#245](https://github.com/DeterminateSystems/nix-src/pull/245)
+
+* Flakerefs in error messages are abbreviated for readability. [DeterminateSystems/nix-src#243](https://github.com/DeterminateSystems/nix-src/pull/243)
