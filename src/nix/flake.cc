@@ -820,8 +820,6 @@ struct CmdFlakeCheck : FlakeCommand
             // not actually produce the outputs.
             state->waitForAllPaths();
             auto missing = store->queryMissing(drvPaths);
-            // Only occurs if `drvPaths` contains a `DerivedPath::Opaque`, which should never happen
-            assert(missing.unknown.empty());
 
             std::vector<DerivedPath> toBuild;
             for (auto & path : missing.willBuild) {
