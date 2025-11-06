@@ -291,7 +291,7 @@ nix_err nix_store_get_fs_closure(
     bool include_outputs,
     bool include_derivers,
     void * userdata,
-    void (*callback)(void * userdata, const StorePath * store_path));
+    void (*callback)(nix_c_context * context, void * userdata, const StorePath * store_path));
 
 /**
  * @brief Returns the derivation associated with the store path

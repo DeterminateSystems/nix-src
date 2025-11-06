@@ -256,7 +256,7 @@ nix_err nix_store_get_fs_closure(
     bool include_outputs,
     bool include_derivers,
     void * userdata,
-    void (*callback)(void * userdata, const StorePath * store_path))
+    void (*callback)(nix_c_context * context, void * userdata, const StorePath * store_path))
 {
     if (context)
         context->last_err_code = NIX_OK;
@@ -269,7 +269,9 @@ nix_err nix_store_get_fs_closure(
         if (callback) {
             for (const auto & path : set) {
                 const StorePath tmp{path};
-                callback(userdata, &tmp);
+                callback(context, userdata, &tmp);
+                if (context && context->last_err_code != NIX_OK)
+                    return context->last_err_code;
             }
         }
     }
