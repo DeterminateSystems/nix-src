@@ -818,6 +818,9 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                     if (auto drv = leaf.derivation())
                         obj.emplace("derivationName", drv->getAttr(state->s.name)->getString());
 
+                    if (auto forSystems = leaf.forSystems())
+                        obj.emplace("forSystems", *forSystems);
+
                     // FIXME: add more stuff
                 },
 

@@ -156,10 +156,9 @@ void visit(
 
     /* Apply the system type filter. */
     if (system) {
-        if (auto forSystems = node->maybeGetAttr("forSystems")) {
-            auto systems = forSystems->getListOfStrings();
-            if (std::find(systems.begin(), systems.end(), system) == systems.end()) {
-                visitFiltered(node, systems);
+        if (auto forSystems = Node(node).forSystems()) {
+            if (std::find(forSystems->begin(), forSystems->end(), system) == forSystems->end()) {
+                visitFiltered(node, *forSystems);
                 return;
             }
         }
@@ -184,7 +183,15 @@ void visit(
     }
 
     else
-        visitLeaf(Leaf(ref(node)));
+        visitLeaf(Leaf(node));
+}
+
+std::optional<std::vector<std::string>> Node::forSystems() const
+{
+    if (auto forSystems = node->maybeGetAttr("forSystems"))
+        return forSystems->getListOfStrings();
+    else
+        return std::nullopt;
 }
 
 std::optional<std::string> Leaf::what() const

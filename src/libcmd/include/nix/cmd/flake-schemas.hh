@@ -15,9 +15,25 @@ void forEachOutput(
     ref<AttrCursor> inventory,
     std::function<void(Symbol outputName, std::shared_ptr<AttrCursor> output, const std::string & doc, bool isLast)> f);
 
-struct Leaf
+struct Node
 {
     const ref<AttrCursor> node;
+
+    Node(const ref<AttrCursor> & node)
+        : node(node)
+    {
+    }
+
+    /**
+     * Return the `forSystems` attribute. This can be null, which
+     * means "all systems".
+     */
+    std::optional<std::vector<std::string>> forSystems() const;
+};
+
+struct Leaf : Node
+{
+    using Node::Node;
 
     std::optional<std::string> what() const;
 
