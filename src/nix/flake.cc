@@ -377,8 +377,8 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                 checkAllSystems ? std::optional<std::string>() : localSystem,
                 node,
 
-                [&](ref<eval_cache::AttrCursor> leaf) {
-                    if (auto evalChecks = leaf->maybeGetAttr("evalChecks")) {
+                [&](const flake_schemas::Leaf & leaf) {
+                    if (auto evalChecks = leaf.node->maybeGetAttr("evalChecks")) {
                         auto checkNames = evalChecks->getAttrs();
                         for (auto & checkName : checkNames) {
                             // FIXME: update activity
@@ -389,8 +389,8 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                         }
                     }
 
-                    if (auto drv = flake_schemas::derivation(leaf)) {
-                        if (auto isFlakeCheck = leaf->maybeGetAttr("isFlakeCheck")) {
+                    if (auto drv = leaf.derivation()) {
+                        if (auto isFlakeCheck = leaf.node->maybeGetAttr("isFlakeCheck")) {
                             if (isFlakeCheck->getBool()) {
                                 auto drvPath = drv->forceDerivation();
                                 drvPaths_.lock()->push_back(
@@ -806,16 +806,16 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 showAllSystems ? std::optional<std::string>() : localSystem,
                 node,
 
-                [&](ref<eval_cache::AttrCursor> leaf) {
+                [&](const flake_schemas::Leaf & leaf) {
                     obj.emplace("leaf", true);
 
-                    if (auto what = flake_schemas::what(leaf))
+                    if (auto what = leaf.what())
                         obj.emplace("what", *what);
 
-                    if (auto shortDescription = flake_schemas::shortDescription(leaf))
+                    if (auto shortDescription = leaf.shortDescription())
                         obj.emplace("shortDescription", *shortDescription);
 
-                    if (auto drv = flake_schemas::derivation(leaf))
+                    if (auto drv = leaf.derivation())
                         obj.emplace("derivationName", drv->getAttr(state->s.name)->getString());
 
                     // FIXME: add more stuff

@@ -148,7 +148,7 @@ void forEachOutput(
 void visit(
     std::optional<std::string> system,
     ref<AttrCursor> node,
-    std::function<void(ref<AttrCursor> leaf)> visitLeaf,
+    std::function<void(const Leaf & leaf)> visitLeaf,
     std::function<void(std::function<void(ForEachChild)>)> visitNonLeaf,
     std::function<void(ref<AttrCursor> node, const std::vector<std::string> & systems)> visitFiltered)
 {
@@ -184,27 +184,27 @@ void visit(
     }
 
     else
-        visitLeaf(ref(node));
+        visitLeaf(Leaf(ref(node)));
 }
 
-std::optional<std::string> what(ref<AttrCursor> leaf)
+std::optional<std::string> Leaf::what() const
 {
-    if (auto what = leaf->maybeGetAttr("what"))
+    if (auto what = node->maybeGetAttr("what"))
         return what->getString();
     else
         return std::nullopt;
 }
 
-std::optional<std::string> shortDescription(ref<AttrCursor> leaf)
+std::optional<std::string> Leaf::shortDescription() const
 {
-    if (auto what = leaf->maybeGetAttr("shortDescription"))
+    if (auto what = node->maybeGetAttr("shortDescription"))
         return trim(what->getString());
     return std::nullopt;
 }
 
-std::shared_ptr<AttrCursor> derivation(ref<AttrCursor> leaf)
+std::shared_ptr<AttrCursor> Leaf::derivation() const
 {
-    return leaf->maybeGetAttr("derivation");
+    return node->maybeGetAttr("derivation");
 }
 
 std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, eval_cache::AttrPath attrPath)
