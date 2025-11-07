@@ -197,11 +197,8 @@ std::optional<std::string> what(ref<AttrCursor> leaf)
 
 std::optional<std::string> shortDescription(ref<AttrCursor> leaf)
 {
-    if (auto what = leaf->maybeGetAttr("shortDescription")) {
-        auto s = trim(what->getString());
-        if (s != "")
-            return s;
-    }
+    if (auto what = leaf->maybeGetAttr("shortDescription"))
+        return trim(what->getString());
     return std::nullopt;
 }
 
