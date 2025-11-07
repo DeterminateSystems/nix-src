@@ -846,6 +846,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
         };
 
         auto res = nlohmann::json::object();
+        res.emplace("version", 1);
 
         flake_schemas::forEachOutput(
             inventory,
