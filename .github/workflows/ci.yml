@@ -63,25 +63,6 @@ jobs:
       runner_for_virt: UbuntuLatest32Cores128GArm
       runner_small: UbuntuLatest32Cores128GArm
 
-  build_x86_64-darwin:
-    uses: ./.github/workflows/build.yml
-    with:
-      if: ${{
-            github.event_name != 'pull_request'
-            || (
-              github.event.pull_request.head.repo.full_name == 'DeterminateSystems/nix-src'
-              && (
-                (github.event.action == 'labeled' && github.event.label.name == 'upload to s3')
-                || (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'upload to s3'))
-              )
-            )
-          }}
-      system: x86_64-darwin
-      runner: macos-latest-large
-      runner_for_virt: macos-latest-large
-      runner_small: macos-latest-large
-      run_tests: false
-
   build_aarch64-darwin:
     uses: ./.github/workflows/build.yml
     with:
@@ -96,7 +77,6 @@ jobs:
       - eval
       - build_x86_64-linux
       - build_aarch64-linux
-      - build_x86_64-darwin
       - build_aarch64-darwin
     if: ${{ always() }}
     steps:
