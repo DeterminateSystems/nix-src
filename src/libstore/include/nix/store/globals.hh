@@ -225,12 +225,8 @@ public:
           The following system types are widely used, as Nix is actively supported on these platforms:
 
           - `x86_64-linux`
-          - `x86_64-darwin`
-          - `i686-linux`
           - `aarch64-linux`
           - `aarch64-darwin`
-          - `armv6l-linux`
-          - `armv7l-linux`
 
           In general, you do not have to modify this setting.
           While you can force Nix to run a Darwin-specific `builder` executable on a Linux machine, the result would obviously be wrong.
