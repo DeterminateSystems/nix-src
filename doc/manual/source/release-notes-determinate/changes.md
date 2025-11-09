@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.12.2.<!-- differences -->
+This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.13.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -75,8 +75,6 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 
 <!-- Determinate Nix version 3.8.2 -->
 
-* ci: don't run the full test suite for x86_64-darwin by @grahamc in [DeterminateSystems/nix-src#144](https://github.com/DeterminateSystems/nix-src/pull/144)
-
 <!-- Determinate Nix version 3.8.3 -->
 
 <!-- Determinate Nix version 3.8.4 -->
@@ -139,3 +137,7 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 * Computing the `revCount` attribute is multi-threaded, making it much faster for repositories like Nixpkgs. [DeterminateSystems/nix-src#245](https://github.com/DeterminateSystems/nix-src/pull/245)
 
 * Flakerefs in error messages are abbreviated for readability. [DeterminateSystems/nix-src#243](https://github.com/DeterminateSystems/nix-src/pull/243)
+
+<!-- Determinate Nix version 3.13.0 -->
+
+* Git fetching has a progress indication [DeterminateSystems/nix-src#250](https://github.com/DeterminateSystems/nix-src/pull/250)
