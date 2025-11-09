@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.12.2.<!-- differences -->
+This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.13.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -139,3 +139,15 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 * Computing the `revCount` attribute is multi-threaded, making it much faster for repositories like Nixpkgs. [DeterminateSystems/nix-src#245](https://github.com/DeterminateSystems/nix-src/pull/245)
 
 * Flakerefs in error messages are abbreviated for readability. [DeterminateSystems/nix-src#243](https://github.com/DeterminateSystems/nix-src/pull/243)
+
+<!-- Determinate Nix version 3.13.0 -->
+
+* C API: add nix_locked_flake_read_path for flake file reading by @RossComputerGuy in [DeterminateSystems/nix-src#244](https://github.com/DeterminateSystems/nix-src/pull/244)
+
+* C API: make nix_store_get_fs_closure compatible with upstream by @RossComputerGuy in [DeterminateSystems/nix-src#254](https://github.com/DeterminateSystems/nix-src/pull/254)
+
+* Git fetcher: Restore progress indication by @edolstra in [DeterminateSystems/nix-src#250](https://github.com/DeterminateSystems/nix-src/pull/250)
+
+* Sync with upstream 2.32.3 by @edolstra in [DeterminateSystems/nix-src#255](https://github.com/DeterminateSystems/nix-src/pull/255)
+
+* Drop x86_64-darwin by @grahamc in [DeterminateSystems/nix-src#257](https://github.com/DeterminateSystems/nix-src/pull/257)
