@@ -760,6 +760,8 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
 {
     bool showLegacy = false;
     bool showAllSystems = false;
+    bool showOutputPaths = false;
+    bool showDrvPaths = false;
 
     CmdFlakeShow()
     {
@@ -772,6 +774,16 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
             .longName = "all-systems",
             .description = "Show the contents of outputs for all systems.",
             .handler = {&showAllSystems, true},
+        });
+        addFlag({
+            .longName = "output-paths",
+            .description = "Include the store paths of derivation outputs in the JSON output.",
+            .handler = {&showOutputPaths, true},
+        });
+        addFlag({
+            .longName = "drv-paths",
+            .description = "Include the store paths of derivations in the JSON output.",
+            .handler = {&showDrvPaths, true},
         });
     }
 
@@ -815,8 +827,27 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                     if (auto shortDescription = leaf.shortDescription())
                         obj.emplace("shortDescription", *shortDescription);
 
-                    if (auto drv = leaf.derivation())
+                    if (auto drv = leaf.derivation()) {
                         obj.emplace("derivationName", drv->getAttr(state->s.name)->getString());
+
+                        if (showDrvPaths) {
+                            auto drvPath = drv->forceDerivation();
+                            obj.emplace("derivation", store->printStorePath(drvPath));
+                        }
+
+                        if (showOutputPaths) {
+                            auto outputs = nlohmann::json::object();
+                            auto drvPath = drv->forceDerivation();
+                            auto drv = getEvalStore()->derivationFromPath(drvPath);
+                            for (auto & i : drv.outputsAndOptPaths(*store)) {
+                                if (auto outPath = i.second.second)
+                                    outputs.emplace(i.first, store->printStorePath(*outPath));
+                                else
+                                    outputs.emplace(i.first, nullptr);
+                            }
+                            obj.emplace("outputs", std::move(outputs));
+                        }
+                    }
 
                     if (auto forSystems = leaf.forSystems())
                         obj.emplace("forSystems", *forSystems);
