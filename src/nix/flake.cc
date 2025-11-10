@@ -819,8 +819,6 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 node,
 
                 [&](const flake_schemas::Leaf & leaf) {
-                    obj.emplace("leaf", true);
-
                     if (auto what = leaf.what())
                         obj.emplace("what", *what);
 
@@ -828,11 +826,13 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                         obj.emplace("shortDescription", *shortDescription);
 
                     if (auto drv = leaf.derivation()) {
-                        obj.emplace("derivationName", drv->getAttr(state->s.name)->getString());
+                        auto drvObj = nlohmann::json::object();
+
+                        drvObj.emplace("name", drv->getAttr(state->s.name)->getString());
 
                         if (showDrvPaths) {
                             auto drvPath = drv->forceDerivation();
-                            obj.emplace("derivation", store->printStorePath(drvPath));
+                            drvObj.emplace("path", store->printStorePath(drvPath));
                         }
 
                         if (showOutputPaths) {
@@ -845,8 +845,10 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                                 else
                                     outputs.emplace(i.first, nullptr);
                             }
-                            obj.emplace("outputs", std::move(outputs));
+                            drvObj.emplace("outputs", std::move(outputs));
                         }
+
+                        obj.emplace("derivation", std::move(drvObj));
                     }
 
                     if (auto forSystems = leaf.forSystems())
@@ -879,8 +881,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 });
         };
 
-        auto res = nlohmann::json::object();
-        res.emplace("version", 1);
+        auto inv = nlohmann::json::object();
 
         flake_schemas::forEachOutput(
             inventory,
@@ -888,7 +889,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 std::shared_ptr<eval_cache::AttrCursor> output,
                 const std::string & doc,
                 bool isLast) {
-                auto & j = res.emplace(state->symbols[outputName], nlohmann::json::object()).first.value();
+                auto & j = inv.emplace(state->symbols[outputName], nlohmann::json::object()).first.value();
 
                 if (!showLegacy && state->symbols[outputName] == "legacyPackages") {
                     j.emplace("skipped", true);
@@ -901,6 +902,8 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
             });
 
         futures.finishAll();
+
+        auto res = nlohmann::json{{"version", 2}, {"inventory", std::move(inv)}};
 
         if (json)
             printJSON(res);

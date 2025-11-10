@@ -205,7 +205,7 @@ std::optional<std::string> Leaf::what() const
 std::optional<std::string> Leaf::shortDescription() const
 {
     if (auto what = node->maybeGetAttr("shortDescription"))
-        return trim(what->getString());
+        return what->getString();
     return std::nullopt;
 }
 
