@@ -143,13 +143,15 @@ jobs:
       - name: Checkout flake-regressions
         uses: actions/checkout@v4
         with:
-          repository: DeterminateSystems/flake-regressions
+          repository: NixOS/flake-regressions
           path: flake-regressions
+          ref: nix-flake-show
       - name: Checkout flake-regressions-data
         uses: actions/checkout@v4
         with:
-          repository: DeterminateSystems/flake-regressions-data
+          repository: NixOS/flake-regressions-data
           path: flake-regressions/tests
+          ref: update-json-format
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
       - name: Run flake regression tests
@@ -159,6 +161,7 @@ jobs:
           FLAKE_REGRESSION_GLOB: ${{ matrix.glob }}
           NIX_CONFIG: ${{ matrix.nix_config }}
           PREFETCH: "1"
+          USE_NIX_FLAKE_SHOW: "1"
         run: |
           set -x
           echo "PARALLEL: $PARALLEL"
