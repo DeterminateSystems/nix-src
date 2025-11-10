@@ -365,7 +365,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                 throw;
             } catch (Error & e) {
                 if (settings.keepGoing) {
-                    logError({.msg = e.info().msg});
+                    logError(e.info());
                     hasErrors = true;
                 } else
                     throw;
