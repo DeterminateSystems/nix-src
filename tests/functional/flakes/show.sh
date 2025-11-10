@@ -16,9 +16,9 @@ nix flake show --json > show-output.json
 nix eval --impure --expr '
 let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in
-assert show_output.packages.output.children.someOtherSystem.filtered;
-assert show_output.packages.output.children.${builtins.currentSystem}.children.default.derivationName == "simple";
-assert show_output.legacyPackages.skipped;
+assert show_output.inventory.packages.output.children.someOtherSystem.filtered;
+assert show_output.inventory.packages.output.children.${builtins.currentSystem}.children.default.derivation.name == "simple";
+assert show_output.inventory.legacyPackages.skipped;
 true
 '
 
@@ -28,8 +28,8 @@ nix flake show --json --all-systems > show-output.json
 nix eval --impure --expr '
 let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in
-assert show_output.packages.output.children.someOtherSystem.children.default.derivationName == "simple";
-assert show_output.legacyPackages.skipped;
+assert show_output.inventory.packages.output.children.someOtherSystem.children.default.derivation.name == "simple";
+assert show_output.inventory.legacyPackages.skipped;
 true
 '
 
@@ -39,7 +39,7 @@ nix flake show --json --legacy > show-output.json
 nix eval --impure --expr '
 let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in
-assert show_output.legacyPackages.output.children.${builtins.currentSystem}.children.hello.derivationName == "simple";
+assert show_output.inventory.legacyPackages.output.children.${builtins.currentSystem}.children.hello.derivation.name == "simple";
 true
 '
 
@@ -60,8 +60,8 @@ nix flake show --json --legacy --all-systems > show-output.json
 nix eval --impure --expr '
 let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in
-assert show_output.legacyPackages.output.children.${builtins.currentSystem}.children.AAAAAASomeThingsFailToEvaluate.failed;
-assert show_output.legacyPackages.output.children.${builtins.currentSystem}.children.simple.derivationName == "simple";
+assert show_output.inventory.legacyPackages.output.children.${builtins.currentSystem}.children.AAAAAASomeThingsFailToEvaluate.failed;
+assert show_output.inventory.legacyPackages.output.children.${builtins.currentSystem}.children.simple.derivation.name == "simple";
 true
 '
 
@@ -71,4 +71,4 @@ popd
 writeIfdFlake "$flakeDir"
 pushd "$flakeDir"
 
-[[ $(nix flake show --json | jq -r ".packages.output.children.\"$system\".children.default.derivationName") = top ]]
+[[ $(nix flake show --json | jq -r ".inventory.packages.output.children.\"$system\".children.default.derivation.name") = top ]]

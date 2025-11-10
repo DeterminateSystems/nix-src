@@ -903,11 +903,10 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
 
         futures.finishAll();
 
-        auto res = nlohmann::json{{"version", 2}, {"inventory", std::move(inv)}};
-
-        if (json)
+        if (json) {
+            auto res = nlohmann::json{{"version", 2}, {"inventory", std::move(inv)}};
             printJSON(res);
-        else {
+        } else {
 
             // Render the JSON into a tree representation.
             std::function<void(nlohmann::json j, const std::string & headerPrefix, const std::string & nextPrefix)>
@@ -949,8 +948,8 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
 
             logger->cout("%s", fmt(ANSI_BOLD "%s" ANSI_NORMAL, flake->flake.lockedRef));
 
-            for (const auto & [i, child] : enumerate(res.items())) {
-                bool last = i + 1 == res.size();
+            for (const auto & [i, child] : enumerate(inv.items())) {
+                bool last = i + 1 == inv.size();
                 auto nextPrefix = last ? treeNull : treeLine;
                 render(
                     child.value()["output"],
