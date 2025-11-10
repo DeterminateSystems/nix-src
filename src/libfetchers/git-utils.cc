@@ -592,24 +592,15 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
 
         if (ExecutablePath::load().findName("git")) {
             auto dir = this->path;
-            Strings gitArgs{"-C", dir.string(), "--git-dir", ".", "fetch", "--quiet", "--force"};
+            Strings gitArgs{"-C", dir.string(), "--git-dir", ".", "fetch", "--progress", "--force"};
             if (shallow)
                 append(gitArgs, {"--depth", "1"});
             append(gitArgs, {std::string("--"), url, refspec});
 
-            auto [status, output] = runProgram(
-                RunOptions{
-                    .program = "git",
-                    .lookupPath = true,
-                    // FIXME: git stderr messes up our progress indicator, so
-                    // we're using --quiet for now. Should process its stderr.
-                    .args = gitArgs,
-                    .input = {},
-                    .mergeStderrToStdout = true,
-                    .isInteractive = true});
+            auto status = runProgram(RunOptions{.program = "git", .args = gitArgs, .isInteractive = true}).first;
 
             if (status > 0)
-                throw Error("Failed to fetch git repository %s : %s", url, output);
+                throw Error("Failed to fetch git repository '%s'", url);
         } else {
             // Fall back to using libgit2 for fetching. This does not
             // support SSH very well.
