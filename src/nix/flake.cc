@@ -951,18 +951,15 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
             for (const auto & [i, child] : enumerate(inv.items())) {
                 bool last = i + 1 == inv.size();
                 auto nextPrefix = last ? treeNull : treeLine;
-                render(
-                    child.value()["output"],
-                    fmt(ANSI_GREEN "%s%s" ANSI_NORMAL ANSI_BOLD "%s" ANSI_NORMAL,
-                        "",
-                        last ? treeLast : treeConn,
-                        child.key()),
-                    nextPrefix);
-                if (child.value().contains("unknown"))
-                    logger->cout(
-                        ANSI_GREEN "%s%s" ANSI_NORMAL ANSI_ITALIC "(unknown flake output)" ANSI_NORMAL,
-                        nextPrefix,
-                        treeLast);
+                auto output = child.value().find("output");
+                auto headerPrefix = fmt(
+                    ANSI_GREEN "%s" ANSI_NORMAL ANSI_BOLD "%s" ANSI_NORMAL, last ? treeLast : treeConn, child.key());
+                if (output != child.value().end())
+                    render(*output, headerPrefix, nextPrefix);
+                else if (child.value().contains("unknown"))
+                    logger->cout(headerPrefix + ANSI_WARNING " unknown flake output" ANSI_NORMAL);
+                else if (child.value().contains("skipped"))
+                    logger->cout(headerPrefix + ANSI_WARNING " omitted" ANSI_NORMAL " (use '--legacy' to show)");
             }
         }
     }
