@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.13.0.<!-- differences -->
+This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.13.1.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -141,3 +141,6 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 <!-- Determinate Nix version 3.13.0 -->
 
 * Git fetching has a progress indication [DeterminateSystems/nix-src#250](https://github.com/DeterminateSystems/nix-src/pull/250)
+
+<!-- Determinate Nix version 3.13.1 -->
+
