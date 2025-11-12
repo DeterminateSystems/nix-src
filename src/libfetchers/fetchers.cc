@@ -84,7 +84,7 @@ Input Input::fromAttrs(const Settings & settings, Attrs && attrs)
         // but not all of them. Doing this is to support those other
         // operations which are supposed to be robust on
         // unknown/uninterpretable inputs.
-        Input input{settings};
+        Input input;
         input.attrs = attrs;
         fixupInput(input);
         return input;
@@ -160,9 +160,9 @@ bool Input::isDirect() const
     return !scheme || scheme->isDirect(*this);
 }
 
-bool Input::isLocked() const
+bool Input::isLocked(const Settings & settings) const
 {
-    return scheme && scheme->isLocked(*this);
+    return scheme && scheme->isLocked(settings, *this);
 }
 
 bool Input::isFinal() const
@@ -199,15 +199,15 @@ bool Input::contains(const Input & other) const
 }
 
 // FIXME: remove
-std::tuple<StorePath, ref<SourceAccessor>, Input> Input::fetchToStore(ref<Store> store) const
+std::tuple<StorePath, ref<SourceAccessor>, Input> Input::fetchToStore(const Settings & settings, ref<Store> store) const
 {
     if (!scheme)
         throw Error("cannot fetch unsupported input '%s'", attrsToJSON(toAttrs()));
 
     try {
-        auto [accessor, result] = getAccessorUnchecked(store);
+        auto [accessor, result] = getAccessorUnchecked(settings, store);
 
-        auto storePath = nix::fetchToStore(*settings, *store, SourcePath(accessor), FetchMode::Copy, result.getName());
+        auto storePath = nix::fetchToStore(settings, *store, SourcePath(accessor), FetchMode::Copy, result.getName());
 
         auto narHash = store->queryPathInfo(storePath)->narHash;
         result.attrs.insert_or_assign("narHash", narHash.to_string(HashFormat::SRI, true));
@@ -296,10 +296,10 @@ void Input::checkLocks(Input specified, Input & result)
     }
 }
 
-std::pair<ref<SourceAccessor>, Input> Input::getAccessor(ref<Store> store) const
+std::pair<ref<SourceAccessor>, Input> Input::getAccessor(const Settings & settings, ref<Store> store) const
 {
     try {
-        auto [accessor, result] = getAccessorUnchecked(store);
+        auto [accessor, result] = getAccessorUnchecked(settings, store);
 
         result.attrs.insert_or_assign("__final", Explicit<bool>(true));
 
@@ -327,7 +327,7 @@ struct SubstitutedSourceAccessor : ForwardingSourceAccessor
     }
 };
 
-std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(ref<Store> store) const
+std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings & settings, ref<Store> store) const
 {
     // FIXME: cache the accessor
 
@@ -347,7 +347,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(ref<Store> sto
         // can reuse the existing nar instead of copying the unpacked
         // input back into the store on every evaluation.
         if (accessor->fingerprint) {
-            settings->getCache()->upsert(
+            settings.getCache()->upsert(
                 makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
                 {{"hash", store->queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
         }
@@ -369,7 +369,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(ref<Store> sto
     }
 
     try {
-        auto [accessor, result] = scheme->getAccessor(store, *this);
+        auto [accessor, result] = scheme->getAccessor(settings, store, *this);
 
         if (!accessor->fingerprint)
             accessor->fingerprint = result.getFingerprint(store);
@@ -405,10 +405,10 @@ Input Input::applyOverrides(std::optional<std::string> ref, std::optional<Hash> 
     return scheme->applyOverrides(*this, ref, rev);
 }
 
-void Input::clone(ref<Store> store, const std::filesystem::path & destDir) const
+void Input::clone(const Settings & settings, ref<Store> store, const std::filesystem::path & destDir) const
 {
     assert(scheme);
-    scheme->clone(store, *this, destDir);
+    scheme->clone(settings, store, *this, destDir);
 }
 
 std::optional<std::filesystem::path> Input::getSourcePath() const
@@ -521,12 +521,13 @@ void InputScheme::putFile(
     throw Error("input '%s' does not support modifying file '%s'", input.to_string(), path);
 }
 
-void InputScheme::clone(ref<Store> store, const Input & input, const std::filesystem::path & destDir) const
+void InputScheme::clone(
+    const Settings & settings, ref<Store> store, const Input & input, const std::filesystem::path & destDir) const
 {
     if (std::filesystem::exists(destDir))
         throw Error("cannot clone into existing path %s", destDir);
 
-    auto [accessor, input2] = getAccessor(store, input);
+    auto [accessor, input2] = getAccessor(settings, store, input);
 
     Activity act(*logger, lvlTalkative, actUnknown, fmt("copying '%s' to %s...", input2.to_string(), destDir));
 

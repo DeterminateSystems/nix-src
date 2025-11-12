@@ -48,7 +48,7 @@ static void builtinFetchTree(const BuiltinBuilderContext & ctx)
        Nix's daemon so we can use the real store? */
     auto tmpStore = openStore(ctx.tmpDirInSandbox + "/nix");
 
-    auto [accessor, lockedInput] = input.getAccessor(tmpStore);
+    auto [accessor, lockedInput] = input.getAccessor(myFetchSettings, tmpStore);
 
     auto source = sinkToSource([&](Sink & sink) { accessor->dumpPath(CanonPath::root, sink); });
 
