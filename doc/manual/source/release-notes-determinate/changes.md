@@ -144,6 +144,3 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 
 <!-- Determinate Nix version 3.13.1 -->
 
-* nix bundle: Wait for async path writer by @edolstra in [DeterminateSystems/nix-src#260](https://github.com/DeterminateSystems/nix-src/pull/260)
-
-* Sync with upstream 2.32.4 by @edolstra in [DeterminateSystems/nix-src#261](https://github.com/DeterminateSystems/nix-src/pull/261)
