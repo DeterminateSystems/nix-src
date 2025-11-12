@@ -137,6 +137,10 @@ cat > "$flakeDir"/flake.nix <<EOF
       name = "simple";
       buildCommand = "mkdir \$out";
     };
+    packages.$system.bar = with import ./config.nix; mkDerivation {
+      name = "bad";
+      buildCommand = "exit 1";
+    };
   };
 }
 EOF
@@ -144,6 +148,11 @@ EOF
 cp "${config_nix}" "$flakeDir/"
 
 expectStderr 0 nix flake check "$flakeDir" | grepQuiet 'running 1 flake check'
+
+# FIXME: error code 100 doesn't get propagated from the daemon.
+if ! isTestOnNixOS && $NIX_REMOTE != daemon; then
+    expectStderr 100 nix flake check --build-all "$flakeDir" | grepQuiet 'Cannot build.*bad'
+fi
 
 cat > "$flakeDir"/flake.nix <<EOF
 {

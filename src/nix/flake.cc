@@ -303,6 +303,7 @@ struct CmdFlakeInfo : CmdFlakeMetadata
 struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
 {
     bool build = true;
+    bool buildAll = false;
     bool checkAllSystems = false;
 
     CmdFlakeCheck()
@@ -311,6 +312,11 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
             .longName = "no-build",
             .description = "Do not build checks.",
             .handler = {&build, false},
+        });
+        addFlag({
+            .longName = "build-all",
+            .description = "Build all derivations, not just checks.",
+            .handler = {&buildAll, true},
         });
         addFlag({
             .longName = "all-systems",
@@ -390,15 +396,13 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                     }
 
                     if (auto drv = leaf.derivation()) {
-                        if (auto isFlakeCheck = leaf.node->maybeGetAttr("isFlakeCheck")) {
-                            if (isFlakeCheck->getBool()) {
-                                auto drvPath = drv->forceDerivation();
-                                drvPaths_.lock()->push_back(
-                                    DerivedPath::Built{
-                                        .drvPath = makeConstantStorePathRef(drvPath),
-                                        .outputs = OutputsSpec::All{},
-                                    });
-                            }
+                        if (buildAll || leaf.isFlakeCheck()) {
+                            auto drvPath = drv->forceDerivation();
+                            drvPaths_.lock()->push_back(
+                                DerivedPath::Built{
+                                    .drvPath = makeConstantStorePathRef(drvPath),
+                                    .outputs = OutputsSpec::All{},
+                                });
                         }
                     }
                 },

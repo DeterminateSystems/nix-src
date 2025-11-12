@@ -40,6 +40,8 @@ struct Leaf : Node
     std::optional<std::string> shortDescription() const;
 
     std::shared_ptr<AttrCursor> derivation() const;
+
+    bool isFlakeCheck() const;
 };
 
 typedef std::function<void(Symbol attrName, ref<AttrCursor> attr, bool isLast)> ForEachChild;

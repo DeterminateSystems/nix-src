@@ -214,6 +214,12 @@ std::shared_ptr<AttrCursor> Leaf::derivation() const
     return node->maybeGetAttr("derivation");
 }
 
+bool Leaf::isFlakeCheck() const
+{
+    auto isFlakeCheck = node->maybeGetAttr("isFlakeCheck");
+    return isFlakeCheck && isFlakeCheck->getBool();
+}
+
 std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, eval_cache::AttrPath attrPath)
 {
     if (attrPath.empty())
