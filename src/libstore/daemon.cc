@@ -744,6 +744,7 @@ static void performOp(
         options.action = (GCOptions::GCAction) readInt(conn.from);
         options.pathsToDelete = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
         conn.from >> options.ignoreLiveness >> options.maxFreed;
+        options.censor = !trusted;
         // obsolete fields
         readInt(conn.from);
         readInt(conn.from);
@@ -752,7 +753,7 @@ static void performOp(
         GCResults results;
 
         logger->startWork();
-        if (options.ignoreLiveness)
+        if (options.ignoreLiveness && !getEnv("_NIX_IN_TEST").has_value())
             throw Error("you are not allowed to ignore liveness");
         auto & gcStore = require<GcStore>(*store);
         gcStore.collectGarbage(options, results);
@@ -1029,7 +1030,7 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
     auto [protoVersion, features] =
         WorkerProto::BasicServerConnection::handshake(to, from, PROTOCOL_VERSION, WorkerProto::allFeatures);
 
-    if (protoVersion < 256 + 18)
+    if (protoVersion < MINIMUM_PROTOCOL_VERSION)
         throw Error("the Nix client version is too old");
 
     WorkerProto::BasicServerConnection conn;

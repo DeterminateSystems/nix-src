@@ -95,6 +95,11 @@ struct DerivationBuilderParams
     StringSet systemFeatures;
 
     DesugaredEnv desugaredEnv;
+
+    /**
+     * The activity corresponding to the build.
+     */
+    std::unique_ptr<Activity> & act;
 };
 
 /**

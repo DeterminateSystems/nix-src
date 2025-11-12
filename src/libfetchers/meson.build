@@ -36,6 +36,7 @@ subdir('nix-meson-build-support/asan-options')
 
 sources = files(
   'attrs.cc',
+  'builtin.cc',
   'cache.cc',
   'fetch-settings.cc',
   'fetch-to-store.cc',

@@ -81,7 +81,7 @@ struct IndirectInputScheme : InputScheme
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         ParsedURL url{
             .scheme = "flake",
@@ -109,11 +109,6 @@ struct IndirectInputScheme : InputScheme
     std::pair<ref<SourceAccessor>, Input> getAccessor(ref<Store> store, const Input & input) const override
     {
         throw Error("indirect input '%s' cannot be fetched directly", input.to_string());
-    }
-
-    std::optional<ExperimentalFeature> experimentalFeature() const override
-    {
-        return Xp::Flakes;
     }
 
     bool isDirect(const Input & input) const override

@@ -47,8 +47,9 @@ struct CmdFlakePrefetchInputs : FlakeCommand
                 try {
                     Activity act(*logger, lvlInfo, actUnknown, fmt("fetching '%s'", lockedNode->lockedRef));
                     auto accessor = lockedNode->lockedRef.input.getAccessor(store).first;
-                    fetchToStore(
-                        fetchSettings, *store, accessor, FetchMode::Copy, lockedNode->lockedRef.input.getName());
+                    if (!evalSettings.lazyTrees)
+                        fetchToStore(
+                            fetchSettings, *store, accessor, FetchMode::Copy, lockedNode->lockedRef.input.getName());
                 } catch (Error & e) {
                     printError("%s", e.what());
                     nrFailed++;

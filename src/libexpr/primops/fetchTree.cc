@@ -183,17 +183,11 @@ static void fetchTree(
             }
             input = fetchers::Input::fromAttrs(state.fetchSettings, std::move(attrs));
         } else {
-            if (!experimentalFeatureSettings.isEnabled(Xp::Flakes))
-                state
-                    .error<EvalError>(
-                        "passing a string argument to '%s' requires the 'flakes' experimental feature", fetcher)
-                    .atPos(pos)
-                    .debugThrow();
             input = fetchers::Input::fromURL(state.fetchSettings, url);
         }
     }
 
-    if (!state.settings.pureEval && !input.isDirect() && experimentalFeatureSettings.isEnabled(Xp::Flakes))
+    if (!state.settings.pureEval && !input.isDirect())
         input = lookupInRegistries(state.store, input, fetchers::UseRegistries::Limited).first;
 
     if (state.settings.pureEval && !input.isLocked()) {
@@ -221,7 +215,7 @@ static void fetchTree(
 
     auto cachedInput = state.inputCache->getAccessor(state.store, input, fetchers::UseRegistries::No);
 
-    auto storePath = state.mountInput(cachedInput.lockedInput, input, cachedInput.accessor);
+    auto storePath = state.mountInput(cachedInput.lockedInput, input, cachedInput.accessor, true);
 
     emitTreeAttrs(state, storePath, cachedInput.lockedInput, v, params.emptyRevFallback, false);
 }
@@ -421,7 +415,6 @@ static RegisterPrimOp primop_fetchTree({
       - `"mercurial"`
 
      *input* can also be a [URL-like reference](@docroot@/command-ref/new-cli/nix3-flake.md#flake-references).
-     The additional input types and the URL-like syntax requires the [`flakes` experimental feature](@docroot@/development/experimental-features.md#xp-feature-flakes) to be enabled.
 
       > **Example**
       >
@@ -458,7 +451,6 @@ static RegisterPrimOp primop_fetchTree({
       >   ```
     )",
     .fun = prim_fetchTree,
-    .experimentalFeature = Xp::FetchTree,
 });
 
 void prim_fetchFinalTree(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -815,7 +807,7 @@ static RegisterPrimOp primop_fetchGit({
           name in the `ref` attribute.
 
           However, if the revision you're looking for is in a future
-          branch for the non-default branch you will need to specify the
+          branch for the non-default branch you need to specify the
           the `ref` attribute as well.
 
           ```nix

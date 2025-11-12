@@ -51,10 +51,12 @@ struct SingleDerivedPath;
 enum RepairFlag : bool;
 struct MemorySourceAccessor;
 struct MountedSourceAccessor;
+struct AsyncPathWriter;
 
 namespace eval_cache {
 class EvalCache;
 }
+struct Executor;
 
 /**
  * Increments a count on construction and decrements on destruction.
@@ -191,7 +193,7 @@ std::ostream & operator<<(std::ostream & os, const ValueType t);
 
 struct RegexCache;
 
-std::shared_ptr<RegexCache> makeRegexCache();
+ref<RegexCache> makeRegexCache();
 
 struct DebugTrace
 {
@@ -372,6 +374,7 @@ public:
 
     const fetchers::Settings & fetchSettings;
     const EvalSettings & settings;
+
     SymbolTable symbols;
     PosTable positions;
 
@@ -418,7 +421,7 @@ public:
 
     RootValue vImportedDrvToDerivation = nullptr;
 
-    ref<fetchers::InputCache> inputCache;
+    const ref<fetchers::InputCache> inputCache;
 
     /**
      * Debugger
@@ -429,6 +432,8 @@ public:
     int trylevel;
     std::list<DebugTrace> debugTraces;
     boost::unordered_flat_map<const Expr *, const std::shared_ptr<const StaticEnv>> exprEnvs;
+
+    ref<AsyncPathWriter> asyncPathWriter;
 
     const std::shared_ptr<const StaticEnv> getStaticEnv(const Expr & expr) const
     {
@@ -494,17 +499,18 @@ private:
      * Associate source positions of certain AST nodes with their preceding doc comment, if they have one.
      * Grouped by file.
      */
-    boost::unordered_flat_map<SourcePath, DocCommentMap> positionToDocComment;
+    SharedSync<boost::unordered_flat_map<SourcePath, ref<DocCommentMap>>> positionToDocComment;
 
     LookupPath lookupPath;
 
+    // FIXME: make thread-safe.
     boost::unordered_flat_map<std::string, std::optional<SourcePath>, StringViewHash, std::equal_to<>>
         lookupPathResolved;
 
     /**
      * Cache used by prim_match().
      */
-    std::shared_ptr<RegexCache> regexCache;
+    ref<RegexCache> regexCache;
 
 public:
 
@@ -579,7 +585,12 @@ public:
     /**
      * Mount an input on the Nix store.
      */
-    StorePath mountInput(fetchers::Input & input, const fetchers::Input & originalInput, ref<SourceAccessor> accessor);
+    StorePath mountInput(
+        fetchers::Input & input,
+        const fetchers::Input & originalInput,
+        ref<SourceAccessor> accessor,
+        bool requireLockable,
+        bool forceNarHash = false);
 
     /**
      * Parse a Nix expression from the specified file.
@@ -640,7 +651,10 @@ public:
      * application, call the function and overwrite `v` with the
      * result.  Otherwise, this is a no-op.
      */
-    inline void forceValue(Value & v, const PosIdx pos);
+    inline void forceValue(Value & v, const PosIdx pos)
+    {
+        v.force(*this, pos);
+    }
 
     void tryFixupBlackHolePos(Value & v, PosIdx pos);
 
@@ -698,6 +712,12 @@ public:
     std::optional<std::string> tryAttrsToString(
         const PosIdx pos, Value & v, NixStringContext & context, bool coerceMore = false, bool copyToStore = true);
 
+    StorePath devirtualize(const StorePath & path, StringMap * rewrites = nullptr);
+
+    SingleDerivedPath devirtualize(const SingleDerivedPath & path, StringMap * rewrites = nullptr);
+
+    std::string devirtualize(std::string_view s, const NixStringContext & context);
+
     /**
      * String coercion.
      *
@@ -715,7 +735,19 @@ public:
         bool copyToStore = true,
         bool canonicalizePath = true);
 
-    StorePath copyPathToStore(NixStringContext & context, const SourcePath & path);
+    StorePath copyPathToStore(NixStringContext & context, const SourcePath & path, PosIdx pos);
+
+    /**
+     * Compute the base name for a `SourcePath`. For non-store paths,
+     * this is just `SourcePath::baseName()`. But for store paths, for
+     * backwards compatibility, it needs to be `<hash>-source`,
+     * i.e. as if the path were copied to the Nix store. This results
+     * in a "double-copied" store path like
+     * `/nix/store/<hash1>-<hash2>-source`. We don't need to
+     * materialize /nix/store/<hash2>-source though. Still, this
+     * requires reading/hashing the path twice.
+     */
+    std::string computeBaseName(const SourcePath & path, PosIdx pos);
 
     /**
      * Path coercion.
@@ -858,10 +890,11 @@ private:
         std::shared_ptr<StaticEnv> & staticEnv);
 
     /**
-     * Current Nix call stack depth, used with `max-call-depth` setting to throw stack overflow hopefully before we run
-     * out of system stack.
+     * Current Nix call stack depth, used with `max-call-depth`
+     * setting to throw stack overflow hopefully before we run out of
+     * system stack.
      */
-    size_t callDepth = 0;
+    thread_local static size_t callDepth;
 
 public:
 
@@ -1008,6 +1041,10 @@ public:
 
     DocComment getDocCommentForPos(PosIdx pos);
 
+    void waitForPath(const StorePath & path);
+    void waitForPath(const SingleDerivedPath & path);
+    void waitForAllPaths();
+
 private:
 
     /**
@@ -1033,8 +1070,18 @@ private:
     Counter nrPrimOpCalls;
     Counter nrFunctionCalls;
 
+public:
+    Counter nrThunksAwaited;
+    Counter nrThunksAwaitedSlow;
+    Counter microsecondsWaiting;
+    Counter currentlyWaiting;
+    Counter maxWaiting;
+    Counter nrSpuriousWakeups;
+
+private:
     bool countCalls;
 
+    // FIXME: make thread-safe.
     typedef boost::unordered_flat_map<std::string, size_t, StringViewHash, std::equal_to<>> PrimOpCalls;
     PrimOpCalls primOpCalls;
 
@@ -1046,6 +1093,7 @@ private:
 
     void incrFunctionCall(ExprLambda * fun);
 
+    // FIXME: make thread-safe.
     typedef boost::unordered_flat_map<PosIdx, size_t, std::hash<PosIdx>> AttrSelects;
     AttrSelects attrSelects;
 
@@ -1063,6 +1111,17 @@ private:
 
     friend struct Value;
     friend class ListBuilder;
+
+public:
+    /**
+     * Worker threads manager.
+     *
+     * Note: keep this last to ensure that it's destroyed first, so we
+     * don't have any background work items (e.g. from
+     * `builtins.parallel`) referring to a partially destroyed
+     * `EvalState`.
+     */
+    ref<Executor> executor;
 };
 
 struct DebugTraceStacker

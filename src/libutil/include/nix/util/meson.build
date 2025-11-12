@@ -37,6 +37,7 @@ headers = files(
   'file-system.hh',
   'finally.hh',
   'fmt.hh',
+  'forwarding-source-accessor.hh',
   'fs-sink.hh',
   'git.hh',
   'hash.hh',

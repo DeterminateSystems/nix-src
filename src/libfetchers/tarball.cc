@@ -136,11 +136,11 @@ static DownloadTarballResult downloadTarball_(
             .treeHash = treeHash,
             .lastModified = (time_t) getIntAttr(infoAttrs, "lastModified"),
             .immutableUrl = maybeGetStrAttr(infoAttrs, "immutableUrl"),
-            .accessor = getTarballCache()->getAccessor(treeHash, false, displayPrefix),
+            .accessor = settings.getTarballCache()->getAccessor(treeHash, false, displayPrefix),
         };
     };
 
-    if (cached && !getTarballCache()->hasObject(getRevAttr(cached->value, "treeHash")))
+    if (cached && !settings.getTarballCache()->hasObject(getRevAttr(cached->value, "treeHash")))
         cached.reset();
 
     if (cached && !cached->expired)
@@ -179,7 +179,7 @@ static DownloadTarballResult downloadTarball_(
         TarArchive{path};
     })
                                                                                     : TarArchive{*source};
-    auto tarballCache = getTarballCache();
+    auto tarballCache = settings.getTarballCache();
     auto parseSink = tarballCache->getFileSystemObjectSink();
     auto lastModified = unpackTarfileToSink(archive, *parseSink);
     auto tree = parseSink->flush();
@@ -309,7 +309,7 @@ struct CurlInputScheme : InputScheme
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         auto url = parseURL(getStrAttr(input.attrs, "url"));
         // NAR hashes are preferred over file hashes since tar/zip
@@ -355,7 +355,7 @@ struct FileInputScheme : CurlInputScheme
 
         auto accessor = ref{store->getFSAccessor(file.storePath)};
 
-        accessor->setPathDisplay("«" + input.to_string() + "»");
+        accessor->setPathDisplay("«" + input.to_string(true) + "»");
 
         return {accessor, input};
     }
@@ -382,7 +382,7 @@ struct TarballInputScheme : CurlInputScheme
         auto input(_input);
 
         auto result =
-            downloadTarball_(*input.settings, getStrAttr(input.attrs, "url"), {}, "«" + input.to_string() + "»");
+            downloadTarball_(*input.settings, getStrAttr(input.attrs, "url"), {}, "«" + input.to_string(true) + "»");
 
         if (result.immutableUrl) {
             auto immutableInput = Input::fromURL(*input.settings, *result.immutableUrl);
@@ -398,7 +398,9 @@ struct TarballInputScheme : CurlInputScheme
 
         input.attrs.insert_or_assign(
             "narHash",
-            getTarballCache()->treeHashToNarHash(*input.settings, result.treeHash).to_string(HashFormat::SRI, true));
+            input.settings->getTarballCache()
+                ->treeHashToNarHash(*input.settings, result.treeHash)
+                .to_string(HashFormat::SRI, true));
 
         return {result.accessor, input};
     }

@@ -325,7 +325,7 @@ private:
 
 protected:
 
-    void addDependency(const StorePath & path) override;
+    void addDependencyImpl(const StorePath & path) override;
 
     /**
      * Make a file owned by the builder.
@@ -858,6 +858,11 @@ PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
        host file system. */
     PathsInChroot pathsInChroot = defaultPathsInChroot;
 
+    for (auto & p : pathsInChroot)
+        if (!p.second.optional && !maybeLstat(p.second.source))
+            throw SysError(
+                "path '%s' is configured as part of the `sandbox-paths` option, but is inaccessible", p.second.source);
+
     if (hasPrefix(store.storeDir, tmpDirInSandbox())) {
         throw Error("`sandbox-build-dir` must not contain the storeDir");
     }
@@ -977,7 +982,7 @@ void DerivationBuilderImpl::processSandboxSetupMessages()
                     "while waiting for the build environment for '%s' to initialize (%s, previous messages: %s)",
                     store.printStorePath(drvPath),
                     statusToString(status),
-                    concatStringsSep("|", msgs));
+                    concatStringsSep("\n", msgs));
                 throw;
             }
         }();
@@ -1181,11 +1186,8 @@ void DerivationBuilderImpl::stopDaemon()
     daemonSocket.close();
 }
 
-void DerivationBuilderImpl::addDependency(const StorePath & path)
+void DerivationBuilderImpl::addDependencyImpl(const StorePath & path)
 {
-    if (isAllowed(path))
-        return;
-
     addedPaths.insert(path);
 }
 
@@ -1814,7 +1816,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
     /* Apply output checks. This includes checking of the wanted vs got
        hash of fixed-outputs. */
-    checkOutputs(store, drvPath, drv.outputs, drvOptions.outputChecks, infos);
+    checkOutputs(store, drvPath, drv.outputs, drvOptions.outputChecks, infos, *act);
 
     if (buildMode == bmCheck) {
         return {};
