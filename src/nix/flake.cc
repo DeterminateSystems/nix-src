@@ -300,6 +300,22 @@ struct CmdFlakeInfo : CmdFlakeMetadata
     }
 };
 
+/**
+ * Log the current exception, after forcing cached evaluation errors.
+ */
+static void logEvalError()
+{
+    try {
+        try {
+            throw;
+        } catch (eval_cache::CachedEvalError & e) {
+            e.force();
+        }
+    } catch (Error & e) {
+        logError(e.info());
+    }
+}
+
 struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
 {
     bool build = true;
@@ -364,46 +380,45 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
 
         std::atomic_bool hasErrors = false;
 
-        auto reportError = [&](const Error & e) {
-            try {
-                throw e;
-            } catch (Interrupted & e) {
-                throw;
-            } catch (Error & e) {
-                if (settings.keepGoing) {
-                    logError(e.info());
-                    hasErrors = true;
-                } else
-                    throw;
-            }
-        };
-
         visit = [&](ref<eval_cache::AttrCursor> node) {
             flake_schemas::visit(
                 checkAllSystems ? std::optional<std::string>() : localSystem,
                 node,
 
                 [&](const flake_schemas::Leaf & leaf) {
-                    if (auto evalChecks = leaf.node->maybeGetAttr("evalChecks")) {
-                        auto checkNames = evalChecks->getAttrs();
-                        for (auto & checkName : checkNames) {
-                            // FIXME: update activity
-                            auto cursor = evalChecks->getAttr(checkName);
-                            auto b = cursor->getBool();
-                            if (!b)
-                                reportError(Error("Evaluation check '%s' failed.", cursor->getAttrPathStr()));
+                    try {
+                        if (auto evalChecks = leaf.node->maybeGetAttr("evalChecks")) {
+                            auto checkNames = evalChecks->getAttrs();
+                            for (auto & checkName : checkNames) {
+                                // FIXME: update activity
+                                auto cursor = evalChecks->getAttr(checkName);
+                                auto b = cursor->getBool();
+                                if (!b)
+                                    throw Error("Evaluation check '%s' failed.", cursor->getAttrPathStr());
+                            }
                         }
-                    }
 
-                    if (auto drv = leaf.derivation()) {
-                        if (buildAll || leaf.isFlakeCheck()) {
-                            auto drvPath = drv->forceDerivation();
-                            drvPaths_.lock()->push_back(
-                                DerivedPath::Built{
-                                    .drvPath = makeConstantStorePathRef(drvPath),
-                                    .outputs = OutputsSpec::All{},
-                                });
+                        if (auto drv = leaf.derivation()) {
+                            if (buildAll || leaf.isFlakeCheck()) {
+                                auto drvPath = drv->forceDerivation();
+                                drvPaths_.lock()->push_back(
+                                    DerivedPath::Built{
+                                        .drvPath = makeConstantStorePathRef(drvPath),
+                                        .outputs = OutputsSpec::All{},
+                                    });
+                            }
                         }
+
+                        notice("✅ %s", leaf.node->getAttrPathStr());
+                    } catch (Interrupted & e) {
+                        throw;
+                    } catch (Error & e) {
+                        printError("❌ %s", leaf.node->getAttrPathStr());
+                        if (settings.keepGoing) {
+                            logEvalError();
+                            hasErrors = true;
+                        } else
+                            throw;
                     }
                 },
 
