@@ -19,6 +19,7 @@
 #include "nix/store/globals.hh"
 #include "nix/expr/parallel-eval.hh"
 #include "nix/cmd/flake-schemas.hh"
+#include "nix/util/exit.hh"
 
 #include <filesystem>
 #include <nlohmann/json.hpp>
@@ -375,6 +376,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
         Sync<std::vector<DerivedPath>> drvPaths_;
         Sync<std::set<std::string>> uncheckedOutputs;
         Sync<std::set<std::string>> omittedSystems;
+        Sync<std::map<DerivedPath, std::vector<eval_cache::AttrPath>>> derivedPathToAttrPaths_;
 
         std::function<void(ref<eval_cache::AttrCursor> node)> visit;
 
@@ -387,6 +389,9 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
 
                 [&](const flake_schemas::Leaf & leaf) {
                     try {
+                        bool done = true;
+                        bool buildSkipped = false;
+
                         if (auto evalChecks = leaf.node->maybeGetAttr("evalChecks")) {
                             auto checkNames = evalChecks->getAttrs();
                             for (auto & checkName : checkNames) {
@@ -401,19 +406,27 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                         if (auto drv = leaf.derivation()) {
                             if (buildAll || leaf.isFlakeCheck()) {
                                 auto drvPath = drv->forceDerivation();
-                                drvPaths_.lock()->push_back(
-                                    DerivedPath::Built{
-                                        .drvPath = makeConstantStorePathRef(drvPath),
-                                        .outputs = OutputsSpec::All{},
-                                    });
-                            }
+                                auto derivedPath = DerivedPath::Built{
+                                    .drvPath = makeConstantStorePathRef(drvPath),
+                                    .outputs = OutputsSpec::All{},
+                                };
+                                (*derivedPathToAttrPaths_.lock())[derivedPath].push_back(leaf.node->getAttrPath());
+                                drvPaths_.lock()->push_back(std::move(derivedPath));
+                                if (build)
+                                    done = false;
+                            } else
+                                buildSkipped = true;
                         }
 
-                        notice("✅ %s", leaf.node->getAttrPathStr());
+                        if (done)
+                            notice(
+                                "✅ " ANSI_BOLD "%s" ANSI_NORMAL "%s",
+                                leaf.node->getAttrPathStr(),
+                                buildSkipped ? ANSI_ITALIC ANSI_FAINT " (build skipped)" : "");
                     } catch (Interrupted & e) {
                         throw;
                     } catch (Error & e) {
-                        printError("❌ %s", leaf.node->getAttrPathStr());
+                        printError("❌ " ANSI_RED "%s" ANSI_NORMAL, leaf.node->getAttrPathStr());
                         if (settings.keepGoing) {
                             logEvalError();
                             hasErrors = true;
@@ -452,6 +465,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
             warn("The following flake outputs are unchecked: %s.", concatStringsSep(", ", *uncheckedOutputs.lock()));
 
         auto drvPaths(drvPaths_.lock());
+        auto derivedPathToAttrPaths(derivedPathToAttrPaths_.lock());
 
         if (build && !drvPaths->empty()) {
             // FIXME: should start building while evaluating.
@@ -471,21 +485,51 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
             auto missing = store->queryMissing(*drvPaths);
 
             std::vector<DerivedPath> toBuild;
+            std::set<DerivedPath> toBuildSet;
             for (auto & path : missing.willBuild) {
-                toBuild.emplace_back(
-                    DerivedPath::Built{
-                        .drvPath = makeConstantStorePathRef(path),
-                        .outputs = OutputsSpec::All{},
-                    });
+                auto derivedPath = DerivedPath::Built{
+                    .drvPath = makeConstantStorePathRef(path),
+                    .outputs = OutputsSpec::All{},
+                };
+                toBuild.emplace_back(derivedPath);
+                toBuildSet.insert(std::move(derivedPath));
             }
+
+            for (auto & [derivedPath, attrPaths] : *derivedPathToAttrPaths)
+                if (!toBuildSet.contains(derivedPath))
+                    for (auto & attrPath : attrPaths)
+                        notice(
+                            "✅ " ANSI_BOLD "%s" ANSI_NORMAL ANSI_ITALIC ANSI_FAINT " (previously built)" ANSI_NORMAL,
+                            eval_cache::toAttrPathStr(*state, attrPath));
 
             // FIXME: should start building while evaluating.
             Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", toBuild.size()));
-            store->buildPaths(toBuild);
-        }
 
-        if (hasErrors)
-            throw Error("some errors were encountered during the evaluation");
+            auto buildResults = store->buildPathsWithResults(toBuild);
+            assert(buildResults.size() == toBuild.size());
+
+            for (auto & buildResult : buildResults) {
+                if (auto failure = buildResult.tryGetFailure())
+                    try {
+                        hasErrors = true;
+                        for (auto & attrPath : (*derivedPathToAttrPaths)[buildResult.path])
+                            if (failure->status == BuildResult::Failure::Cancelled)
+                                notice(
+                                    "❓ " ANSI_BOLD "%s" ANSI_NORMAL ANSI_FAINT " (cancelled)",
+                                    eval_cache::toAttrPathStr(*state, attrPath));
+                            else
+                                printError(
+                                    "❌ " ANSI_RED "%s" ANSI_NORMAL, eval_cache::toAttrPathStr(*state, attrPath));
+                        if (failure->status != BuildResult::Failure::Cancelled)
+                            failure->rethrow();
+                    } catch (Error & e) {
+                        logError(e.info());
+                    }
+                else
+                    for (auto & attrPath : (*derivedPathToAttrPaths)[buildResult.path])
+                        notice("✅ " ANSI_BOLD "%s" ANSI_NORMAL, eval_cache::toAttrPathStr(*state, attrPath));
+            }
+        }
 
         if (!omittedSystems.lock()->empty()) {
             // TODO: empty system is not visible; render all as nix strings?
@@ -494,6 +538,9 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                 "Use '--all-systems' to check all.",
                 concatStringsSep(", ", *omittedSystems.lock()));
         }
+
+        if (hasErrors)
+            throw Exit(1);
     };
 };
 
