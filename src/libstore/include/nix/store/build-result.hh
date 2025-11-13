@@ -77,6 +77,7 @@ struct BuildResult
             /// know about this one, so change it back to `OutputRejected`
             /// before serialization.
             HashMismatch = 15,
+            Cancelled = 16,
         } status = MiscFailure;
 
         static std::string_view statusToString(Status status);

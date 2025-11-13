@@ -56,6 +56,8 @@ std::string_view BuildResult::Failure::statusToString(BuildResult::Failure::Stat
         return "NoSubstituters";
     case BuildResult::Failure::HashMismatch:
         return "HashMismatch";
+    case BuildResult::Failure::Cancelled:
+        return "Cancelled";
     default:
         unreachable();
     }
