@@ -31,6 +31,8 @@ struct BuildResult
             ResolvesToAlreadyValid = 13,
         } status;
 
+        static std::string_view statusToString(Status status);
+
         /**
          * For derivations, a mapping from the names of the wanted outputs
          * to actual paths.
@@ -77,6 +79,8 @@ struct BuildResult
             HashMismatch = 15,
         } status = MiscFailure;
 
+        static std::string_view statusToString(Status status);
+
         /**
          * Information about the error if the build failed.
          *
@@ -98,7 +102,7 @@ struct BuildResult
 
         [[noreturn]] void rethrow() const
         {
-            throw Error("%s", errorMsg);
+            throw Error("%s", errorMsg.empty() ? statusToString(status) : errorMsg);
         }
     };
 

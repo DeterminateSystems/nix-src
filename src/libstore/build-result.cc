@@ -13,7 +13,7 @@ std::strong_ordering BuildResult::Success::operator<=>(const BuildResult::Succes
 bool BuildResult::Failure::operator==(const BuildResult::Failure &) const noexcept = default;
 std::strong_ordering BuildResult::Failure::operator<=>(const BuildResult::Failure &) const noexcept = default;
 
-static std::string_view statusToString(BuildResult::Success::Status status)
+std::string_view BuildResult::Success::statusToString(BuildResult::Success::Status status)
 {
     switch (status) {
     case BuildResult::Success::Built:
@@ -29,7 +29,7 @@ static std::string_view statusToString(BuildResult::Success::Status status)
     }
 }
 
-static std::string_view statusToString(BuildResult::Failure::Status status)
+std::string_view BuildResult::Failure::statusToString(BuildResult::Failure::Status status)
 {
     switch (status) {
     case BuildResult::Failure::PermanentFailure:
@@ -66,9 +66,9 @@ void to_json(nlohmann::json & json, const BuildResult & buildResult)
     json = nlohmann::json::object();
     // FIXME: change this to have `success` and `failure` objects.
     if (auto success = buildResult.tryGetSuccess()) {
-        json["status"] = statusToString(success->status);
+        json["status"] = BuildResult::Success::statusToString(success->status);
     } else if (auto failure = buildResult.tryGetFailure()) {
-        json["status"] = statusToString(failure->status);
+        json["status"] = BuildResult::Failure::statusToString(failure->status);
         if (failure->errorMsg != "")
             json["errorMsg"] = failure->errorMsg;
         if (failure->isNonDeterministic)
