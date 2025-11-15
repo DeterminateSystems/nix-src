@@ -70,7 +70,7 @@ public:
 
     ParsedURL toURL(bool abbreviate = false) const;
 
-    std::string toURLString(const StringMap & extraQuery = {}) const;
+    std::string toURLString(const StringMap & extraQuery = {}, bool abbreviate = false) const;
 
     std::string to_string(bool abbreviate = false) const;
 

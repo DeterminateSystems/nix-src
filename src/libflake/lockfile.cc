@@ -323,7 +323,7 @@ std::map<InputAttrPath, Node::Edge> LockFile::getAllInputs() const
 
 static std::string describe(const FlakeRef & flakeRef)
 {
-    auto s = fmt("'%s'", flakeRef.to_string());
+    auto s = fmt("'%s'", flakeRef.to_string(true));
 
     if (auto lastModified = flakeRef.input.getLastModified())
         s += fmt(" (%s)", std::put_time(std::gmtime(&*lastModified), "%Y-%m-%d"));
