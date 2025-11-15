@@ -142,9 +142,9 @@ ParsedURL Input::toURL(bool abbreviate) const
     return url;
 }
 
-std::string Input::toURLString(const StringMap & extraQuery) const
+std::string Input::toURLString(const StringMap & extraQuery, bool abbreviate) const
 {
-    auto url = toURL();
+    auto url = toURL(abbreviate);
     for (auto & attr : extraQuery)
         url.query.insert(attr);
     return url.to_string();

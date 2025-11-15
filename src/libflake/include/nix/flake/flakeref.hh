@@ -61,7 +61,7 @@ struct FlakeRef
     }
 
     // FIXME: change to operator <<.
-    std::string to_string() const;
+    std::string to_string(bool abbreviate = false) const;
 
     fetchers::Attrs toAttrs() const;
 
