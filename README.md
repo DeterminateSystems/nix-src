@@ -27,7 +27,7 @@ Determinate Nix is built on SOC-2-Type-II-compliant infrastructure using [Determ
 
 > [!NOTE]
 > Determinate Nix, by definition, consists of _both_ the components listed above.
-> While it's possible to use the code in this repository to run just our downstream Nix CLI, we do _not_ officially support this experience and provide none of the guarantees or SLAs that we provide for the full Determinate Nix experience.
+> While it's possible to use the code in this repository to run just our downstream Nix CLI, we do _not_ officially support this experience and provide none of the guarantees or SLAs that we provide for Determinate Nix proper.
 
 Determinate Nix is part of the [Determinate platform][determinate], which also includes [FlakeHub], a secure flake repository with features like [FlakeHub Cache][cache], [private flakes][private-flakes], and [semantic versioning][semver] (SemVer) for [flakes].
 
