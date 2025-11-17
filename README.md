@@ -51,7 +51,7 @@ curl -fsSL https://install.determinate.systems/nix | sh -s -- install --determin
 ### NixOS
 
 On [NixOS], we recommend following our [dedicated installation guide][nixos-install].
-We also provide both [Amazon Machine Images][amis] (AMIs)
+We also provide both [Amazon Machine Images][amis] (AMIs) and [ISOs] for using Determinate on NixOS.
 
 ## Other resources
 
@@ -93,6 +93,7 @@ Check the [contributing guide][contributing] if you want to get involved with de
 [flakes]: https://zero-to-nix.com/concepts/flakes
 [gui]: https://install.determinate.systems/determinate-pkg/stable/Universal
 [installer]: https://github.com/DeterminateSystems/nix-installer
+[isos]: https://github.com/DeterminateSystems/nixos-iso
 [language]: https://zero-to-nix.com/concepts/nix-language
 [license]: ./COPYING
 [manual]: https://manual.determinate.systems
