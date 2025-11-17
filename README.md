@@ -45,7 +45,7 @@ Click [here][gui] to download and run it.
 On Linux, including Windows Subsystem for Linux (WSL), we recommend installing Determinate Nix using [Determinate Nix Installer][installer]:
 
 ```shell
-curl -fsSL https://install.determinate.systems/nix | sh -s -- install --determinate
+curl -fsSL https://install.determinate.systems/nix | sh -s -- install
 ```
 
 ### NixOS
