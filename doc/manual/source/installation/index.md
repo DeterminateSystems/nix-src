@@ -5,7 +5,7 @@ For Linux and Windows Subsystem for Linux (WSL) users:
 
 ```console
 curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | \
-  sh -s -- install --determinate
+  sh -s -- install
 ```
 
 ## Distributions
