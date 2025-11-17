@@ -13,7 +13,7 @@
 
 [![CI](https://github.com/DeterminateSystems/nix-src/workflows/CI/badge.svg)](https://github.com/DeterminateSystems/nix-src/actions/workflows/ci.yml)
 
-**Nix** is a powerful [language], [package manager][package-management], and [build tool][cli] for [macOS](#macos), [Linux](linux), and other Unix systems.
+**Nix** is a powerful [language], [package manager][package-management], and [build tool][cli] for [macOS](#macos), [Linux](#linux), and other Unix systems.
 It enables you to create fully reproducible [development environments][envs], to build [packages] in sandboxed environments, to build entire Linux systems using [NixOS], and much more.
 
 [**Determinate Nix**][det-nix] is a downstream distribution of [Nix][upstream] created and maintained by [Determinate Systems][detsys].
