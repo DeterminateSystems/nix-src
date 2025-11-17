@@ -19,8 +19,8 @@ It enables you to create fully reproducible [development environments][envs], to
 [**Determinate Nix**][det-nix] is a downstream distribution of [Nix][upstream] created and maintained by [Determinate Systems][detsys].
 It has two components:
 
-- The distribution of the Nix CLI built from this repository.
-    It's based on the [upstream Nix CLI][upstream] but adds a wide variety of [features] and [improvements][changelog].
+- The Determinate Nix CLI, a distribution of the Nix CLI built from this repository.
+    It's based on the [upstream Nix CLI][upstream] and continuously rebased against it, but adds a wide variety of [features] and [improvements][changelog].
 - [Determinate Nixd][dnixd] is a useful daemon for Linux and macOS that handles vital tasks like configuration and enterprise certificate management.
 
 Determinate Nix is built on SOC-2-Type-II-compliant infrastructure using [Determinate Secure Packages][secure-packages], released via a carefully orchestrated process, and, for Determinate Systems customers, backed by formal security response SLAs that meet stringent compliance standards.
