@@ -8,6 +8,7 @@
 #include <cassert>
 
 #include "nix/util/error.hh"
+#include "nix/util/logging.hh"
 
 namespace nix {
 
@@ -126,7 +127,12 @@ public:
      */
     WriteLock lock()
     {
-        return WriteLock(this);
+        try {
+            return WriteLock(this);
+        } catch (...) {
+            printError("LOCK FAIL %p %p", &mutex, &data);
+            throw;
+        }
     }
 
     struct ReadLock : Lock<RL>

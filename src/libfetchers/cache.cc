@@ -152,6 +152,8 @@ struct CacheImpl : Cache
 
 ref<Cache> Settings::getCache() const
 {
+    if (getenv("TMP_DEBUG"))
+        printError("getCache() %p %p %p", this, &_cache, &fetchSettings);
     auto cache(_cache.lock());
     if (!*cache)
         *cache = std::make_shared<CacheImpl>();

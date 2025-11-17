@@ -333,6 +333,8 @@ static Flake getFlake(
     const InputAttrPath & lockRootAttrPath,
     bool requireLockable)
 {
+    if (getenv("TMP_DEBUG"))
+        printError("getFlake() %p", &fetchSettings);
     // Fetch a lazy tree first.
     auto cachedInput = state.inputCache->getAccessor(state.store, originalRef.input, useRegistries);
 

@@ -1,9 +1,14 @@
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/util/config-global.hh"
+#include "nix/util/logging.hh"
 
 namespace nix::fetchers {
 
-Settings::Settings() {}
+Settings::Settings()
+{
+    if (getenv("TMP_DEBUG"))
+        printError("Settings() %p %p %p", this, &_cache, &fetchSettings);
+}
 
 } // namespace nix::fetchers
 
