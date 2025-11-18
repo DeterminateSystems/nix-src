@@ -61,3 +61,28 @@ rm -rf "$lazy"
 clearStore
 
 expectStderr 1 nix build --out-link "$TEST_ROOT/result" -L "$repo" | grepQuiet "Cannot build.*source.drv"
+
+# `nix flake prefetch-inputs` should ignore build-time inputs.
+depDir=$TEST_ROOT/dep
+createGitRepo "$depDir"
+createSimpleGitFlake "$depDir"
+
+cat > "$repo/flake.nix" <<EOF
+{
+  inputs.lazy = {
+    type = "git";
+    url = "file://$depDir";
+    buildTime = true;
+  };
+
+  outputs = { self, ... }: { };
+}
+EOF
+
+nix flake lock "$repo"
+
+clearStore
+rm -rf "$TEST_HOME/.cache"
+rm -rf "$depDir"
+
+nix flake prefetch-inputs "$repo"

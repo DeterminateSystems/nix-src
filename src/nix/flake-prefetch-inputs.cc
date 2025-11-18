@@ -44,6 +44,8 @@ struct CmdFlakePrefetchInputs : FlakeCommand
                 return;
 
             if (auto lockedNode = dynamic_cast<const LockedNode *>(&node)) {
+                if (lockedNode->buildTime)
+                    return;
                 try {
                     Activity act(*logger, lvlInfo, actUnknown, fmt("fetching '%s'", lockedNode->lockedRef));
                     auto accessor = lockedNode->lockedRef.input.getAccessor(fetchSettings, store).first;
