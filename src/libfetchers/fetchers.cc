@@ -289,11 +289,6 @@ void Input::checkLocks(Input specified, Input & result)
         if (result.getRev() != prevRev)
             throw Error("'rev' attribute mismatch in input '%s', expected %s", result.to_string(), prevRev->gitRev());
     }
-
-    if (auto prevRevCount = specified.getRevCount()) {
-        if (result.getRevCount() != prevRevCount)
-            throw Error("'revCount' attribute mismatch in input '%s', expected %d", result.to_string(), *prevRevCount);
-    }
 }
 
 std::pair<ref<SourceAccessor>, Input> Input::getAccessor(const Settings & settings, ref<Store> store) const
