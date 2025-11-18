@@ -17,7 +17,7 @@ let
 
     openssl req -newkey rsa:2048 -nodes -keyout $out/server.key \
       -subj "/C=CN/ST=Denial/L=Springfield/O=Dis/CN=github.com" -out server.csr
-    openssl x509 -req -extfile <(printf "subjectAltName=DNS:api.github.com,DNS:github.com,DNS:channels.nixos.org") \
+    openssl x509 -req -extfile <(printf "subjectAltName=DNS:api.github.com,DNS:github.com,DNS:channels.nixos.org,DNS:install.determinate.systems") \
       -days 36500 -in server.csr -CA $out/ca.crt -CAkey ca.key -CAcreateserial -out $out/server.crt
   '';
 
@@ -107,13 +107,13 @@ in
         services.httpd.extraConfig = ''
           ErrorLog syslog:local6
         '';
-        services.httpd.virtualHosts."channels.nixos.org" = {
+        services.httpd.virtualHosts."install.determinate.systems" = {
           forceSSL = true;
           sslServerKey = "${cert}/server.key";
           sslServerCert = "${cert}/server.crt";
           servedDirs = [
             {
-              urlPath = "/";
+              urlPath = "/flake-registry/stable/";
               dir = registry;
             }
           ];
@@ -165,6 +165,7 @@ in
         nix.settings.substituters = lib.mkForce [ ];
         networking.hosts.${(builtins.head nodes.github.networking.interfaces.eth1.ipv4.addresses).address} =
           [
+            "install.determinate.systems"
             "channels.nixos.org"
             "api.github.com"
             "github.com"

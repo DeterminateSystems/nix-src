@@ -115,7 +115,7 @@ struct Settings : public Config
 
     Setting<std::string> flakeRegistry{
         this,
-        "https://install.determinate.systems/flake-registry/stable/registry.json",
+        "https://install.determinate.systems/flake-registry/stable/flake-registry.json",
         "flake-registry",
         R"(
           Path or URI of the global flake registry.
