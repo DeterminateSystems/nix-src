@@ -89,7 +89,7 @@ struct MercurialInputScheme : InputScheme
                 throw BadURL("invalid Mercurial branch/tag name '%s'", *ref);
         }
 
-        Input input{settings};
+        Input input{};
         input.attrs = attrs;
         return input;
     }
@@ -154,7 +154,7 @@ struct MercurialInputScheme : InputScheme
         return {isLocal, isLocal ? renderUrlPathEnsureLegal(url.path) : url.to_string()};
     }
 
-    StorePath fetchToStore(ref<Store> store, Input & input) const
+    StorePath fetchToStore(const Settings & settings, ref<Store> store, Input & input) const
     {
         auto origRev = input.getRev();
 
@@ -176,10 +176,10 @@ struct MercurialInputScheme : InputScheme
                 /* This is an unclean working tree. So copy all tracked
                    files. */
 
-                if (!input.settings->allowDirty)
+                if (!settings.allowDirty)
                     throw Error("Mercurial tree '%s' is unclean", actualUrl);
 
-                if (input.settings->warnDirty)
+                if (settings.warnDirty)
                     warn("Mercurial tree '%s' is unclean", actualUrl);
 
                 input.attrs.insert_or_assign("ref", chomp(runHg({"branch", "-R", actualUrl})));
@@ -238,13 +238,13 @@ struct MercurialInputScheme : InputScheme
         Cache::Key refToRevKey{"hgRefToRev", {{"url", actualUrl}, {"ref", *input.getRef()}}};
 
         if (!input.getRev()) {
-            if (auto res = input.settings->getCache()->lookupWithTTL(refToRevKey))
+            if (auto res = settings.getCache()->lookupWithTTL(refToRevKey))
                 input.attrs.insert_or_assign("rev", getRevAttr(*res, "rev").gitRev());
         }
 
         /* If we have a rev, check if we have a cached store path. */
         if (auto rev = input.getRev()) {
-            if (auto res = input.settings->getCache()->lookupStorePath(revInfoKey(*rev), *store))
+            if (auto res = settings.getCache()->lookupStorePath(revInfoKey(*rev), *store))
                 return makeResult(res->value, res->storePath);
         }
 
@@ -298,7 +298,7 @@ struct MercurialInputScheme : InputScheme
 
         /* Now that we have the rev, check the cache again for a
            cached store path. */
-        if (auto res = input.settings->getCache()->lookupStorePath(revInfoKey(rev), *store))
+        if (auto res = settings.getCache()->lookupStorePath(revInfoKey(rev), *store))
             return makeResult(res->value, res->storePath);
 
         Path tmpDir = createTempDir();
@@ -315,18 +315,19 @@ struct MercurialInputScheme : InputScheme
         });
 
         if (!origRev)
-            input.settings->getCache()->upsert(refToRevKey, {{"rev", rev.gitRev()}});
+            settings.getCache()->upsert(refToRevKey, {{"rev", rev.gitRev()}});
 
-        input.settings->getCache()->upsert(revInfoKey(rev), *store, infoAttrs, storePath);
+        settings.getCache()->upsert(revInfoKey(rev), *store, infoAttrs, storePath);
 
         return makeResult(infoAttrs, std::move(storePath));
     }
 
-    std::pair<ref<SourceAccessor>, Input> getAccessor(ref<Store> store, const Input & _input) const override
+    std::pair<ref<SourceAccessor>, Input>
+    getAccessor(const Settings & settings, ref<Store> store, const Input & _input) const override
     {
         Input input(_input);
 
-        auto storePath = fetchToStore(store, input);
+        auto storePath = fetchToStore(settings, store, input);
 
         // We just added it, it should be there.
         auto accessor = ref{store->getFSAccessor(storePath)};
@@ -336,7 +337,7 @@ struct MercurialInputScheme : InputScheme
         return {accessor, input};
     }
 
-    bool isLocked(const Input & input) const override
+    bool isLocked(const Settings & settings, const Input & input) const override
     {
         return (bool) input.getRev();
     }
