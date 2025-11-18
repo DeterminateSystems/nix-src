@@ -738,13 +738,17 @@ struct GitInputScheme : InputScheme
 
         auto rev = *input.getRev();
 
-        Attrs infoAttrs({
-            {"rev", rev.gitRev()},
-            {"lastModified", getLastModified(settings, repoInfo, repoDir, rev)},
-        });
+        /* Skip lastModified computation if it's already supplied by the caller.
+           We don't care if they specify an incorrect value; it doesn't
+           matter for security, unlike narHash. */
+        if (!input.attrs.contains("lastModified"))
+            input.attrs.insert_or_assign("lastModified", getLastModified(settings, repoInfo, repoDir, rev));
 
-        if (!getShallowAttr(input))
-            infoAttrs.insert_or_assign("revCount", getRevCount(settings, repoInfo, repoDir, rev));
+        if (!getShallowAttr(input)) {
+            /* Like lastModified, skip revCount if supplied by the caller. */
+            if (!input.attrs.contains("revCount"))
+                input.attrs.insert_or_assign("revCount", getRevCount(settings, repoInfo, repoDir, rev));
+        }
 
         printTalkative("using revision %s of repo '%s'", rev.gitRev(), repoInfo.locationToArg());
 
@@ -800,9 +804,6 @@ struct GitInputScheme : InputScheme
         }
 
         assert(!origRev || origRev == rev);
-        if (!getShallowAttr(input))
-            input.attrs.insert_or_assign("revCount", getIntAttr(infoAttrs, "revCount"));
-        input.attrs.insert_or_assign("lastModified", getIntAttr(infoAttrs, "lastModified"));
 
         return {accessor, std::move(input)};
     }
