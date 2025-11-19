@@ -310,3 +310,31 @@ git -C "$empty" config user.name "Foobar"
 git -C "$empty" commit --allow-empty --allow-empty-message --message ""
 
 nix eval --impure --expr "let attrs = builtins.fetchGit $empty; in assert attrs.lastModified != 0; assert attrs.rev != \"0000000000000000000000000000000000000000\"; assert attrs.revCount == 1; true"
+
+# Test backward compatibility hack for Nix < 2.20 locks / fetchTree calls that expect Git filters to be applied.
+eol="$TEST_ROOT/git-eol"
+mkdir -p "$eol"
+git init "$eol"
+git -C "$eol" config user.email "foobar@example.com"
+git -C "$eol" config user.name "Foobar"
+printf "Hello\nWorld\n" > "$eol/crlf"
+git -C "$eol" add crlf
+git -C "$eol" commit -a -m Initial
+printf "crlf text eol=crlf\n" > "$eol/.gitattributes"
+git -C "$eol" add .gitattributes
+git -C "$eol" commit -a -m 'Apply gitattributes'
+
+rev="$(git -C "$eol" rev-parse HEAD)"
+
+export _NIX_TEST_BARF_ON_UNCACHEABLE=1
+
+expectStderr 0 nix eval --expr \
+    "assert builtins.readFile \"\${builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-kxXTCbD8wCYT9qNDKzl9bNKO8++pKY2QwAhqSqENP5k=\"; }}/crlf\" == \"Hello\r\nWorld\r\n\"; true" \
+    | grepQuiet "Please update the NAR hash to 'sha256-LDLvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA='"
+
+nix eval --expr \
+    "assert builtins.readFile \"\${builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-LDLvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA=\"; }}/crlf\" == \"Hello\nWorld\n\"; true"
+
+expectStderr 102 nix eval --expr \
+    "assert builtins.readFile \"\${builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-DLDvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA=\"; }}/crlf\" == \"Hello\nWorld\n\"; true" \
+    | grepQuiet "NAR hash mismatch"

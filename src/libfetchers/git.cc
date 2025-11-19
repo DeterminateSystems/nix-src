@@ -16,6 +16,7 @@
 #include "nix/util/json-utils.hh"
 #include "nix/util/archive.hh"
 #include "nix/util/mounted-source-accessor.hh"
+#include "nix/fetchers/fetch-to-store.hh"
 
 #include <regex>
 #include <string.h>
@@ -637,6 +638,12 @@ struct GitInputScheme : InputScheme
         return shallow || input.getRevCount().has_value();
     }
 
+    std::string makeFingerprint(const Input & input, const Hash & rev) const
+    {
+        return rev.gitRev() + (getSubmodulesAttr(input) ? ";s" : "") + (getExportIgnoreAttr(input) ? ";e" : "")
+               + (getLfsAttr(input) ? ";l" : "");
+    }
+
     std::pair<ref<SourceAccessor>, Input>
     getAccessorFromCommit(const Settings & settings, ref<Store> store, RepoInfo & repoInfo, Input && input) const
     {
@@ -782,6 +789,33 @@ struct GitInputScheme : InputScheme
         bool exportIgnore = getExportIgnoreAttr(input);
         bool smudgeLfs = getLfsAttr(input);
         auto accessor = repo->getAccessor(rev, exportIgnore, "«" + input.to_string(true) + "»", smudgeLfs);
+
+        /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Git filters. Nix >= 2.20 doesn't
+         * apply Git filters, so we may get a NAR hash mismatch. If that happens, try again with filters enabled. */
+        if (auto expectedNarHash = input.getNarHash()) {
+            if (accessor->pathExists(CanonPath(".gitattributes"))) {
+                accessor->fingerprint = makeFingerprint(input, rev);
+                auto narHashNoFilters =
+                    fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
+                if (expectedNarHash != narHashNoFilters) {
+                    auto accessor2 =
+                        repo->getAccessor(rev, exportIgnore, "«" + input.to_string(true) + "»", smudgeLfs, true);
+                    accessor2->fingerprint = makeFingerprint(input, rev) + ";f";
+                    auto narHashFilters =
+                        fetchToStore2(settings, *store, {accessor2}, FetchMode::DryRun, input.getName()).second;
+                    if (expectedNarHash == narHashFilters) {
+                        warn(
+                            "Git input '%s' specifies a NAR hash '%s' that is only correct if Git filters are applied.\n"
+                            "This is pre-Nix 2.20 behavior; in Nix 2.20 and later, Git filters are not applied.\n"
+                            "Please update the NAR hash to '%s'.",
+                            input.to_string(),
+                            expectedNarHash->to_string(HashFormat::SRI, true),
+                            narHashNoFilters.to_string(HashFormat::SRI, true));
+                        accessor = accessor2;
+                    }
+                }
+            }
+        }
 
         /* If the repo has submodules, fetch them and return a mounted
            input accessor consisting of the accessor for the top-level
@@ -942,13 +976,8 @@ struct GitInputScheme : InputScheme
 
     std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
     {
-        auto makeFingerprint = [&](const Hash & rev) {
-            return rev.gitRev() + (getSubmodulesAttr(input) ? ";s" : "") + (getExportIgnoreAttr(input) ? ";e" : "")
-                   + (getLfsAttr(input) ? ";l" : "");
-        };
-
         if (auto rev = input.getRev())
-            return makeFingerprint(*rev);
+            return makeFingerprint(input, *rev);
         else {
             auto repoInfo = getRepoInfo(input);
             if (auto repoPath = repoInfo.getPath(); repoPath && repoInfo.workdirInfo.submodules.empty()) {
@@ -964,7 +993,7 @@ struct GitInputScheme : InputScheme
                     writeString("deleted:", hashSink);
                     writeString(file.abs(), hashSink);
                 }
-                return makeFingerprint(repoInfo.workdirInfo.headRev.value_or(nullRev))
+                return makeFingerprint(input, repoInfo.workdirInfo.headRev.value_or(nullRev))
                        + ";d=" + hashSink.finish().hash.to_string(HashFormat::Base16, false);
             }
             return std::nullopt;
