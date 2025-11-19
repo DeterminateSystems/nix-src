@@ -12,8 +12,6 @@ namespace nix::fetchers {
 
 struct Registry
 {
-    const Settings & settings;
-
     enum RegistryType {
         Flag = 0,
         User = 1,
@@ -33,9 +31,8 @@ struct Registry
 
     std::vector<Entry> entries;
 
-    Registry(const Settings & settings, RegistryType type)
-        : settings{settings}
-        , type{type}
+    Registry(RegistryType type)
+        : type{type}
     {
     }
 
@@ -58,7 +55,7 @@ Path getUserRegistryPath();
 
 Registries getRegistries(const Settings & settings, ref<Store> store);
 
-void overrideRegistry(const Settings & settings, const Input & from, const Input & to, const Attrs & extraAttrs);
+void overrideRegistry(const Input & from, const Input & to, const Attrs & extraAttrs);
 
 enum class UseRegistries : int {
     No,
