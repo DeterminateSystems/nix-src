@@ -5,7 +5,7 @@ R""(
 * Resolve the `nixpkgs` and `blender-bin` flakerefs:
 
   ```console
-  # nix registry resolve nixpkgs 
+  # nix registry resolve nixpkgs blender-bin
   github:NixOS/nixpkgs/nixpkgs-unstable
   github:edolstra/nix-warez?dir=blender
   ```
