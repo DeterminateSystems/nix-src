@@ -56,6 +56,13 @@ sources = files(
 
 subdir('include/nix/fetchers')
 
+# Generate builtin-flake-registry.json.gen.hh
+subdir('nix-meson-build-support/generate-header')
+
+sources += gen_header.process(
+  'builtin-flake-registry.json',
+)
+
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
 
