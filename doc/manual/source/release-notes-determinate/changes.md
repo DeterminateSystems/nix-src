@@ -147,18 +147,12 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 
 <!-- Determinate Nix version 3.13.2 -->
 
-* Abbreviate flakerefs in lockfile diffs and `nix flake metadata` by @edolstra in [DeterminateSystems/nix-src#264](https://github.com/DeterminateSystems/nix-src/pull/264)
+* Abbreviate flakerefs in lockfile diffs and `nix flake metadata` [DeterminateSystems/nix-src#264](https://github.com/DeterminateSystems/nix-src/pull/264)
 
-* Add missing 'determinate' prefix by @edolstra in [DeterminateSystems/nix-src#265](https://github.com/DeterminateSystems/nix-src/pull/265)
+* nix flake prefetch-inputs: Skip build-time inputs [DeterminateSystems/nix-src#263](https://github.com/DeterminateSystems/nix-src/pull/263)
 
-* Re-word README description of the project by @lucperkins in [DeterminateSystems/nix-src#267](https://github.com/DeterminateSystems/nix-src/pull/267)
+* Git fetcher: Don't compute revCount/lastModified if they're already specified [DeterminateSystems/nix-src#269](https://github.com/DeterminateSystems/nix-src/pull/269)
 
-* Remove setting from Input by @edolstra in [DeterminateSystems/nix-src#268](https://github.com/DeterminateSystems/nix-src/pull/268)
+* Avoid unnecessary Git refetches [DeterminateSystems/nix-src#270](https://github.com/DeterminateSystems/nix-src/pull/270)
 
-* nix flake prefetch-inputs: Skip build-time inputs by @edolstra in [DeterminateSystems/nix-src#263](https://github.com/DeterminateSystems/nix-src/pull/263)
-
-* Git fetcher: Don't compute revCount/lastModified if they're already specified by @edolstra in [DeterminateSystems/nix-src#269](https://github.com/DeterminateSystems/nix-src/pull/269)
-
-* Avoid unnecessary Git refetches by @edolstra in [DeterminateSystems/nix-src#270](https://github.com/DeterminateSystems/nix-src/pull/270)
-
-* incident-20251118-nix-flake-registry-is-down use our mirrored registry by @grahamc in [DeterminateSystems/nix-src#271](https://github.com/DeterminateSystems/nix-src/pull/271)
+* Use mirrored flake registry [DeterminateSystems/nix-src#271](https://github.com/DeterminateSystems/nix-src/pull/271)
