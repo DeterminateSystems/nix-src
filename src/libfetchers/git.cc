@@ -16,6 +16,7 @@
 #include "nix/util/json-utils.hh"
 #include "nix/util/archive.hh"
 #include "nix/util/mounted-source-accessor.hh"
+#include "nix/fetchers/fetch-to-store.hh"
 
 #include <regex>
 #include <string.h>
@@ -646,6 +647,30 @@ struct GitInputScheme : InputScheme
         return options.makeFingerprint(rev) + (getSubmodulesAttr(input) ? ";s" : "");
     }
 
+    /**
+     * Get a `SourceAccessor` for the given Git revision by creating a git archive and unpacking it to the Nix store.
+     * This is used for Nix < 2.20 compatibility.
+     */
+    ref<SourceAccessor> getGitArchiveAccessor(
+        Store & store, RepoInfo & repoInfo, const std::filesystem::path & repoDir, const Hash & rev) const
+    {
+        auto tmpDir = createTempDir();
+        AutoDelete delTmpDir(tmpDir, true);
+
+        auto source = sinkToSource([&](Sink & sink) {
+            runProgram2(
+                {.program = "git",
+                 .args = {"-C", repoDir, "--git-dir", repoInfo.gitDir, "archive", rev.gitRev()},
+                 .standardOut = &sink});
+        });
+
+        unpackTarfile(*source, tmpDir);
+
+        auto storePath = store.addToStore("source", {getFSSourceAccessor(), CanonPath(tmpDir)});
+
+        return ref{store.getFSAccessor(storePath)};
+    }
+
     std::pair<ref<SourceAccessor>, Input>
     getAccessorFromCommit(const Settings & settings, ref<Store> store, RepoInfo & repoInfo, Input && input) const
     {
@@ -793,6 +818,34 @@ struct GitInputScheme : InputScheme
             .smudgeLfs = getLfsAttr(input),
         };
         auto accessor = repo->getAccessor(rev, options, "«" + input.to_string(true) + "»");
+
+        /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Nix applying Git filters,
+         * `export-ignore` or `export-subst`. Nix >= 2.20 doesn't do those, so we may get a NAR hash mismatch. If that
+         * happens, try again using `git archive`. */
+        if (auto expectedNarHash = input.getNarHash()) {
+            if (accessor->pathExists(CanonPath(".gitattributes"))) {
+                auto narHashNew =
+                    fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
+                if (expectedNarHash != narHashNew) {
+                    GitAccessorOptions options2{.exportIgnore = true};
+                    auto accessor2 = getGitArchiveAccessor(*store, repoInfo, repoDir, rev);
+                    accessor2->fingerprint = options2.makeFingerprint(rev) + ";f";
+                    auto narHashOld =
+                        fetchToStore2(settings, *store, {accessor2}, FetchMode::DryRun, input.getName()).second;
+                    if (expectedNarHash == narHashOld) {
+                        warn(
+                            "Git input '%s' specifies a NAR hash '%s' that was created by Nix < 2.20.\n"
+                            "Nix >= 2.20 does not apply Git filters, `export-ignore` and `export-subst` by default, which changes the NAR hash.\n"
+                            "Please update the NAR hash to '%s'.",
+                            input.to_string(),
+                            expectedNarHash->to_string(HashFormat::SRI, true),
+                            narHashNew.to_string(HashFormat::SRI, true));
+                        accessor = accessor2;
+                        options = options2;
+                    }
+                }
+            }
+        }
 
         /* If the repo has submodules, fetch them and return a mounted
            input accessor consisting of the accessor for the top-level
