@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.13.1.<!-- differences -->
+This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.13.2.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -144,3 +144,15 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 
 <!-- Determinate Nix version 3.13.1 -->
 
+
+<!-- Determinate Nix version 3.13.2 -->
+
+* Abbreviate flakerefs in lockfile diffs and `nix flake metadata` [DeterminateSystems/nix-src#264](https://github.com/DeterminateSystems/nix-src/pull/264)
+
+* nix flake prefetch-inputs: Skip build-time inputs [DeterminateSystems/nix-src#263](https://github.com/DeterminateSystems/nix-src/pull/263)
+
+* Git fetcher: Don't compute revCount/lastModified if they're already specified [DeterminateSystems/nix-src#269](https://github.com/DeterminateSystems/nix-src/pull/269)
+
+* Avoid unnecessary Git refetches [DeterminateSystems/nix-src#270](https://github.com/DeterminateSystems/nix-src/pull/270)
+
+* Use mirrored flake registry [DeterminateSystems/nix-src#271](https://github.com/DeterminateSystems/nix-src/pull/271)
