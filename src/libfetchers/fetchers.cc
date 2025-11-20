@@ -358,10 +358,10 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
     try {
         auto [accessor, result] = scheme->getAccessor(settings, store, *this);
 
-        if (!accessor->fingerprint)
-            accessor->fingerprint = result.getFingerprint(store);
+        if (auto fp = accessor->getFingerprint(CanonPath::root).second)
+            result.cachedFingerprint = *fp;
         else
-            result.cachedFingerprint = accessor->fingerprint;
+            accessor->fingerprint = result.getFingerprint(store);
 
         return {accessor, std::move(result)};
     } catch (Error & e) {

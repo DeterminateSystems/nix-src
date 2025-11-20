@@ -766,6 +766,7 @@ struct GitSourceAccessor : SourceAccessor
               .options = options,
           }}
     {
+        fingerprint = options.makeFingerprint(rev);
     }
 
     std::string readBlob(const CanonPath & path, bool symlink)
