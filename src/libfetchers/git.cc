@@ -637,6 +637,15 @@ struct GitInputScheme : InputScheme
         return shallow || input.getRevCount().has_value();
     }
 
+    std::string makeFingerprint(const Input & input, const Hash & rev) const
+    {
+        auto options = GitAccessorOptions{
+            .exportIgnore = getExportIgnoreAttr(input),
+            .smudgeLfs = getLfsAttr(input),
+        };
+        return options.makeFingerprint(rev) + (getSubmodulesAttr(input) ? ";s" : "");
+    }
+
     std::pair<ref<SourceAccessor>, Input>
     getAccessorFromCommit(const Settings & settings, ref<Store> store, RepoInfo & repoInfo, Input && input) const
     {
@@ -779,10 +788,11 @@ struct GitInputScheme : InputScheme
 
         verifyCommit(input, repo);
 
-        bool exportIgnore = getExportIgnoreAttr(input);
-        bool smudgeLfs = getLfsAttr(input);
-        auto accessor = repo->getAccessor(
-            rev, {.exportIgnore = exportIgnore, .smudgeLfs = smudgeLfs}, "«" + input.to_string(true) + "»");
+        GitAccessorOptions options{
+            .exportIgnore = getExportIgnoreAttr(input),
+            .smudgeLfs = getLfsAttr(input),
+        };
+        auto accessor = repo->getAccessor(rev, options, "«" + input.to_string(true) + "»");
 
         /* If the repo has submodules, fetch them and return a mounted
            input accessor consisting of the accessor for the top-level
@@ -790,7 +800,7 @@ struct GitInputScheme : InputScheme
         if (getSubmodulesAttr(input)) {
             std::map<CanonPath, nix::ref<SourceAccessor>> mounts;
 
-            for (auto & [submodule, submoduleRev] : repo->getSubmodules(rev, exportIgnore)) {
+            for (auto & [submodule, submoduleRev] : repo->getSubmodules(rev, options.exportIgnore)) {
                 auto resolved = repo->resolveSubmoduleUrl(submodule.url);
                 debug(
                     "Git submodule %s: %s %s %s -> %s",
@@ -813,9 +823,9 @@ struct GitInputScheme : InputScheme
                     }
                 }
                 attrs.insert_or_assign("rev", submoduleRev.gitRev());
-                attrs.insert_or_assign("exportIgnore", Explicit<bool>{exportIgnore});
+                attrs.insert_or_assign("exportIgnore", Explicit<bool>{options.exportIgnore});
                 attrs.insert_or_assign("submodules", Explicit<bool>{true});
-                attrs.insert_or_assign("lfs", Explicit<bool>{smudgeLfs});
+                attrs.insert_or_assign("lfs", Explicit<bool>{options.smudgeLfs});
                 attrs.insert_or_assign("allRefs", Explicit<bool>{true});
                 auto submoduleInput = fetchers::Input::fromAttrs(settings, std::move(attrs));
                 auto [submoduleAccessor, submoduleInput2] = submoduleInput.getAccessor(settings, store);
@@ -943,13 +953,8 @@ struct GitInputScheme : InputScheme
 
     std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
     {
-        auto makeFingerprint = [&](const Hash & rev) {
-            return rev.gitRev() + (getSubmodulesAttr(input) ? ";s" : "") + (getExportIgnoreAttr(input) ? ";e" : "")
-                   + (getLfsAttr(input) ? ";l" : "");
-        };
-
         if (auto rev = input.getRev())
-            return makeFingerprint(*rev);
+            return makeFingerprint(input, *rev);
         else {
             auto repoInfo = getRepoInfo(input);
             if (auto repoPath = repoInfo.getPath(); repoPath && repoInfo.workdirInfo.submodules.empty()) {
@@ -965,7 +970,7 @@ struct GitInputScheme : InputScheme
                     writeString("deleted:", hashSink);
                     writeString(file.abs(), hashSink);
                 }
-                return makeFingerprint(repoInfo.workdirInfo.headRev.value_or(nullRev))
+                return makeFingerprint(input, repoInfo.workdirInfo.headRev.value_or(nullRev))
                        + ";d=" + hashSink.finish().hash.to_string(HashFormat::Base16, false);
             }
             return std::nullopt;

@@ -738,10 +738,14 @@ ref<GitRepo> GitRepo::openRepo(const std::filesystem::path & path, bool create, 
     return make_ref<GitRepoImpl>(path, create, bare);
 }
 
+std::string GitAccessorOptions::makeFingerprint(const Hash & rev) const
+{
+    return rev.gitRev() + (exportIgnore ? ";e" : "") + (smudgeLfs ? ";l" : "");
+}
+
 /**
  * Raw git tree input accessor.
  */
-
 struct GitSourceAccessor : SourceAccessor
 {
     struct State
