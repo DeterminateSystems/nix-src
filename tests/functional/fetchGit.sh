@@ -318,9 +318,10 @@ git init "$eol"
 git -C "$eol" config user.email "foobar@example.com"
 git -C "$eol" config user.name "Foobar"
 printf "Hello\nWorld\n" > "$eol/crlf"
-git -C "$eol" add crlf
+printf "ignore me" > "$eol/ignored"
+git -C "$eol" add crlf ignored
 git -C "$eol" commit -a -m Initial
-printf "crlf text eol=crlf\n" > "$eol/.gitattributes"
+printf "crlf text eol=crlf\nignored export-ignore\n" > "$eol/.gitattributes"
 git -C "$eol" add .gitattributes
 git -C "$eol" commit -a -m 'Apply gitattributes'
 
@@ -328,13 +329,16 @@ rev="$(git -C "$eol" rev-parse HEAD)"
 
 export _NIX_TEST_BARF_ON_UNCACHEABLE=1
 
+oldHash="sha256-OizkFa+lIZbi+DCfbH8AYzsJ+BRmW0u/a7KKuzXADEU="
+newHash="sha256-hKHmbBsoVwqPNkL0MXL0RAtbOCqK6tP4xpX2tKR6GPI="
+
 expectStderr 0 nix eval --expr \
-    "assert builtins.readFile \"\${builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-kxXTCbD8wCYT9qNDKzl9bNKO8++pKY2QwAhqSqENP5k=\"; }}/crlf\" == \"Hello\r\nWorld\r\n\"; true" \
-    | grepQuiet "Please update the NAR hash to 'sha256-LDLvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA='"
+    "let tree = builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"$oldHash\"; }; in assert builtins.readFile \"\${tree}/crlf\" == \"Hello\r\nWorld\r\n\"; assert !builtins.pathExists \"\${tree}/ignored\"; true" \
+    | grepQuiet "Please update the NAR hash to '$newHash'"
 
 nix eval --expr \
-    "assert builtins.readFile \"\${builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-LDLvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA=\"; }}/crlf\" == \"Hello\nWorld\n\"; true"
+    "let tree = builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"$newHash\"; }; in assert builtins.readFile \"\${tree}/crlf\" == \"Hello\nWorld\n\"; assert builtins.pathExists \"\${tree}/ignored\"; true"
 
 expectStderr 102 nix eval --expr \
-    "assert builtins.readFile \"\${builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-DLDvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA=\"; }}/crlf\" == \"Hello\nWorld\n\"; true" \
+    "builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-DLDvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA=\"; }" \
     | grepQuiet "NAR hash mismatch"

@@ -790,27 +790,27 @@ struct GitInputScheme : InputScheme
         bool smudgeLfs = getLfsAttr(input);
         auto accessor = repo->getAccessor(rev, exportIgnore, "«" + input.to_string(true) + "»", smudgeLfs);
 
-        /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Git filters. Nix >= 2.20 doesn't
-         * apply Git filters, so we may get a NAR hash mismatch. If that happens, try again with filters enabled. */
+        /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Nix applying Git filters or
+         * `export-ignore`. Nix >= 2.20 doesn't do those, so we may get a NAR hash mismatch. If that happens, try again
+         * with filters and export-ignore enabled. */
         if (auto expectedNarHash = input.getNarHash()) {
             if (accessor->pathExists(CanonPath(".gitattributes"))) {
                 accessor->fingerprint = makeFingerprint(input, rev);
-                auto narHashNoFilters =
+                auto narHashNew =
                     fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
-                if (expectedNarHash != narHashNoFilters) {
-                    auto accessor2 =
-                        repo->getAccessor(rev, exportIgnore, "«" + input.to_string(true) + "»", smudgeLfs, true);
-                    accessor2->fingerprint = makeFingerprint(input, rev) + ";f";
-                    auto narHashFilters =
+                if (expectedNarHash != narHashNew) {
+                    auto accessor2 = repo->getAccessor(rev, true, "«" + input.to_string(true) + "»", smudgeLfs, true);
+                    accessor2->fingerprint = makeFingerprint(input, rev) + ";e;f";
+                    auto narHashOld =
                         fetchToStore2(settings, *store, {accessor2}, FetchMode::DryRun, input.getName()).second;
-                    if (expectedNarHash == narHashFilters) {
+                    if (expectedNarHash == narHashOld) {
                         warn(
-                            "Git input '%s' specifies a NAR hash '%s' that is only correct if Git filters are applied.\n"
-                            "This is pre-Nix 2.20 behavior; in Nix 2.20 and later, Git filters are not applied.\n"
+                            "Git input '%s' specifies a NAR hash '%s' that was created by Nix < 2.20.\n"
+                            "Nix >= 2.20 does not apply Git filters and `export-ignore` by default, which changes the NAR hash.\n"
                             "Please update the NAR hash to '%s'.",
                             input.to_string(),
                             expectedNarHash->to_string(HashFormat::SRI, true),
-                            narHashNoFilters.to_string(HashFormat::SRI, true));
+                            narHashNew.to_string(HashFormat::SRI, true));
                         accessor = accessor2;
                     }
                 }
