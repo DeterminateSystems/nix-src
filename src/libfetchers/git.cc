@@ -800,13 +800,11 @@ struct GitInputScheme : InputScheme
          * with filters and export-ignore enabled. */
         if (auto expectedNarHash = input.getNarHash()) {
             if (accessor->pathExists(CanonPath(".gitattributes"))) {
-                accessor->fingerprint = options.makeFingerprint(rev);
                 auto narHashNew =
                     fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
                 if (expectedNarHash != narHashNew) {
                     GitAccessorOptions options2{.exportIgnore = true, .applyFilters = true};
                     auto accessor2 = repo->getAccessor(rev, options2, "«" + input.to_string(true) + "»");
-                    accessor2->fingerprint = options2.makeFingerprint(rev);
                     auto narHashOld =
                         fetchToStore2(settings, *store, {accessor2}, FetchMode::DryRun, input.getName()).second;
                     if (expectedNarHash == narHashOld) {
