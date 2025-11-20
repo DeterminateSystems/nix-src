@@ -640,8 +640,11 @@ struct GitInputScheme : InputScheme
 
     std::string makeFingerprint(const Input & input, const Hash & rev) const
     {
-        return rev.gitRev() + (getSubmodulesAttr(input) ? ";s" : "") + (getExportIgnoreAttr(input) ? ";e" : "")
-               + (getLfsAttr(input) ? ";l" : "");
+        auto options = GitAccessorOptions{
+            .exportIgnore = getExportIgnoreAttr(input),
+            .smudgeLfs = getLfsAttr(input),
+        };
+        return options.makeFingerprint(rev) + (getSubmodulesAttr(input) ? ";s" : "");
     }
 
     std::pair<ref<SourceAccessor>, Input>
@@ -786,23 +789,24 @@ struct GitInputScheme : InputScheme
 
         verifyCommit(input, repo);
 
-        bool exportIgnore = getExportIgnoreAttr(input);
-        bool smudgeLfs = getLfsAttr(input);
-        auto accessor = repo->getAccessor(
-            rev, {.exportIgnore = exportIgnore, .smudgeLfs = smudgeLfs}, "«" + input.to_string(true) + "»");
+        GitAccessorOptions options{
+            .exportIgnore = getExportIgnoreAttr(input),
+            .smudgeLfs = getLfsAttr(input),
+        };
+        auto accessor = repo->getAccessor(rev, options, "«" + input.to_string(true) + "»");
 
         /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Nix applying Git filters or
          * `export-ignore`. Nix >= 2.20 doesn't do those, so we may get a NAR hash mismatch. If that happens, try again
          * with filters and export-ignore enabled. */
         if (auto expectedNarHash = input.getNarHash()) {
             if (accessor->pathExists(CanonPath(".gitattributes"))) {
-                accessor->fingerprint = makeFingerprint(input, rev);
+                accessor->fingerprint = options.makeFingerprint(rev);
                 auto narHashNew =
                     fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
                 if (expectedNarHash != narHashNew) {
-                    auto accessor2 = repo->getAccessor(
-                        rev, {.exportIgnore = true, .applyFilters = true}, "«" + input.to_string(true) + "»");
-                    accessor2->fingerprint = makeFingerprint(input, rev) + ";e;f";
+                    GitAccessorOptions options2{.exportIgnore = true, .applyFilters = true};
+                    auto accessor2 = repo->getAccessor(rev, options2, "«" + input.to_string(true) + "»");
+                    accessor2->fingerprint = options2.makeFingerprint(rev);
                     auto narHashOld =
                         fetchToStore2(settings, *store, {accessor2}, FetchMode::DryRun, input.getName()).second;
                     if (expectedNarHash == narHashOld) {
@@ -814,6 +818,7 @@ struct GitInputScheme : InputScheme
                             expectedNarHash->to_string(HashFormat::SRI, true),
                             narHashNew.to_string(HashFormat::SRI, true));
                         accessor = accessor2;
+                        options = options2;
                     }
                 }
             }
@@ -825,7 +830,7 @@ struct GitInputScheme : InputScheme
         if (getSubmodulesAttr(input)) {
             std::map<CanonPath, nix::ref<SourceAccessor>> mounts;
 
-            for (auto & [submodule, submoduleRev] : repo->getSubmodules(rev, exportIgnore)) {
+            for (auto & [submodule, submoduleRev] : repo->getSubmodules(rev, options.exportIgnore)) {
                 auto resolved = repo->resolveSubmoduleUrl(submodule.url);
                 debug(
                     "Git submodule %s: %s %s %s -> %s",
@@ -848,9 +853,9 @@ struct GitInputScheme : InputScheme
                     }
                 }
                 attrs.insert_or_assign("rev", submoduleRev.gitRev());
-                attrs.insert_or_assign("exportIgnore", Explicit<bool>{exportIgnore});
+                attrs.insert_or_assign("exportIgnore", Explicit<bool>{options.exportIgnore});
                 attrs.insert_or_assign("submodules", Explicit<bool>{true});
-                attrs.insert_or_assign("lfs", Explicit<bool>{smudgeLfs});
+                attrs.insert_or_assign("lfs", Explicit<bool>{options.smudgeLfs});
                 attrs.insert_or_assign("allRefs", Explicit<bool>{true});
                 auto submoduleInput = fetchers::Input::fromAttrs(settings, std::move(attrs));
                 auto [submoduleAccessor, submoduleInput2] = submoduleInput.getAccessor(settings, store);

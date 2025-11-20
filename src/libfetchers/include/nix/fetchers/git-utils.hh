@@ -27,6 +27,8 @@ struct GitAccessorOptions
     bool exportIgnore = false;
     bool smudgeLfs = false;
     bool applyFilters = false;
+
+    std::string makeFingerprint(const Hash & rev) const;
 };
 
 struct GitRepo
