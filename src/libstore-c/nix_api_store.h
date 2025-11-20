@@ -23,6 +23,8 @@ extern "C" {
 typedef struct Store Store;
 /** @brief Nix store path */
 typedef struct StorePath StorePath;
+/** @brief Nix Derived Path */
+typedef struct DerivedPath DerivedPath;
 /** @brief Nix Derivation */
 typedef struct nix_derivation nix_derivation;
 
@@ -376,6 +378,42 @@ nix_err nix_derivation_get_outputs_and_optpaths(
  */
 nix_err nix_derivation_to_json(
     nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata);
+
+/**
+ * @brief Parse a Nix derived path into a DerivedPath
+ *
+ * @note Don't forget to free this path using nix_derived_path_free()!
+ * @param[out] context Optional, stores error information
+ * @param[in] store nix store reference
+ * @param[in] path Path string to parse, copied
+ * @return owned store path, NULL on error
+ */
+DerivedPath * nix_store_parse_derived_path(nix_c_context * context, Store * store, const char * path);
+
+/**
+ * @brief Deallocate a `DerivedPath`
+ *
+ * Does not fail.
+ * @param[in] d the derived path to free
+ */
+void nix_derived_path_free(const DerivedPath * d);
+
+/**
+ * @brief Copy a `DerivedPath`
+ *
+ * @param[in] d the derived path to copy
+ * @return a new `DerivedPath`
+ */
+DerivedPath * nix_derived_path_clone(const DerivedPath * d);
+
+/**
+ * @brief Gets the store path for a derived path by realising it.
+ *
+ * @param[out] context Optional, stores error information
+ * @param[in] d the derived path
+ * @return The derivation path, NULL on error
+ */
+StorePath * nix_derived_path_get_store_path(nix_c_context * context, DerivedPath * d);
 
 // cffi end
 #ifdef __cplusplus
