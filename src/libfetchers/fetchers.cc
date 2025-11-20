@@ -328,6 +328,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         auto accessor = make_ref<SubstitutedSourceAccessor>(ref{store->getFSAccessor(*storePath)});
 
         accessor->fingerprint = getFingerprint(store);
+        cachedFingerprint = accessor->fingerprint;
 
         // Store a cache entry for the substituted tree so later fetches
         // can reuse the existing nar instead of copying the unpacked
