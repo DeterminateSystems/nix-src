@@ -788,7 +788,8 @@ struct GitInputScheme : InputScheme
 
         bool exportIgnore = getExportIgnoreAttr(input);
         bool smudgeLfs = getLfsAttr(input);
-        auto accessor = repo->getAccessor(rev, exportIgnore, "«" + input.to_string(true) + "»", smudgeLfs);
+        auto accessor = repo->getAccessor(
+            rev, {.exportIgnore = exportIgnore, .smudgeLfs = smudgeLfs}, "«" + input.to_string(true) + "»");
 
         /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Nix applying Git filters or
          * `export-ignore`. Nix >= 2.20 doesn't do those, so we may get a NAR hash mismatch. If that happens, try again
@@ -799,7 +800,8 @@ struct GitInputScheme : InputScheme
                 auto narHashNew =
                     fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
                 if (expectedNarHash != narHashNew) {
-                    auto accessor2 = repo->getAccessor(rev, true, "«" + input.to_string(true) + "»", smudgeLfs, true);
+                    auto accessor2 = repo->getAccessor(
+                        rev, {.exportIgnore = true, .applyFilters = true}, "«" + input.to_string(true) + "»");
                     accessor2->fingerprint = makeFingerprint(input, rev) + ";e;f";
                     auto narHashOld =
                         fetchToStore2(settings, *store, {accessor2}, FetchMode::DryRun, input.getName()).second;
@@ -882,7 +884,7 @@ struct GitInputScheme : InputScheme
         auto exportIgnore = getExportIgnoreAttr(input);
 
         ref<SourceAccessor> accessor =
-            repo->getAccessor(repoInfo.workdirInfo, exportIgnore, makeNotAllowedError(repoPath));
+            repo->getAccessor(repoInfo.workdirInfo, {.exportIgnore = exportIgnore}, makeNotAllowedError(repoPath));
 
         /* If the repo has submodules, return a mounted input accessor
            consisting of the accessor for the top-level repo and the

@@ -550,18 +550,15 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
     }
 
     /**
-     * A 'GitSourceAccessor' with no regard for export-ignore or any other transformations.
+     * A 'GitSourceAccessor' with no regard for export-ignore.
      */
-    ref<GitSourceAccessor> getRawAccessor(const Hash & rev, bool smudgeLfs = false, bool applyFilters = false);
+    ref<GitSourceAccessor> getRawAccessor(const Hash & rev, const GitAccessorOptions & options);
 
-    ref<SourceAccessor> getAccessor(
-        const Hash & rev,
-        bool exportIgnore,
-        std::string displayPrefix,
-        bool smudgeLfs = false,
-        bool applyFilters = false) override;
+    ref<SourceAccessor>
+    getAccessor(const Hash & rev, const GitAccessorOptions & options, std::string displayPrefix) override;
 
-    ref<SourceAccessor> getAccessor(const WorkdirInfo & wd, bool exportIgnore, MakeNotAllowedError e) override;
+    ref<SourceAccessor>
+    getAccessor(const WorkdirInfo & wd, const GitAccessorOptions & options, MakeNotAllowedError e) override;
 
     ref<GitFileSystemObjectSink> getFileSystemObjectSink() override;
 
@@ -704,7 +701,7 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
 
     Hash treeHashToNarHash(const fetchers::Settings & settings, const Hash & treeHash) override
     {
-        auto accessor = getAccessor(treeHash, false, "");
+        auto accessor = getAccessor(treeHash, {}, "");
 
         fetchers::Cache::Key cacheKey{"treeHashToNarHash", {{"treeHash", treeHash.gitRev()}}};
 
@@ -753,18 +750,18 @@ struct GitSourceAccessor : SourceAccessor
         git_oid oid;
         Object root;
         std::optional<lfs::Fetch> lfsFetch = std::nullopt;
-        bool applyFilters;
+        GitAccessorOptions options;
     };
 
     Sync<State> state_;
 
-    GitSourceAccessor(ref<GitRepoImpl> repo_, const Hash & rev, bool smudgeLfs, bool applyFilters_)
+    GitSourceAccessor(ref<GitRepoImpl> repo_, const Hash & rev, const GitAccessorOptions & options)
         : state_{State{
               .repo = repo_,
               .oid = hashToOID(rev),
               .root = peelToTreeOrBlob(lookupObject(*repo_, hashToOID(rev)).get()),
-              .lfsFetch = smudgeLfs ? std::make_optional(lfs::Fetch(*repo_, hashToOID(rev))) : std::nullopt,
-              .applyFilters = applyFilters_,
+              .lfsFetch = options.smudgeLfs ? std::make_optional(lfs::Fetch(*repo_, hashToOID(rev))) : std::nullopt,
+              .options = options,
           }}
     {
     }
@@ -792,7 +789,7 @@ struct GitSourceAccessor : SourceAccessor
             }
         }
 
-        if (!state->applyFilters)
+        if (!state->options.applyFilters)
             return std::string((const char *) git_blob_rawcontent(blob.get()), git_blob_rawsize(blob.get()));
         else {
             // Apply git filters including potential CRLF conversion
@@ -1336,26 +1333,26 @@ struct GitFileSystemObjectSinkImpl : GitFileSystemObjectSink
     }
 };
 
-ref<GitSourceAccessor> GitRepoImpl::getRawAccessor(const Hash & rev, bool smudgeLfs, bool applyFilters)
+ref<GitSourceAccessor> GitRepoImpl::getRawAccessor(const Hash & rev, const GitAccessorOptions & options)
 {
     auto self = ref<GitRepoImpl>(shared_from_this());
-    return make_ref<GitSourceAccessor>(self, rev, smudgeLfs, applyFilters);
+    return make_ref<GitSourceAccessor>(self, rev, options);
 }
 
-ref<SourceAccessor> GitRepoImpl::getAccessor(
-    const Hash & rev, bool exportIgnore, std::string displayPrefix, bool smudgeLfs, bool applyFilters)
+ref<SourceAccessor>
+GitRepoImpl::getAccessor(const Hash & rev, const GitAccessorOptions & options, std::string displayPrefix)
 {
     auto self = ref<GitRepoImpl>(shared_from_this());
-    ref<GitSourceAccessor> rawGitAccessor = getRawAccessor(rev, smudgeLfs, applyFilters);
+    ref<GitSourceAccessor> rawGitAccessor = getRawAccessor(rev, options);
     rawGitAccessor->setPathDisplay(std::move(displayPrefix));
-    if (exportIgnore)
+    if (options.exportIgnore)
         return make_ref<GitExportIgnoreSourceAccessor>(self, rawGitAccessor, rev);
     else
         return rawGitAccessor;
 }
 
-ref<SourceAccessor>
-GitRepoImpl::getAccessor(const WorkdirInfo & wd, bool exportIgnore, MakeNotAllowedError makeNotAllowedError)
+ref<SourceAccessor> GitRepoImpl::getAccessor(
+    const WorkdirInfo & wd, const GitAccessorOptions & options, MakeNotAllowedError makeNotAllowedError)
 {
     auto self = ref<GitRepoImpl>(shared_from_this());
     ref<SourceAccessor> fileAccessor = AllowListSourceAccessor::create(
@@ -1365,7 +1362,7 @@ GitRepoImpl::getAccessor(const WorkdirInfo & wd, bool exportIgnore, MakeNotAllow
                                            boost::unordered_flat_set<CanonPath>{CanonPath::root},
                                            std::move(makeNotAllowedError))
                                            .cast<SourceAccessor>();
-    if (exportIgnore)
+    if (options.exportIgnore)
         fileAccessor = make_ref<GitExportIgnoreSourceAccessor>(self, fileAccessor, std::nullopt);
     return fileAccessor;
 }
@@ -1380,7 +1377,7 @@ std::vector<std::tuple<GitRepoImpl::Submodule, Hash>> GitRepoImpl::getSubmodules
     /* Read the .gitmodules files from this revision. */
     CanonPath modulesFile(".gitmodules");
 
-    auto accessor = getAccessor(rev, exportIgnore, "");
+    auto accessor = getAccessor(rev, {.exportIgnore = exportIgnore}, "");
     if (!accessor->pathExists(modulesFile))
         return {};
 
@@ -1397,7 +1394,7 @@ std::vector<std::tuple<GitRepoImpl::Submodule, Hash>> GitRepoImpl::getSubmodules
 
     std::vector<std::tuple<Submodule, Hash>> result;
 
-    auto rawAccessor = getRawAccessor(rev);
+    auto rawAccessor = getRawAccessor(rev, {});
 
     for (auto & submodule : parseSubmodules(pathTemp)) {
         /* Filter out .gitmodules entries that don't exist or are not

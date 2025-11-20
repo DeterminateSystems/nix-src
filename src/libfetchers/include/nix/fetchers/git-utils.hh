@@ -22,6 +22,13 @@ struct GitFileSystemObjectSink : ExtendedFileSystemObjectSink
     virtual Hash flush() = 0;
 };
 
+struct GitAccessorOptions
+{
+    bool exportIgnore = false;
+    bool smudgeLfs = false;
+    bool applyFilters = false;
+};
+
 struct GitRepo
 {
     virtual ~GitRepo() {}
@@ -88,15 +95,11 @@ struct GitRepo
 
     virtual bool hasObject(const Hash & oid) = 0;
 
-    virtual ref<SourceAccessor> getAccessor(
-        const Hash & rev,
-        bool exportIgnore,
-        std::string displayPrefix,
-        bool smudgeLfs = false,
-        bool applyFilters = false) = 0;
-
     virtual ref<SourceAccessor>
-    getAccessor(const WorkdirInfo & wd, bool exportIgnore, MakeNotAllowedError makeNotAllowedError) = 0;
+    getAccessor(const Hash & rev, const GitAccessorOptions & options, std::string displayPrefix) = 0;
+
+    virtual ref<SourceAccessor> getAccessor(
+        const WorkdirInfo & wd, const GitAccessorOptions & options, MakeNotAllowedError makeNotAllowedError) = 0;
 
     virtual ref<GitFileSystemObjectSink> getFileSystemObjectSink() = 0;
 
