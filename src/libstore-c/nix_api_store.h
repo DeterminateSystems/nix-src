@@ -23,6 +23,8 @@ extern "C" {
 typedef struct Store Store;
 /** @brief Nix store path */
 typedef struct StorePath StorePath;
+/** @brief Nix store path with outputs */
+typedef struct StorePathWithOutputs StorePathWithOutputs;
 /** @brief Nix Derivation */
 typedef struct nix_derivation nix_derivation;
 
@@ -376,6 +378,44 @@ nix_err nix_derivation_get_outputs_and_optpaths(
  */
 nix_err nix_derivation_to_json(
     nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata);
+
+/**
+ * @brief Parse a Nix store path with outputs into a StorePathWithOutputs
+ *
+ * @note Don't forget to free this path using nix_store_path_with_outputs_free()!
+ * @param[out] context Optional, stores error information
+ * @param[in] store nix store reference
+ * @param[in] path_with_outputs Path with outputs string to parse, copied
+ * @return owned store path, NULL on error
+ */
+StorePathWithOutputs *
+nix_store_parse_path_with_outputs(nix_c_context * context, Store * store, const char * path_with_outputs);
+
+/** @brief Deallocate a StorePathWithOutputs
+ *
+ * Does not fail.
+ * @param[in] p the path to free
+ */
+void nix_store_path_with_outputs_free(StorePathWithOutputs * p);
+
+/**
+ * @brief Copy a StorePathWithOutputs
+ *
+ * @param[in] p the path to copy
+ * @return a new StorePathWithOutputs
+ */
+StorePathWithOutputs * nix_store_path_with_outputs_clone(const StorePathWithOutputs * p);
+
+/**
+ * @brief Gets the derived path as JSON
+ *
+ * @param[out] context Optional, stores error information
+ * @param[in] path The StorePathWithOutputs
+ * @param[in] callback Called with the JSON string
+ * @param[in] userdata Arbitrary data passed to the callback
+ */
+nix_err nix_store_path_with_outputs_get_derived(
+    nix_c_context * context, const StorePathWithOutputs * path, nix_get_string_callback callback, void * userdata);
 
 // cffi end
 #ifdef __cplusplus

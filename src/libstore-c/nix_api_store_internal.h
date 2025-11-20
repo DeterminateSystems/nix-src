@@ -1,6 +1,7 @@
 #ifndef NIX_API_STORE_INTERNAL_H
 #define NIX_API_STORE_INTERNAL_H
 #include "nix/store/store-api.hh"
+#include "nix/store/path-with-outputs.hh"
 #include "nix/store/derivations.hh"
 
 extern "C" {
@@ -13,6 +14,11 @@ struct Store
 struct StorePath
 {
     nix::StorePath path;
+};
+
+struct StorePathWithOutputs
+{
+    nix::StorePathWithOutputs path_with_outputs;
 };
 
 struct nix_derivation

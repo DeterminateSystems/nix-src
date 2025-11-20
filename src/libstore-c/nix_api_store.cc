@@ -1,9 +1,12 @@
+#include <nlohmann/json.hpp>
+
 #include "nix_api_store.h"
 #include "nix_api_store_internal.h"
 #include "nix_api_util.h"
 #include "nix_api_util_internal.h"
 
 #include "nix/store/path.hh"
+#include "nix/store/path-with-outputs.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/store-open.hh"
 #include "nix/store/build-result.hh"
@@ -377,6 +380,46 @@ nix_err nix_derivation_to_json(
         context->last_err_code = NIX_OK;
     try {
         auto result = drv->drv.toJSON().dump();
+        if (callback) {
+            callback(result.data(), result.size(), userdata);
+        }
+    }
+    NIXC_CATCH_ERRS
+}
+
+StorePathWithOutputs *
+nix_store_parse_path_with_outputs(nix_c_context * context, Store * store, const char * path_with_outputs)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        std::string p = path_with_outputs;
+        nix::StorePathWithOutputs s = nix::parsePathWithOutputs(*store->ptr, p);
+        return new StorePathWithOutputs{std::move(s)};
+    }
+    NIXC_CATCH_ERRS_NULL
+}
+
+void nix_store_path_with_outputs_free(StorePathWithOutputs * p)
+{
+    delete p;
+}
+
+StorePathWithOutputs * nix_store_path_with_outputs_clone(const StorePathWithOutputs * p)
+{
+    return new StorePathWithOutputs{p->path_with_outputs};
+}
+
+nix_err nix_store_path_with_outputs_get_derived(
+    nix_c_context * context, const StorePathWithOutputs * path, nix_get_string_callback callback, void * userdata)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        auto derived = path->path_with_outputs.toDerivedPath();
+        auto json = static_cast<nlohmann::json>(derived);
+        auto result = json.dump();
+
         if (callback) {
             callback(result.data(), result.size(), userdata);
         }
