@@ -8,6 +8,7 @@
   # Image configuration
   name ? "nix",
   tag ? "latest",
+  fromImage ? null,
   bundleNixpkgs ? true,
   channelName ? "nixpkgs",
   channelURL ? "https://nixos.org/channels/nixpkgs-unstable",
@@ -352,6 +353,7 @@ dockerTools.buildLayeredImageWithNixDb {
     gid
     uname
     gname
+    fromImage
     ;
 
   contents = [ baseSystem ];
