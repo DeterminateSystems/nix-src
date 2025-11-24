@@ -21,9 +21,13 @@ class RemoteFSAccessor : public SourceAccessor
 
     friend struct BinaryCacheStore;
 
-    std::filesystem::path makeCacheFile(std::string_view hashPart, const std::string & ext);
+    std::filesystem::path makeCacheFile(const Hash & narHash, const std::string & ext);
 
-    ref<SourceAccessor> addToCache(std::string_view hashPart, std::string && nar);
+    ref<SourceAccessor> addToCache(
+        std::string_view hashPart,
+        const std::filesystem::path & cacheFile,
+        const std::filesystem::path & listingFile,
+        std::string && nar);
 
 public:
 
