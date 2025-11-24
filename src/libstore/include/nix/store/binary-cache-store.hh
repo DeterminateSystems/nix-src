@@ -38,7 +38,7 @@ struct BinaryCacheStoreConfig : virtual StoreConfig
     const Setting<std::string> secretKeyFiles{
         this, "", "secret-keys", "List of comma-separated paths to the secret keys used to sign the binary cache."};
 
-    const Setting<Path> localNarCache{
+    const Setting<std::filesystem::path> localNarCache{
         this,
         "",
         "local-nar-cache",
