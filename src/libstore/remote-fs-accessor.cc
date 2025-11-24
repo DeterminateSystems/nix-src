@@ -18,18 +18,22 @@ RemoteFSAccessor::RemoteFSAccessor(
         createDirs(*cacheDir);
 }
 
-std::filesystem::path RemoteFSAccessor::makeCacheFile(std::string_view hashPart, const std::string & ext)
+std::filesystem::path RemoteFSAccessor::makeCacheFile(const Hash & narHash, const std::string & ext)
 {
     assert(cacheDir);
-    return (*cacheDir / hashPart) + "." + ext;
+    return (*cacheDir / narHash.to_string(HashFormat::Nix32, false)) + "." + ext;
 }
 
-ref<SourceAccessor> RemoteFSAccessor::addToCache(std::string_view hashPart, std::string && nar)
+ref<SourceAccessor> RemoteFSAccessor::addToCache(
+    std::string_view hashPart,
+    const std::filesystem::path & cacheFile,
+    const std::filesystem::path & listingFile,
+    std::string && nar)
 {
-    if (cacheDir) {
+    if (!cacheFile.empty()) {
         try {
             /* FIXME: do this asynchronously. */
-            writeFile(makeCacheFile(hashPart, "nar"), nar);
+            writeFile(cacheFile, nar);
         } catch (...) {
             ignoreExceptionExceptInterrupt();
         }
@@ -38,10 +42,10 @@ ref<SourceAccessor> RemoteFSAccessor::addToCache(std::string_view hashPart, std:
     auto narAccessor = makeNarAccessor(std::move(nar));
     nars.emplace(hashPart, narAccessor);
 
-    if (cacheDir) {
+    if (!listingFile.empty()) {
         try {
             nlohmann::json j = listNarDeep(*narAccessor, CanonPath::root);
-            writeFile(makeCacheFile(hashPart, "ls"), j.dump());
+            writeFile(listingFile, j.dump());
         } catch (...) {
             ignoreExceptionExceptInterrupt();
         }
@@ -64,33 +68,36 @@ std::shared_ptr<SourceAccessor> RemoteFSAccessor::accessObject(const StorePath &
     if (i != nars.end())
         return i->second;
 
-    std::string listing;
-    std::filesystem::path cacheFile;
+    std::filesystem::path cacheFile, listingFile;
 
-    if (cacheDir && nix::pathExists(cacheFile = makeCacheFile(storePath.hashPart(), "nar"))) {
+    if (cacheDir) {
+        auto info = store->queryPathInfo(storePath);
 
-        try {
-            listing = nix::readFile(makeCacheFile(storePath.hashPart(), "ls"));
-            auto listingJson = nlohmann::json::parse(listing);
-            auto narAccessor = makeLazyNarAccessor(listingJson, seekableGetNarBytes(cacheFile));
+        cacheFile = makeCacheFile(info->narHash, "nar");
+        listingFile = makeCacheFile(info->narHash, "ls");
 
-            nars.emplace(storePath.hashPart(), narAccessor);
-            return narAccessor;
+        if (nix::pathExists(cacheFile)) {
+            try {
+                auto listing = nix::readFile(listingFile);
+                auto listingJson = nlohmann::json::parse(listing);
+                auto narAccessor = makeLazyNarAccessor(listingJson, seekableGetNarBytes(cacheFile));
+                nars.emplace(storePath.hashPart(), narAccessor);
+                return narAccessor;
+            } catch (SystemError &) {
+            }
 
-        } catch (SystemError &) {
-        }
-
-        try {
-            auto narAccessor = makeNarAccessor(nix::readFile(cacheFile));
-            nars.emplace(storePath.hashPart(), narAccessor);
-            return narAccessor;
-        } catch (SystemError &) {
+            try {
+                auto narAccessor = makeNarAccessor(nix::readFile(cacheFile));
+                nars.emplace(storePath.hashPart(), narAccessor);
+                return narAccessor;
+            } catch (SystemError &) {
+            }
         }
     }
 
     StringSink sink;
     store->narFromPath(storePath, sink);
-    return addToCache(storePath.hashPart(), std::move(sink.s));
+    return addToCache(storePath.hashPart(), cacheFile, listingFile, std::move(sink.s));
 }
 
 std::optional<SourceAccessor::Stat> RemoteFSAccessor::maybeLstat(const CanonPath & path)
