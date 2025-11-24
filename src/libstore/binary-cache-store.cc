@@ -410,10 +410,29 @@ void BinaryCacheStore::narFromPath(const StorePath & storePath, Sink & sink)
 {
     auto info = queryPathInfo(storePath).cast<const NarInfo>();
 
-    LengthSink narSize;
-    TeeSink tee{sink, narSize};
+    if (narCache) {
+        if (auto nar = narCache->getNar(info->narHash)) {
+            notice("substituted '%s' from local NAR cache", printStorePath(storePath));
+            sink(*nar);
+            stats.narRead++;
+            stats.narReadBytes += nar->size();
+            return;
+        }
+    }
 
-    auto decompressor = makeDecompressionSink(info->compression, tee);
+    LengthSink narSize;
+    TeeSink tee{narSize, sink};
+    std::unique_ptr<Sink> narCacheSink;
+    std::unique_ptr<Sink> tee2;
+    Sink * sink2 = &tee;
+
+    if (narCache) {
+        narCacheSink = sourceToSink([&](Source & source) { narCache->upsertNar(info->narHash, source); });
+        tee2 = std::make_unique<TeeSink>(*narCacheSink, tee);
+        sink2 = tee2.get();
+    }
+
+    auto decompressor = makeDecompressionSink(info->compression, *sink2);
 
     try {
         getFile(info->url, *decompressor);
@@ -423,6 +442,7 @@ void BinaryCacheStore::narFromPath(const StorePath & storePath, Sink & sink)
 
     decompressor->finish();
 
+    // FIXME: this is never reached
     stats.narRead++;
     // stats.narReadCompressedBytes += nar->size(); // FIXME
     stats.narReadBytes += narSize.length;
