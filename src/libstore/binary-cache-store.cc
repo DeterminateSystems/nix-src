@@ -408,11 +408,27 @@ void BinaryCacheStore::narFromPath(const StorePath & storePath, Sink & sink)
 {
     auto info = queryPathInfo(storePath).cast<const NarInfo>();
 
+    if (narCache) {
+        if (auto nar = narCache->getNar(info->narHash)) {
+            notice("substituted '%s' from local NAR cache", printStorePath(storePath));
+            sink(*nar);
+            stats.narRead++;
+            stats.narReadBytes += nar->size();
+            return;
+        }
+    }
+
+    std::unique_ptr<Sink> narCacheSink;
+    if (narCache)
+        narCacheSink = sourceToSink([&](Source & source) { narCache->upsertNar(info->narHash, source); });
+
     uint64_t narSize = 0;
 
     LambdaSink uncompressedSink{
         [&](std::string_view data) {
             narSize += data.size();
+            if (narCacheSink)
+                (*narCacheSink)(data);
             sink(data);
         },
         [&]() {
