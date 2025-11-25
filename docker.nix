@@ -27,6 +27,8 @@
     "org.opencontainers.image.description" = "Nix container image";
   },
   Cmd ? [ (lib.getExe bashInteractive) ],
+  extraPrePaths ? [ ],
+  extraPostPaths ? [ ],
   # Default Packages
   nix ? pkgs.nix,
   bashInteractive ? pkgs.bashInteractive,
@@ -373,11 +375,15 @@ dockerTools.buildLayeredImageWithNixDb {
     Env = [
       "USER=${uname}"
       "PATH=${
-        lib.concatStringsSep ":" [
-          "${userHome}/.nix-profile/bin"
-          "/nix/var/nix/profiles/default/bin"
-          "/nix/var/nix/profiles/default/sbin"
-        ]
+        lib.concatStringsSep ":" (
+          extraPrePaths
+          ++ [
+            "${userHome}/.nix-profile/bin"
+            "/nix/var/nix/profiles/default/bin"
+            "/nix/var/nix/profiles/default/sbin"
+          ]
+          ++ extraPostPaths
+        )
       }"
       "MANPATH=${
         lib.concatStringsSep ":" [
