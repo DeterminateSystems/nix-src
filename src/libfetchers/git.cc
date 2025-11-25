@@ -638,13 +638,13 @@ struct GitInputScheme : InputScheme
         return shallow || input.getRevCount().has_value();
     }
 
-    std::string makeFingerprint(const Input & input, const Hash & rev) const
+    GitAccessorOptions getGitAccessorOptions(const Input & input) const
     {
-        auto options = GitAccessorOptions{
+        return GitAccessorOptions{
             .exportIgnore = getExportIgnoreAttr(input),
             .smudgeLfs = getLfsAttr(input),
+            .submodules = getSubmodulesAttr(input),
         };
-        return options.makeFingerprint(rev) + (getSubmodulesAttr(input) ? ";s" : "");
     }
 
     /**
@@ -652,7 +652,11 @@ struct GitInputScheme : InputScheme
      * This is used for Nix < 2.20 compatibility.
      */
     ref<SourceAccessor> getGitArchiveAccessor(
-        Store & store, RepoInfo & repoInfo, const std::filesystem::path & repoDir, const Hash & rev) const
+        Store & store,
+        RepoInfo & repoInfo,
+        const std::filesystem::path & repoDir,
+        const Hash & rev,
+        GitAccessorOptions & options) const
     {
         auto tmpDir = createTempDir();
         AutoDelete delTmpDir(tmpDir, true);
@@ -670,7 +674,7 @@ struct GitInputScheme : InputScheme
 
         auto accessor = store.getFSAccessor(storePath);
 
-        GitAccessorOptions options{.exportIgnore = true};
+        options.exportIgnore = true;
         accessor->fingerprint = options.makeFingerprint(rev) + ";f";
 
         return ref{accessor};
@@ -818,10 +822,7 @@ struct GitInputScheme : InputScheme
 
         verifyCommit(input, repo);
 
-        GitAccessorOptions options{
-            .exportIgnore = getExportIgnoreAttr(input),
-            .smudgeLfs = getLfsAttr(input),
-        };
+        auto options = getGitAccessorOptions(input);
 
         auto expectedNarHash = input.getNarHash();
 
@@ -832,7 +833,7 @@ struct GitInputScheme : InputScheme
              * as well. */
             warn("Using Nix 2.19 semantics to export Git repository '%s'.", input.to_string());
             auto accessorModern = accessor;
-            accessor = getGitArchiveAccessor(*store, repoInfo, repoDir, rev);
+            accessor = getGitArchiveAccessor(*store, repoInfo, repoDir, rev, options);
             if (expectedNarHash) {
                 auto narHashLegacy =
                     fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
@@ -850,7 +851,7 @@ struct GitInputScheme : InputScheme
             auto narHashNew = fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
             if (expectedNarHash && accessor->pathExists(CanonPath(".gitattributes"))) {
                 if (expectedNarHash != narHashNew) {
-                    auto accessorLegacy = getGitArchiveAccessor(*store, repoInfo, repoDir, rev);
+                    auto accessorLegacy = getGitArchiveAccessor(*store, repoInfo, repoDir, rev, options);
                     auto narHashLegacy =
                         fetchToStore2(settings, *store, {accessorLegacy}, FetchMode::DryRun, input.getName()).second;
                     if (expectedNarHash == narHashLegacy) {
@@ -870,7 +871,7 @@ struct GitInputScheme : InputScheme
         /* If the repo has submodules, fetch them and return a mounted
            input accessor consisting of the accessor for the top-level
            repo and the accessors for the submodules. */
-        if (getSubmodulesAttr(input)) {
+        if (options.submodules) {
             std::map<CanonPath, nix::ref<SourceAccessor>> mounts;
 
             for (auto & [submodule, submoduleRev] : repo->getSubmodules(rev, options.exportIgnore)) {
@@ -1026,10 +1027,12 @@ struct GitInputScheme : InputScheme
 
     std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
     {
+        auto options = getGitAccessorOptions(input);
+
         if (auto rev = input.getRev())
             // FIXME: this can return a wrong fingerprint for the legacy (`git archive`) case, since we don't know here
             // whether to append the `;f` suffix or not.
-            return makeFingerprint(input, *rev);
+            return options.makeFingerprint(*rev);
         else {
             auto repoInfo = getRepoInfo(input);
             if (auto repoPath = repoInfo.getPath(); repoPath && repoInfo.workdirInfo.submodules.empty()) {
@@ -1045,7 +1048,7 @@ struct GitInputScheme : InputScheme
                     writeString("deleted:", hashSink);
                     writeString(file.abs(), hashSink);
                 }
-                return makeFingerprint(input, repoInfo.workdirInfo.headRev.value_or(nullRev))
+                return options.makeFingerprint(repoInfo.workdirInfo.headRev.value_or(nullRev))
                        + ";d=" + hashSink.finish().hash.to_string(HashFormat::Base16, false);
             }
             return std::nullopt;

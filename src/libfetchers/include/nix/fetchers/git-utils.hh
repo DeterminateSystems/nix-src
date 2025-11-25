@@ -26,6 +26,7 @@ struct GitAccessorOptions
 {
     bool exportIgnore = false;
     bool smudgeLfs = false;
+    bool submodules = false; // Currently implemented in GitInputScheme rather than GitAccessor
 
     std::string makeFingerprint(const Hash & rev) const;
 };

@@ -740,7 +740,7 @@ ref<GitRepo> GitRepo::openRepo(const std::filesystem::path & path, bool create, 
 
 std::string GitAccessorOptions::makeFingerprint(const Hash & rev) const
 {
-    return rev.gitRev() + (exportIgnore ? ";e" : "") + (smudgeLfs ? ";l" : "");
+    return rev.gitRev() + (exportIgnore ? ";e" : "") + (smudgeLfs ? ";l" : "") + (submodules ? ";s" : "");
 }
 
 /**
