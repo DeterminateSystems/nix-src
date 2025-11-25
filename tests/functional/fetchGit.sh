@@ -343,3 +343,27 @@ nix eval --expr \
 expectStderr 102 nix eval --expr \
     "builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-DLDvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA=\"; }" \
     | grepQuiet "NAR hash mismatch"
+
+mkdir -p "$TEST_ROOT"/flake
+cat > "$TEST_ROOT"/flake/flake.nix << EOF
+{
+  inputs.eol = { type = "git"; url = "file://$eol"; rev = "$rev"; flake = false; };
+  outputs = { self, eol }: rec {
+    crlf = builtins.readFile "\${eol}/crlf";
+    isLegacy = assert crlf == "Hello\r\nWorld\r\n"; true;
+    isModern = assert crlf == "Hello\nWorld\n"; true;
+  };
+}
+EOF
+
+# Test locking with Nix < 2.20 semantics (i.e. using `git archive`).
+nix eval --nix-219-compat "path:$TEST_ROOT/flake"#isLegacy
+nix eval "path:$TEST_ROOT/flake"#isLegacy
+[[ $(jq -r .nodes.eol.locked.narHash < "$TEST_ROOT"/flake/flake.lock) = "$oldHash" ]]
+
+# Test locking with Nix >= 2.20 semantics (i.e. using libgit2).
+rm "$TEST_ROOT"/flake/flake.lock
+rm "$TEST_HOME/.cache/nix/fetcher-cache-v4.sqlite" # FIXME
+nix eval "path:$TEST_ROOT/flake"#isModern
+nix eval --nix-219-compat "path:$TEST_ROOT/flake"#isModern
+[[ $(jq -r .nodes.eol.locked.narHash < "$TEST_ROOT"/flake/flake.lock) = "$newHash" ]]

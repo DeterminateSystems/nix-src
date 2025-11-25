@@ -668,7 +668,12 @@ struct GitInputScheme : InputScheme
 
         auto storePath = store.addToStore("source", {getFSSourceAccessor(), CanonPath(tmpDir)});
 
-        return ref{store.getFSAccessor(storePath)};
+        auto accessor = store.getFSAccessor(storePath);
+
+        GitAccessorOptions options{.exportIgnore = true};
+        accessor->fingerprint = options.makeFingerprint(rev) + ";f";
+
+        return ref{accessor};
     }
 
     std::pair<ref<SourceAccessor>, Input>
@@ -817,22 +822,38 @@ struct GitInputScheme : InputScheme
             .exportIgnore = getExportIgnoreAttr(input),
             .smudgeLfs = getLfsAttr(input),
         };
+
+        auto expectedNarHash = input.getNarHash();
+
         auto accessor = repo->getAccessor(rev, options, "«" + input.to_string(true) + "»");
 
-        /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Nix applying Git filters,
-         * `export-ignore` or `export-subst`. Nix >= 2.20 doesn't do those, so we may get a NAR hash mismatch. If that
-         * happens, try again using `git archive`. */
-        if (auto expectedNarHash = input.getNarHash()) {
-            if (accessor->pathExists(CanonPath(".gitattributes"))) {
-                auto narHashNew =
+        if (settings.nix219Compat && !options.smudgeLfs && accessor->pathExists(CanonPath(".gitattributes"))) {
+            /* Use Nix 2.19 semantics to generate locks, but if a NAR hash is specified, support Nix >= 2.20 semantics
+             * as well. */
+            warn("Using Nix 2.19 semantics to export Git repository '%s'.", input.to_string());
+            auto accessorModern = accessor;
+            accessor = getGitArchiveAccessor(*store, repoInfo, repoDir, rev);
+            if (expectedNarHash) {
+                auto narHashLegacy =
                     fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
+                if (expectedNarHash != narHashLegacy) {
+                    auto narHashModern =
+                        fetchToStore2(settings, *store, {accessorModern}, FetchMode::DryRun, input.getName()).second;
+                    if (expectedNarHash == narHashModern)
+                        accessor = accessorModern;
+                }
+            }
+        } else {
+            /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Nix applying Git filters,
+             * `export-ignore` or `export-subst`. Nix >= 2.20 doesn't do those, so we may get a NAR hash mismatch. If
+             * that happens, try again using `git archive`. */
+            auto narHashNew = fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
+            if (expectedNarHash && accessor->pathExists(CanonPath(".gitattributes"))) {
                 if (expectedNarHash != narHashNew) {
-                    GitAccessorOptions options2{.exportIgnore = true};
-                    auto accessor2 = getGitArchiveAccessor(*store, repoInfo, repoDir, rev);
-                    accessor2->fingerprint = options2.makeFingerprint(rev) + ";f";
-                    auto narHashOld =
-                        fetchToStore2(settings, *store, {accessor2}, FetchMode::DryRun, input.getName()).second;
-                    if (expectedNarHash == narHashOld) {
+                    auto accessorLegacy = getGitArchiveAccessor(*store, repoInfo, repoDir, rev);
+                    auto narHashLegacy =
+                        fetchToStore2(settings, *store, {accessorLegacy}, FetchMode::DryRun, input.getName()).second;
+                    if (expectedNarHash == narHashLegacy) {
                         warn(
                             "Git input '%s' specifies a NAR hash '%s' that was created by Nix < 2.20.\n"
                             "Nix >= 2.20 does not apply Git filters, `export-ignore` and `export-subst` by default, which changes the NAR hash.\n"
@@ -840,8 +861,7 @@ struct GitInputScheme : InputScheme
                             input.to_string(),
                             expectedNarHash->to_string(HashFormat::SRI, true),
                             narHashNew.to_string(HashFormat::SRI, true));
-                        accessor = accessor2;
-                        options = options2;
+                        accessor = accessorLegacy;
                     }
                 }
             }
@@ -1007,6 +1027,8 @@ struct GitInputScheme : InputScheme
     std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
     {
         if (auto rev = input.getRev())
+            // FIXME: this can return a wrong fingerprint for the legacy (`git archive`) case, since we don't know here
+            // whether to append the `;f` suffix or not.
             return makeFingerprint(input, *rev);
         else {
             auto repoInfo = getRepoInfo(input);
