@@ -363,7 +363,6 @@ nix eval "path:$TEST_ROOT/flake"#isLegacy
 
 # Test locking with Nix >= 2.20 semantics (i.e. using libgit2).
 rm "$TEST_ROOT"/flake/flake.lock
-rm "$TEST_HOME/.cache/nix/fetcher-cache-v4.sqlite" # FIXME
 nix eval "path:$TEST_ROOT/flake"#isModern
 nix eval --nix-219-compat "path:$TEST_ROOT/flake"#isModern
 [[ $(jq -r .nodes.eol.locked.narHash < "$TEST_ROOT"/flake/flake.lock) = "$newHash" ]]
