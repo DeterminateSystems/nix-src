@@ -233,11 +233,21 @@ mkdir "$narCache"
 
 [[ $(nix store cat --store "file://$cacheDir?local-nar-cache=$narCache" "$outPath/foobar") = FOOBAR ]]
 
-rm -rfv "$cacheDir/nar"
+mv "$cacheDir/nar" "$cacheDir/nar2"
 
 [[ $(nix store cat --store "file://$cacheDir?local-nar-cache=$narCache" "$outPath/foobar") = FOOBAR ]]
 
 (! nix store cat --store "file://$cacheDir" "$outPath/foobar")
+
+
+# Check substitution from the local NAR cache.
+clearStore
+rm -rf "$narCache" "$cacheDir/nar"
+mv "$cacheDir/nar2" "$cacheDir/nar"
+nix-store -r --substituters "file://$cacheDir?local-nar-cache=$narCache" --no-require-sigs "$outPath"
+mv "$cacheDir/nar" "$cacheDir/nar2"
+clearStore
+nix-store -r --substituters "file://$cacheDir?local-nar-cache=$narCache" --no-require-sigs "$outPath"
 
 
 # Test NAR listing generation.
