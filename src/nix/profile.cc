@@ -364,8 +364,10 @@ struct CmdProfileAdd : InstallablesCommand, MixDefaultProfile
     {
         ProfileManifest manifest(*getEvalState(), *profile);
 
-        auto builtPaths = builtPathsPerInstallable(
-            Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal));
+        auto buildResults = Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal);
+        Installable::throwBuildErrors(buildResults, *store);
+
+        auto builtPaths = builtPathsPerInstallable(buildResults);
 
         for (auto & installable : installables) {
             ProfileElement element;
@@ -767,8 +769,10 @@ struct CmdProfileUpgrade : virtual SourceExprCommand, MixDefaultProfile, MixProf
             return;
         }
 
-        auto builtPaths = builtPathsPerInstallable(
-            Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal));
+        auto buildResults = Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal);
+        Installable::throwBuildErrors(buildResults, *store);
+
+        auto builtPaths = builtPathsPerInstallable(buildResults);
 
         for (size_t i = 0; i < installables.size(); ++i) {
             auto & installable = installables.at(i);

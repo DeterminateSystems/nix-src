@@ -21,6 +21,7 @@
 #include "nix/util/url.hh"
 #include "nix/fetchers/registry.hh"
 #include "nix/store/build-result.hh"
+#include "nix/util/exit.hh"
 
 #include <regex>
 #include <queue>
@@ -600,43 +601,52 @@ const BuiltPathWithResult & InstallableWithBuildResult::getSuccess() const
         return *std::get_if<Success>(&result);
 }
 
+void Installable::throwBuildErrors(std::vector<InstallableWithBuildResult> & buildResults, const Store & store)
+{
+    for (auto & buildResult : buildResults) {
+        if (std::get_if<InstallableWithBuildResult::Failure>(&buildResult.result)) {
+            // Report success first.
+            for (auto & buildResult : buildResults) {
+                if (std::get_if<InstallableWithBuildResult::Success>(&buildResult.result))
+                    notice("✅ " ANSI_BOLD "%s" ANSI_NORMAL, buildResult.installable->what());
+            }
+
+            // Then failures.
+            for (auto & buildResult : buildResults) {
+                if (auto failure = std::get_if<InstallableWithBuildResult::Failure>(&buildResult.result)) {
+                    auto failure2 = failure->tryGetFailure();
+                    assert(failure2);
+                    if (failure2->status == BuildResult::Failure::Cancelled
+                        // FIXME: remove MiscFailure eventually
+                        || failure2->status == BuildResult::Failure::MiscFailure)
+                        notice(
+                            "❓ " ANSI_BOLD "%s" ANSI_NORMAL ANSI_FAINT " (cancelled)",
+                            buildResult.installable->what());
+                    else {
+                        printError("❌ " ANSI_RED "%s" ANSI_NORMAL, buildResult.installable->what());
+                        try {
+                            failure2->rethrow();
+                        } catch (Error & e) {
+                            logError(e.info());
+                        }
+                    }
+                }
+            }
+
+            throw Exit(1);
+        }
+    }
+}
+
 std::vector<BuiltPathWithResult> Installable::build(
     ref<Store> evalStore, ref<Store> store, Realise mode, const Installables & installables, BuildMode bMode)
 {
+    auto results = build2(evalStore, store, mode, installables, bMode);
+    throwBuildErrors(results, *store);
     std::vector<BuiltPathWithResult> res;
-    for (auto & b : build2(evalStore, store, mode, installables, bMode))
+    for (auto & b : results)
         res.push_back(b.getSuccess());
     return res;
-}
-
-static void throwBuildErrors(std::vector<KeyedBuildResult> & buildResults, const Store & store)
-{
-    std::vector<std::pair<const KeyedBuildResult *, const KeyedBuildResult::Failure *>> failed;
-    for (auto & buildResult : buildResults) {
-        if (auto * failure = buildResult.tryGetFailure()) {
-            failed.push_back({&buildResult, failure});
-        }
-    }
-
-    auto failedResult = failed.begin();
-    if (failedResult != failed.end()) {
-        if (failed.size() == 1) {
-            failedResult->second->rethrow();
-        } else {
-            StringSet failedPaths;
-            for (; failedResult != failed.end(); failedResult++) {
-                if (!failedResult->second->errorMsg.empty()) {
-                    logError(
-                        ErrorInfo{
-                            .level = lvlError,
-                            .msg = failedResult->second->errorMsg,
-                        });
-                }
-                failedPaths.insert(failedResult->first->path.to_string(store));
-            }
-            throw Error("build of %s failed", concatStringsSep(", ", quoteStrings(failedPaths)));
-        }
-    }
 }
 
 std::vector<InstallableWithBuildResult> Installable::build2(
@@ -704,9 +714,13 @@ std::vector<InstallableWithBuildResult> Installable::build2(
             printMissing(store, pathsToBuild, lvlInfo);
 
         auto buildResults = store->buildPathsWithResults(pathsToBuild, bMode, evalStore);
-        throwBuildErrors(buildResults, *store);
         for (auto & buildResult : buildResults) {
-            // If we didn't throw, they must all be successes.
+            if (buildResult.tryGetFailure()) {
+                for (auto & aux : backmap[buildResult.path]) {
+                    res.push_back({.installable = aux.installable, .result = buildResult});
+                }
+                continue;
+            }
             auto & success = std::get<nix::BuildResult::Success>(buildResult.inner);
             for (auto & aux : backmap[buildResult.path]) {
                 std::visit(

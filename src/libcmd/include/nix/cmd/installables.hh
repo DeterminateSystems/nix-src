@@ -183,6 +183,8 @@ struct Installable
         const Installables & installables,
         BuildMode bMode = bmNormal);
 
+    static void throwBuildErrors(std::vector<InstallableWithBuildResult> & buildResults, const Store & store);
+
     static std::set<StorePath> toStorePathSet(
         ref<Store> evalStore, ref<Store> store, Realise mode, OperateOn operateOn, const Installables & installables);
 
