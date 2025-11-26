@@ -19,21 +19,17 @@
 
 namespace nix {
 
-fetchers::Settings fetchSettings;
-
-static GlobalConfig::Register rFetchSettings(&fetchSettings);
-
 EvalSettings evalSettings{
     settings.readOnlyMode,
     {
         {
             "flake",
             [](EvalState & state, std::string_view rest) {
-                experimentalFeatureSettings.require(Xp::Flakes);
                 // FIXME `parseFlakeRef` should take a `std::string_view`.
                 auto flakeRef = parseFlakeRef(fetchSettings, std::string{rest}, {}, true, false);
                 debug("fetching flake search path element '%s''", rest);
-                auto [accessor, lockedRef] = flakeRef.resolve(state.store).lazyFetch(state.store);
+                auto [accessor, lockedRef] =
+                    flakeRef.resolve(fetchSettings, state.store).lazyFetch(fetchSettings, state.store);
                 auto storePath = nix::fetchToStore(
                     state.fetchSettings,
                     *state.store,
@@ -185,9 +181,8 @@ SourcePath lookupFileArg(EvalState & state, std::string_view s, const Path * bas
     }
 
     else if (hasPrefix(s, "flake:")) {
-        experimentalFeatureSettings.require(Xp::Flakes);
         auto flakeRef = parseFlakeRef(fetchSettings, std::string(s.substr(6)), {}, true, false);
-        auto [accessor, lockedRef] = flakeRef.resolve(state.store).lazyFetch(state.store);
+        auto [accessor, lockedRef] = flakeRef.resolve(fetchSettings, state.store).lazyFetch(fetchSettings, state.store);
         auto storePath = nix::fetchToStore(
             state.fetchSettings, *state.store, SourcePath(accessor), FetchMode::Copy, lockedRef.input.getName());
         state.allowPath(storePath);

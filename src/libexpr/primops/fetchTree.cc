@@ -82,7 +82,7 @@ struct FetchTreeParams
 static void fetchTree(
     EvalState & state, const PosIdx pos, Value ** args, Value & v, const FetchTreeParams & params = FetchTreeParams{})
 {
-    fetchers::Input input{state.fetchSettings};
+    fetchers::Input input{};
     NixStringContext context;
     std::optional<std::string> type;
     auto fetcher = params.isFetchGit ? "fetchGit" : "fetchTree";
@@ -150,11 +150,6 @@ static void fetchTree(
             attrs.emplace("exportIgnore", Explicit<bool>{true});
         }
 
-        // fetchTree should fetch git repos with shallow = true by default
-        if (type == "git" && !params.isFetchGit && !attrs.contains("shallow")) {
-            attrs.emplace("shallow", Explicit<bool>{true});
-        }
-
         if (!params.allowNameArgument)
             if (auto nameIter = attrs.find("name"); nameIter != attrs.end())
                 state.error<EvalError>("argument 'name' isn’t supported in call to '%s'", fetcher)
@@ -183,20 +178,14 @@ static void fetchTree(
             }
             input = fetchers::Input::fromAttrs(state.fetchSettings, std::move(attrs));
         } else {
-            if (!experimentalFeatureSettings.isEnabled(Xp::Flakes))
-                state
-                    .error<EvalError>(
-                        "passing a string argument to '%s' requires the 'flakes' experimental feature", fetcher)
-                    .atPos(pos)
-                    .debugThrow();
             input = fetchers::Input::fromURL(state.fetchSettings, url);
         }
     }
 
-    if (!state.settings.pureEval && !input.isDirect() && experimentalFeatureSettings.isEnabled(Xp::Flakes))
-        input = lookupInRegistries(state.store, input, fetchers::UseRegistries::Limited).first;
+    if (!state.settings.pureEval && !input.isDirect())
+        input = lookupInRegistries(state.fetchSettings, state.store, input, fetchers::UseRegistries::Limited).first;
 
-    if (state.settings.pureEval && !input.isLocked()) {
+    if (state.settings.pureEval && !input.isLocked(state.fetchSettings)) {
         if (input.getNarHash())
             warn(
                 "Input '%s' is unlocked (e.g. lacks a Git revision) but does have a NAR hash. "
@@ -219,9 +208,10 @@ static void fetchTree(
             throw Error("input '%s' is not allowed to use the '__final' attribute", input.to_string());
     }
 
-    auto cachedInput = state.inputCache->getAccessor(state.store, input, fetchers::UseRegistries::No);
+    auto cachedInput =
+        state.inputCache->getAccessor(state.fetchSettings, state.store, input, fetchers::UseRegistries::No);
 
-    auto storePath = state.mountInput(cachedInput.lockedInput, input, cachedInput.accessor);
+    auto storePath = state.mountInput(cachedInput.lockedInput, input, cachedInput.accessor, true);
 
     emitTreeAttrs(state, storePath, cachedInput.lockedInput, v, params.emptyRevFallback, false);
 }
@@ -421,7 +411,6 @@ static RegisterPrimOp primop_fetchTree({
       - `"mercurial"`
 
      *input* can also be a [URL-like reference](@docroot@/command-ref/new-cli/nix3-flake.md#flake-references).
-     The additional input types and the URL-like syntax requires the [`flakes` experimental feature](@docroot@/development/experimental-features.md#xp-feature-flakes) to be enabled.
 
       > **Example**
       >
@@ -458,7 +447,6 @@ static RegisterPrimOp primop_fetchTree({
       >   ```
     )",
     .fun = prim_fetchTree,
-    .experimentalFeature = Xp::FetchTree,
 });
 
 void prim_fetchFinalTree(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -815,7 +803,7 @@ static RegisterPrimOp primop_fetchGit({
           name in the `ref` attribute.
 
           However, if the revision you're looking for is in a future
-          branch for the non-default branch you will need to specify the
+          branch for the non-default branch you need to specify the
           the `ref` attribute as well.
 
           ```nix

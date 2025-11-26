@@ -75,9 +75,9 @@ class Settings : public Config
 
 public:
 
-    Settings();
+    static unsigned int getDefaultCores();
 
-    unsigned int getDefaultCores() const;
+    Settings();
 
     Path nixPrefix;
 
@@ -225,12 +225,8 @@ public:
           The following system types are widely used, as Nix is actively supported on these platforms:
 
           - `x86_64-linux`
-          - `x86_64-darwin`
-          - `i686-linux`
           - `aarch64-linux`
           - `aarch64-darwin`
-          - `armv6l-linux`
-          - `armv7l-linux`
 
           In general, you do not have to modify this setting.
           While you can force Nix to run a Darwin-specific `builder` executable on a Linux machine, the result would obviously be wrong.
@@ -427,7 +423,7 @@ public:
         R"(
           If set to `true`, Nix instructs [remote build machines](#conf-builders) to use their own [`substituters`](#conf-substituters) if available.
 
-          It means that remote build hosts fetches as many dependencies as possible from their own substituters (e.g, from `cache.nixos.org`) instead of waiting for the local machine to upload them all.
+          It means that remote build hosts fetch as many dependencies as possible from their own substituters (e.g, from `cache.nixos.org`) instead of waiting for the local machine to upload them all.
           This can drastically reduce build times if the network connection between the local machine and the remote build host is slow.
         )"};
 
@@ -503,7 +499,7 @@ public:
           by the Nix account, its group should be the group specified here,
           and its mode should be `1775`.
 
-          If the build users group is empty, builds areperformed under
+          If the build users group is empty, builds are performed under
           the uid of the Nix process (that is, the uid of the caller if
           `NIX_REMOTE` is empty, the uid under which the Nix daemon runs if
           `NIX_REMOTE` is `daemon`). Obviously, this should not be used
@@ -847,8 +843,8 @@ public:
           4.  The path to the build's scratch directory. This directory
               exists only if the build was run with `--keep-failed`.
 
-          The stderr and stdout output from the diff hook isn't
-          displayed to the user. Instead, it print to the nix-daemon's log.
+          The stderr and stdout output from the diff hook isn't displayed
+          to the user. Instead, it prints to the nix-daemon's log.
 
           When using the Nix daemon, `diff-hook` must be set in the `nix.conf`
           configuration file, and cannot be passed at the command line.
@@ -1355,11 +1351,12 @@ public:
 
     Setting<std::string> upgradeNixStorePathUrl{
         this,
-        "https://github.com/NixOS/nixpkgs/raw/master/nixos/modules/installer/tools/nix-fallback-paths.nix",
+        "",
         "upgrade-nix-store-path-url",
         R"(
-          Used by `nix upgrade-nix`, the URL of the file that contains the
-          store paths of the latest Nix release.
+          Deprecated. This option was used to configure how `nix upgrade-nix` operated.
+
+          Using this setting has no effect. It will be removed in a future release of Determinate Nix.
         )"};
 
     Setting<uint64_t> warnLargePathThreshold{
@@ -1468,6 +1465,8 @@ std::vector<Path> getUserConfigFiles();
  * not affected by the change.
  */
 extern std::string nixVersion;
+
+extern const std::string determinateNixVersion;
 
 /**
  * @param loadConfig Whether to load configuration from `nix.conf`, `NIX_CONFIG`, etc. May be disabled for unit tests.

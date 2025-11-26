@@ -13,12 +13,12 @@ const static std::string subDirElemRegex = "(?:[a-zA-Z0-9_-]+[a-zA-Z0-9._-]*)";
 const static std::string subDirRegex = subDirElemRegex + "(?:/" + subDirElemRegex + ")*";
 #endif
 
-std::string FlakeRef::to_string() const
+std::string FlakeRef::to_string(bool abbreviate) const
 {
     StringMap extraQuery;
     if (subdir != "")
         extraQuery.insert_or_assign("dir", subdir);
-    return input.toURLString(extraQuery);
+    return input.toURLString(extraQuery, abbreviate);
 }
 
 fetchers::Attrs FlakeRef::toAttrs() const
@@ -35,9 +35,10 @@ std::ostream & operator<<(std::ostream & str, const FlakeRef & flakeRef)
     return str;
 }
 
-FlakeRef FlakeRef::resolve(ref<Store> store, fetchers::UseRegistries useRegistries) const
+FlakeRef FlakeRef::resolve(
+    const fetchers::Settings & fetchSettings, ref<Store> store, fetchers::UseRegistries useRegistries) const
 {
-    auto [input2, extraAttrs] = lookupInRegistries(store, input, useRegistries);
+    auto [input2, extraAttrs] = lookupInRegistries(fetchSettings, store, input, useRegistries);
     return FlakeRef(std::move(input2), fetchers::maybeGetStrAttr(extraAttrs, "dir").value_or(subdir));
 }
 
@@ -258,9 +259,10 @@ FlakeRef FlakeRef::fromAttrs(const fetchers::Settings & fetchSettings, const fet
         fetchers::maybeGetStrAttr(attrs, "dir").value_or(""));
 }
 
-std::pair<ref<SourceAccessor>, FlakeRef> FlakeRef::lazyFetch(ref<Store> store) const
+std::pair<ref<SourceAccessor>, FlakeRef>
+FlakeRef::lazyFetch(const fetchers::Settings & fetchSettings, ref<Store> store) const
 {
-    auto [accessor, lockedInput] = input.getAccessor(store);
+    auto [accessor, lockedInput] = input.getAccessor(fetchSettings, store);
     return {accessor, FlakeRef(std::move(lockedInput), subdir)};
 }
 

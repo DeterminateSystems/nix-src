@@ -44,7 +44,7 @@ struct IndirectInputScheme : InputScheme
 
         // FIXME: forbid query params?
 
-        Input input{settings};
+        Input input{};
         input.attrs.insert_or_assign("type", "indirect");
         input.attrs.insert_or_assign("id", id);
         if (rev)
@@ -76,12 +76,12 @@ struct IndirectInputScheme : InputScheme
         if (!std::regex_match(id, flakeRegex))
             throw BadURL("'%s' is not a valid flake ID", id);
 
-        Input input{settings};
+        Input input{};
         input.attrs = attrs;
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         ParsedURL url{
             .scheme = "flake",
@@ -106,14 +106,10 @@ struct IndirectInputScheme : InputScheme
         return input;
     }
 
-    std::pair<ref<SourceAccessor>, Input> getAccessor(ref<Store> store, const Input & input) const override
+    std::pair<ref<SourceAccessor>, Input>
+    getAccessor(const Settings & settings, ref<Store> store, const Input & input) const override
     {
         throw Error("indirect input '%s' cannot be fetched directly", input.to_string());
-    }
-
-    std::optional<ExperimentalFeature> experimentalFeature() const override
-    {
-        return Xp::Flakes;
     }
 
     bool isDirect(const Input & input) const override

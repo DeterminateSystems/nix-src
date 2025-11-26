@@ -288,11 +288,11 @@ struct ProfileManifest
 
         while (i != prev.elements.end() || j != cur.elements.end()) {
             if (j != cur.elements.end() && (i == prev.elements.end() || i->first > j->first)) {
-                logger->cout("%s%s: ∅ -> %s", indent, j->second.identifier(), j->second.versions());
+                logger->cout("%s%s: %s added", indent, j->second.identifier(), j->second.versions());
                 changes = true;
                 ++j;
             } else if (i != prev.elements.end() && (j == cur.elements.end() || i->first < j->first)) {
-                logger->cout("%s%s: %s -> ∅", indent, i->second.identifier(), i->second.versions());
+                logger->cout("%s%s: %s removed", indent, i->second.identifier(), i->second.versions());
                 changes = true;
                 ++i;
             } else {
@@ -711,7 +711,7 @@ struct CmdProfileUpgrade : virtual SourceExprCommand, MixDefaultProfile, MixProf
                     element.identifier());
                 continue;
             }
-            if (element.source->originalRef.input.isLocked()) {
+            if (element.source->originalRef.input.isLocked(getEvalState()->fetchSettings)) {
                 warn(
                     "Found package '%s', but it was added from a locked flake reference so it can't be upgraded!",
                     element.identifier());
@@ -740,7 +740,8 @@ struct CmdProfileUpgrade : virtual SourceExprCommand, MixDefaultProfile, MixProf
             assert(infop);
             auto & info = *infop;
 
-            if (info.flake.lockedRef.input.isLocked() && element.source->lockedRef == info.flake.lockedRef)
+            if (info.flake.lockedRef.input.isLocked(getEvalState()->fetchSettings)
+                && element.source->lockedRef == info.flake.lockedRef)
                 continue;
 
             printInfo(

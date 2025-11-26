@@ -51,6 +51,7 @@ private:
         ActivityId parent;
         std::optional<std::string> name;
         std::chrono::time_point<std::chrono::steady_clock> startTime;
+        bool logged = false;
     };
 
     struct ActivitiesByType
@@ -142,8 +143,14 @@ public:
             return;
         }
 
-        if (state->active)
+        if (state->active) {
             writeToStderr("\r\e[K");
+            /* Show activities that were previously only shown on the
+               progress bar. Otherwise the user won't know what's
+               happening. */
+            for (auto & act : state->activities)
+                logActivity(*state, lvlNotice, act);
+        }
     }
 
     void resume() override
@@ -196,6 +203,14 @@ public:
         }
     }
 
+    void logActivity(State & state, Verbosity lvl, ActInfo & act)
+    {
+        if (!act.logged && lvl <= verbosity && !act.s.empty() && act.type != actBuildWaiting) {
+            log(state, lvl, act.s + "...");
+            act.logged = true;
+        }
+    }
+
     void startActivity(
         ActivityId act,
         Verbosity lvl,
@@ -206,14 +221,13 @@ public:
     {
         auto state(state_.lock());
 
-        if (lvl <= verbosity && !s.empty() && type != actBuildWaiting)
-            log(*state, lvl, s + "...");
-
         state->activities.emplace_back(
             ActInfo{.s = s, .type = type, .parent = parent, .startTime = std::chrono::steady_clock::now()});
         auto i = std::prev(state->activities.end());
         state->its.emplace(act, i);
         state->activitiesByType[type].its.emplace(act, i);
+
+        logActivity(*state, lvl, *i);
 
         if (type == actBuild) {
             std::string name(storePathToName(getS(fields, 0)));

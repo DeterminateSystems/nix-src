@@ -17,7 +17,7 @@ struct PathInputScheme : InputScheme
         if (url.authority && url.authority->host.size())
             throw Error("path URL '%s' should not have an authority ('%s')", url, *url.authority);
 
-        Input input{settings};
+        Input input{};
         input.attrs.insert_or_assign("type", "path");
         input.attrs.insert_or_assign("path", renderUrlPathEnsureLegal(url.path));
 
@@ -60,12 +60,12 @@ struct PathInputScheme : InputScheme
     {
         getStrAttr(attrs, "path");
 
-        Input input{settings};
+        Input input{};
         input.attrs = attrs;
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         auto query = attrsToQuery(input.attrs);
         query.erase("path");
@@ -101,7 +101,7 @@ struct PathInputScheme : InputScheme
             return path;
     }
 
-    bool isLocked(const Input & input) const override
+    bool isLocked(const Settings & settings, const Input & input) const override
     {
         return (bool) input.getNarHash();
     }
@@ -116,7 +116,8 @@ struct PathInputScheme : InputScheme
         throw Error("cannot fetch input '%s' because it uses a relative path", input.to_string());
     }
 
-    std::pair<ref<SourceAccessor>, Input> getAccessor(ref<Store> store, const Input & _input) const override
+    std::pair<ref<SourceAccessor>, Input>
+    getAccessor(const Settings & settings, ref<Store> store, const Input & _input) const override
     {
         Input input(_input);
         auto path = getStrAttr(input.attrs, "path");
@@ -145,12 +146,9 @@ struct PathInputScheme : InputScheme
         auto info = store->queryPathInfo(*storePath);
         accessor->fingerprint =
             fmt("path:%s", store->queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true));
-        input.settings->getCache()->upsert(
-            makeFetchToStoreCacheKey(
-                input.getName(), *accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
-            *store,
-            {},
-            *storePath);
+        settings.getCache()->upsert(
+            makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
+            {{"hash", info->narHash.to_string(HashFormat::SRI, true)}});
 
         /* Trust the lastModified value supplied by the user, if
            any. It's not a "secure" attribute so we don't care. */
@@ -158,11 +156,6 @@ struct PathInputScheme : InputScheme
             input.attrs.insert_or_assign("lastModified", uint64_t(mtime));
 
         return {accessor, std::move(input)};
-    }
-
-    std::optional<ExperimentalFeature> experimentalFeature() const override
-    {
-        return Xp::Flakes;
     }
 };
 

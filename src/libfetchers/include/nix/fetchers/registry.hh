@@ -12,8 +12,6 @@ namespace nix::fetchers {
 
 struct Registry
 {
-    const Settings & settings;
-
     enum RegistryType {
         Flag = 0,
         User = 1,
@@ -33,13 +31,15 @@ struct Registry
 
     std::vector<Entry> entries;
 
-    Registry(const Settings & settings, RegistryType type)
-        : settings{settings}
-        , type{type}
+    Registry(RegistryType type)
+        : type{type}
     {
     }
 
     static std::shared_ptr<Registry> read(const Settings & settings, const Path & path, RegistryType type);
+
+    static std::shared_ptr<Registry>
+    read(const Settings & settings, std::string_view whence, std::string_view jsonStr, RegistryType type);
 
     void write(const Path & path);
 
@@ -70,6 +70,7 @@ enum class UseRegistries : int {
  * Rewrite a flakeref using the registries. If `filter` is set, only
  * use the registries for which the filter function returns true.
  */
-std::pair<Input, Attrs> lookupInRegistries(ref<Store> store, const Input & input, UseRegistries useRegistries);
+std::pair<Input, Attrs>
+lookupInRegistries(const Settings & settings, ref<Store> store, const Input & input, UseRegistries useRegistries);
 
 } // namespace nix::fetchers

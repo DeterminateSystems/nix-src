@@ -191,6 +191,8 @@ ref<FileTransfer> getFileTransfer();
  */
 ref<FileTransfer> makeFileTransfer();
 
+std::shared_ptr<FileTransfer> resetFileTransfer();
+
 class FileTransferError : public Error
 {
 public:

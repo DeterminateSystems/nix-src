@@ -40,5 +40,6 @@ if [[ "$NIX_REMOTE" != "daemon" ]]; then
     nix build -vv --file dependencies.nix --no-link --json-log-path "$TEST_ROOT/log.json" 2>&1 | grepQuiet 'building.*dependencies-top.drv'
     jq < "$TEST_ROOT/log.json"
     grep '{"action":"start","fields":\[".*-dependencies-top.drv","",1,1\],"id":.*,"level":3,"parent":0' "$TEST_ROOT/log.json" >&2
+    grep -E '{"action":"result","id":[^,]+,"payload":{"builtOutputs":{"out":{"path":"[^-]+-dependencies-top"' "$TEST_ROOT/log.json" >&2
     (( $(grep -c '{"action":"msg","level":5,"msg":"executing builder .*"}' "$TEST_ROOT/log.json" ) == 5 ))
 fi

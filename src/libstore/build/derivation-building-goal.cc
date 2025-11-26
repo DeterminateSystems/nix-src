@@ -787,6 +787,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
                     .defaultPathsInChroot = std::move(defaultPathsInChroot),
                     .systemFeatures = worker.store.config.systemFeatures.get(),
                     .desugaredEnv = std::move(desugaredEnv),
+                    .act = act,
                 });
         }
 
@@ -969,7 +970,7 @@ BuildError DerivationBuildingGoal::fixupBuilderFailureErrorMessage(BuilderFailur
             msg += line;
             msg += "\n";
         }
-        auto nixLogCommand = experimentalFeatureSettings.isEnabled(Xp::NixCommand) ? "nix log" : "nix-store -l";
+        auto nixLogCommand = "nix log";
         // The command is on a separate line for easy copying, such as with triple click.
         // This message will be indented elsewhere, so removing the indentation before the
         // command will not put it at the start of the line unfortunately.
@@ -1328,6 +1329,13 @@ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status stat
         .builtOutputs = std::move(builtOutputs),
     };
 
+    logger->result(
+        act ? act->id : getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
     mcRunningBuilds.reset();
 
     if (status == BuildResult::Success::Built)
@@ -1344,6 +1352,13 @@ Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
         .status = ex.status,
         .errorMsg = fmt("%s", Uncolored(ex.info().msg)),
     };
+
+    logger->result(
+        act ? act->id : getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
     mcRunningBuilds.reset();
 

@@ -8,6 +8,8 @@
 
 #include <coroutine>
 
+#include <nlohmann/json.hpp>
+
 namespace nix {
 
 PathSubstitutionGoal::PathSubstitutionGoal(
@@ -32,6 +34,12 @@ Goal::Done PathSubstitutionGoal::doneSuccess(BuildResult::Success::Status status
     buildResult.inner = BuildResult::Success{
         .status = status,
     };
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+
     return amDone(ecSuccess);
 }
 
@@ -42,6 +50,12 @@ Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failu
         .status = status,
         .errorMsg = std::move(errorMsg),
     };
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+
     return amDone(result);
 }
 
