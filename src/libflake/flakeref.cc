@@ -3,6 +3,7 @@
 #include "nix/util/url.hh"
 #include "nix/util/url-parts.hh"
 #include "nix/fetchers/fetchers.hh"
+#include "nix/fetchers/fetch-settings.hh"
 
 namespace nix {
 
@@ -61,7 +62,8 @@ static std::pair<FlakeRef, std::string>
 fromParsedURL(const fetchers::Settings & fetchSettings, ParsedURL && parsedURL, bool isFlake)
 {
     auto dir = getOr(parsedURL.query, "dir", "");
-    parsedURL.query.erase("dir");
+    if (!fetchSettings.nix219Compat)
+        parsedURL.query.erase("dir");
 
     std::string fragment;
     std::swap(fragment, parsedURL.fragment);
