@@ -233,19 +233,9 @@ MixReadOnlyOption::MixReadOnlyOption()
     });
 }
 
-Strings SourceExprCommand::getDefaultFlakeAttrPaths()
+StringSet SourceExprCommand::getRoles()
 {
-    return {"packages." + settings.thisSystem.get() + ".default", "defaultPackage." + settings.thisSystem.get()};
-}
-
-Strings SourceExprCommand::getDefaultFlakeAttrPathPrefixes()
-{
-    return {// As a convenience, look for the attribute in
-            // 'outputs.packages'.
-            "packages." + settings.thisSystem.get() + ".",
-            // As a temporary hack until Nixpkgs is properly converted
-            // to provide a clean 'packages' set, look in 'legacyPackages'.
-            "legacyPackages." + settings.thisSystem.get() + "."};
+    return {"nix-build"};
 }
 
 Args::CompleterClosure SourceExprCommand::getCompleteInstallable()
@@ -299,13 +289,7 @@ void SourceExprCommand::completeInstallable(AddCompletions & completions, std::s
                 }
             }
         } else {
-            completeFlakeRefWithFragment(
-                completions,
-                getEvalState(),
-                lockFlags,
-                getDefaultFlakeAttrPathPrefixes(),
-                getDefaultFlakeAttrPaths(),
-                prefix);
+            completeFlakeRefWithFragment(completions, getEvalState(), lockFlags, getRoles(), prefix);
         }
     } catch (EvalError &) {
         // Don't want eval errors to mess-up with the completion engine, so let's just swallow them
@@ -316,8 +300,7 @@ void completeFlakeRefWithFragment(
     AddCompletions & completions,
     ref<EvalState> evalState,
     flake::LockFlags lockFlags,
-    Strings attrPathPrefixes,
-    const Strings & defaultFlakeAttrPaths,
+    const StringSet & roles,
     std::string_view prefix)
 {
     /* Look for flake output attributes that match the
@@ -347,6 +330,7 @@ void completeFlakeRefWithFragment(
 
             auto root = evalCache->getRoot();
 
+#if 0
             if (prefixRoot == ".") {
                 attrPathPrefixes.clear();
             }
@@ -393,6 +377,7 @@ void completeFlakeRefWithFragment(
                     completions.add(flakeRefS + "#" + prefixRoot);
                 }
             }
+#endif
         }
     } catch (Error & e) {
         warn(e.msg());
@@ -440,17 +425,13 @@ static StorePath getDeriver(ref<Store> store, const Installable & i, const Store
     return *derivers.begin();
 }
 
+// FIXME: remove
 ref<eval_cache::EvalCache> openEvalCache(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake)
 {
     auto fingerprint = evalSettings.useEvalCache && evalSettings.pureEval
                            ? lockedFlake->getFingerprint(state.store, state.fetchSettings)
                            : std::nullopt;
     auto rootLoader = [&state, lockedFlake]() {
-        /* For testing whether the evaluation cache is
-           complete. */
-        if (getEnv("NIX_ALLOW_EVAL").value_or("1") == "0")
-            throw Error("not everything is cached, but evaluation is not allowed");
-
         auto vFlake = state.allocValue();
         flake::callFlake(state, *lockedFlake, *vFlake);
 
@@ -546,9 +527,9 @@ Installables SourceExprCommand::parseInstallables(ref<Store> store, std::vector<
                         std::move(flakeRef),
                         fragment,
                         std::move(extendedOutputsSpec),
-                        getDefaultFlakeAttrPaths(),
-                        getDefaultFlakeAttrPathPrefixes(),
-                        lockFlags));
+                        getRoles(),
+                        lockFlags,
+                        getDefaultFlakeSchemas()));
                 continue;
             } catch (...) {
                 ex = std::current_exception();
