@@ -13,6 +13,7 @@
 #include "nix/util/callback.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/archive.hh"
+#include "nix/store/nar-cache.hh"
 
 #include <chrono>
 #include <future>
@@ -26,6 +27,7 @@ namespace nix {
 
 BinaryCacheStore::BinaryCacheStore(Config & config)
     : config{config}
+    , narCache{config.localNarCache.get().empty() ? nullptr : std::make_shared<NarCache>(config.localNarCache.get())}
 {
     if (config.secretKeyFile != "")
         signers.push_back(std::make_unique<LocalSigner>(SecretKey{readFile(config.secretKeyFile)}));
@@ -408,10 +410,36 @@ void BinaryCacheStore::narFromPath(const StorePath & storePath, Sink & sink)
 {
     auto info = queryPathInfo(storePath).cast<const NarInfo>();
 
-    LengthSink narSize;
-    TeeSink tee{sink, narSize};
+    if (narCache) {
+        if (auto nar = narCache->getNar(info->narHash)) {
+            notice("substituted '%s' from local NAR cache", printStorePath(storePath));
+            sink(*nar);
+            stats.narRead++;
+            stats.narReadBytes += nar->size();
+            return;
+        }
+    }
 
-    auto decompressor = makeDecompressionSink(info->compression, tee);
+    std::unique_ptr<Sink> narCacheSink;
+    if (narCache)
+        narCacheSink = sourceToSink([&](Source & source) { narCache->upsertNar(info->narHash, source); });
+
+    uint64_t narSize = 0;
+
+    LambdaSink uncompressedSink{
+        [&](std::string_view data) {
+            narSize += data.size();
+            if (narCacheSink)
+                (*narCacheSink)(data);
+            sink(data);
+        },
+        [&]() {
+            stats.narRead++;
+            // stats.narReadCompressedBytes += nar->size(); // FIXME
+            stats.narReadBytes += narSize;
+        }};
+
+    auto decompressor = makeDecompressionSink(info->compression, uncompressedSink);
 
     try {
         getFile(info->url, *decompressor);
@@ -421,9 +449,7 @@ void BinaryCacheStore::narFromPath(const StorePath & storePath, Sink & sink)
 
     decompressor->finish();
 
-    stats.narRead++;
-    // stats.narReadCompressedBytes += nar->size(); // FIXME
-    stats.narReadBytes += narSize.length;
+    // Note: don't do anything here because it's never reached if we're called as a coroutine.
 }
 
 void BinaryCacheStore::queryPathInfoUncached(
@@ -541,7 +567,7 @@ void BinaryCacheStore::registerDrvOutput(const Realisation & info)
 
 ref<RemoteFSAccessor> BinaryCacheStore::getRemoteFSAccessor(bool requireValidPath)
 {
-    return make_ref<RemoteFSAccessor>(ref<Store>(shared_from_this()), requireValidPath, config.localNarCache);
+    return make_ref<RemoteFSAccessor>(ref<Store>(shared_from_this()), requireValidPath, narCache);
 }
 
 ref<SourceAccessor> BinaryCacheStore::getFSAccessor(bool requireValidPath)
