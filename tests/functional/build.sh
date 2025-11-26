@@ -161,20 +161,17 @@ printf "%s\n" "$drv^*" | nix build --no-link --stdin --json | jq --exit-status '
 out="$(nix build -f fod-failing.nix -L 2>&1)" && status=0 || status=$?
 test "$status" = 1
 # one "hash mismatch" error, one "build of ... failed"
-test "$(<<<"$out" grep -cE '^error:')" = 2
-<<<"$out" grepQuiet -E "hash mismatch in fixed-output derivation '.*-x1\\.drv'"
-<<<"$out" grepQuiet -vE "hash mismatch in fixed-output derivation '.*-x3\\.drv'"
-<<<"$out" grepQuiet -vE "hash mismatch in fixed-output derivation '.*-x2\\.drv'"
-<<<"$out" grepQuiet -E "error: build of '.*-x[1-4]\\.drv\\^out', '.*-x[1-4]\\.drv\\^out', '.*-x[1-4]\\.drv\\^out', '.*-x[1-4]\\.drv\\^out' failed"
+test "$(<<<"$out" grep -cE '^error:')" = 1
+test "$(<<<"$out" grep -cE '(cancelled)')" = 3
+<<<"$out" grepQuiet -E "hash mismatch in fixed-output derivation"
 
 out="$(nix build -f fod-failing.nix -L x1 x2 x3 --keep-going 2>&1)" && status=0 || status=$?
 test "$status" = 1
-# three "hash mismatch" errors - for each failing fod, one "build of ... failed"
-test "$(<<<"$out" grep -cE '^error:')" = 4
+# three "hash mismatch" errors - for each failing fod
+test "$(<<<"$out" grep -cE '^error:')" = 3
 <<<"$out" grepQuiet -E "hash mismatch in fixed-output derivation '.*-x1\\.drv'"
 <<<"$out" grepQuiet -E "hash mismatch in fixed-output derivation '.*-x3\\.drv'"
 <<<"$out" grepQuiet -E "hash mismatch in fixed-output derivation '.*-x2\\.drv'"
-<<<"$out" grepQuiet -E "error: build of '.*-x[1-3]\\.drv\\^out', '.*-x[1-3]\\.drv\\^out', '.*-x[1-3]\\.drv\\^out' failed"
 
 out="$(nix build -f fod-failing.nix -L x4 2>&1)" && status=0 || status=$?
 test "$status" = 1
