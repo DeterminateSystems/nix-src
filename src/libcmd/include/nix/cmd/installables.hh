@@ -96,6 +96,12 @@ typedef std::vector<DerivedPathWithInfo> DerivedPathsWithInfo;
 
 struct Installable;
 
+struct InstallableWithBuildResult
+{
+    ref<Installable> installable;
+    BuiltPathWithResult builtPath;
+};
+
 /**
  * Shorthand, for less typing and helping us keep the choice of
  * collection in sync.
@@ -160,7 +166,7 @@ struct Installable
         const Installables & installables,
         BuildMode bMode = bmNormal);
 
-    static std::vector<std::pair<ref<Installable>, BuiltPathWithResult>> build2(
+    static std::vector<InstallableWithBuildResult> build2(
         ref<Store> evalStore,
         ref<Store> store,
         Realise mode,

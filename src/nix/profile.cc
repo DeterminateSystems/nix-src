@@ -313,11 +313,11 @@ struct ProfileManifest
 };
 
 static std::map<Installable *, std::pair<BuiltPaths, ref<ExtraPathInfo>>>
-builtPathsPerInstallable(const std::vector<std::pair<ref<Installable>, BuiltPathWithResult>> & builtPaths)
+builtPathsPerInstallable(const std::vector<InstallableWithBuildResult> & builtPaths)
 {
     std::map<Installable *, std::pair<BuiltPaths, ref<ExtraPathInfo>>> res;
-    for (auto & [installable, builtPath] : builtPaths) {
-        auto & r = res.insert({&*installable,
+    for (auto & b : builtPaths) {
+        auto & r = res.insert({&*b.installable,
                                {
                                    {},
                                    make_ref<ExtraPathInfo>(),
@@ -327,8 +327,8 @@ builtPathsPerInstallable(const std::vector<std::pair<ref<Installable>, BuiltPath
            (e.g. meta.priority fields) if the installable returned
            multiple derivations. So pick one arbitrarily. FIXME:
            print a warning? */
-        r.first.push_back(builtPath.path);
-        r.second = builtPath.info;
+        r.first.push_back(b.builtPath.path);
+        r.second = b.builtPath.info;
     }
     return res;
 }
