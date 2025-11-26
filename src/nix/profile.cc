@@ -327,8 +327,9 @@ builtPathsPerInstallable(const std::vector<InstallableWithBuildResult> & builtPa
            (e.g. meta.priority fields) if the installable returned
            multiple derivations. So pick one arbitrarily. FIXME:
            print a warning? */
-        r.first.push_back(b.builtPath.path);
-        r.second = b.builtPath.info;
+        auto builtPath = b.getSuccess();
+        r.first.push_back(builtPath.path);
+        r.second = builtPath.info;
     }
     return res;
 }

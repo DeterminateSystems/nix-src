@@ -99,7 +99,17 @@ struct Installable;
 struct InstallableWithBuildResult
 {
     ref<Installable> installable;
-    BuiltPathWithResult builtPath;
+
+    using Success = BuiltPathWithResult;
+
+    using Failure = BuildResult; // must be a `BuildResult::Failure`
+
+    std::variant<Success, Failure> result;
+
+    /**
+     * Throw an exception if this represents a failure, otherwise returns a `BuiltPathWithResult`.
+     */
+    const BuiltPathWithResult & getSuccess() const;
 };
 
 /**

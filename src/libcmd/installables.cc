@@ -590,12 +590,22 @@ static SingleBuiltPath getBuiltPath(ref<Store> evalStore, ref<Store> store, cons
         b.raw());
 }
 
+const BuiltPathWithResult & InstallableWithBuildResult::getSuccess() const
+{
+    if (auto * failure = std::get_if<Failure>(&result)) {
+        auto failure2 = failure->tryGetFailure();
+        assert(failure2);
+        failure2->rethrow();
+    } else
+        return *std::get_if<Success>(&result);
+}
+
 std::vector<BuiltPathWithResult> Installable::build(
     ref<Store> evalStore, ref<Store> store, Realise mode, const Installables & installables, BuildMode bMode)
 {
     std::vector<BuiltPathWithResult> res;
-    for (auto & [_, builtPathWithResult] : build2(evalStore, store, mode, installables, bMode))
-        res.push_back(builtPathWithResult);
+    for (auto & b : build2(evalStore, store, mode, installables, bMode))
+        res.push_back(b.getSuccess());
     return res;
 }
 
@@ -667,7 +677,7 @@ std::vector<InstallableWithBuildResult> Installable::build2(
                             auto outputs = resolveDerivedPath(*store, bfd, &*evalStore);
                             res.push_back(
                                 {.installable = aux.installable,
-                                 .builtPath = {
+                                 .result = InstallableWithBuildResult::Success{
                                      .path =
                                          BuiltPath::Built{
                                              .drvPath = make_ref<SingleBuiltPath>(
@@ -679,7 +689,8 @@ std::vector<InstallableWithBuildResult> Installable::build2(
                         [&](const DerivedPath::Opaque & bo) {
                             res.push_back(
                                 {.installable = aux.installable,
-                                 .builtPath = {.path = BuiltPath::Opaque{bo.path}, .info = aux.info}});
+                                 .result = InstallableWithBuildResult::Success{
+                                     .path = BuiltPath::Opaque{bo.path}, .info = aux.info}});
                         },
                     },
                     path.raw());
@@ -706,7 +717,7 @@ std::vector<InstallableWithBuildResult> Installable::build2(
                                 outputs.emplace(outputName, realisation.outPath);
                             res.push_back(
                                 {.installable = aux.installable,
-                                 .builtPath = {
+                                 .result = InstallableWithBuildResult::Success{
                                      .path =
                                          BuiltPath::Built{
                                              .drvPath = make_ref<SingleBuiltPath>(
@@ -719,7 +730,7 @@ std::vector<InstallableWithBuildResult> Installable::build2(
                         [&](const DerivedPath::Opaque & bo) {
                             res.push_back(
                                 {.installable = aux.installable,
-                                 .builtPath = {
+                                 .result = InstallableWithBuildResult::Success{
                                      .path = BuiltPath::Opaque{bo.path}, .info = aux.info, .result = buildResult}});
                         },
                     },
