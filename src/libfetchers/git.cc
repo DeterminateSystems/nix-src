@@ -648,10 +648,10 @@ struct GitInputScheme : InputScheme
     }
 
     /**
-     * Get a `SourceAccessor` for the given Git revision by creating a git archive and unpacking it to the Nix store.
-     * This is used for Nix < 2.20 compatibility.
+     * Get a `SourceAccessor` for the given Git revision using Nix < 2.20 semantics, i.e. using `git archive` or `git
+     * checkout`.
      */
-    ref<SourceAccessor> getGitArchiveAccessor(
+    ref<SourceAccessor> getLegacyGitAccessor(
         Store & store,
         RepoInfo & repoInfo,
         const std::filesystem::path & repoDir,
@@ -661,27 +661,49 @@ struct GitInputScheme : InputScheme
         auto tmpDir = createTempDir();
         AutoDelete delTmpDir(tmpDir, true);
 
-        auto source = sinkToSource([&](Sink & sink) {
-            runProgram2(
-                {.program = "git",
-                 .args = {"-C", repoDir, "--git-dir", repoInfo.gitDir, "archive", rev.gitRev()},
-                 .standardOut = &sink});
-        });
+        auto storePath =
+            options.submodules
+                ? [&]() {
+                      // Nix < 2.20 used `git checkout` for repos with submodules.
+                      runProgram2({.program = "git", .args = {"init", tmpDir}});
+                      runProgram2({.program = "git", .args = {"-C", tmpDir, "remote", "add", "origin", repoDir}});
+                      runProgram2({.program = "git", .args = {"-C", tmpDir, "fetch", "origin", rev.gitRev()}});
+                      runProgram2({.program = "git", .args = {"-C", tmpDir, "checkout", rev.gitRev()}});
+                      PathFilter filter = [&](const Path & path) { return baseNameOf(path) != ".git"; };
+                      return store.addToStore(
+                          "source",
+                          {getFSSourceAccessor(), CanonPath(tmpDir)},
+                          ContentAddressMethod::Raw::NixArchive,
+                          HashAlgorithm::SHA256,
+                          {},
+                          filter);
+                  }()
+                : [&]() {
+                      // Nix < 2.20 used `git archive` for repos without submodules.
+                      options.exportIgnore = true;
 
-        unpackTarfile(*source, tmpDir);
+                      auto source = sinkToSource([&](Sink & sink) {
+                          runProgram2(
+                              {.program = "git",
+                               .args = {"-C", repoDir, "--git-dir", repoInfo.gitDir, "archive", rev.gitRev()},
+                               .standardOut = &sink});
+                      });
 
-        auto storePath = store.addToStore("source", {getFSSourceAccessor(), CanonPath(tmpDir)});
+                      unpackTarfile(*source, tmpDir);
+
+                      return store.addToStore("source", {getFSSourceAccessor(), CanonPath(tmpDir)});
+                  }();
 
         auto accessor = store.getFSAccessor(storePath);
 
-        options.exportIgnore = true;
-        accessor->fingerprint = options.makeFingerprint(rev) + ";f";
+        accessor->fingerprint = options.makeFingerprint(rev) + ";legacy";
 
         return ref{accessor};
     }
 
     std::pair<ref<SourceAccessor>, Input>
     getAccessorFromCommit(const Settings & settings, ref<Store> store, RepoInfo & repoInfo, Input && input) const
+
     {
         assert(!repoInfo.workdirInfo.isDirty);
 
@@ -833,7 +855,7 @@ struct GitInputScheme : InputScheme
              * as well. */
             warn("Using Nix 2.19 semantics to export Git repository '%s'.", input.to_string());
             auto accessorModern = accessor;
-            accessor = getGitArchiveAccessor(*store, repoInfo, repoDir, rev, options);
+            accessor = getLegacyGitAccessor(*store, repoInfo, repoDir, rev, options);
             if (expectedNarHash) {
                 auto narHashLegacy =
                     fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
@@ -851,7 +873,7 @@ struct GitInputScheme : InputScheme
             auto narHashNew = fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
             if (expectedNarHash && accessor->pathExists(CanonPath(".gitattributes"))) {
                 if (expectedNarHash != narHashNew) {
-                    auto accessorLegacy = getGitArchiveAccessor(*store, repoInfo, repoDir, rev, options);
+                    auto accessorLegacy = getLegacyGitAccessor(*store, repoInfo, repoDir, rev, options);
                     auto narHashLegacy =
                         fetchToStore2(settings, *store, {accessorLegacy}, FetchMode::DryRun, input.getName()).second;
                     if (expectedNarHash == narHashLegacy) {
@@ -1033,7 +1055,7 @@ struct GitInputScheme : InputScheme
 
         if (auto rev = input.getRev())
             // FIXME: this can return a wrong fingerprint for the legacy (`git archive`) case, since we don't know here
-            // whether to append the `;f` suffix or not.
+            // whether to append the `;legacy` suffix or not.
             return options.makeFingerprint(*rev);
         else {
             auto repoInfo = getRepoInfo(input);
