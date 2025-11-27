@@ -338,6 +338,7 @@ sources = files(
   'local-binary-cache-store.cc',
   'local-fs-store.cc',
   'local-overlay-store.cc',
+  'local-store-active-builds.cc',
   'local-store.cc',
   'log-store.cc',
   'machines.cc',

@@ -1,6 +1,7 @@
 #include "nix/store/build/derivation-builder.hh"
 #include "nix/util/file-system.hh"
 #include "nix/store/local-store.hh"
+#include "nix/store/active-builds.hh"
 #include "nix/util/processes.hh"
 #include "nix/store/builtins.hh"
 #include "nix/store/path-references.hh"
@@ -76,6 +77,11 @@ protected:
      * The process ID of the builder.
      */
     Pid pid;
+
+    /**
+     * Handles to track active builds for `nix ps`.
+     */
+    std::optional<ActiveBuildsTracker::BuildHandle> activeBuildHandle;
 
     LocalStore & store;
 
@@ -471,6 +477,8 @@ bool DerivationBuilderImpl::killChild()
         killSandbox(true);
 
         pid.wait();
+
+        activeBuildHandle.reset();
     }
     return ret;
 }
@@ -503,6 +511,8 @@ SingleDrvOutputs DerivationBuilderImpl::unprepareBuild()
        open and modifies them after they have been chown'ed to
        root. */
     killSandbox(true);
+
+    activeBuildHandle.reset();
 
     /* Terminate the recursive Nix daemon. */
     stopDaemon();
@@ -846,6 +856,19 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
     startChild();
 
     pid.setSeparatePG(true);
+
+    /* Make the build visible to `nix ps`. */
+    if (auto tracker = dynamic_cast<ActiveBuildsTracker *>(&store)) {
+        ActiveBuild build{
+            .nixPid = getpid(),
+            .clientPid = std::nullopt, // FIXME
+            .clientUid = std::nullopt, // FIXME
+            .mainPid = pid,
+            .mainUid = buildUser ? buildUser->getUID() : getuid(),
+            .derivation = drvPath,
+        };
+        activeBuildHandle.emplace(tracker->buildStarted(build));
+    }
 
     processSandboxSetupMessages();
 
