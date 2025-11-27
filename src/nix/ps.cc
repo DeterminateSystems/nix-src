@@ -41,8 +41,7 @@ struct CmdPs : StoreCommand
             std::cout << fmt(
                 ANSI_BOLD "%s" ANSI_NORMAL " (uid=%d)\n", store->printStorePath(build.derivation), build.mainUid);
             if (build.processes.empty())
-                std::cout << fmt(
-                    "%s%9d %9d " ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n", treeLast, build.mainPid);
+                std::cout << fmt("%s%9d " ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n", treeLast, build.mainPid);
             else {
                 /* Recover the tree structure of the processes. */
                 std::set<pid_t> pids;
