@@ -1,12 +1,8 @@
 #include "nix/store/local-store.hh"
 #include "nix/util/json-utils.hh"
-#include "nix/util/json-impls.hh"
 #include "nix/util/cgroup.hh"
 
 #include <nlohmann/json.hpp>
-#include <sstream>
-
-JSON_IMPL(ActiveBuild)
 
 namespace nix {
 
@@ -24,7 +20,7 @@ static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
 }
 #endif
 
-std::vector<ActiveBuildInfo> LocalStore::queryBuilds()
+std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
 {
     std::vector<ActiveBuildInfo> result;
 
@@ -95,6 +91,8 @@ void LocalStore::buildFinished(const BuildHandle & handle)
     activeBuilds.lock()->erase(handle.id);
 }
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ActiveBuildInfo::ProcessInfo, pid, parentPid, argv)
+
 } // namespace nix
 
 namespace nlohmann {
@@ -125,6 +123,19 @@ void adl_serializer<ActiveBuild>::to_json(json & j, const ActiveBuild & build)
         {"cgroup", build.cgroup},
         {"derivation", build.derivation.to_string()},
     };
+}
+
+ActiveBuildInfo adl_serializer<ActiveBuildInfo>::from_json(const json & j)
+{
+    ActiveBuildInfo info(adl_serializer<ActiveBuild>::from_json(j));
+    info.processes = j.at("processes").get<std::vector<ActiveBuildInfo::ProcessInfo>>();
+    return info;
+}
+
+void adl_serializer<ActiveBuildInfo>::to_json(json & j, const ActiveBuildInfo & build)
+{
+    adl_serializer<ActiveBuild>::to_json(j, build);
+    j["processes"] = build.processes;
 }
 
 } // namespace nlohmann

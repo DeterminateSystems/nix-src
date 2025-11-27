@@ -1,6 +1,7 @@
 #include "nix/cmd/command.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/store-cast.hh"
 #include "nix/store/active-builds.hh"
 #include "nix/util/terminal.hh"
 
@@ -27,12 +28,9 @@ struct CmdPs : StoreCommand
 
     void run(ref<Store> store) override
     {
-        auto tracker = store.dynamic_pointer_cast<ActiveBuildsTracker>();
+        auto & tracker = require<QueryActiveBuildsStore>(*store);
 
-        if (!tracker)
-            throw Error("Store does not support tracking active builds.");
-
-        auto builds = tracker->queryBuilds();
+        auto builds = tracker.queryActiveBuilds();
 
         if (builds.empty()) {
             notice("No active builds.");

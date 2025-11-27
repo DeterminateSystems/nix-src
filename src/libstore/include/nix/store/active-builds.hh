@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nix/store/path.hh"
+#include "nix/util/json-impls.hh"
 
 #include <sys/types.h>
 
@@ -32,16 +33,14 @@ struct ActiveBuildInfo : ActiveBuild
     std::vector<ProcessInfo> processes;
 };
 
-struct ActiveBuildsTracker
+struct TrackActiveBuildsStore
 {
-    virtual std::vector<ActiveBuildInfo> queryBuilds() = 0;
-
     struct BuildHandle
     {
-        ActiveBuildsTracker & tracker;
+        TrackActiveBuildsStore & tracker;
         uint64_t id;
 
-        BuildHandle(ActiveBuildsTracker & tracker, uint64_t id)
+        BuildHandle(TrackActiveBuildsStore & tracker, uint64_t id)
             : tracker(tracker)
             , id(id)
         {
@@ -66,4 +65,14 @@ struct ActiveBuildsTracker
     virtual void buildFinished(const BuildHandle & handle) = 0;
 };
 
+struct QueryActiveBuildsStore
+{
+    inline static std::string operationName = "Querying active builds";
+
+    virtual std::vector<ActiveBuildInfo> queryActiveBuilds() = 0;
+};
+
 } // namespace nix
+
+JSON_IMPL(ActiveBuild)
+JSON_IMPL(ActiveBuildInfo)

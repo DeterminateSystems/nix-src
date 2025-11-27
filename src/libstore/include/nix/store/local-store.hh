@@ -126,7 +126,10 @@ public:
     StoreReference getReference() const override;
 };
 
-class LocalStore : public virtual IndirectRootStore, public virtual GcStore, public virtual ActiveBuildsTracker
+class LocalStore : public virtual IndirectRootStore,
+                   public virtual GcStore,
+                   public virtual TrackActiveBuildsStore,
+                   public virtual QueryActiveBuildsStore
 {
 public:
 
@@ -471,7 +474,7 @@ private:
 
     Sync<std::unordered_map<uint64_t, ActiveBuildFile>> activeBuilds;
 
-    std::vector<ActiveBuildInfo> queryBuilds() override;
+    std::vector<ActiveBuildInfo> queryActiveBuilds() override;
 
     BuildHandle buildStarted(const ActiveBuild & build) override;
 

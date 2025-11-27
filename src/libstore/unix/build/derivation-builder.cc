@@ -81,7 +81,7 @@ protected:
     /**
      * Handles to track active builds for `nix ps`.
      */
-    std::optional<ActiveBuildsTracker::BuildHandle> activeBuildHandle;
+    std::optional<TrackActiveBuildsStore::BuildHandle> activeBuildHandle;
 
     LocalStore & store;
 
@@ -863,7 +863,7 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
     pid.setSeparatePG(true);
 
     /* Make the build visible to `nix ps`. */
-    if (auto tracker = dynamic_cast<ActiveBuildsTracker *>(&store))
+    if (auto tracker = dynamic_cast<TrackActiveBuildsStore *>(&store))
         activeBuildHandle.emplace(tracker->buildStarted(getActiveBuild()));
 
     processSandboxSetupMessages();
