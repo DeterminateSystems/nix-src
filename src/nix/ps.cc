@@ -40,20 +40,42 @@ struct CmdPs : StoreCommand
 
         for (const auto & build : builds) {
             std::cout << fmt(
-                ANSI_BOLD "%s" ANSI_NORMAL " (uid=%d, cgroup=%s)\n",
-                store->printStorePath(build.derivation),
-                build.mainUid,
-                build.cgroup.value_or("(none)"));
+                ANSI_BOLD "%s" ANSI_NORMAL " (uid=%d)\n", store->printStorePath(build.derivation), build.mainUid);
             if (build.processes.empty())
-                std::cout << fmt("%s%9d " ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n", treeLast, build.mainPid);
+                std::cout << fmt(
+                    "%s%9d %9d " ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n", treeLast, build.mainPid);
             else {
-                for (const auto & [n, process] : enumerate(build.processes)) {
-                    std::cout << fmt(
-                        "%s%9d %s\n",
-                        n + 1 == build.processes.size() ? treeLast : treeConn,
-                        process.pid,
-                        concatStringsSep(" ", process.argv));
+                /* Recover the tree structure of the processes. */
+                std::set<pid_t> pids;
+                for (auto & process : build.processes)
+                    pids.insert(process.pid);
+
+                using Processes = std::set<const ActiveBuildInfo::ProcessInfo *>;
+                std::map<pid_t, Processes> children;
+                Processes rootProcesses;
+                for (auto & process : build.processes) {
+                    if (pids.contains(process.parentPid))
+                        children[process.parentPid].insert(&process);
+                    else
+                        rootProcesses.insert(&process);
                 }
+
+                /* Render the process tree. */
+                [&](this const auto & visit, const Processes & processes, std::string_view prefix) -> void {
+                    for (const auto & [n, process] : enumerate(processes)) {
+                        bool last = n + 1 == processes.size();
+                        std::cout << fmt(
+                            "%s%s%d %s\n",
+                            prefix,
+                            last ? treeLast : treeConn,
+                            process->pid,
+                            // Use tokenizeString() to remove newlines / consecutive whitespace.
+                            concatStringsSep(
+                                " ", tokenizeString<std::vector<std::string>>(concatStringsSep(" ", process->argv)))
+                                .substr(0, 70));
+                        visit(children[process->pid], last ? prefix + treeNull : prefix + treeLine);
+                    }
+                }(rootProcesses, "");
             }
         }
     }

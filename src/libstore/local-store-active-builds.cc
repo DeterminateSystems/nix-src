@@ -15,6 +15,9 @@ static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
 {
     return {
         .pid = pid,
+        .parentPid =
+            string2Int<pid_t>(tokenizeString<std::vector<std::string>>(readFile(fmt("/proc/%d/stat", pid))).at(3))
+                .value_or(0),
         .argv =
             tokenizeString<std::vector<std::string>>(readFile(fmt("/proc/%d/cmdline", pid)), std::string("\000", 1)),
     };
