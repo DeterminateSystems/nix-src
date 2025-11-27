@@ -2,6 +2,7 @@
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/active-builds.hh"
+#include "nix/util/terminal.hh"
 
 using namespace nix;
 
@@ -61,18 +62,21 @@ struct CmdPs : StoreCommand
                 }
 
                 /* Render the process tree. */
+                auto width = isTTY() ? getWindowWidth() : std::numeric_limits<unsigned int>::max();
                 [&](this const auto & visit, const Processes & processes, std::string_view prefix) -> void {
                     for (const auto & [n, process] : enumerate(processes)) {
                         bool last = n + 1 == processes.size();
-                        std::cout << fmt(
-                            "%s%s%d %s\n",
-                            prefix,
-                            last ? treeLast : treeConn,
-                            process->pid,
-                            // Use tokenizeString() to remove newlines / consecutive whitespace.
-                            concatStringsSep(
-                                " ", tokenizeString<std::vector<std::string>>(concatStringsSep(" ", process->argv)))
-                                .substr(0, 70));
+                        std::cout << filterANSIEscapes(
+                            fmt("%s%s%d %s",
+                                prefix,
+                                last ? treeLast : treeConn,
+                                process->pid,
+                                // Use tokenizeString() to remove newlines / consecutive whitespace.
+                                concatStringsSep(
+                                    " ",
+                                    tokenizeString<std::vector<std::string>>(concatStringsSep(" ", process->argv)))),
+                            false,
+                            width) << "\n";
                         visit(children[process->pid], last ? prefix + treeNull : prefix + treeLine);
                     }
                 }(rootProcesses, "");
