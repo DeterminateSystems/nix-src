@@ -1,6 +1,7 @@
 #include "nix/store/local-store.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/util/json-impls.hh"
+#include "nix/util/cgroup.hh"
 
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -40,7 +41,11 @@ std::vector<ActiveBuildInfo> LocalStore::queryBuilds()
 #ifdef __linux__
             /* Read process information from /proc. */
             try {
-                info.processes.push_back(getProcessInfo(info.mainPid));
+                if (info.cgroup) {
+                    for (auto pid : getPidsInCgroup(*info.cgroup))
+                        info.processes.push_back(getProcessInfo(pid));
+                } else
+                    info.processes.push_back(getProcessInfo(info.mainPid));
             } catch (...) {
                 ignoreExceptionExceptInterrupt();
             }
@@ -101,6 +106,7 @@ ActiveBuild adl_serializer<ActiveBuild>::from_json(const json & j)
         .clientUid = j.at("clientUid").get<std::optional<uid_t>>(),
         .mainPid = j.at("mainPid").get<pid_t>(),
         .mainUid = j.at("mainUid").get<uid_t>(),
+        .cgroup = j.at("cgroup").get<std::optional<Path>>(),
         .derivation = StorePath{getString(j.at("derivation"))},
     };
 }
@@ -113,6 +119,7 @@ void adl_serializer<ActiveBuild>::to_json(json & j, const ActiveBuild & build)
         {"clientUid", build.clientUid},
         {"mainPid", build.mainPid},
         {"mainUid", build.mainUid},
+        {"cgroup", build.cgroup},
         {"derivation", build.derivation.to_string()},
     };
 }

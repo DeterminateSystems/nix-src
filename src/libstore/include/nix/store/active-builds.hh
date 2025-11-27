@@ -15,6 +15,7 @@ struct ActiveBuild
 
     pid_t mainPid;
     uid_t mainUid;
+    std::optional<Path> cgroup;
 
     StorePath derivation;
 };

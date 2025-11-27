@@ -40,12 +40,19 @@ struct CmdPs : StoreCommand
 
         for (const auto & build : builds) {
             std::cout << fmt(
-                ANSI_BOLD "%s" ANSI_NORMAL " (uid=%d)\n", store->printStorePath(build.derivation), build.mainUid);
+                ANSI_BOLD "%s" ANSI_NORMAL " (uid=%d, cgroup=%s)\n",
+                store->printStorePath(build.derivation),
+                build.mainUid,
+                build.cgroup.value_or("(none)"));
             if (build.processes.empty())
                 std::cout << fmt("%s%9d " ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n", treeLast, build.mainPid);
             else {
-                for (auto & process : build.processes) {
-                    std::cout << fmt("%s%9d %s\n", treeLast, process.pid, concatStringsSep(" ", process.argv));
+                for (const auto & [n, process] : enumerate(build.processes)) {
+                    std::cout << fmt(
+                        "%s%9d %s\n",
+                        n + 1 == build.processes.size() ? treeLast : treeConn,
+                        process.pid,
+                        concatStringsSep(" ", process.argv));
                 }
             }
         }

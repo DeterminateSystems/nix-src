@@ -242,6 +242,11 @@ protected:
     virtual void checkSystem();
 
     /**
+     * Construct the `ActiveBuild` object for `ActiveBuildsTracker`.
+     */
+    virtual ActiveBuild getActiveBuild();
+
+    /**
      * Return the paths that should be made available in the sandbox.
      * This includes:
      *
@@ -858,21 +863,24 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
     pid.setSeparatePG(true);
 
     /* Make the build visible to `nix ps`. */
-    if (auto tracker = dynamic_cast<ActiveBuildsTracker *>(&store)) {
-        ActiveBuild build{
-            .nixPid = getpid(),
-            .clientPid = std::nullopt, // FIXME
-            .clientUid = std::nullopt, // FIXME
-            .mainPid = pid,
-            .mainUid = buildUser ? buildUser->getUID() : getuid(),
-            .derivation = drvPath,
-        };
-        activeBuildHandle.emplace(tracker->buildStarted(build));
-    }
+    if (auto tracker = dynamic_cast<ActiveBuildsTracker *>(&store))
+        activeBuildHandle.emplace(tracker->buildStarted(getActiveBuild()));
 
     processSandboxSetupMessages();
 
     return builderOut.get();
+}
+
+ActiveBuild DerivationBuilderImpl::getActiveBuild()
+{
+    return {
+        .nixPid = getpid(),
+        .clientPid = std::nullopt, // FIXME
+        .clientUid = std::nullopt, // FIXME
+        .mainPid = pid,
+        .mainUid = buildUser ? buildUser->getUID() : getuid(),
+        .derivation = drvPath,
+    };
 }
 
 PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
