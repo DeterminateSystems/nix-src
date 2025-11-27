@@ -300,6 +300,7 @@ subdir('nix-meson-build-support/common')
 subdir('nix-meson-build-support/asan-options')
 
 sources = files(
+  'active-builds.cc',
   'async-path-writer.cc',
   'aws-creds.cc',
   'binary-cache-store.cc',
