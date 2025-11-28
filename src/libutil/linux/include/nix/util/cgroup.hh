@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <optional>
+#include <filesystem>
 
 #include "nix/util/types.hh"
 
@@ -33,5 +34,10 @@ std::string getCurrentCgroup();
  * returned, and then all subsequent calls will return the original cgroup.
  */
 std::string getRootCgroup();
+
+/**
+ * Get the PIDs of all processes in the given cgroup.
+ */
+std::set<pid_t> getPidsInCgroup(const std::filesystem::path & cgroup);
 
 } // namespace nix
