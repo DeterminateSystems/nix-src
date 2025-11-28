@@ -138,6 +138,8 @@ struct WorkerProto
     using Feature = std::string;
     using FeatureSet = std::set<Feature, std::less<>>;
 
+    static constexpr std::string_view featureQueryActiveBuilds{"queryActiveBuilds"};
+
     static const FeatureSet allFeatures;
 };
 
