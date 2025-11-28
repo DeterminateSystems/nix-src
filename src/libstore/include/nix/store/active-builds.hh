@@ -18,6 +18,8 @@ struct ActiveBuild
     uid_t mainUid;
     std::optional<Path> cgroup;
 
+    time_t startTime;
+
     StorePath derivation;
 };
 

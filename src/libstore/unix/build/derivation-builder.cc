@@ -879,6 +879,7 @@ ActiveBuild DerivationBuilderImpl::getActiveBuild()
         .clientUid = std::nullopt, // FIXME
         .mainPid = pid,
         .mainUid = buildUser ? buildUser->getUID() : getuid(),
+        .startTime = buildResult.startTime,
         .derivation = drvPath,
     };
 }

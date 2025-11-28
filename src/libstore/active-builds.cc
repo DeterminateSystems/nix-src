@@ -22,6 +22,7 @@ ActiveBuild adl_serializer<ActiveBuild>::from_json(const json & j)
         .mainPid = j.at("mainPid").get<pid_t>(),
         .mainUid = j.at("mainUid").get<uid_t>(),
         .cgroup = j.at("cgroup").get<std::optional<Path>>(),
+        .startTime = j.at("startTime").get<time_t>(),
         .derivation = StorePath{getString(j.at("derivation"))},
     };
 }
@@ -35,6 +36,7 @@ void adl_serializer<ActiveBuild>::to_json(json & j, const ActiveBuild & build)
         {"mainPid", build.mainPid},
         {"mainUid", build.mainUid},
         {"cgroup", build.cgroup},
+        {"startTime", build.startTime},
         {"derivation", build.derivation.to_string()},
     };
 }
