@@ -3,6 +3,7 @@
 #include "nix/store/path.hh"
 #include "nix/util/json-impls.hh"
 
+#include <chrono>
 #include <sys/types.h>
 
 namespace nix {
@@ -31,6 +32,9 @@ struct ActiveBuildInfo : ActiveBuild
         pid_t parentPid = 0;
         std::vector<std::string> argv;
     };
+
+    // User/system CPU time for the entire cgroup, if available.
+    std::optional<std::chrono::microseconds> cpuUser, cpuSystem;
 
     std::vector<ProcessInfo> processes;
 };

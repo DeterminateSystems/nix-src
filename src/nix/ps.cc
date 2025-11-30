@@ -39,9 +39,13 @@ struct CmdPs : StoreCommand
 
         for (const auto & build : builds) {
             std::cout << fmt(
-                ANSI_BOLD "%s" ANSI_NORMAL " (%ds, uid=%d)\n",
+                ANSI_BOLD "%s" ANSI_NORMAL " (wall=%ds, %suid=%d)\n",
                 store->printStorePath(build.derivation),
                 time(nullptr) - build.startTime,
+                build.cpuUser && build.cpuSystem
+                    ? fmt("cpu=%ss, ",
+                          std::chrono::duration_cast<std::chrono::seconds>(*build.cpuUser + *build.cpuSystem).count())
+                    : "",
                 build.mainUid);
             if (build.processes.empty())
                 std::cout << fmt("%s%9d " ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n", treeLast, build.mainPid);

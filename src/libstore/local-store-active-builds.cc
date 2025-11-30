@@ -45,6 +45,11 @@ std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
                 if (info.cgroup) {
                     for (auto pid : getPidsInCgroup(*info.cgroup))
                         info.processes.push_back(getProcessInfo(pid));
+
+                    /* Read CPU statistics from the cgroup. */
+                    auto stats = getCgroupStats(*info.cgroup);
+                    info.cpuUser = stats.cpuUser;
+                    info.cpuSystem = stats.cpuSystem;
                 } else
                     info.processes.push_back(getProcessInfo(info.mainPid));
             } catch (...) {

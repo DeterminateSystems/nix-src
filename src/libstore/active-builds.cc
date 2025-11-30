@@ -45,6 +45,14 @@ ActiveBuildInfo adl_serializer<ActiveBuildInfo>::from_json(const json & j)
 {
     ActiveBuildInfo info(adl_serializer<ActiveBuild>::from_json(j));
     info.processes = j.at("processes").get<std::vector<ActiveBuildInfo::ProcessInfo>>();
+
+    // Deserialize CPU times from seconds (as float) to microseconds
+    if (j.contains("cpuUser") && !j.at("cpuUser").is_null())
+        info.cpuUser = std::chrono::microseconds(static_cast<int64_t>(j.at("cpuUser").get<double>() * 1'000'000));
+
+    if (j.contains("cpuSystem") && !j.at("cpuSystem").is_null())
+        info.cpuSystem = std::chrono::microseconds(static_cast<int64_t>(j.at("cpuSystem").get<double>() * 1'000'000));
+
     return info;
 }
 
@@ -52,6 +60,17 @@ void adl_serializer<ActiveBuildInfo>::to_json(json & j, const ActiveBuildInfo & 
 {
     adl_serializer<ActiveBuild>::to_json(j, build);
     j["processes"] = build.processes;
+
+    // Serialize CPU times as seconds (as float)
+    if (build.cpuUser)
+        j["cpuUser"] = static_cast<double>(build.cpuUser->count()) / 1'000'000.0;
+    else
+        j["cpuUser"] = nullptr;
+
+    if (build.cpuSystem)
+        j["cpuSystem"] = static_cast<double>(build.cpuSystem->count()) / 1'000'000.0;
+    else
+        j["cpuSystem"] = nullptr;
 }
 
 } // namespace nlohmann
