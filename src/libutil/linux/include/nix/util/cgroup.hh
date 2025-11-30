@@ -19,6 +19,11 @@ struct CgroupStats
 };
 
 /**
+ * Read statistics from the given cgroup.
+ */
+CgroupStats getCgroupStats(const std::filesystem::path & cgroup);
+
+/**
  * Destroy the cgroup denoted by 'path'. The postcondition is that
  * 'path' does not exist, and thus any processes in the cgroup have
  * been killed. Also return statistics from the cgroup just before
