@@ -37,18 +37,25 @@ struct CmdPs : StoreCommand
             return;
         }
 
+        /* Print column headers. */
+        std::cout << fmt("%9s %7s %5s %s\n", "UID", "PID", "CPU", "DERIVATION/COMMAND");
+
         for (const auto & build : builds) {
             std::cout << fmt(
-                ANSI_BOLD "%s" ANSI_NORMAL " (wall=%ds, %suid=%d)\n",
-                store->printStorePath(build.derivation),
-                time(nullptr) - build.startTime,
+                "%9d %7d %5s " ANSI_BOLD "%s" ANSI_NORMAL " (wall=%ds)\n",
+                build.mainUid,
+                build.mainPid,
                 build.cpuUser && build.cpuSystem
-                    ? fmt("cpu=%ss, ",
+                    ? fmt("%ss",
                           std::chrono::duration_cast<std::chrono::seconds>(*build.cpuUser + *build.cpuSystem).count())
                     : "",
-                build.mainUid);
+                store->printStorePath(build.derivation),
+                time(nullptr) - build.startTime);
             if (build.processes.empty())
-                std::cout << fmt("%s%9d " ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n", treeLast, build.mainPid);
+                std::cout << fmt("%9d %7d      %s" ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n",
+                    build.mainUid,
+                    build.mainPid,
+                    treeLast);
             else {
                 /* Recover the tree structure of the processes. */
                 std::set<pid_t> pids;
@@ -76,19 +83,26 @@ struct CmdPs : StoreCommand
                         if (process->cpuUser && process->cpuSystem) {
                             auto totalCpu = *process->cpuUser + *process->cpuSystem;
                             auto totalSecs = std::chrono::duration_cast<std::chrono::seconds>(totalCpu).count();
-                            cpuInfo = fmt(" " ANSI_FAINT "(cpu=%ss)" ANSI_NORMAL, totalSecs);
+                            cpuInfo = fmt("%ds", totalSecs);
                         }
 
+                        // Format left-aligned info (uid, pid, cpu)
+                        auto leftInfo = fmt("%5d %7d %5s ",
+                            build.mainUid,
+                            process->pid,
+                            cpuInfo);
+
+                        // Format argv with tree structure
+                        auto argv = concatStringsSep(
+                            " ",
+                            tokenizeString<std::vector<std::string>>(concatStringsSep(" ", process->argv)));
+
                         std::cout << filterANSIEscapes(
-                            fmt("%s%s%d %s%s",
+                            fmt("%s%s%s%s",
+                                leftInfo,
                                 prefix,
                                 last ? treeLast : treeConn,
-                                process->pid,
-                                // Use tokenizeString() to remove newlines / consecutive whitespace.
-                                concatStringsSep(
-                                    " ",
-                                    tokenizeString<std::vector<std::string>>(concatStringsSep(" ", process->argv))),
-                                cpuInfo),
+                                argv),
                             false,
                             width) << "\n";
                         visit(children[process->pid], last ? prefix + treeNull : prefix + treeLine);
