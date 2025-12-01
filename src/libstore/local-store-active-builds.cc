@@ -2,6 +2,7 @@
 #include "nix/util/json-utils.hh"
 #ifdef __linux__
 #  include "nix/util/cgroup.hh"
+#  include <unistd.h>
 #endif
 
 #include <nlohmann/json.hpp>
@@ -11,14 +12,34 @@ namespace nix {
 #ifdef __linux__
 static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
 {
-    return {
-        .pid = pid,
-        .parentPid =
-            string2Int<pid_t>(tokenizeString<std::vector<std::string>>(readFile(fmt("/proc/%d/stat", pid))).at(3))
-                .value_or(0),
-        .argv =
-            tokenizeString<std::vector<std::string>>(readFile(fmt("/proc/%d/cmdline", pid)), std::string("\000", 1)),
-    };
+    ActiveBuildInfo::ProcessInfo info;
+    info.pid = pid;
+    info.argv =
+        tokenizeString<std::vector<std::string>>(readFile(fmt("/proc/%d/cmdline", pid)), std::string("\000", 1));
+
+    // Read /proc/[pid]/stat for parent PID and CPU times
+    auto statFields = tokenizeString<std::vector<std::string>>(readFile(fmt("/proc/%d/stat", pid)));
+
+    // Field 3 (index 3) is ppid
+    if (statFields.size() > 3)
+        info.parentPid = string2Int<pid_t>(statFields[3]).value_or(0);
+
+    // Fields 13 and 14 (indices 13, 14) are utime and stime in clock ticks
+    static long clkTck = sysconf(_SC_CLK_TCK);
+    if (statFields.size() > 14 && clkTck > 0) {
+        auto utime = string2Int<uint64_t>(statFields[13]);
+        auto stime = string2Int<uint64_t>(statFields[14]);
+
+        if (utime) {
+            // Convert clock ticks to microseconds: (ticks / clkTck) * 1000000
+            info.cpuUser = std::chrono::microseconds((*utime * 1'000'000) / clkTck);
+        }
+        if (stime) {
+            info.cpuSystem = std::chrono::microseconds((*stime * 1'000'000) / clkTck);
+        }
+    }
+
+    return info;
 }
 #endif
 

@@ -5,13 +5,48 @@
 
 namespace nix {
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ActiveBuildInfo::ProcessInfo, pid, parentPid, argv)
-
 } // namespace nix
 
 namespace nlohmann {
 
 using namespace nix;
+
+ActiveBuildInfo::ProcessInfo adl_serializer<ActiveBuildInfo::ProcessInfo>::from_json(const json & j)
+{
+    ActiveBuildInfo::ProcessInfo info;
+    info.pid = j.at("pid").get<pid_t>();
+    info.parentPid = j.at("parentPid").get<pid_t>();
+    info.argv = j.at("argv").get<std::vector<std::string>>();
+
+    // Deserialize CPU times from seconds (as float) to microseconds
+    if (j.contains("cpuUser") && !j.at("cpuUser").is_null())
+        info.cpuUser = std::chrono::microseconds(static_cast<int64_t>(j.at("cpuUser").get<double>() * 1'000'000));
+
+    if (j.contains("cpuSystem") && !j.at("cpuSystem").is_null())
+        info.cpuSystem = std::chrono::microseconds(static_cast<int64_t>(j.at("cpuSystem").get<double>() * 1'000'000));
+
+    return info;
+}
+
+void adl_serializer<ActiveBuildInfo::ProcessInfo>::to_json(json & j, const ActiveBuildInfo::ProcessInfo & process)
+{
+    j = nlohmann::json{
+        {"pid", process.pid},
+        {"parentPid", process.parentPid},
+        {"argv", process.argv},
+    };
+
+    // Serialize CPU times as seconds (as float)
+    if (process.cpuUser)
+        j["cpuUser"] = static_cast<double>(process.cpuUser->count()) / 1'000'000.0;
+    else
+        j["cpuUser"] = nullptr;
+
+    if (process.cpuSystem)
+        j["cpuSystem"] = static_cast<double>(process.cpuSystem->count()) / 1'000'000.0;
+    else
+        j["cpuSystem"] = nullptr;
+}
 
 ActiveBuild adl_serializer<ActiveBuild>::from_json(const json & j)
 {

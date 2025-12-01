@@ -31,6 +31,7 @@ struct ActiveBuildInfo : ActiveBuild
         pid_t pid = 0;
         pid_t parentPid = 0;
         std::vector<std::string> argv;
+        std::optional<std::chrono::microseconds> cpuUser, cpuSystem;
     };
 
     // User/system CPU time for the entire cgroup, if available.
@@ -82,3 +83,4 @@ struct QueryActiveBuildsStore
 
 JSON_IMPL(ActiveBuild)
 JSON_IMPL(ActiveBuildInfo)
+JSON_IMPL(ActiveBuildInfo::ProcessInfo)

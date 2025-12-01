@@ -70,15 +70,25 @@ struct CmdPs : StoreCommand
                 [&](this const auto & visit, const Processes & processes, std::string_view prefix) -> void {
                     for (const auto & [n, process] : enumerate(processes)) {
                         bool last = n + 1 == processes.size();
+
+                        // Format CPU time if available
+                        std::string cpuInfo;
+                        if (process->cpuUser && process->cpuSystem) {
+                            auto totalCpu = *process->cpuUser + *process->cpuSystem;
+                            auto totalSecs = std::chrono::duration_cast<std::chrono::seconds>(totalCpu).count();
+                            cpuInfo = fmt(" " ANSI_FAINT "(cpu=%ss)" ANSI_NORMAL, totalSecs);
+                        }
+
                         std::cout << filterANSIEscapes(
-                            fmt("%s%s%d %s",
+                            fmt("%s%s%d %s%s",
                                 prefix,
                                 last ? treeLast : treeConn,
                                 process->pid,
                                 // Use tokenizeString() to remove newlines / consecutive whitespace.
                                 concatStringsSep(
                                     " ",
-                                    tokenizeString<std::vector<std::string>>(concatStringsSep(" ", process->argv)))),
+                                    tokenizeString<std::vector<std::string>>(concatStringsSep(" ", process->argv))),
+                                cpuInfo),
                             false,
                             width) << "\n";
                         visit(children[process->pid], last ? prefix + treeNull : prefix + treeLine);
