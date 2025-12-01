@@ -17,8 +17,20 @@ static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
     info.argv =
         tokenizeString<std::vector<std::string>>(readFile(fmt("/proc/%d/cmdline", pid)), std::string("\000", 1));
 
+    auto statPath = fmt("/proc/%d/stat", pid);
+
+    AutoCloseFD statFd = open(statPath.c_str(), O_RDONLY | O_CLOEXEC);
+    if (!statFd)
+        throw SysError("opening '%s'", statPath);
+
+    // Get the UID from the ownership of the stat file.
+    struct stat st;
+    if (fstat(statFd.get(), &st) == -1)
+        throw SysError("getting ownership of '%s'", statPath);
+    info.uid = st.st_uid;
+
     // Read /proc/[pid]/stat for parent PID and CPU times
-    auto statFields = tokenizeString<std::vector<std::string>>(readFile(fmt("/proc/%d/stat", pid)));
+    auto statFields = tokenizeString<std::vector<std::string>>(readFile(statFd.get()));
 
     // Field 3 (index 3) is ppid
     if (statFields.size() > 3)

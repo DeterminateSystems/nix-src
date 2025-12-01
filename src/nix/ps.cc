@@ -52,7 +52,8 @@ struct CmdPs : StoreCommand
                 store->printStorePath(build.derivation),
                 time(nullptr) - build.startTime);
             if (build.processes.empty())
-                std::cout << fmt("%9d %7d      %s" ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n",
+                std::cout << fmt(
+                    "%9d %7d      %s" ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n",
                     build.mainUid,
                     build.mainPid,
                     treeLast);
@@ -87,24 +88,15 @@ struct CmdPs : StoreCommand
                         }
 
                         // Format left-aligned info (uid, pid, cpu)
-                        auto leftInfo = fmt("%5d %7d %5s ",
-                            build.mainUid,
-                            process->pid,
-                            cpuInfo);
+                        auto leftInfo = fmt("%5d %7d %5s ", process->uid, process->pid, cpuInfo);
 
                         // Format argv with tree structure
                         auto argv = concatStringsSep(
-                            " ",
-                            tokenizeString<std::vector<std::string>>(concatStringsSep(" ", process->argv)));
+                            " ", tokenizeString<std::vector<std::string>>(concatStringsSep(" ", process->argv)));
 
                         std::cout << filterANSIEscapes(
-                            fmt("%s%s%s%s",
-                                leftInfo,
-                                prefix,
-                                last ? treeLast : treeConn,
-                                argv),
-                            false,
-                            width) << "\n";
+                            fmt("%s%s%s%s", leftInfo, prefix, last ? treeLast : treeConn, argv), false, width)
+                                  << "\n";
                         visit(children[process->pid], last ? prefix + treeNull : prefix + treeLine);
                     }
                 }(rootProcesses, "");

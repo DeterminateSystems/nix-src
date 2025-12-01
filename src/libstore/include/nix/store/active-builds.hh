@@ -30,9 +30,9 @@ struct ActiveBuildInfo : ActiveBuild
     {
         pid_t pid = 0;
         pid_t parentPid = 0;
+        uid_t uid = -1;
         std::vector<std::string> argv;
         std::optional<std::chrono::microseconds> cpuUser, cpuSystem;
-        // FIXME: include uid, since it can be different from mainUid when using uid-range
     };
 
     // User/system CPU time for the entire cgroup, if available.

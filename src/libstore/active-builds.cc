@@ -16,6 +16,7 @@ ActiveBuildInfo::ProcessInfo adl_serializer<ActiveBuildInfo::ProcessInfo>::from_
     ActiveBuildInfo::ProcessInfo info;
     info.pid = j.at("pid").get<pid_t>();
     info.parentPid = j.at("parentPid").get<pid_t>();
+    info.uid = j.at("uid").get<uid_t>();
     info.argv = j.at("argv").get<std::vector<std::string>>();
 
     // Deserialize CPU times from seconds (as float) to microseconds
@@ -33,6 +34,7 @@ void adl_serializer<ActiveBuildInfo::ProcessInfo>::to_json(json & j, const Activ
     j = nlohmann::json{
         {"pid", process.pid},
         {"parentPid", process.parentPid},
+        {"uid", process.uid},
         {"argv", process.argv},
     };
 
