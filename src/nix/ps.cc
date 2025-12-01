@@ -37,13 +37,18 @@ struct CmdPs : StoreCommand
             return;
         }
 
+        /* Helper to format user info: show name if available, else UID */
+        auto formatUser = [](const UserInfo & user) -> std::string {
+            return user.name ? *user.name : std::to_string(user.uid);
+        };
+
         /* Print column headers. */
-        std::cout << fmt("%9s %7s %5s %s\n", "UID", "PID", "CPU", "DERIVATION/COMMAND");
+        std::cout << fmt("%9s %7s %5s %s\n", "USER", "PID", "CPU", "DERIVATION/COMMAND");
 
         for (const auto & build : builds) {
             std::cout << fmt(
-                "%9d %7d %5s " ANSI_BOLD "%s" ANSI_NORMAL " (wall=%ds)\n",
-                build.mainUid,
+                "%9s %7d %5s " ANSI_BOLD "%s" ANSI_NORMAL " (wall=%ds)\n",
+                formatUser(build.mainUser),
                 build.mainPid,
                 build.cpuUser && build.cpuSystem
                     ? fmt("%ss",
@@ -53,8 +58,8 @@ struct CmdPs : StoreCommand
                 time(nullptr) - build.startTime);
             if (build.processes.empty())
                 std::cout << fmt(
-                    "%9d %7d      %s" ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n",
-                    build.mainUid,
+                    "%9s %7d      %s" ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n",
+                    formatUser(build.mainUser),
                     build.mainPid,
                     treeLast);
             else {
@@ -87,8 +92,8 @@ struct CmdPs : StoreCommand
                             cpuInfo = fmt("%ds", totalSecs);
                         }
 
-                        // Format left-aligned info (uid, pid, cpu)
-                        auto leftInfo = fmt("%5d %7d %5s ", process->uid, process->pid, cpuInfo);
+                        // Format left-aligned info (user, pid, cpu)
+                        auto leftInfo = fmt("%9s %7d %5s ", formatUser(process->user), process->pid, cpuInfo);
 
                         // Format argv with tree structure
                         auto argv = concatStringsSep(

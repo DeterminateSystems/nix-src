@@ -3,6 +3,7 @@
 #ifdef __linux__
 #  include "nix/util/cgroup.hh"
 #  include <unistd.h>
+#  include <pwd.h>
 #endif
 
 #include <nlohmann/json.hpp>
@@ -27,7 +28,7 @@ static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
     struct stat st;
     if (fstat(statFd.get(), &st) == -1)
         throw SysError("getting ownership of '%s'", statPath);
-    info.uid = st.st_uid;
+    info.user = UserInfo::fromUid(st.st_uid);
 
     // Read /proc/[pid]/stat for parent PID and CPU times
     auto statFields = tokenizeString<std::vector<std::string>>(readFile(statFd.get()));

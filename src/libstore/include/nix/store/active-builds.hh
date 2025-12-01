@@ -8,6 +8,20 @@
 
 namespace nix {
 
+/**
+ * A uid and optional corresponding user name.
+ */
+struct UserInfo
+{
+    uid_t uid = -1;
+    std::optional<std::string> name;
+
+    /**
+     * Create a UserInfo from a UID, looking up the username if possible.
+     */
+    static UserInfo fromUid(uid_t uid);
+};
+
 struct ActiveBuild
 {
     pid_t nixPid;
@@ -16,7 +30,7 @@ struct ActiveBuild
     std::optional<uid_t> clientUid;
 
     pid_t mainPid;
-    uid_t mainUid;
+    UserInfo mainUser;
     std::optional<Path> cgroup;
 
     time_t startTime;
@@ -30,7 +44,7 @@ struct ActiveBuildInfo : ActiveBuild
     {
         pid_t pid = 0;
         pid_t parentPid = 0;
-        uid_t uid = -1;
+        UserInfo user;
         std::vector<std::string> argv;
         std::optional<std::chrono::microseconds> cpuUser, cpuSystem;
     };
@@ -82,6 +96,7 @@ struct QueryActiveBuildsStore
 
 } // namespace nix
 
+JSON_IMPL(UserInfo)
 JSON_IMPL(ActiveBuild)
 JSON_IMPL(ActiveBuildInfo)
 JSON_IMPL(ActiveBuildInfo::ProcessInfo)
