@@ -3,6 +3,7 @@
 #include "nix/store/store-api.hh"
 #include "nix/store/store-cast.hh"
 #include "nix/store/active-builds.hh"
+#include "nix/util/table.hh"
 #include "nix/util/terminal.hh"
 
 using namespace nix;
