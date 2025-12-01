@@ -54,6 +54,28 @@ static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
 
     return info;
 }
+
+/**
+ * Recursively get all descendant PIDs of a given PID using /proc/[pid]/task/[pid]/children.
+ */
+static std::set<pid_t> getDescendantPids(pid_t pid)
+{
+    std::set<pid_t> descendants;
+
+    [&](this auto self, pid_t pid) -> void {
+        try {
+            descendants.insert(pid);
+            for (const auto & childPidStr :
+                 tokenizeString<std::vector<std::string>>(readFile(fmt("/proc/%d/task/%d/children", pid, pid))))
+                if (auto childPid = string2Int<pid_t>(childPidStr))
+                    self(*childPid);
+        } catch (...) {
+            // Process may have exited.
+        }
+    }(pid);
+
+    return descendants;
+}
 #endif
 
 std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
@@ -84,8 +106,10 @@ std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
                     auto stats = getCgroupStats(*info.cgroup);
                     info.cpuUser = stats.cpuUser;
                     info.cpuSystem = stats.cpuSystem;
-                } else
-                    info.processes.push_back(getProcessInfo(info.mainPid));
+                } else {
+                    for (auto pid : getDescendantPids(info.mainPid))
+                        info.processes.push_back(getProcessInfo(pid));
+                }
             } catch (...) {
                 ignoreExceptionExceptInterrupt();
             }
