@@ -2,6 +2,7 @@
 #include "nix/util/json-utils.hh"
 #ifdef __linux__
 #  include "nix/util/cgroup.hh"
+#  include <regex>
 #  include <unistd.h>
 #  include <pwd.h>
 #endif
@@ -30,26 +31,30 @@ static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
         throw SysError("getting ownership of '%s'", statPath);
     info.user = UserInfo::fromUid(st.st_uid);
 
-    // Read /proc/[pid]/stat for parent PID and CPU times
-    auto statFields = tokenizeString<std::vector<std::string>>(readFile(statFd.get()));
+    // Read /proc/[pid]/stat for parent PID and CPU times.
+    // Format: pid (comm) state ppid ...
+    // Note that the comm field can contain spaces, so use a regex to parse it.
+    auto statContent = trim(readFile(statFd.get()));
+    static std::regex statRegex(R"((\d+) \(([^)]*)\) (.*))");
+    std::smatch match;
+    if (!std::regex_match(statContent, match, statRegex))
+        throw Error("failed to parse /proc/%d/stat", pid);
 
-    // Field 3 (index 3) is ppid
-    if (statFields.size() > 3)
-        info.parentPid = string2Int<pid_t>(statFields[3]).value_or(0);
+    // Parse the remaining fields after (comm).
+    auto remainingFields = tokenizeString<std::vector<std::string>>(match[3].str());
 
-    // Fields 13 and 14 (indices 13, 14) are utime and stime in clock ticks
+    if (remainingFields.size() > 1)
+        info.parentPid = string2Int<pid_t>(remainingFields[1]).value_or(0);
+
     static long clkTck = sysconf(_SC_CLK_TCK);
-    if (statFields.size() > 14 && clkTck > 0) {
-        auto utime = string2Int<uint64_t>(statFields[13]);
-        auto stime = string2Int<uint64_t>(statFields[14]);
+    if (remainingFields.size() > 12 && clkTck > 0) {
+        auto utime = string2Int<uint64_t>(remainingFields[11]);
+        auto stime = string2Int<uint64_t>(remainingFields[12]);
 
-        if (utime) {
-            // Convert clock ticks to microseconds: (ticks / clkTck) * 1000000
+        if (utime)
             info.cpuUser = std::chrono::microseconds((*utime * 1'000'000) / clkTck);
-        }
-        if (stime) {
+        if (stime)
             info.cpuSystem = std::chrono::microseconds((*stime * 1'000'000) / clkTck);
-        }
     }
 
     return info;
