@@ -43,27 +43,31 @@ struct CmdPs : StoreCommand
             return user.name ? *user.name : std::to_string(user.uid);
         };
 
-        /* Print column headers. */
-        std::cout << fmt("%9s %7s %5s %s\n", "USER", "PID", "CPU", "DERIVATION/COMMAND");
+        Table table;
+
+        /* Add column headers. */
+        table.push_back({"USER", "PID", "CPU", "DERIVATION/COMMAND"});
 
         for (const auto & build : builds) {
-            std::cout << fmt(
-                "%9s %7d %5s " ANSI_BOLD "%s" ANSI_NORMAL " (wall=%ds)\n",
-                formatUser(build.mainUser),
-                build.mainPid,
-                build.cpuUser && build.cpuSystem
-                    ? fmt("%ss",
-                          std::chrono::duration_cast<std::chrono::seconds>(*build.cpuUser + *build.cpuSystem).count())
-                    : "",
-                store->printStorePath(build.derivation),
-                time(nullptr) - build.startTime);
-            if (build.processes.empty())
-                std::cout << fmt(
-                    "%9s %7d      %s" ANSI_ITALIC "(no process info)" ANSI_NORMAL "\n",
-                    formatUser(build.mainUser),
-                    build.mainPid,
-                    treeLast);
-            else {
+            /* Add build summary row. */
+            table.push_back(
+                {formatUser(build.mainUser),
+                 std::to_string(build.mainPid),
+                 build.cpuUser && build.cpuSystem
+                     ? fmt("%ds",
+                           std::chrono::duration_cast<std::chrono::seconds>(*build.cpuUser + *build.cpuSystem).count())
+                     : "",
+                 fmt(ANSI_BOLD "%s" ANSI_NORMAL " (wall=%ds)",
+                     store->printStorePath(build.derivation),
+                     time(nullptr) - build.startTime)});
+
+            if (build.processes.empty()) {
+                table.push_back(
+                    {formatUser(build.mainUser),
+                     std::to_string(build.mainPid),
+                     "",
+                     fmt("%s" ANSI_ITALIC "(no process info)" ANSI_NORMAL, treeLast)});
+            } else {
                 /* Recover the tree structure of the processes. */
                 std::set<pid_t> pids;
                 for (auto & process : build.processes)
@@ -80,7 +84,6 @@ struct CmdPs : StoreCommand
                 }
 
                 /* Render the process tree. */
-                auto width = isTTY() ? getWindowWidth() : std::numeric_limits<unsigned int>::max();
                 [&](this auto const & visit, const Processes & processes, std::string_view prefix) -> void {
                     for (const auto & [n, process] : enumerate(processes)) {
                         bool last = n + 1 == processes.size();
@@ -93,21 +96,25 @@ struct CmdPs : StoreCommand
                             cpuInfo = fmt("%ds", totalSecs);
                         }
 
-                        // Format left-aligned info (user, pid, cpu)
-                        auto leftInfo = fmt("%9s %7d %5s ", formatUser(process->user), process->pid, cpuInfo);
-
                         // Format argv with tree structure
                         auto argv = concatStringsSep(
                             " ", tokenizeString<std::vector<std::string>>(concatStringsSep(" ", process->argv)));
 
-                        std::cout << filterANSIEscapes(
-                            fmt("%s%s%s%s", leftInfo, prefix, last ? treeLast : treeConn, argv), false, width)
-                                  << "\n";
+                        table.push_back(
+                            {formatUser(process->user),
+                             std::to_string(process->pid),
+                             cpuInfo,
+                             fmt("%s%s%s", prefix, last ? treeLast : treeConn, argv)});
+
                         visit(children[process->pid], last ? prefix + treeNull : prefix + treeLine);
                     }
                 }(rootProcesses, "");
             }
         }
+
+        auto width = isTTY() ? getWindowWidth() : std::numeric_limits<unsigned int>::max();
+
+        printTable(std::cout, table, width);
     }
 };
 

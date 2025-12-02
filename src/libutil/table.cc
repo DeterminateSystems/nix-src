@@ -1,4 +1,5 @@
 #include "nix/util/table.hh"
+#include "nix/util/terminal.hh"
 
 #include <algorithm>
 #include <cassert>
@@ -7,7 +8,7 @@
 
 namespace nix {
 
-void printTable(std::ostream & out, Table & table)
+void printTable(std::ostream & out, Table & table, unsigned int width)
 {
     auto nrColumns = table.size() > 0 ? table.front().size() : 0;
 
@@ -24,13 +25,15 @@ void printTable(std::ostream & out, Table & table)
 
     for (auto & i : table) {
         size_t column = 0;
+        std::string line;
         for (auto j = i.begin(); j != i.end(); ++j, ++column) {
             std::string s = *j;
             replace(s.begin(), s.end(), '\n', ' ');
-            out << s;
+            line += s;
             if (column < nrColumns - 1)
-                out << std::string(widths[column] - s.size() + 2, ' ');
+                line += std::string(widths[column] - s.size() + 2, ' ');
         }
+        out << filterANSIEscapes(line, false, width);
         out << std::endl;
     }
 }
