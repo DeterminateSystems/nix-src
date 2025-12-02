@@ -81,7 +81,7 @@ struct CmdPs : StoreCommand
 
                 /* Render the process tree. */
                 auto width = isTTY() ? getWindowWidth() : std::numeric_limits<unsigned int>::max();
-                [&](this const auto & visit, const Processes & processes, std::string_view prefix) -> void {
+                [&](this auto const & visit, const Processes & processes, std::string_view prefix) -> void {
                     for (const auto & [n, process] : enumerate(processes)) {
                         bool last = n + 1 == processes.size();
 

@@ -1,7 +1,8 @@
 #pragma once
 
-#include "nix/store/path.hh"
+#include "nix/util/util.hh"
 #include "nix/util/json-impls.hh"
+#include "nix/store/path.hh"
 
 #include <chrono>
 #include <sys/types.h>
@@ -77,8 +78,13 @@ struct TrackActiveBuildsStore
 
         ~BuildHandle()
         {
-            if (id)
-                tracker.buildFinished(*this);
+            if (id) {
+                try {
+                    tracker.buildFinished(*this);
+                } catch (...) {
+                    ignoreExceptionInDestructor();
+                }
+            }
         }
     };
 
