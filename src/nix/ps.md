@@ -22,6 +22,6 @@ R"(
 
 This command lists all currently running Nix builds.
 For each build, it shows the derivation path and the main process ID.
-On Linux, it also shows all child processes of each build.
+On Linux and macOS, it also shows the child processes of each build.
 
 )"

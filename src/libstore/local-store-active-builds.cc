@@ -7,7 +7,14 @@
 #  include <pwd.h>
 #endif
 
+#ifdef __APPLE__
+#  include <libproc.h>
+#  include <sys/sysctl.h>
+#  include <mach/mach_time.h>
+#endif
+
 #include <nlohmann/json.hpp>
+#include <queue>
 
 namespace nix {
 
@@ -84,6 +91,116 @@ static std::set<pid_t> getDescendantPids(pid_t pid)
 }
 #endif
 
+#ifdef __APPLE__
+static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
+{
+    ActiveBuildInfo::ProcessInfo info;
+    info.pid = pid;
+
+    // Get basic process info including ppid and uid.
+    struct proc_bsdinfo procInfo;
+    if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &procInfo, sizeof(procInfo)) != sizeof(procInfo))
+        throw SysError("getting process info for pid %d", pid);
+
+    info.parentPid = procInfo.pbi_ppid;
+    info.user = UserInfo::fromUid(procInfo.pbi_uid);
+
+    // Get CPU times.
+    struct proc_taskinfo taskInfo;
+    if (proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &taskInfo, sizeof(taskInfo)) == sizeof(taskInfo)) {
+
+        mach_timebase_info_data_t timebase;
+        mach_timebase_info(&timebase);
+        auto nanosecondsPerTick = (double) timebase.numer / (double) timebase.denom;
+
+        // Convert nanoseconds to microseconds.
+        info.utime =
+            std::chrono::microseconds((uint64_t) ((double) taskInfo.pti_total_user * nanosecondsPerTick / 1000));
+        info.stime =
+            std::chrono::microseconds((uint64_t) ((double) taskInfo.pti_total_system * nanosecondsPerTick / 1000));
+    }
+
+    // Get argv using sysctl.
+    int mib[3] = {CTL_KERN, KERN_PROCARGS2, pid};
+    size_t size = 0;
+
+    // First call to get size.
+    if (sysctl(mib, 3, nullptr, &size, nullptr, 0) == 0 && size > 0) {
+        std::vector<char> buffer(size);
+        if (sysctl(mib, 3, buffer.data(), &size, nullptr, 0) == 0) {
+            // Format: argc (int), followed by executable path, followed by null-terminated args
+            if (size >= sizeof(int)) {
+                int argc;
+                memcpy(&argc, buffer.data(), sizeof(argc));
+
+                // Skip past argc and executable path (null-terminated).
+                size_t pos = sizeof(int);
+                while (pos < size && buffer[pos] != '\0')
+                    pos++;
+                pos++; // Skip the null terminator
+
+                // Skip any additional null bytes.
+                while (pos < size && buffer[pos] == '\0')
+                    pos++;
+
+                // Parse the arguments.
+                while (pos < size && info.argv.size() < (size_t) argc) {
+                    size_t argStart = pos;
+                    while (pos < size && buffer[pos] != '\0')
+                        pos++;
+
+                    if (pos > argStart)
+                        info.argv.emplace_back(buffer.data() + argStart, pos - argStart);
+
+                    pos++; // Skip the null terminator
+                }
+            }
+        }
+    }
+
+    return info;
+}
+
+/**
+ * Recursively get all descendant PIDs using sysctl with KERN_PROC.
+ */
+static std::set<pid_t> getDescendantPids(pid_t startPid)
+{
+    // Get all processes.
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
+    size_t size = 0;
+
+    if (sysctl(mib, 4, nullptr, &size, nullptr, 0) == -1)
+        return {startPid};
+
+    std::vector<struct kinfo_proc> procs(size / sizeof(struct kinfo_proc));
+    if (sysctl(mib, 4, procs.data(), &size, nullptr, 0) == -1)
+        return {startPid};
+
+    // Get the children of all processes.
+    std::map<pid_t, std::set<pid_t>> children;
+    size_t count = size / sizeof(struct kinfo_proc);
+    for (size_t i = 0; i < count; i++) {
+        pid_t childPid = procs[i].kp_proc.p_pid;
+        pid_t parentPid = procs[i].kp_eproc.e_ppid;
+        children[parentPid].insert(childPid);
+    }
+
+    // Get all children of `pid`.
+    std::set<pid_t> descendants;
+    std::queue<pid_t> todo;
+    todo.push(startPid);
+    while (auto pid = pop(todo)) {
+        if (!descendants.insert(*pid).second)
+            continue;
+        for (auto & child : children[*pid])
+            todo.push(child);
+    }
+
+    return descendants;
+}
+#endif
+
 std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
 {
     std::vector<ActiveBuildInfo> result;
@@ -101,9 +218,10 @@ std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
 
             ActiveBuildInfo info(nlohmann::json::parse(readFile(fd.get())).get<ActiveBuild>());
 
-#ifdef __linux__
-            /* Read process information from /proc. */
+#if defined(__linux__) || defined(__APPLE__)
+            /* Read process information. */
             try {
+#  ifdef __linux__
                 if (info.cgroup) {
                     for (auto pid : getPidsInCgroup(*info.cgroup))
                         info.processes.push_back(getProcessInfo(pid));
@@ -112,7 +230,9 @@ std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
                     auto stats = getCgroupStats(*info.cgroup);
                     info.utime = stats.cpuUser;
                     info.stime = stats.cpuSystem;
-                } else {
+                } else
+#  endif
+                {
                     for (auto pid : getDescendantPids(info.mainPid))
                         info.processes.push_back(getProcessInfo(pid));
                 }
