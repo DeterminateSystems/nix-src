@@ -2781,7 +2781,10 @@ static void addPath(
             auto rewrites = state.realiseContext(context);
             path = {path.accessor, CanonPath(rewriteStrings(path.path.abs(), rewrites))};
             auto [storePath, subPath] = state.store->toStorePath(path.path.abs());
-            refs = state.store->queryPathInfo(storePath)->references;
+            try {
+                refs = state.store->queryPathInfo(storePath)->references;
+            } catch (Error &) { // FIXME: should be InvalidPathError
+            }
         }
 
         std::unique_ptr<PathFilter> filter;
