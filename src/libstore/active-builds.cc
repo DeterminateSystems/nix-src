@@ -50,12 +50,23 @@ void adl_serializer<UserInfo>::to_json(json & j, const UserInfo & info)
     };
 }
 
+// Durations are serialized as floats representing seconds.
 static std::optional<std::chrono::microseconds> parseDuration(const json & j, const char * key)
 {
     if (j.contains(key) && !j.at(key).is_null())
-        return std::chrono::microseconds(j.at(key).get<uint64_t>());
+        return std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::duration<float, std::chrono::seconds::period>(j.at(key).get<double>()));
     else
         return std::nullopt;
+}
+
+static nlohmann::json printDuration(const std::optional<std::chrono::microseconds> & duration)
+{
+    return duration
+               ? nlohmann::json(
+                     std::chrono::duration_cast<std::chrono::duration<float, std::chrono::seconds::period>>(*duration)
+                         .count())
+               : nullptr;
 }
 
 ActiveBuildInfo::ProcessInfo adl_serializer<ActiveBuildInfo::ProcessInfo>::from_json(const json & j)
@@ -79,10 +90,10 @@ void adl_serializer<ActiveBuildInfo::ProcessInfo>::to_json(json & j, const Activ
         {"parentPid", process.parentPid},
         {"user", process.user},
         {"argv", process.argv},
-        {"utime", process.utime ? nlohmann::json(process.utime->count()) : nullptr},
-        {"stime", process.stime ? nlohmann::json(process.stime->count()) : nullptr},
-        {"cutime", process.cutime ? nlohmann::json(process.cutime->count()) : nullptr},
-        {"cstime", process.cstime ? nlohmann::json(process.cstime->count()) : nullptr},
+        {"utime", printDuration(process.utime)},
+        {"stime", printDuration(process.stime)},
+        {"cutime", printDuration(process.cutime)},
+        {"cstime", printDuration(process.cstime)},
     };
 }
 
@@ -95,7 +106,7 @@ ActiveBuild adl_serializer<ActiveBuild>::from_json(const json & j)
         .mainPid = j.at("mainPid").get<pid_t>(),
         .mainUser = j.at("mainUser").get<UserInfo>(),
         .cgroup = j.at("cgroup").get<std::optional<Path>>(),
-        .startTime = j.at("startTime").get<time_t>(),
+        .startTime = (time_t) j.at("startTime").get<double>(),
         .derivation = StorePath{getString(j.at("derivation"))},
     };
 }
@@ -109,7 +120,7 @@ void adl_serializer<ActiveBuild>::to_json(json & j, const ActiveBuild & build)
         {"mainPid", build.mainPid},
         {"mainUser", build.mainUser},
         {"cgroup", build.cgroup},
-        {"startTime", build.startTime},
+        {"startTime", (double) build.startTime},
         {"derivation", build.derivation.to_string()},
     };
 }
@@ -127,8 +138,8 @@ void adl_serializer<ActiveBuildInfo>::to_json(json & j, const ActiveBuildInfo & 
 {
     adl_serializer<ActiveBuild>::to_json(j, build);
     j["processes"] = build.processes;
-    j["utime"] = build.utime ? nlohmann::json(build.utime->count()) : nullptr;
-    j["stime"] = build.stime ? nlohmann::json(build.stime->count()) : nullptr;
+    j["utime"] = printDuration(build.utime);
+    j["stime"] = printDuration(build.stime);
 }
 
 } // namespace nlohmann
