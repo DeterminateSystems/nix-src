@@ -1,4 +1,5 @@
 #include "nix/cmd/command.hh"
+#include "nix/main/common-args.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/store-cast.hh"
@@ -6,9 +7,11 @@
 #include "nix/util/table.hh"
 #include "nix/util/terminal.hh"
 
+#include <nlohmann/json.hpp>
+
 using namespace nix;
 
-struct CmdPs : StoreCommand
+struct CmdPs : MixJSON, StoreCommand
 {
     std::string description() override
     {
@@ -32,6 +35,11 @@ struct CmdPs : StoreCommand
         auto & tracker = require<QueryActiveBuildsStore>(*store);
 
         auto builds = tracker.queryActiveBuilds();
+
+        if (json) {
+            printJSON(nlohmann::json(builds));
+            return;
+        }
 
         if (builds.empty()) {
             notice("No active builds.");
