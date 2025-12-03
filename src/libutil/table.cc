@@ -19,6 +19,7 @@ void printTable(std::ostream & out, Table & table, unsigned int width)
         assert(i.size() == nrColumns);
         size_t column = 0;
         for (auto j = i.begin(); j != i.end(); ++j, ++column)
+            // TODO: take ANSI escapes into account when calculating width.
             widths[column] = std::max(widths[column], j->content.size());
     }
 

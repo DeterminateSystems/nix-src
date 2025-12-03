@@ -84,6 +84,7 @@ static std::set<pid_t> getDescendantPids(pid_t pid)
                     self(*childPid);
         } catch (...) {
             // Process may have exited.
+            ignoreExceptionExceptInterrupt();
         }
     }(pid);
 
@@ -242,7 +243,7 @@ std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
 #endif
 
             result.push_back(std::move(info));
-        } catch (Error &) {
+        } catch (...) {
             ignoreExceptionExceptInterrupt();
         }
     }
