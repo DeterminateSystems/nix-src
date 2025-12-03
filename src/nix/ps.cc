@@ -53,9 +53,8 @@ struct CmdPs : StoreCommand
             table.push_back(
                 {formatUser(build.mainUser),
                  std::to_string(build.mainPid),
-                 build.cpuUser && build.cpuSystem
-                     ? fmt("%ds",
-                           std::chrono::duration_cast<std::chrono::seconds>(*build.cpuUser + *build.cpuSystem).count())
+                 build.utime && build.stime
+                     ? fmt("%ds", std::chrono::duration_cast<std::chrono::seconds>(*build.utime + *build.stime).count())
                      : "",
                  fmt(ANSI_BOLD "%s" ANSI_NORMAL " (wall=%ds)",
                      store->printStorePath(build.derivation),
@@ -90,8 +89,8 @@ struct CmdPs : StoreCommand
 
                         // Format CPU time if available
                         std::string cpuInfo;
-                        if (process->cpuUser && process->cpuSystem) {
-                            auto totalCpu = *process->cpuUser + *process->cpuSystem;
+                        if (process->utime && process->stime) {
+                            auto totalCpu = *process->utime + *process->stime;
                             auto totalSecs = std::chrono::duration_cast<std::chrono::seconds>(totalCpu).count();
                             cpuInfo = fmt("%ds", totalSecs);
                         }

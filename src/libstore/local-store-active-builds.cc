@@ -52,9 +52,9 @@ static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
         auto stime = string2Int<uint64_t>(remainingFields[12]);
 
         if (utime)
-            info.cpuUser = std::chrono::microseconds((*utime * 1'000'000) / clkTck);
+            info.utime = std::chrono::microseconds((*utime * 1'000'000) / clkTck);
         if (stime)
-            info.cpuSystem = std::chrono::microseconds((*stime * 1'000'000) / clkTck);
+            info.stime = std::chrono::microseconds((*stime * 1'000'000) / clkTck);
     }
 
     return info;
@@ -109,8 +109,8 @@ std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
 
                     /* Read CPU statistics from the cgroup. */
                     auto stats = getCgroupStats(*info.cgroup);
-                    info.cpuUser = stats.cpuUser;
-                    info.cpuSystem = stats.cpuSystem;
+                    info.utime = stats.cpuUser;
+                    info.stime = stats.cpuSystem;
                 } else {
                     for (auto pid : getDescendantPids(info.mainPid))
                         info.processes.push_back(getProcessInfo(pid));
