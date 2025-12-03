@@ -47,7 +47,7 @@ struct ActiveBuildInfo : ActiveBuild
         pid_t parentPid = 0;
         UserInfo user;
         std::vector<std::string> argv;
-        std::optional<std::chrono::microseconds> utime, stime;
+        std::optional<std::chrono::microseconds> utime, stime, cutime, cstime;
     };
 
     // User/system CPU time for the entire cgroup, if available.

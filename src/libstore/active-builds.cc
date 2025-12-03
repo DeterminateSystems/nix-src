@@ -50,24 +50,25 @@ void adl_serializer<UserInfo>::to_json(json & j, const UserInfo & info)
     };
 }
 
+static std::optional<std::chrono::microseconds> parseDuration(const json & j, const char * key)
+{
+    if (j.contains(key) && !j.at(key).is_null())
+        return std::chrono::microseconds(j.at(key).get<uint64_t>());
+    else
+        return std::nullopt;
+}
+
 ActiveBuildInfo::ProcessInfo adl_serializer<ActiveBuildInfo::ProcessInfo>::from_json(const json & j)
 {
-    std::optional<std::chrono::microseconds> utime, stime;
-
-    // Deserialize CPU times from seconds (as float) to microseconds
-    if (j.contains("utime") && !j.at("utime").is_null())
-        utime = std::chrono::microseconds(static_cast<int64_t>(j.at("utime").get<double>() * 1'000'000));
-
-    if (j.contains("stime") && !j.at("stime").is_null())
-        stime = std::chrono::microseconds(static_cast<int64_t>(j.at("stime").get<double>() * 1'000'000));
-
     return ActiveBuildInfo::ProcessInfo{
         .pid = j.at("pid").get<pid_t>(),
         .parentPid = j.at("parentPid").get<pid_t>(),
         .user = j.at("user").get<UserInfo>(),
         .argv = j.at("argv").get<std::vector<std::string>>(),
-        .utime = utime,
-        .stime = stime,
+        .utime = parseDuration(j, "utime"),
+        .stime = parseDuration(j, "stime"),
+        .cutime = parseDuration(j, "cutime"),
+        .cstime = parseDuration(j, "cstime"),
     };
 }
 
@@ -78,18 +79,11 @@ void adl_serializer<ActiveBuildInfo::ProcessInfo>::to_json(json & j, const Activ
         {"parentPid", process.parentPid},
         {"user", process.user},
         {"argv", process.argv},
+        {"utime", process.utime ? nlohmann::json(process.utime->count()) : nullptr},
+        {"stime", process.stime ? nlohmann::json(process.stime->count()) : nullptr},
+        {"cutime", process.cutime ? nlohmann::json(process.cutime->count()) : nullptr},
+        {"cstime", process.cstime ? nlohmann::json(process.cstime->count()) : nullptr},
     };
-
-    // Serialize CPU times as seconds (as float)
-    if (process.utime)
-        j["utime"] = static_cast<double>(process.utime->count()) / 1'000'000.0;
-    else
-        j["utime"] = nullptr;
-
-    if (process.stime)
-        j["stime"] = static_cast<double>(process.stime->count()) / 1'000'000.0;
-    else
-        j["stime"] = nullptr;
 }
 
 ActiveBuild adl_serializer<ActiveBuild>::from_json(const json & j)
@@ -124,14 +118,8 @@ ActiveBuildInfo adl_serializer<ActiveBuildInfo>::from_json(const json & j)
 {
     ActiveBuildInfo info(adl_serializer<ActiveBuild>::from_json(j));
     info.processes = j.at("processes").get<std::vector<ActiveBuildInfo::ProcessInfo>>();
-
-    // Deserialize CPU times from seconds (as float) to microseconds
-    if (j.contains("utime") && !j.at("utime").is_null())
-        info.utime = std::chrono::microseconds(static_cast<int64_t>(j.at("utime").get<double>() * 1'000'000));
-
-    if (j.contains("stime") && !j.at("stime").is_null())
-        info.stime = std::chrono::microseconds(static_cast<int64_t>(j.at("stime").get<double>() * 1'000'000));
-
+    info.utime = parseDuration(j, "utime");
+    info.stime = parseDuration(j, "stime");
     return info;
 }
 
@@ -139,17 +127,8 @@ void adl_serializer<ActiveBuildInfo>::to_json(json & j, const ActiveBuildInfo & 
 {
     adl_serializer<ActiveBuild>::to_json(j, build);
     j["processes"] = build.processes;
-
-    // Serialize CPU times as seconds (as float)
-    if (build.utime)
-        j["utime"] = static_cast<double>(build.utime->count()) / 1'000'000.0;
-    else
-        j["utime"] = nullptr;
-
-    if (build.stime)
-        j["stime"] = static_cast<double>(build.stime->count()) / 1'000'000.0;
-    else
-        j["stime"] = nullptr;
+    j["utime"] = build.utime ? nlohmann::json(build.utime->count()) : nullptr;
+    j["stime"] = build.stime ? nlohmann::json(build.stime->count()) : nullptr;
 }
 
 } // namespace nlohmann

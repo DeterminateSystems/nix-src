@@ -49,13 +49,27 @@ struct CmdPs : StoreCommand
         table.push_back({"USER", "PID", "CPU", "DERIVATION/COMMAND"});
 
         for (const auto & build : builds) {
+            /* Calculate CPU time - use cgroup stats if available, otherwise sum process times. */
+            std::chrono::microseconds cpuTime = build.utime && build.stime ? *build.utime + *build.stime : [&]() {
+                std::chrono::microseconds total{0};
+                for (const auto & process : build.processes) {
+                    if (process.utime)
+                        total += *process.utime;
+                    if (process.stime)
+                        total += *process.stime;
+                    if (process.cutime)
+                        total += *process.cutime;
+                    if (process.cstime)
+                        total += *process.cstime;
+                }
+                return total;
+            }();
+
             /* Add build summary row. */
             table.push_back(
                 {formatUser(build.mainUser),
                  std::to_string(build.mainPid),
-                 build.utime && build.stime
-                     ? fmt("%ds", std::chrono::duration_cast<std::chrono::seconds>(*build.utime + *build.stime).count())
-                     : "",
+                 fmt("%ds", std::chrono::duration_cast<std::chrono::seconds>(cpuTime).count()),
                  fmt(ANSI_BOLD "%s" ANSI_NORMAL " (wall=%ds)",
                      store->printStorePath(build.derivation),
                      time(nullptr) - build.startTime)});

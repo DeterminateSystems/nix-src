@@ -47,14 +47,15 @@ static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
         info.parentPid = string2Int<pid_t>(remainingFields[1]).value_or(0);
 
     static long clkTck = sysconf(_SC_CLK_TCK);
-    if (remainingFields.size() > 12 && clkTck > 0) {
-        auto utime = string2Int<uint64_t>(remainingFields[11]);
-        auto stime = string2Int<uint64_t>(remainingFields[12]);
-
-        if (utime)
+    if (remainingFields.size() > 14 && clkTck > 0) {
+        if (auto utime = string2Int<uint64_t>(remainingFields[11]))
             info.utime = std::chrono::microseconds((*utime * 1'000'000) / clkTck);
-        if (stime)
+        if (auto stime = string2Int<uint64_t>(remainingFields[12]))
             info.stime = std::chrono::microseconds((*stime * 1'000'000) / clkTck);
+        if (auto cutime = string2Int<uint64_t>(remainingFields[13]))
+            info.cutime = std::chrono::microseconds((*cutime * 1'000'000) / clkTck);
+        if (auto cstime = string2Int<uint64_t>(remainingFields[14]))
+            info.cstime = std::chrono::microseconds((*cstime * 1'000'000) / clkTck);
     }
 
     return info;
