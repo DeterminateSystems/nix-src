@@ -19,19 +19,28 @@ void printTable(std::ostream & out, Table & table, unsigned int width)
         assert(i.size() == nrColumns);
         size_t column = 0;
         for (auto j = i.begin(); j != i.end(); ++j, ++column)
-            if (j->size() > widths[column])
-                widths[column] = j->size();
+            widths[column] = std::max(widths[column], j->content.size());
     }
 
     for (auto & i : table) {
         size_t column = 0;
         std::string line;
         for (auto j = i.begin(); j != i.end(); ++j, ++column) {
-            std::string s = *j;
+            std::string s = j->content;
             replace(s.begin(), s.end(), '\n', ' ');
-            line += s;
-            if (column < nrColumns - 1)
-                line += std::string(widths[column] - s.size() + 2, ' ');
+
+            auto padding = std::string(widths[column] - s.size(), ' ');
+            if (j->alignment == TableCell::Right) {
+                line += padding;
+                line += s;
+            } else {
+                line += s;
+                if (column + 1 < nrColumns)
+                    line += padding;
+            }
+
+            if (column + 1 < nrColumns)
+                line += "  ";
         }
         out << filterANSIEscapes(line, false, width);
         out << std::endl;
