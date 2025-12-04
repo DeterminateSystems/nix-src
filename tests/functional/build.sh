@@ -160,7 +160,7 @@ printf "%s\n" "$drv^*" | nix build --no-link --stdin --json | jq --exit-status '
 # --keep-going and FOD
 out="$(nix build -f fod-failing.nix -L 2>&1)" && status=0 || status=$?
 test "$status" = 1
-# one "hash mismatch" error, one "build of ... failed"
+# one "hash mismatch" error, one cancelled build
 test "$(<<<"$out" grep -cE '^error:')" = 1
 test "$(<<<"$out" grep -cE '(cancelled)')" = 3
 <<<"$out" grepQuiet -E "hash mismatch in fixed-output derivation"
