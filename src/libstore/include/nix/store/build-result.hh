@@ -147,6 +147,13 @@ struct BuildResult
 
     bool operator==(const BuildResult &) const noexcept;
     std::strong_ordering operator<=>(const BuildResult &) const noexcept;
+
+    bool isCancelled() const
+    {
+        auto failure = tryGetFailure();
+        // FIXME: remove MiscFailure eventually.
+        return failure && (failure->status == Failure::Cancelled || failure->status == Failure::MiscFailure);
+    }
 };
 
 /**

@@ -611,24 +611,28 @@ void Installable::throwBuildErrors(std::vector<InstallableWithBuildResult> & bui
                     notice("✅ " ANSI_BOLD "%s" ANSI_NORMAL, buildResult.installable->what());
             }
 
-            // Then failures.
+            // Then cancelled builds.
             for (auto & buildResult : buildResults) {
                 if (auto failure = std::get_if<InstallableWithBuildResult::Failure>(&buildResult.result)) {
-                    auto failure2 = failure->tryGetFailure();
-                    assert(failure2);
-                    if (failure2->status == BuildResult::Failure::Cancelled
-                        // FIXME: remove MiscFailure eventually
-                        || failure2->status == BuildResult::Failure::MiscFailure)
+                    if (failure->isCancelled())
                         notice(
                             "❓ " ANSI_BOLD "%s" ANSI_NORMAL ANSI_FAINT " (cancelled)",
                             buildResult.installable->what());
-                    else {
-                        printError("❌ " ANSI_RED "%s" ANSI_NORMAL, buildResult.installable->what());
-                        try {
-                            failure2->rethrow();
-                        } catch (Error & e) {
-                            logError(e.info());
-                        }
+                }
+            }
+
+            // Then failures.
+            for (auto & buildResult : buildResults) {
+                if (auto failure = std::get_if<InstallableWithBuildResult::Failure>(&buildResult.result)) {
+                    if (failure->isCancelled())
+                        continue;
+                    auto failure2 = failure->tryGetFailure();
+                    assert(failure2);
+                    printError("❌ " ANSI_RED "%s" ANSI_NORMAL, buildResult.installable->what());
+                    try {
+                        failure2->rethrow();
+                    } catch (Error & e) {
+                        logError(e.info());
                     }
                 }
             }
