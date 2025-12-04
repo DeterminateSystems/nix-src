@@ -137,7 +137,7 @@ struct CmdPs : MixJSON, StoreCommand
             }
         }
 
-        auto width = isTTY() ? getWindowWidth() : std::numeric_limits<unsigned int>::max();
+        auto width = isTTY() && isatty(STDOUT_FILENO) ? getWindowWidth() : std::numeric_limits<unsigned int>::max();
 
         printTable(std::cout, table, width);
     }
