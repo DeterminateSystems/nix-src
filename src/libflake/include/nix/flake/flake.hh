@@ -225,8 +225,27 @@ struct LockFlags
     bool requireLockable = true;
 };
 
+/**
+ * Return a `Flake` object representing the flake read from the
+ * `flake.nix` file in `rootDir`.
+ */
+Flake readFlake(
+    EvalState & state,
+    const FlakeRef & originalRef,
+    const FlakeRef & resolvedRef,
+    const FlakeRef & lockedRef,
+    const SourcePath & rootDir,
+    const InputAttrPath & lockRootPath);
+
+/**
+ * Compute an in-memory lock file for the specified top-level flake,
+ * and optionally write it to file, if the flake is writable.
+ */
 LockedFlake
 lockFlake(const Settings & settings, EvalState & state, const FlakeRef & flakeRef, const LockFlags & lockFlags);
+
+LockedFlake lockFlake(
+    const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags, Flake flake);
 
 void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & v);
 

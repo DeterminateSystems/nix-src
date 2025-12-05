@@ -17,6 +17,7 @@
 #include "nix/util/url.hh"
 #include "nix/fetchers/registry.hh"
 #include "nix/store/build-result.hh"
+#include "nix/cmd/flake-schemas.hh"
 
 #include <regex>
 #include <queue>
@@ -25,32 +26,14 @@
 
 namespace nix {
 
-std::vector<std::string> InstallableFlake::getActualAttrPaths()
-{
-    std::vector<std::string> res;
-    if (attrPaths.size() == 1 && attrPaths.front().starts_with(".")) {
-        attrPaths.front().erase(0, 1);
-        res.push_back(attrPaths.front());
-        return res;
-    }
-
-    for (auto & prefix : prefixes)
-        res.push_back(prefix + *attrPaths.begin());
-
-    for (auto & s : attrPaths)
-        res.push_back(s);
-
-    return res;
-}
-
-static std::string showAttrPaths(const std::vector<std::string> & paths)
+static std::string showAttrPaths(EvalState & state, const std::vector<eval_cache::AttrPath> & paths)
 {
     std::string s;
     for (const auto & [n, i] : enumerate(paths)) {
         if (n > 0)
             s += n + 1 == paths.size() ? " or " : ", ";
         s += '\'';
-        s += i;
+        s += eval_cache::toAttrPathStr(state, i);
         s += '\'';
     }
     return s;
@@ -62,15 +45,16 @@ InstallableFlake::InstallableFlake(
     FlakeRef && flakeRef,
     std::string_view fragment,
     ExtendedOutputsSpec extendedOutputsSpec,
-    Strings attrPaths,
-    Strings prefixes,
-    const flake::LockFlags & lockFlags)
+    StringSet roles,
+    const flake::LockFlags & lockFlags,
+    std::optional<FlakeRef> defaultFlakeSchemas)
     : InstallableValue(state)
     , flakeRef(flakeRef)
-    , attrPaths(fragment == "" ? attrPaths : Strings{(std::string) fragment})
-    , prefixes(fragment == "" ? Strings{} : prefixes)
+    , fragment(fragment)
+    , roles(roles)
     , extendedOutputsSpec(std::move(extendedOutputsSpec))
     , lockFlags(lockFlags)
+    , defaultFlakeSchemas(defaultFlakeSchemas)
 {
     if (cmd && cmd->getAutoArgs(*state)->size())
         throw UsageError("'--arg' and '--argstr' are incompatible with flakes");
@@ -160,28 +144,101 @@ std::pair<Value *, PosIdx> InstallableFlake::toValue(EvalState & state)
 
 std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState & state)
 {
-    auto evalCache = openEvalCache(state, getLockedFlake());
+    auto cache = flake_schemas::call(state, getLockedFlake(), defaultFlakeSchemas);
 
-    auto root = evalCache->getRoot();
+    auto inventory = cache->getRoot()->getAttr("inventory");
+    auto outputs = cache->getRoot()->getAttr("outputs");
 
     std::vector<ref<eval_cache::AttrCursor>> res;
 
     Suggestions suggestions;
-    auto attrPaths = getActualAttrPaths();
+
+    std::vector<eval_cache::AttrPath> attrPaths;
+
+    if (fragment.starts_with("."))
+        attrPaths.push_back(parseAttrPath(state, fragment.substr(1)));
+    else {
+        auto schemas = flake_schemas::getSchema(inventory);
+
+        // FIXME: Ugly hack to preserve the historical precedence
+        // between outputs. We should add a way for schemas to declare
+        // priorities.
+        std::vector<std::string> schemasSorted;
+        std::set<std::string> schemasSeen;
+        auto doSchema = [&](const std::string & schema) {
+            if (schemas.contains(schema)) {
+                schemasSorted.push_back(schema);
+                schemasSeen.insert(schema);
+            }
+        };
+        doSchema("apps");
+        doSchema("devShells");
+        doSchema("packages");
+        doSchema("legacyPackages");
+        for (auto & schema : schemas)
+            if (!schemasSeen.contains(schema.first))
+                schemasSorted.push_back(schema.first);
+
+        auto parsedFragment = parseAttrPath(state, fragment);
+
+        for (auto & role : roles) {
+            for (auto & schemaName : schemasSorted) {
+                auto & schema = schemas.find(schemaName)->second;
+                if (schema.roles.contains(role)) {
+                    eval_cache::AttrPath attrPath{state.symbols.create(schemaName)};
+                    if (schema.appendSystem)
+                        attrPath.push_back(state.symbols.create(settings.thisSystem.get()));
+
+                    if (parsedFragment.empty()) {
+                        if (schema.defaultAttrPath) {
+                            auto attrPath2{attrPath};
+                            for (auto & x : *schema.defaultAttrPath)
+                                attrPath2.push_back(x);
+                            attrPaths.push_back(attrPath2);
+                        }
+                    } else {
+                        auto attrPath2{attrPath};
+                        for (auto & x : parsedFragment)
+                            attrPath2.push_back(x);
+                        attrPaths.push_back(attrPath2);
+                    }
+                }
+            }
+        }
+
+        if (!parsedFragment.empty())
+            attrPaths.push_back(parsedFragment);
+
+        // FIXME: compatibility hack to get `nix repl` to return all
+        // outputs by default.
+        if (parsedFragment.empty() && roles.contains("nix-repl"))
+            attrPaths.push_back({});
+    }
+
+    if (attrPaths.empty())
+        throw Error("flake '%s' does not provide a default output", flakeRef);
 
     for (auto & attrPath : attrPaths) {
-        debug("trying flake output attribute '%s'", attrPath);
+        debug("trying flake output attribute '%s'", eval_cache::toAttrPathStr(state, attrPath));
 
-        auto attr = root->findAlongAttrPath(parseAttrPath(state, attrPath));
-        if (attr) {
-            res.push_back(ref(*attr));
-        } else {
-            suggestions += attr.getSuggestions();
+        auto outputInfo = flake_schemas::getOutput(inventory, attrPath);
+
+        if (outputInfo && outputInfo->leafAttrPath.empty()) {
+            if (auto drv = outputInfo->nodeInfo->maybeGetAttr("derivation")) {
+                res.push_back(ref(drv));
+                continue;
+            }
         }
+
+        auto attr = outputs->findAlongAttrPath(attrPath);
+        if (attr)
+            res.push_back(ref(*attr));
+        else
+            suggestions += attr.getSuggestions();
     }
 
     if (res.size() == 0)
-        throw Error(suggestions, "flake '%s' does not provide attribute %s", flakeRef, showAttrPaths(attrPaths));
+        throw Error(suggestions, "flake '%s' does not provide attribute %s", flakeRef, showAttrPaths(state, attrPaths));
 
     return res;
 }
@@ -196,6 +253,14 @@ std::shared_ptr<flake::LockedFlake> InstallableFlake::getLockedFlake() const
             std::make_shared<flake::LockedFlake>(lockFlake(flakeSettings, *state, flakeRef, lockFlagsApplyConfig));
     }
     return _lockedFlake;
+}
+
+ref<eval_cache::EvalCache> InstallableFlake::openEvalCache() const
+{
+    if (!_evalCache) {
+        _evalCache = flake_schemas::call(*state, getLockedFlake(), defaultFlakeSchemas);
+    }
+    return ref(_evalCache);
 }
 
 FlakeRef InstallableFlake::nixpkgsFlakeRef() const

@@ -36,11 +36,12 @@ struct ExtraPathInfoFlake : ExtraPathInfoValue
 struct InstallableFlake : InstallableValue
 {
     FlakeRef flakeRef;
-    Strings attrPaths;
-    Strings prefixes;
+    std::string fragment;
+    StringSet roles;
     ExtendedOutputsSpec extendedOutputsSpec;
     const flake::LockFlags & lockFlags;
     mutable std::shared_ptr<flake::LockedFlake> _lockedFlake;
+    std::optional<FlakeRef> defaultFlakeSchemas;
 
     InstallableFlake(
         SourceExprCommand * cmd,
@@ -48,16 +49,14 @@ struct InstallableFlake : InstallableValue
         FlakeRef && flakeRef,
         std::string_view fragment,
         ExtendedOutputsSpec extendedOutputsSpec,
-        Strings attrPaths,
-        Strings prefixes,
-        const flake::LockFlags & lockFlags);
+        StringSet roles,
+        const flake::LockFlags & lockFlags,
+        std::optional<FlakeRef> defaultFlakeSchemas);
 
     std::string what() const override
     {
-        return flakeRef.to_string() + "#" + *attrPaths.begin();
+        return flakeRef.to_string() + "#" + fragment;
     }
-
-    std::vector<std::string> getActualAttrPaths();
 
     DerivedPathsWithInfo toDerivedPaths() override;
 
@@ -72,6 +71,12 @@ struct InstallableFlake : InstallableValue
     std::shared_ptr<flake::LockedFlake> getLockedFlake() const;
 
     FlakeRef nixpkgsFlakeRef() const;
+
+    ref<eval_cache::EvalCache> openEvalCache() const;
+
+private:
+
+    mutable std::shared_ptr<eval_cache::EvalCache> _evalCache;
 };
 
 /**
