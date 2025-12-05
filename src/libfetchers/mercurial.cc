@@ -345,7 +345,7 @@ struct MercurialInputScheme : InputScheme
     std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
     {
         if (auto rev = input.getRev())
-            return rev->gitRev();
+            return "hg:" + rev->gitRev();
         else
             return std::nullopt;
     }
