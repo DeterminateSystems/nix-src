@@ -73,7 +73,7 @@ void RemoteStore::initConnection(Connection & conn)
         try {
             auto [protoVersion, features] =
                 WorkerProto::BasicClientConnection::handshake(conn.to, tee, PROTOCOL_VERSION, WorkerProto::allFeatures);
-            if (protoVersion < 256 + 18)
+            if (protoVersion < MINIMUM_PROTOCOL_VERSION)
                 throw Error("the Nix daemon version is too old");
             conn.protoVersion = protoVersion;
             conn.features = features;
@@ -761,6 +761,16 @@ void RemoteStore::addBuildLog(const StorePath & drvPath, std::string_view log)
     StringSource source(log);
     conn.withFramedSink([&](Sink & sink) { source.drainInto(sink); });
     readInt(conn->from);
+}
+
+std::vector<ActiveBuildInfo> RemoteStore::queryActiveBuilds()
+{
+    auto conn(getConnection());
+    if (!conn->features.count(WorkerProto::featureQueryActiveBuilds))
+        throw Error("remote store does not support querying active builds");
+    conn->to << WorkerProto::Op::QueryActiveBuilds;
+    conn.processStderr();
+    return nlohmann::json::parse(readString(conn->from)).get<std::vector<ActiveBuildInfo>>();
 }
 
 std::optional<std::string> RemoteStore::getVersion()

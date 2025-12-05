@@ -4,12 +4,13 @@
 #include "nix/main/common-args.hh"
 #include <nlohmann/json.hpp>
 
+#include "ls.hh"
+
 using namespace nix;
 
-struct MixLs : virtual Args, MixJSON
+struct MixLs : virtual Args, MixJSON, MixLongListing
 {
     bool recursive = false;
-    bool verbose = false;
     bool showDirectory = false;
 
     MixLs()
@@ -19,13 +20,6 @@ struct MixLs : virtual Args, MixJSON
             .shortName = 'R',
             .description = "List subdirectories recursively.",
             .handler = {&recursive, true},
-        });
-
-        addFlag({
-            .longName = "long",
-            .shortName = 'l',
-            .description = "Show detailed file information.",
-            .handler = {&verbose, true},
         });
 
         addFlag({
@@ -41,13 +35,13 @@ struct MixLs : virtual Args, MixJSON
         std::function<void(const SourceAccessor::Stat &, const CanonPath &, std::string_view, bool)> doPath;
 
         auto showFile = [&](const CanonPath & curPath, std::string_view relPath) {
-            if (verbose) {
+            if (longListing) {
                 auto st = accessor->lstat(curPath);
                 std::string tp = st.type == SourceAccessor::Type::tRegular
                                      ? (st.isExecutable ? "-r-xr-xr-x" : "-r--r--r--")
                                  : st.type == SourceAccessor::Type::tSymlink ? "lrwxrwxrwx"
                                                                              : "dr-xr-xr-x";
-                auto line = fmt("%s %20d %s", tp, st.fileSize.value_or(0), relPath);
+                auto line = fmt("%s %9d %s", tp, st.fileSize.value_or(0), relPath);
                 if (st.type == SourceAccessor::Type::tSymlink)
                     line += " -> " + accessor->readLink(curPath);
                 logger->cout(line);

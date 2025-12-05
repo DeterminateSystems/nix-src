@@ -333,6 +333,7 @@ StorePath NixRepl::getDerivationPath(Value & v)
     auto drvPath = packageInfo->queryDrvPath();
     if (!drvPath)
         throw Error("expression did not evaluate to a valid derivation (no 'drvPath' attribute)");
+    state->waitForPath(*drvPath);
     if (!state->store->isValidPath(*drvPath))
         throw Error("expression evaluated to invalid derivation '%s'", state->store->printStorePath(*drvPath));
     return *drvPath;
@@ -738,8 +739,8 @@ void NixRepl::loadFlake(const std::string & flakeRefS)
     }
 
     auto flakeRef = parseFlakeRef(fetchSettings, flakeRefS, cwd.string(), true);
-    if (evalSettings.pureEval && !flakeRef.input.isLocked())
-        throw Error("cannot use ':load-flake' on locked flake reference '%s' (use --impure to override)", flakeRefS);
+    if (evalSettings.pureEval && !flakeRef.input.isLocked(fetchSettings))
+        throw Error("cannot use ':load-flake' on unlocked flake reference '%s' (use --impure to override)", flakeRefS);
 
     Value v;
 

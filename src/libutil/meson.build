@@ -159,6 +159,7 @@ sources = [ config_priv_h ] + files(
   'strings.cc',
   'subdir-source-accessor.cc',
   'suggestions.cc',
+  'table.cc',
   'tarfile.cc',
   'tee-logger.cc',
   'terminal.cc',

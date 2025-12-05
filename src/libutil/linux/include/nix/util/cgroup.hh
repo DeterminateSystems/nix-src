@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <optional>
+#include <filesystem>
 
 #include "nix/util/types.hh"
 
@@ -16,6 +17,11 @@ struct CgroupStats
 {
     std::optional<std::chrono::microseconds> cpuUser, cpuSystem;
 };
+
+/**
+ * Read statistics from the given cgroup.
+ */
+CgroupStats getCgroupStats(const std::filesystem::path & cgroup);
 
 /**
  * Destroy the cgroup denoted by 'path'. The postcondition is that
@@ -33,5 +39,10 @@ std::string getCurrentCgroup();
  * returned, and then all subsequent calls will return the original cgroup.
  */
 std::string getRootCgroup();
+
+/**
+ * Get the PIDs of all processes in the given cgroup.
+ */
+std::set<pid_t> getPidsInCgroup(const std::filesystem::path & cgroup);
 
 } // namespace nix

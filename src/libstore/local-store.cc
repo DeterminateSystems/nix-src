@@ -125,6 +125,7 @@ LocalStore::LocalStore(ref<const Config> config)
     , schemaPath(dbDir + "/schema")
     , tempRootsDir(config->stateDir + "/temproots")
     , fnTempRoots(fmt("%s/%d", tempRootsDir, getpid()))
+    , activeBuildsDir(config->stateDir + "/active-builds")
 {
     auto state(_state->lock());
     state->stmts = std::make_unique<State::Stmts>();
@@ -146,6 +147,7 @@ LocalStore::LocalStore(ref<const Config> config)
         createDirs(gcRootsDir);
         replaceSymlink(profilesDir, gcRootsDir + "/profiles");
     }
+    createDirs(activeBuildsDir);
 
     for (auto & perUserDir : {profilesDir + "/per-user", gcRootsDir + "/per-user"}) {
         createDirs(perUserDir);
@@ -1048,15 +1050,13 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
         /* In case we are not interested in reading the NAR: discard it. */
         bool narRead = false;
         Finally cleanup = [&]() {
-            if (!narRead) {
-                NullFileSystemObjectSink sink;
+            if (!narRead)
                 try {
-                    parseDump(sink, source);
+                    source.skip(info.narSize);
                 } catch (...) {
                     // TODO: should Interrupted be handled here?
                     ignoreExceptionInDestructor();
                 }
-            }
         };
 
         addTempRoot(info.path);

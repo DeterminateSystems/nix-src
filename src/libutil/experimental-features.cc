@@ -16,7 +16,7 @@ struct ExperimentalFeatureDetails
 
 /**
  * If two different PRs both add an experimental feature, and we just
- * used a number for this, we *woudln't* get merge conflict and the
+ * used a number for this, we *wouldn't* get merge conflict and the
  * counter will be incremented once instead of twice, causing a build
  * failure.
  *
@@ -24,7 +24,7 @@ struct ExperimentalFeatureDetails
  * feature, we either have no issue at all if few features are not added
  * at the end of the list, or a proper merge conflict if they are.
  */
-constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::BLAKE3Hashes);
+constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::ParallelEval);
 
 constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails = {{
     {
@@ -71,18 +71,11 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
         .trackingUrl = "https://github.com/NixOS/nix/milestone/42",
     },
     {
-        .tag = Xp::Flakes,
-        .name = "flakes",
-        .description = R"(
-            Enable flakes. See the manual entry for [`nix
-            flake`](@docroot@/command-ref/new-cli/nix3-flake.md) for details.
-        )",
-        .trackingUrl = "https://github.com/NixOS/nix/milestone/27",
-    },
-    {
         .tag = Xp::FetchTree,
         .name = "fetch-tree",
         .description = R"(
+            *Enabled for Determinate Nix Installer users since 2.24*
+
             Enable the use of the [`fetchTree`](@docroot@/language/builtins.md#builtins-fetchTree) built-in function in the Nix language.
 
             `fetchTree` exposes a generic interface for fetching remote file system trees from different types of remote sources.
@@ -92,15 +85,6 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
             Enabling just this feature serves as a "release candidate", allowing users to try it out in isolation.
         )",
         .trackingUrl = "https://github.com/NixOS/nix/milestone/31",
-    },
-    {
-        .tag = Xp::NixCommand,
-        .name = "nix-command",
-        .description = R"(
-            Enable the new `nix` subcommands. See the manual on
-            [`nix`](@docroot@/command-ref/new-cli/nix.md) for details.
-        )",
-        .trackingUrl = "https://github.com/NixOS/nix/milestone/28",
     },
     {
         .tag = Xp::GitHashing,
@@ -170,7 +154,7 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
             "http://foo"
             ```
 
-            But enabling this experimental feature will cause the Nix parser to
+            But enabling this experimental feature causes the Nix parser to
             throw an error when encountering a URL literal:
 
             ```
@@ -320,6 +304,22 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
         )",
         .trackingUrl = "",
     },
+    {
+        .tag = Xp::BuildTimeFetchTree,
+        .name = "build-time-fetch-tree",
+        .description = R"(
+            Enable the built-in derivation `builtin:fetch-tree`, as well as the flake input attribute `buildTime`.
+        )",
+        .trackingUrl = "",
+    },
+    {
+        .tag = Xp::ParallelEval,
+        .name = "parallel-eval",
+        .description = R"(
+            Enable built-in functions for parallel evaluation.
+        )",
+        .trackingUrl = "",
+    },
 }};
 
 static_assert(
@@ -330,6 +330,12 @@ static_assert(
         return true;
     }(),
     "array order does not match enum tag order");
+
+/**
+ * A set of previously experimental features that are now considered
+ * stable. We don't warn if users have these in `experimental-features`.
+ */
+std::set<std::string> stabilizedFeatures{"flakes", "nix-command"};
 
 const std::optional<ExperimentalFeature> parseExperimentalFeature(const std::string_view & name)
 {
