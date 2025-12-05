@@ -286,6 +286,15 @@ class AutoDelete
     bool recursive;
 public:
     AutoDelete();
+
+    AutoDelete(AutoDelete && x)
+    {
+        _path = std::move(x._path);
+        del = x.del;
+        recursive = x.recursive;
+        x.del = false;
+    }
+
     AutoDelete(const std::filesystem::path & p, bool recursive = true);
     ~AutoDelete();
 

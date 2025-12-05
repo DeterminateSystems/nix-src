@@ -73,6 +73,7 @@ headers = files(
   'strings.hh',
   'suggestions.hh',
   'sync.hh',
+  'table.hh',
   'tarfile.hh',
   'terminal.hh',
   'thread-pool.hh',

@@ -470,11 +470,7 @@ public:
             }
         }
 
-        auto width = getWindowSize().second;
-        if (width <= 0)
-            width = std::numeric_limits<decltype(width)>::max();
-
-        redraw("\r" + filterANSIEscapes(line, false, width) + ANSI_NORMAL + "\e[K");
+        redraw("\r" + filterANSIEscapes(line, false, getWindowWidth()) + ANSI_NORMAL + "\e[K");
 
         return nextWakeup;
     }

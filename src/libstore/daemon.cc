@@ -17,6 +17,7 @@
 #include "nix/util/git.hh"
 #include "nix/util/logging.hh"
 #include "nix/store/globals.hh"
+#include "nix/store/active-builds.hh"
 
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
 #  include "nix/util/monitor-fd.hh"
@@ -1013,6 +1014,15 @@ static void performOp(
     case WorkerProto::Op::QueryFailedPaths:
     case WorkerProto::Op::ClearFailedPaths:
         throw Error("Removed operation %1%", op);
+
+    case WorkerProto::Op::QueryActiveBuilds: {
+        logger->startWork();
+        auto & activeBuildsStore = require<QueryActiveBuildsStore>(*store);
+        auto activeBuilds = activeBuildsStore.queryActiveBuilds();
+        logger->stopWork();
+        conn.to << nlohmann::json(activeBuilds).dump();
+        break;
+    }
 
     default:
         throw Error("invalid operation %1%", op);

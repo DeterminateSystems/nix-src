@@ -1,6 +1,7 @@
 #include "nix/store/build/derivation-builder.hh"
 #include "nix/util/file-system.hh"
 #include "nix/store/local-store.hh"
+#include "nix/store/active-builds.hh"
 #include "nix/util/processes.hh"
 #include "nix/store/builtins.hh"
 #include "nix/store/path-references.hh"
@@ -76,6 +77,11 @@ protected:
      * The process ID of the builder.
      */
     Pid pid;
+
+    /**
+     * Handles to track active builds for `nix ps`.
+     */
+    std::optional<TrackActiveBuildsStore::BuildHandle> activeBuildHandle;
 
     LocalStore & store;
 
@@ -234,6 +240,11 @@ protected:
      * missing system features.
      */
     virtual void checkSystem();
+
+    /**
+     * Construct the `ActiveBuild` object for `ActiveBuildsTracker`.
+     */
+    virtual ActiveBuild getActiveBuild();
 
     /**
      * Return the paths that should be made available in the sandbox.
@@ -471,6 +482,8 @@ bool DerivationBuilderImpl::killChild()
         killSandbox(true);
 
         pid.wait();
+
+        activeBuildHandle.reset();
     }
     return ret;
 }
@@ -503,6 +516,8 @@ SingleDrvOutputs DerivationBuilderImpl::unprepareBuild()
        open and modifies them after they have been chown'ed to
        root. */
     killSandbox(true);
+
+    activeBuildHandle.reset();
 
     /* Terminate the recursive Nix daemon. */
     stopDaemon();
@@ -847,9 +862,26 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
 
     pid.setSeparatePG(true);
 
+    /* Make the build visible to `nix ps`. */
+    if (auto tracker = dynamic_cast<TrackActiveBuildsStore *>(&store))
+        activeBuildHandle.emplace(tracker->buildStarted(getActiveBuild()));
+
     processSandboxSetupMessages();
 
     return builderOut.get();
+}
+
+ActiveBuild DerivationBuilderImpl::getActiveBuild()
+{
+    return {
+        .nixPid = getpid(),
+        .clientPid = std::nullopt, // FIXME
+        .clientUid = std::nullopt, // FIXME
+        .mainPid = pid,
+        .mainUser = UserInfo::fromUid(buildUser ? buildUser->getUID() : getuid()),
+        .startTime = buildResult.startTime,
+        .derivation = drvPath,
+    };
 }
 
 PathsInChroot DerivationBuilderImpl::getPathsInSandbox()

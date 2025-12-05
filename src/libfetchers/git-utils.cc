@@ -359,7 +359,7 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
 
         ThreadPool pool;
 
-        auto process = [&done, &pool, &repoPool](this const auto & process, const git_oid & oid) -> void {
+        auto process = [&done, &pool, &repoPool](this auto const & process, const git_oid & oid) -> void {
             auto repo(repoPool.get());
 
             auto _commit = lookupObject(*repo, oid, GIT_OBJECT_COMMIT);
