@@ -384,4 +384,35 @@ nix_err nix_derivation_to_json(
     NIXC_CATCH_ERRS
 }
 
+DerivedPath * nix_store_parse_derived_path(nix_c_context * context, Store * store, const char * path)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        auto d = nix::SingleDerivedPath::parse(store->ptr->config, path);
+        return new DerivedPath{std::move(d)};
+    }
+    NIXC_CATCH_ERRS_NULL
+}
+
+void nix_derived_path_free(const DerivedPath * d)
+{
+    delete d;
+}
+
+DerivedPath * nix_derived_path_clone(const DerivedPath * d)
+{
+    return new DerivedPath{d->drv_path};
+}
+
+StorePath * nix_derived_path_get_store_path(nix_c_context * context, DerivedPath * d)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        return new StorePath{d->drv_path.getBaseStorePath()};
+    }
+    NIXC_CATCH_ERRS_NULL
+}
+
 } // extern "C"
