@@ -347,6 +347,7 @@ sources = files(
   'misc.cc',
   'names.cc',
   'nar-accessor.cc',
+  'nar-cache.cc',
   'nar-info-disk-cache.cc',
   'nar-info.cc',
   'optimise-store.cc',
