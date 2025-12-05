@@ -173,8 +173,11 @@ PosIdx Value::determinePos(const PosIdx pos) const
         return attrs()->pos;
     case tLambda:
         return lambda().fun->pos;
+#if 0
+    // FIXME: disabled because reading from an app is racy.
     case tApp:
         return app().left->determinePos(pos);
+#endif
     default:
         return pos;
     }
