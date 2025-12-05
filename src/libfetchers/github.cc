@@ -326,7 +326,7 @@ struct GitArchiveInputScheme : InputScheme
         input.attrs.insert_or_assign("lastModified", uint64_t(tarballInfo.lastModified));
 
         auto accessor =
-            settings.getTarballCache()->getAccessor(tarballInfo.treeHash, false, "«" + input.to_string(true) + "»");
+            settings.getTarballCache()->getAccessor(tarballInfo.treeHash, {}, "«" + input.to_string(true) + "»");
 
         if (!settings.trustTarballsFromGitForges)
             // FIXME: computing the NAR hash here is wasteful if
@@ -350,7 +350,7 @@ struct GitArchiveInputScheme : InputScheme
     std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
     {
         if (auto rev = input.getRev())
-            return rev->gitRev();
+            return "github:" + rev->gitRev();
         else
             return std::nullopt;
     }

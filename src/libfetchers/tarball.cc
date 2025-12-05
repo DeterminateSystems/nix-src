@@ -136,7 +136,7 @@ static DownloadTarballResult downloadTarball_(
             .treeHash = treeHash,
             .lastModified = (time_t) getIntAttr(infoAttrs, "lastModified"),
             .immutableUrl = maybeGetStrAttr(infoAttrs, "immutableUrl"),
-            .accessor = settings.getTarballCache()->getAccessor(treeHash, false, displayPrefix),
+            .accessor = settings.getTarballCache()->getAccessor(treeHash, {}, displayPrefix),
         };
     };
 
@@ -407,9 +407,9 @@ struct TarballInputScheme : CurlInputScheme
     std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
     {
         if (auto narHash = input.getNarHash())
-            return narHash->to_string(HashFormat::SRI, true);
+            return "tarball:" + narHash->to_string(HashFormat::SRI, true);
         else if (auto rev = input.getRev())
-            return rev->gitRev();
+            return "tarball:" + rev->gitRev();
         else
             return std::nullopt;
     }

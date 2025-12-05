@@ -310,3 +310,59 @@ git -C "$empty" config user.name "Foobar"
 git -C "$empty" commit --allow-empty --allow-empty-message --message ""
 
 nix eval --impure --expr "let attrs = builtins.fetchGit $empty; in assert attrs.lastModified != 0; assert attrs.rev != \"0000000000000000000000000000000000000000\"; assert attrs.revCount == 1; true"
+
+# Test backward compatibility hack for Nix < 2.20 locks / fetchTree calls that expect Git filters to be applied.
+eol="$TEST_ROOT/git-eol"
+mkdir -p "$eol"
+git init "$eol"
+git -C "$eol" config user.email "foobar@example.com"
+git -C "$eol" config user.name "Foobar"
+printf "Hello\nWorld\n" > "$eol/crlf"
+printf "ignore me" > "$eol/ignored"
+git -C "$eol" add crlf ignored
+git -C "$eol" commit -a -m Initial
+echo "Version: \$Format:%s\$" > "$eol/version"
+printf "crlf text eol=crlf\nignored export-ignore\nversion export-subst\n" > "$eol/.gitattributes"
+git -C "$eol" add .gitattributes version
+git -C "$eol" commit -a -m 'Apply gitattributes'
+
+rev="$(git -C "$eol" rev-parse HEAD)"
+
+export _NIX_TEST_BARF_ON_UNCACHEABLE=1
+
+oldHash="sha256-cOuYSqDjvOBmKCuH5nXEfHRIAUVJZlictW0raF+3ynk="
+newHash="sha256-WZ5VePvmUcbRbkWLlNtCywWrAcr7EvVeJP8xKdZR7pc="
+
+expectStderr 0 nix eval --expr \
+    "let tree = builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"$oldHash\"; }; in assert builtins.readFile \"\${tree}/crlf\" == \"Hello\r\nWorld\r\n\"; assert !builtins.pathExists \"\${tree}/ignored\"; assert builtins.readFile \"\${tree}/version\" == \"Version: Apply gitattributes\n\"; true" \
+    | grepQuiet "Please update the NAR hash to '$newHash'"
+
+nix eval --expr \
+    "let tree = builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"$newHash\"; }; in assert builtins.readFile \"\${tree}/crlf\" == \"Hello\nWorld\n\"; assert builtins.pathExists \"\${tree}/ignored\"; assert builtins.readFile \"\${tree}/version\" == \"Version: \$Format:%s\$\n\"; true"
+
+expectStderr 102 nix eval --expr \
+    "builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-DLDvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA=\"; }" \
+    | grepQuiet "NAR hash mismatch"
+
+mkdir -p "$TEST_ROOT"/flake
+cat > "$TEST_ROOT"/flake/flake.nix << EOF
+{
+  inputs.eol = { type = "git"; url = "file://$eol"; rev = "$rev"; flake = false; };
+  outputs = { self, eol }: rec {
+    crlf = builtins.readFile "\${eol}/crlf";
+    isLegacy = assert crlf == "Hello\r\nWorld\r\n"; true;
+    isModern = assert crlf == "Hello\nWorld\n"; true;
+  };
+}
+EOF
+
+# Test locking with Nix < 2.20 semantics (i.e. using `git archive`).
+nix eval --nix-219-compat "path:$TEST_ROOT/flake"#isLegacy
+nix eval "path:$TEST_ROOT/flake"#isLegacy
+[[ $(jq -r .nodes.eol.locked.narHash < "$TEST_ROOT"/flake/flake.lock) = "$oldHash" ]]
+
+# Test locking with Nix >= 2.20 semantics (i.e. using libgit2).
+rm "$TEST_ROOT"/flake/flake.lock
+nix eval "path:$TEST_ROOT/flake"#isModern
+nix eval --nix-219-compat "path:$TEST_ROOT/flake"#isModern
+[[ $(jq -r .nodes.eol.locked.narHash < "$TEST_ROOT"/flake/flake.lock) = "$newHash" ]]

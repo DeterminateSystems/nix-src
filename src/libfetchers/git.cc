@@ -16,6 +16,7 @@
 #include "nix/util/json-utils.hh"
 #include "nix/util/archive.hh"
 #include "nix/util/mounted-source-accessor.hh"
+#include "nix/fetchers/fetch-to-store.hh"
 
 #include <regex>
 #include <string.h>
@@ -637,8 +638,72 @@ struct GitInputScheme : InputScheme
         return shallow || input.getRevCount().has_value();
     }
 
+    GitAccessorOptions getGitAccessorOptions(const Input & input) const
+    {
+        return GitAccessorOptions{
+            .exportIgnore = getExportIgnoreAttr(input),
+            .smudgeLfs = getLfsAttr(input),
+            .submodules = getSubmodulesAttr(input),
+        };
+    }
+
+    /**
+     * Get a `SourceAccessor` for the given Git revision using Nix < 2.20 semantics, i.e. using `git archive` or `git
+     * checkout`.
+     */
+    ref<SourceAccessor> getLegacyGitAccessor(
+        Store & store,
+        RepoInfo & repoInfo,
+        const std::filesystem::path & repoDir,
+        const Hash & rev,
+        GitAccessorOptions & options) const
+    {
+        auto tmpDir = createTempDir();
+        AutoDelete delTmpDir(tmpDir, true);
+
+        auto storePath =
+            options.submodules
+                ? [&]() {
+                      // Nix < 2.20 used `git checkout` for repos with submodules.
+                      runProgram2({.program = "git", .args = {"init", tmpDir}});
+                      runProgram2({.program = "git", .args = {"-C", tmpDir, "remote", "add", "origin", repoDir}});
+                      runProgram2({.program = "git", .args = {"-C", tmpDir, "fetch", "origin", rev.gitRev()}});
+                      runProgram2({.program = "git", .args = {"-C", tmpDir, "checkout", rev.gitRev()}});
+                      PathFilter filter = [&](const Path & path) { return baseNameOf(path) != ".git"; };
+                      return store.addToStore(
+                          "source",
+                          {getFSSourceAccessor(), CanonPath(tmpDir)},
+                          ContentAddressMethod::Raw::NixArchive,
+                          HashAlgorithm::SHA256,
+                          {},
+                          filter);
+                  }()
+                : [&]() {
+                      // Nix < 2.20 used `git archive` for repos without submodules.
+                      options.exportIgnore = true;
+
+                      auto source = sinkToSource([&](Sink & sink) {
+                          runProgram2(
+                              {.program = "git",
+                               .args = {"-C", repoDir, "--git-dir", repoInfo.gitDir, "archive", rev.gitRev()},
+                               .standardOut = &sink});
+                      });
+
+                      unpackTarfile(*source, tmpDir);
+
+                      return store.addToStore("source", {getFSSourceAccessor(), CanonPath(tmpDir)});
+                  }();
+
+        auto accessor = store.getFSAccessor(storePath);
+
+        accessor->fingerprint = options.makeFingerprint(rev) + ";legacy";
+
+        return ref{accessor};
+    }
+
     std::pair<ref<SourceAccessor>, Input>
     getAccessorFromCommit(const Settings & settings, ref<Store> store, RepoInfo & repoInfo, Input && input) const
+
     {
         assert(!repoInfo.workdirInfo.isDirty);
 
@@ -779,17 +844,59 @@ struct GitInputScheme : InputScheme
 
         verifyCommit(input, repo);
 
-        bool exportIgnore = getExportIgnoreAttr(input);
-        bool smudgeLfs = getLfsAttr(input);
-        auto accessor = repo->getAccessor(rev, exportIgnore, "«" + input.to_string(true) + "»", smudgeLfs);
+        auto options = getGitAccessorOptions(input);
+
+        auto expectedNarHash = input.getNarHash();
+
+        auto accessor = repo->getAccessor(rev, options, "«" + input.to_string(true) + "»");
+
+        if (settings.nix219Compat && !options.smudgeLfs && accessor->pathExists(CanonPath(".gitattributes"))) {
+            /* Use Nix 2.19 semantics to generate locks, but if a NAR hash is specified, support Nix >= 2.20 semantics
+             * as well. */
+            warn("Using Nix 2.19 semantics to export Git repository '%s'.", input.to_string());
+            auto accessorModern = accessor;
+            accessor = getLegacyGitAccessor(*store, repoInfo, repoDir, rev, options);
+            if (expectedNarHash) {
+                auto narHashLegacy =
+                    fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
+                if (expectedNarHash != narHashLegacy) {
+                    auto narHashModern =
+                        fetchToStore2(settings, *store, {accessorModern}, FetchMode::DryRun, input.getName()).second;
+                    if (expectedNarHash == narHashModern)
+                        accessor = accessorModern;
+                }
+            }
+        } else {
+            /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Nix applying Git filters,
+             * `export-ignore` or `export-subst`. Nix >= 2.20 doesn't do those, so we may get a NAR hash mismatch. If
+             * that happens, try again using `git archive`. */
+            auto narHashNew = fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
+            if (expectedNarHash && accessor->pathExists(CanonPath(".gitattributes"))) {
+                if (expectedNarHash != narHashNew) {
+                    auto accessorLegacy = getLegacyGitAccessor(*store, repoInfo, repoDir, rev, options);
+                    auto narHashLegacy =
+                        fetchToStore2(settings, *store, {accessorLegacy}, FetchMode::DryRun, input.getName()).second;
+                    if (expectedNarHash == narHashLegacy) {
+                        warn(
+                            "Git input '%s' specifies a NAR hash '%s' that was created by Nix < 2.20.\n"
+                            "Nix >= 2.20 does not apply Git filters, `export-ignore` and `export-subst` by default, which changes the NAR hash.\n"
+                            "Please update the NAR hash to '%s'.",
+                            input.to_string(),
+                            expectedNarHash->to_string(HashFormat::SRI, true),
+                            narHashNew.to_string(HashFormat::SRI, true));
+                        accessor = accessorLegacy;
+                    }
+                }
+            }
+        }
 
         /* If the repo has submodules, fetch them and return a mounted
            input accessor consisting of the accessor for the top-level
            repo and the accessors for the submodules. */
-        if (getSubmodulesAttr(input)) {
+        if (options.submodules) {
             std::map<CanonPath, nix::ref<SourceAccessor>> mounts;
 
-            for (auto & [submodule, submoduleRev] : repo->getSubmodules(rev, exportIgnore)) {
+            for (auto & [submodule, submoduleRev] : repo->getSubmodules(rev, options.exportIgnore)) {
                 auto resolved = repo->resolveSubmoduleUrl(submodule.url);
                 debug(
                     "Git submodule %s: %s %s %s -> %s",
@@ -812,9 +919,9 @@ struct GitInputScheme : InputScheme
                     }
                 }
                 attrs.insert_or_assign("rev", submoduleRev.gitRev());
-                attrs.insert_or_assign("exportIgnore", Explicit<bool>{exportIgnore});
+                attrs.insert_or_assign("exportIgnore", Explicit<bool>{options.exportIgnore});
                 attrs.insert_or_assign("submodules", Explicit<bool>{true});
-                attrs.insert_or_assign("lfs", Explicit<bool>{smudgeLfs});
+                attrs.insert_or_assign("lfs", Explicit<bool>{options.smudgeLfs});
                 attrs.insert_or_assign("allRefs", Explicit<bool>{true});
                 auto submoduleInput = fetchers::Input::fromAttrs(settings, std::move(attrs));
                 auto [submoduleAccessor, submoduleInput2] = submoduleInput.getAccessor(settings, store);
@@ -823,8 +930,10 @@ struct GitInputScheme : InputScheme
             }
 
             if (!mounts.empty()) {
+                auto newFingerprint = accessor->getFingerprint(CanonPath::root).second->append(";s");
                 mounts.insert_or_assign(CanonPath::root, accessor);
                 accessor = makeMountedSourceAccessor(std::move(mounts));
+                accessor->fingerprint = newFingerprint;
             }
         }
 
@@ -848,7 +957,7 @@ struct GitInputScheme : InputScheme
         auto exportIgnore = getExportIgnoreAttr(input);
 
         ref<SourceAccessor> accessor =
-            repo->getAccessor(repoInfo.workdirInfo, exportIgnore, makeNotAllowedError(repoPath));
+            repo->getAccessor(repoInfo.workdirInfo, {.exportIgnore = exportIgnore}, makeNotAllowedError(repoPath));
 
         /* If the repo has submodules, return a mounted input accessor
            consisting of the accessor for the top-level repo and the
@@ -942,13 +1051,12 @@ struct GitInputScheme : InputScheme
 
     std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
     {
-        auto makeFingerprint = [&](const Hash & rev) {
-            return rev.gitRev() + (getSubmodulesAttr(input) ? ";s" : "") + (getExportIgnoreAttr(input) ? ";e" : "")
-                   + (getLfsAttr(input) ? ";l" : "");
-        };
+        auto options = getGitAccessorOptions(input);
 
         if (auto rev = input.getRev())
-            return makeFingerprint(*rev);
+            // FIXME: this can return a wrong fingerprint for the legacy (`git archive`) case, since we don't know here
+            // whether to append the `;legacy` suffix or not.
+            return options.makeFingerprint(*rev);
         else {
             auto repoInfo = getRepoInfo(input);
             if (auto repoPath = repoInfo.getPath(); repoPath && repoInfo.workdirInfo.submodules.empty()) {
@@ -964,7 +1072,7 @@ struct GitInputScheme : InputScheme
                     writeString("deleted:", hashSink);
                     writeString(file.abs(), hashSink);
                 }
-                return makeFingerprint(repoInfo.workdirInfo.headRev.value_or(nullRev))
+                return options.makeFingerprint(repoInfo.workdirInfo.headRev.value_or(nullRev))
                        + ";d=" + hashSink.finish().hash.to_string(HashFormat::Base16, false);
             }
             return std::nullopt;

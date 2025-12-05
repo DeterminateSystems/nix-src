@@ -327,7 +327,12 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
     auto makeStoreAccessor = [&]() -> std::pair<ref<SourceAccessor>, Input> {
         auto accessor = make_ref<SubstitutedSourceAccessor>(ref{store->getFSAccessor(*storePath)});
 
-        accessor->fingerprint = getFingerprint(store);
+        // FIXME: use the NAR hash for fingerprinting Git trees that have a .gitattributes file, since we don't know if
+        // we used `git archive` or libgit2 to fetch it.
+        accessor->fingerprint = getType() == "git" && accessor->pathExists(CanonPath(".gitattributes"))
+                                    ? std::optional(storePath->hashPart())
+                                    : getFingerprint(store);
+        cachedFingerprint = accessor->fingerprint;
 
         // Store a cache entry for the substituted tree so later fetches
         // can reuse the existing nar instead of copying the unpacked
@@ -357,10 +362,10 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
     try {
         auto [accessor, result] = scheme->getAccessor(settings, store, *this);
 
-        if (!accessor->fingerprint)
-            accessor->fingerprint = result.getFingerprint(store);
+        if (auto fp = accessor->getFingerprint(CanonPath::root).second)
+            result.cachedFingerprint = *fp;
         else
-            result.cachedFingerprint = accessor->fingerprint;
+            accessor->fingerprint = result.getFingerprint(store);
 
         return {accessor, std::move(result)};
     } catch (Error & e) {
