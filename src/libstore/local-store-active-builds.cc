@@ -140,10 +140,6 @@ static ActiveBuildInfo::ProcessInfo getProcessInfo(pid_t pid)
                     pos++;
                 pos++; // Skip the null terminator
 
-                // Skip any additional null bytes.
-                while (pos < size && buffer[pos] == '\0')
-                    pos++;
-
                 // Parse the arguments.
                 while (pos < size && info.argv.size() < (size_t) argc) {
                     size_t argStart = pos;
