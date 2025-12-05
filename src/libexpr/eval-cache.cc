@@ -379,14 +379,19 @@ std::vector<Symbol> AttrCursor::getAttrPath(Symbol name) const
     return attrPath;
 }
 
+std::string toAttrPathStr(EvalState & state, const AttrPath & attrPath)
+{
+    return dropEmptyInitThenConcatStringsSep(".", state.symbols.resolve(attrPath));
+}
+
 std::string AttrCursor::getAttrPathStr() const
 {
-    return dropEmptyInitThenConcatStringsSep(".", root->state.symbols.resolve(getAttrPath()));
+    return toAttrPathStr(root->state, getAttrPath());
 }
 
 std::string AttrCursor::getAttrPathStr(Symbol name) const
 {
-    return dropEmptyInitThenConcatStringsSep(".", root->state.symbols.resolve(getAttrPath(name)));
+    return toAttrPathStr(root->state, getAttrPath(name));
 }
 
 Value & AttrCursor::forceValue()

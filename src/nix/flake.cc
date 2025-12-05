@@ -18,6 +18,7 @@
 #include "nix/store/local-fs-store.hh"
 #include "nix/store/globals.hh"
 #include "nix/expr/parallel-eval.hh"
+#include "nix/util/exit.hh"
 
 #include <filesystem>
 #include <nlohmann/json.hpp>
@@ -385,7 +386,9 @@ struct CmdFlakeCheck : FlakeCommand
             }
         };
 
-        Sync<StringSet> omittedSystems;
+        Sync<std::vector<DerivedPath>> drvPaths_;
+        Sync<std::set<std::string>> omittedSystems;
+        Sync<std::map<DerivedPath, std::vector<eval_cache::AttrPath>>> derivedPathToAttrPaths_;
 
         // FIXME: rewrite to use EvalCache.
 
@@ -433,8 +436,6 @@ struct CmdFlakeCheck : FlakeCommand
             }
             return std::nullopt;
         };
-
-        std::vector<DerivedPath> drvPaths;
 
         FutureVector futures(*state->executor);
 
@@ -633,11 +634,13 @@ struct CmdFlakeCheck : FlakeCommand
                                                 *attr2.value,
                                                 attr2.pos);
                                             if (drvPath && attr_name == settings.thisSystem.get()) {
-                                                auto path = DerivedPath::Built{
+                                                auto derivedPath = DerivedPath::Built{
                                                     .drvPath = makeConstantStorePathRef(*drvPath),
                                                     .outputs = OutputsSpec::All{},
                                                 };
-                                                drvPaths.push_back(std::move(path));
+                                                (*derivedPathToAttrPaths_.lock())[derivedPath].push_back(
+                                                    {state->symbols.create("checks"), attr.name, attr2.name});
+                                                drvPaths_.lock()->push_back(std::move(derivedPath));
                                             }
                                         }
                                     }
@@ -806,7 +809,10 @@ struct CmdFlakeCheck : FlakeCommand
         futures.spawn(1, checkFlake);
         futures.finishAll();
 
-        if (build && !drvPaths.empty()) {
+        auto drvPaths(drvPaths_.lock());
+        auto derivedPathToAttrPaths(derivedPathToAttrPaths_.lock());
+
+        if (build && !drvPaths->empty()) {
             // TODO: This filtering of substitutable paths is a temporary workaround until
             // https://github.com/NixOS/nix/issues/5025 (union stores) is implemented.
             //
@@ -819,24 +825,57 @@ struct CmdFlakeCheck : FlakeCommand
             // via substitution, as `nix flake check` only needs to verify buildability,
             // not actually produce the outputs.
             state->waitForAllPaths();
-            auto missing = store->queryMissing(drvPaths);
+            auto missing = store->queryMissing(*drvPaths);
 
             std::vector<DerivedPath> toBuild;
+            std::set<DerivedPath> toBuildSet;
             for (auto & path : missing.willBuild) {
-                toBuild.emplace_back(
-                    DerivedPath::Built{
-                        .drvPath = makeConstantStorePathRef(path),
-                        .outputs = OutputsSpec::All{},
-                    });
+                auto derivedPath = DerivedPath::Built{
+                    .drvPath = makeConstantStorePathRef(path),
+                    .outputs = OutputsSpec::All{},
+                };
+                toBuild.emplace_back(derivedPath);
+                toBuildSet.insert(std::move(derivedPath));
             }
+
+            for (auto & [derivedPath, attrPaths] : *derivedPathToAttrPaths)
+                if (!toBuildSet.contains(derivedPath))
+                    for (auto & attrPath : attrPaths)
+                        notice(
+                            "✅ " ANSI_BOLD "%s" ANSI_NORMAL ANSI_ITALIC ANSI_FAINT " (previously built)" ANSI_NORMAL,
+                            eval_cache::toAttrPathStr(*state, attrPath));
 
             // FIXME: should start building while evaluating.
             Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", toBuild.size()));
-            store->buildPaths(toBuild);
-        }
+            auto buildResults = store->buildPathsWithResults(toBuild);
+            assert(buildResults.size() == toBuild.size());
 
-        if (hasErrors)
-            throw Error("some errors were encountered during the evaluation");
+            // Report successes first.
+            for (auto & buildResult : buildResults)
+                if (buildResult.tryGetSuccess())
+                    for (auto & attrPath : (*derivedPathToAttrPaths)[buildResult.path])
+                        notice("✅ " ANSI_BOLD "%s" ANSI_NORMAL, eval_cache::toAttrPathStr(*state, attrPath));
+
+            // Then cancelled builds.
+            for (auto & buildResult : buildResults)
+                if (buildResult.isCancelled())
+                    for (auto & attrPath : (*derivedPathToAttrPaths)[buildResult.path])
+                        notice(
+                            "❓ " ANSI_BOLD "%s" ANSI_NORMAL ANSI_FAINT " (cancelled)",
+                            eval_cache::toAttrPathStr(*state, attrPath));
+
+            // Then failures.
+            for (auto & buildResult : buildResults)
+                if (auto failure = buildResult.tryGetFailure(); failure && !buildResult.isCancelled())
+                    try {
+                        hasErrors = true;
+                        for (auto & attrPath : (*derivedPathToAttrPaths)[buildResult.path])
+                            printError("❌ " ANSI_RED "%s" ANSI_NORMAL, eval_cache::toAttrPathStr(*state, attrPath));
+                        failure->rethrow();
+                    } catch (Error & e) {
+                        logError(e.info());
+                    }
+        }
 
         if (!omittedSystems.lock()->empty()) {
             // TODO: empty system is not visible; render all as nix strings?
@@ -844,7 +883,10 @@ struct CmdFlakeCheck : FlakeCommand
                 "The check omitted these incompatible systems: %s\n"
                 "Use '--all-systems' to check all.",
                 concatStringsSep(", ", *omittedSystems.lock()));
-        };
+        }
+
+        if (hasErrors)
+            throw Exit(1);
     };
 };
 
