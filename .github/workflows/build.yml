@@ -2,6 +2,7 @@ on:
   workflow_call:
     inputs:
       flake:
+        required: false
         default: "."
         type: string
       system:
@@ -36,6 +37,10 @@ on:
         required: false
         default: false
         type: boolean
+      upload_artifacts:
+        required: false
+        default: true
+        type: boolean
     secrets:
       manual_netlify_auth_token:
         required: false
@@ -56,6 +61,7 @@ jobs:
       - run: nix build ${{ inputs.flake }}#packages.${{ inputs.system }}.default .#packages.${{ inputs.system }}.binaryTarball --no-link -L
       - run: nix build ${{ inputs.flake }}#packages.${{ inputs.system }}.binaryTarball --out-link tarball
       - uses: actions/upload-artifact@v4
+        if: inputs.upload_artifacts
         with:
           name: ${{ inputs.system }}
           path: ./tarball/*.xz
