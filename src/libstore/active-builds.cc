@@ -99,6 +99,9 @@ void adl_serializer<ActiveBuildInfo::ProcessInfo>::to_json(json & j, const Activ
 
 ActiveBuild adl_serializer<ActiveBuild>::from_json(const json & j)
 {
+    auto type = j.at("type").get<std::string>();
+    if (type != "build")
+        throw Error("invalid active build JSON: expected type 'build' but got '%s'", type);
     return ActiveBuild{
         .nixPid = j.at("nixPid").get<pid_t>(),
         .clientPid = j.at("clientPid").get<std::optional<pid_t>>(),
@@ -114,6 +117,7 @@ ActiveBuild adl_serializer<ActiveBuild>::from_json(const json & j)
 void adl_serializer<ActiveBuild>::to_json(json & j, const ActiveBuild & build)
 {
     j = nlohmann::json{
+        {"type", "build"},
         {"nixPid", build.nixPid},
         {"clientPid", build.clientPid},
         {"clientUid", build.clientUid},
