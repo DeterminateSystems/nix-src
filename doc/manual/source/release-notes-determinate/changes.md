@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.13.2.<!-- differences -->
+This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.14.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -156,3 +156,32 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 * Avoid unnecessary Git refetches [DeterminateSystems/nix-src#270](https://github.com/DeterminateSystems/nix-src/pull/270)
 
 * Use mirrored flake registry [DeterminateSystems/nix-src#271](https://github.com/DeterminateSystems/nix-src/pull/271)
+
+<!-- Determinate Nix version 3.14.0 -->
+
+* Registry improvements by @edolstra in [DeterminateSystems/nix-src#273](https://github.com/DeterminateSystems/nix-src/pull/273)
+
+* feat: support consumers of docker.nix supplying their own base image by @employee-64c7dcd530593118dcccc3fb in [DeterminateSystems/nix-src#277](https://github.com/DeterminateSystems/nix-src/pull/277)
+
+* feat: support user-provided paths to land in $PATH by @employee-64c7dcd530593118dcccc3fb in [DeterminateSystems/nix-src#280](https://github.com/DeterminateSystems/nix-src/pull/280)
+
+* builtins.path: Propagate references from derivation outputs by @edolstra in [DeterminateSystems/nix-src#283](https://github.com/DeterminateSystems/nix-src/pull/283)
+
+* packaging: fix build with lowdown 2.0.4 by @SandaruKasa in [DeterminateSystems/nix-src#284](https://github.com/DeterminateSystems/nix-src/pull/284)
+
+* nix build, nix profile: Report failing/succeeding installables by @edolstra in [DeterminateSystems/nix-src#281](https://github.com/DeterminateSystems/nix-src/pull/281)
+
+* determinePos(): Don't read from app values by @edolstra in [DeterminateSystems/nix-src#286](https://github.com/DeterminateSystems/nix-src/pull/286)
+
+* nix flake check: Show which outputs failed or succeeded by @edolstra in [DeterminateSystems/nix-src#285](https://github.com/DeterminateSystems/nix-src/pull/285)
+
+* Add `nix ps` command by @edolstra in [DeterminateSystems/nix-src#282](https://github.com/DeterminateSystems/nix-src/pull/282)
+
+* Backward compatibility hack for Nix < 2.20 Git inputs using git-archive by @edolstra in [DeterminateSystems/nix-src#278](https://github.com/DeterminateSystems/nix-src/pull/278)
+
+* Add type field to ActiveBuild record by @edolstra in [DeterminateSystems/nix-src#287](https://github.com/DeterminateSystems/nix-src/pull/287)
+
+
+* @employee-64c7dcd530593118dcccc3fb made their first contribution in [DeterminateSystems/nix-src#277](https://github.com/DeterminateSystems/nix-src/pull/277)
+
+* @SandaruKasa made their first contribution in [DeterminateSystems/nix-src#284](https://github.com/DeterminateSystems/nix-src/pull/284)
