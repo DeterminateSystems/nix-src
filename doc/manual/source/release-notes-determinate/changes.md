@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.13.2.<!-- differences -->
+This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.14.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -156,3 +156,15 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 * Avoid unnecessary Git refetches [DeterminateSystems/nix-src#270](https://github.com/DeterminateSystems/nix-src/pull/270)
 
 * Use mirrored flake registry [DeterminateSystems/nix-src#271](https://github.com/DeterminateSystems/nix-src/pull/271)
+
+<!-- Determinate Nix version 3.14.0 -->
+
+* Fixed a builtins.path regression: Propagate references from derivation outputs [DeterminateSystems/nix-src#283](https://github.com/DeterminateSystems/nix-src/pull/283)
+
+* nix build, nix profile: Report failing/succeeding installables [DeterminateSystems/nix-src#281](https://github.com/DeterminateSystems/nix-src/pull/281)
+
+* nix flake check: Show which outputs failed or succeeded [DeterminateSystems/nix-src#285](https://github.com/DeterminateSystems/nix-src/pull/285)
+
+* Add `nix ps` command [DeterminateSystems/nix-src#282](https://github.com/DeterminateSystems/nix-src/pull/282)
+
+* Backward compatibility for Nix < 2.20: Git inputs using git-archive [DeterminateSystems/nix-src#278](https://github.com/DeterminateSystems/nix-src/pull/278)
