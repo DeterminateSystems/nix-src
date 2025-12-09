@@ -1,6 +1,7 @@
 #include "nix/store/build/derivation-builder.hh"
 #include "nix/util/file-system.hh"
 #include "nix/store/local-store.hh"
+#include "nix/store/active-builds.hh"
 #include "nix/util/processes.hh"
 #include "nix/store/builtins.hh"
 #include "nix/store/path-references.hh"
@@ -76,6 +77,11 @@ protected:
      * The process ID of the builder.
      */
     Pid pid;
+
+    /**
+     * Handles to track active builds for `nix ps`.
+     */
+    std::optional<TrackActiveBuildsStore::BuildHandle> activeBuildHandle;
 
     LocalStore & store;
 
@@ -236,6 +242,11 @@ protected:
     virtual void checkSystem();
 
     /**
+     * Construct the `ActiveBuild` object for `ActiveBuildsTracker`.
+     */
+    virtual ActiveBuild getActiveBuild();
+
+    /**
      * Return the paths that should be made available in the sandbox.
      * This includes:
      *
@@ -325,7 +336,7 @@ private:
 
 protected:
 
-    void addDependency(const StorePath & path) override;
+    void addDependencyImpl(const StorePath & path) override;
 
     /**
      * Make a file owned by the builder.
@@ -471,6 +482,8 @@ bool DerivationBuilderImpl::killChild()
         killSandbox(true);
 
         pid.wait();
+
+        activeBuildHandle.reset();
     }
     return ret;
 }
@@ -503,6 +516,8 @@ SingleDrvOutputs DerivationBuilderImpl::unprepareBuild()
        open and modifies them after they have been chown'ed to
        root. */
     killSandbox(true);
+
+    activeBuildHandle.reset();
 
     /* Terminate the recursive Nix daemon. */
     stopDaemon();
@@ -847,9 +862,26 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
 
     pid.setSeparatePG(true);
 
+    /* Make the build visible to `nix ps`. */
+    if (auto tracker = dynamic_cast<TrackActiveBuildsStore *>(&store))
+        activeBuildHandle.emplace(tracker->buildStarted(getActiveBuild()));
+
     processSandboxSetupMessages();
 
     return builderOut.get();
+}
+
+ActiveBuild DerivationBuilderImpl::getActiveBuild()
+{
+    return {
+        .nixPid = getpid(),
+        .clientPid = std::nullopt, // FIXME
+        .clientUid = std::nullopt, // FIXME
+        .mainPid = pid,
+        .mainUser = UserInfo::fromUid(buildUser ? buildUser->getUID() : getuid()),
+        .startTime = buildResult.startTime,
+        .derivation = drvPath,
+    };
 }
 
 PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
@@ -857,6 +889,11 @@ PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
     /* Allow a user-configurable set of directories from the
        host file system. */
     PathsInChroot pathsInChroot = defaultPathsInChroot;
+
+    for (auto & p : pathsInChroot)
+        if (!p.second.optional && !maybeLstat(p.second.source))
+            throw SysError(
+                "path '%s' is configured as part of the `sandbox-paths` option, but is inaccessible", p.second.source);
 
     if (hasPrefix(store.storeDir, tmpDirInSandbox())) {
         throw Error("`sandbox-build-dir` must not contain the storeDir");
@@ -977,7 +1014,7 @@ void DerivationBuilderImpl::processSandboxSetupMessages()
                     "while waiting for the build environment for '%s' to initialize (%s, previous messages: %s)",
                     store.printStorePath(drvPath),
                     statusToString(status),
-                    concatStringsSep("|", msgs));
+                    concatStringsSep("\n", msgs));
                 throw;
             }
         }();
@@ -1181,11 +1218,8 @@ void DerivationBuilderImpl::stopDaemon()
     daemonSocket.close();
 }
 
-void DerivationBuilderImpl::addDependency(const StorePath & path)
+void DerivationBuilderImpl::addDependencyImpl(const StorePath & path)
 {
-    if (isAllowed(path))
-        return;
-
     addedPaths.insert(path);
 }
 
@@ -1814,7 +1848,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
     /* Apply output checks. This includes checking of the wanted vs got
        hash of fixed-outputs. */
-    checkOutputs(store, drvPath, drv.outputs, drvOptions.outputChecks, infos);
+    checkOutputs(store, drvPath, drv.outputs, drvOptions.outputChecks, infos, *act);
 
     if (buildMode == bmCheck) {
         return {};

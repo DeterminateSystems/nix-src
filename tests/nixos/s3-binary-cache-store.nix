@@ -34,7 +34,6 @@ in
         virtualisation.additionalPaths = [ pkgA ];
         environment.systemPackages = [ pkgs.minio-client ];
         nix.extraOptions = ''
-          experimental-features = nix-command
           substituters =
         '';
         services.minio = {
@@ -53,7 +52,6 @@ in
       {
         virtualisation.writableStore = true;
         nix.extraOptions = ''
-          experimental-features = nix-command
           substituters =
         '';
       };

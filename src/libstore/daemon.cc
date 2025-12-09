@@ -17,6 +17,7 @@
 #include "nix/util/git.hh"
 #include "nix/util/logging.hh"
 #include "nix/store/globals.hh"
+#include "nix/store/active-builds.hh"
 
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
 #  include "nix/util/monitor-fd.hh"
@@ -744,6 +745,7 @@ static void performOp(
         options.action = (GCOptions::GCAction) readInt(conn.from);
         options.pathsToDelete = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
         conn.from >> options.ignoreLiveness >> options.maxFreed;
+        options.censor = !trusted;
         // obsolete fields
         readInt(conn.from);
         readInt(conn.from);
@@ -752,7 +754,7 @@ static void performOp(
         GCResults results;
 
         logger->startWork();
-        if (options.ignoreLiveness)
+        if (options.ignoreLiveness && !getEnv("_NIX_IN_TEST").has_value())
             throw Error("you are not allowed to ignore liveness");
         auto & gcStore = require<GcStore>(*store);
         gcStore.collectGarbage(options, results);
@@ -1013,6 +1015,15 @@ static void performOp(
     case WorkerProto::Op::ClearFailedPaths:
         throw Error("Removed operation %1%", op);
 
+    case WorkerProto::Op::QueryActiveBuilds: {
+        logger->startWork();
+        auto & activeBuildsStore = require<QueryActiveBuildsStore>(*store);
+        auto activeBuilds = activeBuildsStore.queryActiveBuilds();
+        logger->stopWork();
+        conn.to << nlohmann::json(activeBuilds).dump();
+        break;
+    }
+
     default:
         throw Error("invalid operation %1%", op);
     }
@@ -1029,7 +1040,7 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
     auto [protoVersion, features] =
         WorkerProto::BasicServerConnection::handshake(to, from, PROTOCOL_VERSION, WorkerProto::allFeatures);
 
-    if (protoVersion < 256 + 18)
+    if (protoVersion < MINIMUM_PROTOCOL_VERSION)
         throw Error("the Nix client version is too old");
 
     WorkerProto::BasicServerConnection conn;

@@ -24,7 +24,7 @@ let
 in
 
 mkMesonDerivation (finalAttrs: {
-  pname = "nix-manual";
+  pname = "determinate-nix-manual";
   inherit version;
 
   workDir = ./.;
@@ -32,6 +32,7 @@ mkMesonDerivation (finalAttrs: {
     fileset.difference
       (fileset.unions [
         ../../.version
+        ../../.version-determinate
         # Too many different types of files to filter for now
         ../../doc/manual
         ./.

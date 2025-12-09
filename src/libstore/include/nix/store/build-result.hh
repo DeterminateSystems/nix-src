@@ -8,6 +8,8 @@
 #include "nix/store/derived-path.hh"
 #include "nix/store/realisation.hh"
 
+#include <nlohmann/json_fwd.hpp>
+
 namespace nix {
 
 struct BuildResult
@@ -28,6 +30,8 @@ struct BuildResult
             AlreadyValid = 2,
             ResolvesToAlreadyValid = 13,
         } status;
+
+        static std::string_view statusToString(Status status);
 
         /**
          * For derivations, a mapping from the names of the wanted outputs
@@ -73,7 +77,10 @@ struct BuildResult
             /// know about this one, so change it back to `OutputRejected`
             /// before serialization.
             HashMismatch = 15,
+            Cancelled = 16,
         } status = MiscFailure;
+
+        static std::string_view statusToString(Status status);
 
         /**
          * Information about the error if the build failed.
@@ -96,7 +103,7 @@ struct BuildResult
 
         [[noreturn]] void rethrow() const
         {
-            throw Error("%s", errorMsg);
+            throw Error("%s", errorMsg.empty() ? statusToString(status) : errorMsg);
         }
     };
 
@@ -140,6 +147,13 @@ struct BuildResult
 
     bool operator==(const BuildResult &) const noexcept;
     std::strong_ordering operator<=>(const BuildResult &) const noexcept;
+
+    bool isCancelled() const
+    {
+        auto failure = tryGetFailure();
+        // FIXME: remove MiscFailure eventually.
+        return failure && (failure->status == Failure::Cancelled || failure->status == Failure::MiscFailure);
+    }
 };
 
 /**
@@ -173,5 +187,8 @@ struct KeyedBuildResult : BuildResult
     {
     }
 };
+
+void to_json(nlohmann::json & json, const BuildResult & buildResult);
+void to_json(nlohmann::json & json, const KeyedBuildResult & buildResult);
 
 } // namespace nix

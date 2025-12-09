@@ -11,6 +11,12 @@
 
 #include <sys/types.h>
 
+namespace nix {
+
+struct GitRepo;
+
+}
+
 namespace nix::fetchers {
 
 struct Cache;
@@ -88,10 +94,7 @@ struct Settings : public Config
           are subsequently modified. Therefore lock files with dirty
           locks should generally only be used for local testing, and
           should not be pushed to other users.
-        )",
-        {},
-        true,
-        Xp::Flakes};
+        )"};
 
     Setting<bool> trustTarballsFromGitForges{
         this,
@@ -112,21 +115,41 @@ struct Settings : public Config
 
     Setting<std::string> flakeRegistry{
         this,
-        "https://channels.nixos.org/flake-registry.json",
+        "https://install.determinate.systems/flake-registry/stable/flake-registry.json",
         "flake-registry",
         R"(
           Path or URI of the global flake registry.
 
           When empty, disables the global flake registry.
-        )",
-        {},
-        true,
-        Xp::Flakes};
+        )"};
+
+    Setting<bool> nix219Compat{
+        this,
+        false,
+        "nix-219-compat",
+        R"(
+          If enabled, Nix will generate lock files that are compatible with Nix 2.19.
+          In particular, Nix will use `git archive` rather than `libgit2` to copy Git inputs.
+          The resulting locks may not be compatible with Nix >= 2.20.
+        )"};
 
     ref<Cache> getCache() const;
 
+    ref<GitRepo> getTarballCache() const;
+
 private:
     mutable Sync<std::shared_ptr<Cache>> _cache;
+
+    mutable Sync<std::shared_ptr<GitRepo>> _tarballCache;
 };
 
 } // namespace nix::fetchers
+
+namespace nix {
+
+/**
+ * @todo Get rid of global setttings variables
+ */
+extern fetchers::Settings fetchSettings;
+
+} // namespace nix

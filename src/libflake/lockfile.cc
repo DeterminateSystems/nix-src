@@ -37,10 +37,11 @@ LockedNode::LockedNode(const fetchers::Settings & fetchSettings, const nlohmann:
     : lockedRef(getFlakeRef(fetchSettings, json, "locked", "info")) // FIXME: remove "info"
     , originalRef(getFlakeRef(fetchSettings, json, "original", nullptr))
     , isFlake(json.find("flake") != json.end() ? (bool) json["flake"] : true)
+    , buildTime(json.find("buildTime") != json.end() ? (bool) json["buildTime"] : false)
     , parentInputAttrPath(
           json.find("parent") != json.end() ? (std::optional<InputAttrPath>) json["parent"] : std::nullopt)
 {
-    if (!lockedRef.input.isLocked() && !lockedRef.input.isRelative()) {
+    if (!lockedRef.input.isLocked(fetchSettings) && !lockedRef.input.isRelative()) {
         if (lockedRef.input.getNarHash())
             warn(
                 "Lock file entry '%s' is unlocked (e.g. lacks a Git revision) but does have a NAR hash. "
@@ -209,6 +210,8 @@ std::pair<nlohmann::json, LockFile::KeyMap> LockFile::toJSON() const
             n["locked"].erase("__final");
             if (!lockedNode->isFlake)
                 n["flake"] = false;
+            if (lockedNode->buildTime)
+                n["buildTime"] = true;
             if (lockedNode->parentInputAttrPath)
                 n["parent"] = *lockedNode->parentInputAttrPath;
         }
@@ -259,7 +262,7 @@ std::optional<FlakeRef> LockFile::isUnlocked(const fetchers::Settings & fetchSet
        latter case, we can verify the input but we may not be able to
        fetch it from anywhere. */
     auto isConsideredLocked = [&](const fetchers::Input & input) {
-        return input.isLocked() || (fetchSettings.allowDirtyLocks && input.getNarHash());
+        return input.isLocked(fetchSettings) || (fetchSettings.allowDirtyLocks && input.getNarHash());
     };
 
     for (auto & i : nodes) {
@@ -320,7 +323,7 @@ std::map<InputAttrPath, Node::Edge> LockFile::getAllInputs() const
 
 static std::string describe(const FlakeRef & flakeRef)
 {
-    auto s = fmt("'%s'", flakeRef.to_string());
+    auto s = fmt("'%s'", flakeRef.to_string(true));
 
     if (auto lastModified = flakeRef.input.getLastModified())
         s += fmt(" (%s)", std::put_time(std::gmtime(&*lastModified), "%Y-%m-%d"));

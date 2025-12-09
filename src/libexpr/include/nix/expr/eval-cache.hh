@@ -13,6 +13,10 @@ namespace nix::eval_cache {
 struct AttrDb;
 class AttrCursor;
 
+using AttrPath = std::vector<Symbol>;
+
+std::string toAttrPathStr(EvalState & state, const AttrPath & attrPath);
+
 struct CachedEvalError : EvalError
 {
     const ref<AttrCursor> cursor;
