@@ -357,6 +357,17 @@ nix_err nix_derivation_get_outputs_and_optpaths(
 nix_err nix_derivation_to_json(
     nix_c_context * context, const nix_derivation * drv, nix_get_string_callback callback, void * userdata);
 
+/**
+ * @brief Query the full store path given the hash part of a valid store
+ * path, or empty if no matching path is found.
+ *
+ * @param[out] context Optional, stores error information
+ * @param[in] store nix store reference
+ * @param[in] hash Hash part of path as a string
+ * @return Store path reference, NULL if no matching path is found.
+ */
+StorePath * nix_store_query_path_from_hash_part(nix_c_context * context, Store * store, const char * hash);
+
 // cffi end
 #ifdef __cplusplus
 }

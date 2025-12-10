@@ -453,4 +453,20 @@ nix_err nix_derivation_get_outputs_and_optpaths(
     NIXC_CATCH_ERRS
 }
 
+StorePath * nix_store_query_path_from_hash_part(nix_c_context * context, Store * store, const char * hash)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        std::optional<nix::StorePath> s = store->ptr->queryPathFromHashPart(hash);
+
+        if (!s.has_value()) {
+            return nullptr;
+        }
+
+        return new StorePath{std::move(s.value())};
+    }
+    NIXC_CATCH_ERRS_NULL
+}
+
 } // extern "C"
