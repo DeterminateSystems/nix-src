@@ -29,8 +29,17 @@ typedef enum { rpAccept, rpDecline, rpPostpone } HookReply;
  */
 struct DerivationBuildingGoal : public Goal
 {
+    /**
+     * @param storeDerivation Whether to store the derivation in
+     * `worker.store`. This is useful for newly-resolved derivations. In this
+     * case, the derivation was not created a priori, e.g. purely (or close
+     * enough) from evaluation of the Nix language, but also depends on the
+     * exact content produced by upstream builds. It is strongly advised to
+     * have a permanent record of such a resolved derivation in order to
+     * faithfully reconstruct the build history.
+     */
     DerivationBuildingGoal(
-        const StorePath & drvPath, const Derivation & drv, Worker & worker, BuildMode buildMode = bmNormal);
+        const StorePath & drvPath, const Derivation & drv, Worker & worker, BuildMode buildMode, bool storeDerivation);
     ~DerivationBuildingGoal();
 
 private:
@@ -42,8 +51,6 @@ private:
      * The derivation stored at drvPath.
      */
     std::unique_ptr<Derivation> drv;
-
-    std::unique_ptr<DerivationOptions> drvOptions;
 
     /**
      * The remainder is state held during the build.
@@ -100,13 +107,14 @@ private:
     /**
      * The states.
      */
-    Co gaveUpOnSubstitution();
+    Co gaveUpOnSubstitution(bool storeDerivation);
     Co tryToBuild();
 
     /**
      * Is the build hook willing to perform the build?
      */
-    HookReply tryBuildHook(const std::map<std::string, InitialOutput> & initialOutputs);
+    HookReply tryBuildHook(
+        const std::map<std::string, InitialOutput> & initialOutputs, const DerivationOptions<StorePath> & drvOptions);
 
     /**
      * Open a log file and a pipe to it.

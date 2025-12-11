@@ -113,7 +113,7 @@ public:
      * Fetch the entire input into the Nix store, returning the
      * location in the Nix store and the locked input.
      */
-    std::tuple<StorePath, ref<SourceAccessor>, Input> fetchToStore(const Settings & settings, ref<Store> store) const;
+    std::tuple<StorePath, ref<SourceAccessor>, Input> fetchToStore(const Settings & settings, Store & store) const;
 
     /**
      * Check the locking attributes in `result` against
@@ -133,17 +133,17 @@ public:
      * input without copying it to the store. Also return a possibly
      * unlocked input.
      */
-    std::pair<ref<SourceAccessor>, Input> getAccessor(const Settings & settings, ref<Store> store) const;
+    std::pair<ref<SourceAccessor>, Input> getAccessor(const Settings & settings, Store & store) const;
 
 private:
 
-    std::pair<ref<SourceAccessor>, Input> getAccessorUnchecked(const Settings & settings, ref<Store> store) const;
+    std::pair<ref<SourceAccessor>, Input> getAccessorUnchecked(const Settings & settings, Store & store) const;
 
 public:
 
     Input applyOverrides(std::optional<std::string> ref, std::optional<Hash> rev) const;
 
-    void clone(const Settings & settings, ref<Store> store, const std::filesystem::path & destDir) const;
+    void clone(const Settings & settings, Store & store, const std::filesystem::path & destDir) const;
 
     std::optional<std::filesystem::path> getSourcePath() const;
 
@@ -173,7 +173,7 @@ public:
      *
      * This is not a stable identifier between Nix versions, but not guaranteed to change either.
      */
-    std::optional<std::string> getFingerprint(ref<Store> store) const;
+    std::optional<std::string> getFingerprint(Store & store) const;
 };
 
 /**
@@ -204,20 +204,33 @@ struct InputScheme
     virtual std::string_view schemeName() const = 0;
 
     /**
+     * Longform description of this scheme, for documentation purposes.
+     */
+    virtual std::string schemeDescription() const = 0;
+
+    // TODO remove these defaults
+    struct AttributeInfo
+    {
+        const char * type = "String";
+        bool required = true;
+        const char * doc = "";
+    };
+
+    /**
      * Allowed attributes in an attribute set that is converted to an
-     * input.
+     * input, and documentation for each attribute.
      *
-     * `type` is not included from this set, because the `type` field is
+     * `type` is not included from this map, because the `type` field is
       parsed first to choose which scheme; `type` is always required.
      */
-    virtual StringSet allowedAttrs() const = 0;
+    virtual const std::map<std::string, AttributeInfo> & allowedAttrs() const = 0;
 
     virtual ParsedURL toURL(const Input & input, bool abbreviate = false) const;
 
     virtual Input applyOverrides(const Input & input, std::optional<std::string> ref, std::optional<Hash> rev) const;
 
-    virtual void clone(
-        const Settings & settings, ref<Store> store, const Input & input, const std::filesystem::path & destDir) const;
+    virtual void
+    clone(const Settings & settings, Store & store, const Input & input, const std::filesystem::path & destDir) const;
 
     virtual std::optional<std::filesystem::path> getSourcePath(const Input & input) const;
 
@@ -228,7 +241,7 @@ struct InputScheme
         std::optional<std::string> commitMsg) const;
 
     virtual std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, ref<Store> store, const Input & input) const = 0;
+    getAccessor(const Settings & settings, Store & store, const Input & input) const = 0;
 
     /**
      * Is this `InputScheme` part of an experimental feature?
@@ -240,7 +253,7 @@ struct InputScheme
         return true;
     }
 
-    virtual std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const
+    virtual std::optional<std::string> getFingerprint(Store & store, const Input & input) const
     {
         return std::nullopt;
     }
@@ -264,7 +277,12 @@ struct InputScheme
 
 void registerInputScheme(std::shared_ptr<InputScheme> && fetcher);
 
-nlohmann::json dumpRegisterInputSchemeInfo();
+using InputSchemeMap = std::map<std::string_view, std::shared_ptr<InputScheme>>;
+
+/**
+ * Use this for docs, not for finding a specific scheme
+ */
+const InputSchemeMap & getAllInputSchemes();
 
 struct PublicKey
 {

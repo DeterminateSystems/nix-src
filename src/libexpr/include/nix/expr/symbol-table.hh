@@ -6,6 +6,7 @@
 #include "nix/expr/value.hh"
 #include "nix/util/error.hh"
 #include "nix/util/sync.hh"
+#include "nix/util/alignment.hh"
 
 #include <boost/version.hpp>
 #include <boost/unordered/concurrent_flat_set.hpp>
@@ -19,8 +20,7 @@ class SymbolValue : protected Value
 
     operator std::string_view() const noexcept
     {
-        // The actual string is stored directly after the value.
-        return reinterpret_cast<const char *>(this + 1);
+        return string_view();
     }
 };
 
@@ -130,6 +130,12 @@ public:
     }
 
     [[gnu::always_inline]]
+    const StringData & string_data() const noexcept
+    {
+        return s->string_data();
+    }
+
+    [[gnu::always_inline]]
     const char * c_str() const noexcept
     {
         return s->c_str();
@@ -145,13 +151,13 @@ public:
     [[gnu::always_inline]]
     bool empty() const noexcept
     {
-        return static_cast<std::string_view>(*s).empty();
+        return !s->string_data().size();
     }
 
     [[gnu::always_inline]]
     size_t size() const noexcept
     {
-        return static_cast<std::string_view>(*s).size();
+        return s->string_data().size();
     }
 
     [[gnu::always_inline]]
@@ -200,8 +206,7 @@ public:
 
     constexpr static size_t computeSize(std::string_view s)
     {
-        auto rawSize = sizeof(Value) + s.size() + 1;
-        return ((rawSize + Symbol::alignment - 1) / Symbol::alignment) * Symbol::alignment;
+        return alignUp(sizeof(Value) + sizeof(StringData) + s.size() + 1, Symbol::alignment);
     }
 };
 
@@ -274,7 +279,7 @@ public:
      */
     Symbol create(std::string_view s);
 
-    std::vector<SymbolStr> resolve(const std::vector<Symbol> & symbols) const
+    std::vector<SymbolStr> resolve(const std::span<const Symbol> & symbols) const
     {
         std::vector<SymbolStr> result;
         result.reserve(symbols.size());
@@ -306,17 +311,11 @@ public:
     {
         std::string_view left{arena.data, arena.size};
         left = left.substr(Symbol::alignment);
-        while (true) {
-            if (left.empty())
-                break;
-            left = left.substr(sizeof(Value));
-            auto p = left.find('\0');
-            assert(p != left.npos);
-            auto sym = left.substr(0, p);
-            callback(sym);
-            // skip alignment padding
-            auto n = sym.size() + 1;
-            left = left.substr(n + (n % Symbol::alignment ? Symbol::alignment - (n % Symbol::alignment) : 0));
+        while (!left.empty()) {
+            auto v = reinterpret_cast<const SymbolValue *>(left.data());
+            callback(v->string_view());
+            left = left.substr(
+                alignUp(sizeof(SymbolValue) + sizeof(StringData) + v->string_view().size() + 1, Symbol::alignment));
         }
     }
 };

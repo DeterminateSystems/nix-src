@@ -66,7 +66,10 @@ public:
         this, rootDir.get() ? *rootDir.get() + "/nix/store" : storeDir, "real", "Physical path of the Nix store."};
 };
 
-struct LocalFSStore : virtual Store, virtual GcStore, virtual LogStore
+struct alignas(8) /* Work around ASAN failures on i686-linux. */
+    LocalFSStore : virtual Store,
+                   virtual GcStore,
+                   virtual LogStore
 {
     using Config = LocalFSStoreConfig;
 
@@ -78,7 +81,6 @@ struct LocalFSStore : virtual Store, virtual GcStore, virtual LogStore
 
     LocalFSStore(const Config & params);
 
-    void narFromPath(const StorePath & path, Sink & sink) override;
     ref<SourceAccessor> getFSAccessor(bool requireValidPath = true) override;
     std::shared_ptr<SourceAccessor> getFSAccessor(const StorePath & path, bool requireValidPath = true) override;
 
@@ -103,7 +105,12 @@ struct LocalFSStore : virtual Store, virtual GcStore, virtual LogStore
         return config.realStoreDir;
     }
 
-    Path toRealPath(const Path & storePath) override
+    Path toRealPath(const StorePath & storePath)
+    {
+        return toRealPath(printStorePath(storePath));
+    }
+
+    Path toRealPath(const Path & storePath)
     {
         assert(isInStore(storePath));
         return getRealStoreDir() + "/" + std::string(storePath, storeDir.size() + 1);

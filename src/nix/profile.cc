@@ -247,13 +247,13 @@ struct ProfileManifest
             }
         }
 
-        buildProfile(tempDir, std::move(pkgs));
+        buildProfile(tempDir.string(), std::move(pkgs));
 
-        writeFile(tempDir + "/manifest.json", toJSON(*store).dump());
+        writeFile(tempDir / "manifest.json", toJSON(*store).dump());
 
         /* Add the symlink tree to the store. */
         StringSink sink;
-        dumpPath(tempDir, sink);
+        dumpPath(tempDir.string(), sink);
 
         auto narHash = hashString(HashAlgorithm::SHA256, sink.s);
 
@@ -854,7 +854,10 @@ struct CmdProfileDiffClosures : virtual StoreCommand, MixDefaultProfile
                 first = false;
                 logger->cout("Version %d -> %d:", prevGen->number, gen.number);
                 printClosureDiff(
-                    store, store->followLinksToStorePath(prevGen->path), store->followLinksToStorePath(gen.path), "  ");
+                    store,
+                    store->followLinksToStorePath(prevGen->path.string()),
+                    store->followLinksToStorePath(gen.path.string()),
+                    "  ");
             }
 
             prevGen = gen;

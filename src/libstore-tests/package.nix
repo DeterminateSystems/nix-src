@@ -42,20 +42,16 @@ mkMesonExecutable (finalAttrs: {
     (fileset.fileFilter (file: file.hasExt "hh") ./.)
   ];
 
-  # Hack for sake of the dev shell
-  passthru.externalBuildInputs = [
+  buildInputs = [
     sqlite
     rapidcheck
     gtest
-  ]
-  ++ lib.optionals withBenchmarks [
-    gbenchmark
-  ];
-
-  buildInputs = finalAttrs.passthru.externalBuildInputs ++ [
     nix-store
     nix-store-c
     nix-store-test-support
+  ]
+  ++ lib.optionals withBenchmarks [
+    gbenchmark
   ];
 
   mesonFlags = [
@@ -83,7 +79,6 @@ mkMesonExecutable (finalAttrs: {
           }
           (
             ''
-              export ASAN_OPTIONS=abort_on_error=1:print_summary=1:detect_leaks=0
               export _NIX_TEST_UNIT_DATA=${data + "/src/libstore-tests/data"}
               export NIX_REMOTE=$HOME/store
               ${stdenv.hostPlatform.emulator buildPackages} ${lib.getExe finalAttrs.finalPackage}

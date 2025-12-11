@@ -7,8 +7,7 @@
 
 #include "nix/store/derived-path.hh"
 #include "nix/store/realisation.hh"
-
-#include <nlohmann/json_fwd.hpp>
+#include "nix/util/json-impls.hh"
 
 namespace nix {
 
@@ -188,7 +187,7 @@ struct KeyedBuildResult : BuildResult
     }
 };
 
-void to_json(nlohmann::json & json, const BuildResult & buildResult);
-void to_json(nlohmann::json & json, const KeyedBuildResult & buildResult);
-
 } // namespace nix
+
+JSON_IMPL(nix::BuildResult)
+JSON_IMPL(nix::KeyedBuildResult)

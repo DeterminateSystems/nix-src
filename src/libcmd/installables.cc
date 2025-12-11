@@ -133,7 +133,7 @@ MixFlakeOptions::MixFlakeOptions()
             lockFlags.writeLockFile = false;
             lockFlags.inputOverrides.insert_or_assign(
                 flake::parseInputAttrPath(inputAttrPath),
-                parseFlakeRef(fetchSettings, flakeRef, absPath(getCommandBaseDir()), true));
+                parseFlakeRef(fetchSettings, flakeRef, absPath(getCommandBaseDir()).string(), true));
         }},
         .completer = {[&](AddCompletions & completions, size_t n, std::string_view prefix) {
             if (n == 0) {
@@ -174,7 +174,7 @@ MixFlakeOptions::MixFlakeOptions()
             auto flake = flake::lockFlake(
                 flakeSettings,
                 *evalState,
-                parseFlakeRef(fetchSettings, flakeRef, absPath(getCommandBaseDir())),
+                parseFlakeRef(fetchSettings, flakeRef, absPath(getCommandBaseDir()).string()),
                 {.writeLockFile = false});
             for (auto & [inputName, input] : flake.lockFile.root->inputs) {
                 auto input2 = flake.lockFile.findInput({inputName}); // resolve 'follows' nodes
@@ -264,7 +264,7 @@ void SourceExprCommand::completeInstallable(AddCompletions & completions, std::s
 
             evalSettings.pureEval = false;
             auto state = getEvalState();
-            auto e = state->parseExprFromFile(resolveExprPath(lookupFileArg(*state, *file)));
+            auto e = state->parseExprFromFile(resolveExprPath(lookupFileArg(*state, file->string())));
 
             Value root;
             state->eval(e, root);
@@ -343,8 +343,7 @@ void completeFlakeRefWithFragment(
                 parseFlakeRef(fetchSettings, expandTilde(flakeRefS), std::filesystem::current_path().string());
 
             auto evalCache = openEvalCache(
-                *evalState,
-                std::make_shared<flake::LockedFlake>(lockFlake(flakeSettings, *evalState, flakeRef, lockFlags)));
+                *evalState, make_ref<flake::LockedFlake>(lockFlake(flakeSettings, *evalState, flakeRef, lockFlags)));
 
             auto root = evalCache->getRoot();
 
@@ -357,9 +356,9 @@ void completeFlakeRefWithFragment(
             attrPathPrefixes.push_back("");
 
             for (auto & attrPathPrefixS : attrPathPrefixes) {
-                auto attrPathPrefix = parseAttrPath(*evalState, attrPathPrefixS);
+                auto attrPathPrefix = AttrPath::parse(*evalState, attrPathPrefixS);
                 auto attrPathS = attrPathPrefixS + std::string(fragment);
-                auto attrPath = parseAttrPath(*evalState, attrPathS);
+                auto attrPath = AttrPath::parse(*evalState, attrPathS);
 
                 std::string lastAttr;
                 if (!attrPath.empty() && !hasSuffix(attrPathS, ".")) {
@@ -377,9 +376,7 @@ void completeFlakeRefWithFragment(
                         /* Strip the attrpath prefix. */
                         attrPath2.erase(attrPath2.begin(), attrPath2.begin() + attrPathPrefix.size());
                         // FIXME: handle names with dots
-                        completions.add(
-                            flakeRefS + "#" + prefixRoot
-                            + concatStringsSep(".", evalState->symbols.resolve(attrPath2)));
+                        completions.add(flakeRefS + "#" + prefixRoot + attrPath2.to_string(*evalState));
                     }
                 }
             }
@@ -388,7 +385,7 @@ void completeFlakeRefWithFragment(
                attrpaths. */
             if (fragment.empty()) {
                 for (auto & attrPath : defaultFlakeAttrPaths) {
-                    auto attr = root->findAlongAttrPath(parseAttrPath(*evalState, attrPath));
+                    auto attr = root->findAlongAttrPath(AttrPath::parse(*evalState, attrPath));
                     if (!attr)
                         continue;
                     completions.add(flakeRefS + "#" + prefixRoot);
@@ -408,7 +405,7 @@ void completeFlakeRef(AddCompletions & completions, ref<Store> store, std::strin
     Args::completeDir(completions, 0, prefix);
 
     /* Look for registry entries that match the prefix. */
-    for (auto & registry : fetchers::getRegistries(fetchSettings, store)) {
+    for (auto & registry : fetchers::getRegistries(fetchSettings, *store)) {
         for (auto & entry : registry->entries) {
             auto from = entry.from.to_string();
             if (!hasPrefix(prefix, "flake:") && hasPrefix(from, "flake:")) {
@@ -441,42 +438,6 @@ static StorePath getDeriver(ref<Store> store, const Installable & i, const Store
     return *derivers.begin();
 }
 
-ref<eval_cache::EvalCache> openEvalCache(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake)
-{
-    auto fingerprint = evalSettings.useEvalCache && evalSettings.pureEval
-                           ? lockedFlake->getFingerprint(state.store, state.fetchSettings)
-                           : std::nullopt;
-    auto rootLoader = [&state, lockedFlake]() {
-        /* For testing whether the evaluation cache is
-           complete. */
-        if (getEnv("NIX_ALLOW_EVAL").value_or("1") == "0")
-            throw Error("not everything is cached, but evaluation is not allowed");
-
-        auto vFlake = state.allocValue();
-        flake::callFlake(state, *lockedFlake, *vFlake);
-
-        state.forceAttrs(*vFlake, noPos, "while parsing cached flake data");
-
-        auto aOutputs = vFlake->attrs()->get(state.symbols.create("outputs"));
-        assert(aOutputs);
-
-        return aOutputs->value;
-    };
-
-    if (fingerprint) {
-        auto search = state.evalCaches.find(fingerprint.value());
-        if (search == state.evalCaches.end()) {
-            search =
-                state.evalCaches
-                    .emplace(fingerprint.value(), make_ref<nix::eval_cache::EvalCache>(fingerprint, state, rootLoader))
-                    .first;
-        }
-        return search->second;
-    } else {
-        return make_ref<nix::eval_cache::EvalCache>(std::nullopt, state, rootLoader);
-    }
-}
-
 Installables SourceExprCommand::parseInstallables(ref<Store> store, std::vector<std::string> ss)
 {
     Installables result;
@@ -500,10 +461,10 @@ Installables SourceExprCommand::parseInstallables(ref<Store> store, std::vector<
             state->eval(e, *vFile);
         } else if (file) {
             auto dir = absPath(getCommandBaseDir());
-            state->evalFile(lookupFileArg(*state, *file, &dir), *vFile);
+            state->evalFile(lookupFileArg(*state, file->string(), &dir), *vFile);
         } else {
-            Path dir = absPath(getCommandBaseDir());
-            auto e = state->parseExprFromString(*expr, state->rootPath(dir));
+            auto dir = absPath(getCommandBaseDir());
+            auto e = state->parseExprFromString(*expr, state->rootPath(dir.string()));
             state->eval(e, *vFile);
         }
 
@@ -869,7 +830,8 @@ std::vector<FlakeRef> RawInstallablesCommand::getFlakeRefsForCompletion()
     std::vector<FlakeRef> res;
     res.reserve(rawInstallables.size());
     for (const auto & i : rawInstallables)
-        res.push_back(parseFlakeRefWithFragment(fetchSettings, expandTilde(i), absPath(getCommandBaseDir())).first);
+        res.push_back(
+            parseFlakeRefWithFragment(fetchSettings, expandTilde(i), absPath(getCommandBaseDir()).string()).first);
     return res;
 }
 
@@ -888,7 +850,8 @@ void RawInstallablesCommand::run(ref<Store> store)
 
 std::vector<FlakeRef> InstallableCommand::getFlakeRefsForCompletion()
 {
-    return {parseFlakeRefWithFragment(fetchSettings, expandTilde(_installable), absPath(getCommandBaseDir())).first};
+    return {parseFlakeRefWithFragment(fetchSettings, expandTilde(_installable), absPath(getCommandBaseDir()).string())
+                .first};
 }
 
 void InstallablesCommand::run(ref<Store> store, std::vector<std::string> && rawInstallables)

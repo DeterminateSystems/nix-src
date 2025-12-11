@@ -29,7 +29,7 @@ EvalSettings evalSettings{
                 auto flakeRef = parseFlakeRef(fetchSettings, std::string{rest}, {}, true, false);
                 debug("fetching flake search path element '%s''", rest);
                 auto [accessor, lockedRef] =
-                    flakeRef.resolve(fetchSettings, state.store).lazyFetch(fetchSettings, state.store);
+                    flakeRef.resolve(fetchSettings, *state.store).lazyFetch(fetchSettings, *state.store);
                 auto storePath = nix::fetchToStore(
                     state.fetchSettings,
                     *state.store,
@@ -160,29 +160,30 @@ Bindings * MixEvalArgs::getAutoArgs(EvalState & state)
                         state.parseExprFromString(
                             arg.expr,
                             compatibilitySettings.nixShellShebangArgumentsRelativeToScript
-                                ? state.rootPath(absPath(getCommandBaseDir()))
+                                ? state.rootPath(absPath(getCommandBaseDir()).string())
                                 : state.rootPath(".")));
                 },
-                [&](const AutoArgString & arg) { v->mkString(arg.s); },
-                [&](const AutoArgFile & arg) { v->mkString(readFile(arg.path.string())); },
-                [&](const AutoArgStdin & arg) { v->mkString(readFile(STDIN_FILENO)); }},
+                [&](const AutoArgString & arg) { v->mkString(arg.s, state.mem); },
+                [&](const AutoArgFile & arg) { v->mkString(readFile(arg.path.string()), state.mem); },
+                [&](const AutoArgStdin & arg) { v->mkString(readFile(STDIN_FILENO), state.mem); }},
             arg);
         res.insert(state.symbols.create(name), v);
     }
     return res.finish();
 }
 
-SourcePath lookupFileArg(EvalState & state, std::string_view s, const Path * baseDir)
+SourcePath lookupFileArg(EvalState & state, std::string_view s, const std::filesystem::path * baseDir)
 {
     if (EvalSettings::isPseudoUrl(s)) {
-        auto accessor = fetchers::downloadTarball(state.store, state.fetchSettings, EvalSettings::resolvePseudoUrl(s));
+        auto accessor = fetchers::downloadTarball(*state.store, state.fetchSettings, EvalSettings::resolvePseudoUrl(s));
         auto storePath = fetchToStore(state.fetchSettings, *state.store, SourcePath(accessor), FetchMode::Copy);
         return state.storePath(storePath);
     }
 
     else if (hasPrefix(s, "flake:")) {
         auto flakeRef = parseFlakeRef(fetchSettings, std::string(s.substr(6)), {}, true, false);
-        auto [accessor, lockedRef] = flakeRef.resolve(fetchSettings, state.store).lazyFetch(fetchSettings, state.store);
+        auto [accessor, lockedRef] =
+            flakeRef.resolve(fetchSettings, *state.store).lazyFetch(fetchSettings, *state.store);
         auto storePath = nix::fetchToStore(
             state.fetchSettings, *state.store, SourcePath(accessor), FetchMode::Copy, lockedRef.input.getName());
         state.allowPath(storePath);
@@ -190,12 +191,13 @@ SourcePath lookupFileArg(EvalState & state, std::string_view s, const Path * bas
     }
 
     else if (s.size() > 2 && s.at(0) == '<' && s.at(s.size() - 1) == '>') {
-        Path p(s.substr(1, s.size() - 2));
+        // Should perhaps be a `CanonPath`?
+        std::string p(s.substr(1, s.size() - 2));
         return state.findFile(p);
     }
 
     else
-        return state.rootPath(baseDir ? absPath(s, *baseDir) : absPath(s));
+        return state.rootPath(absPath(std::filesystem::path{s}, baseDir).string());
 }
 
 } // namespace nix

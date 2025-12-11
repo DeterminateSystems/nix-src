@@ -69,8 +69,8 @@ nix_err nix_expr_eval_from_string(
         context->last_err_code = NIX_OK;
     try {
         nix::Expr * parsedExpr = state->state.parseExprFromString(expr, state->state.rootPath(nix::CanonPath(path)));
-        state->state.eval(parsedExpr, value->value);
-        state->state.forceValue(value->value, nix::noPos);
+        state->state.eval(parsedExpr, *value->value);
+        state->state.forceValue(*value->value, nix::noPos);
         state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
@@ -81,8 +81,8 @@ nix_err nix_value_call(nix_c_context * context, EvalState * state, Value * fn, n
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        state->state.callFunction(fn->value, arg->value, value->value, nix::noPos);
-        state->state.forceValue(value->value, nix::noPos);
+        state->state.callFunction(*fn->value, *arg->value, *value->value, nix::noPos);
+        state->state.forceValue(*value->value, nix::noPos);
         state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
@@ -93,9 +93,15 @@ nix_err nix_value_call_multi(
 {
     if (context)
         context->last_err_code = NIX_OK;
+
+    std::vector<nix::Value *> internal_args;
+    internal_args.reserve(nargs);
+    for (size_t i = 0; i < nargs; i++)
+        internal_args.push_back(args[i]->value);
+
     try {
-        state->state.callFunction(fn->value, {(nix::Value **) args, nargs}, value->value, nix::noPos);
-        state->state.forceValue(value->value, nix::noPos);
+        state->state.callFunction(*fn->value, {internal_args.data(), nargs}, *value->value, nix::noPos);
+        state->state.forceValue(*value->value, nix::noPos);
         state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
@@ -106,7 +112,7 @@ nix_err nix_value_force(nix_c_context * context, EvalState * state, nix_value * 
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        state->state.forceValue(value->value, nix::noPos);
+        state->state.forceValue(*value->value, nix::noPos);
         state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
@@ -117,7 +123,7 @@ nix_err nix_value_force_deep(nix_c_context * context, EvalState * state, nix_val
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        state->state.forceValueDeep(value->value);
+        state->state.forceValueDeep(*value->value);
         state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
@@ -142,6 +148,8 @@ nix_eval_state_builder * nix_eval_state_builder_new(nix_c_context * context, Sto
 
 void nix_eval_state_builder_free(nix_eval_state_builder * builder)
 {
+    if (builder)
+        builder->~nix_eval_state_builder();
     operator delete(builder, static_cast<std::align_val_t>(alignof(nix_eval_state_builder)));
 }
 
@@ -208,6 +216,8 @@ EvalState * nix_state_create(nix_c_context * context, const char ** lookupPath_c
 
 void nix_state_free(EvalState * state)
 {
+    if (state)
+        state->~EvalState();
     operator delete(state, static_cast<std::align_val_t>(alignof(EvalState)));
 }
 

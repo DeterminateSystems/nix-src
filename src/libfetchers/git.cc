@@ -43,10 +43,10 @@ bool isCacheFileWithinTtl(time_t now, const struct stat & st)
     return st.st_mtime + static_cast<time_t>(settings.tarballTtl) > now;
 }
 
-Path getCachePath(std::string_view key, bool shallow)
+std::filesystem::path getCachePath(std::string_view key, bool shallow)
 {
-    return getCacheDir() + "/gitv3/" + hashString(HashAlgorithm::SHA256, key).to_string(HashFormat::Nix32, false)
-           + (shallow ? "-shallow" : "");
+    return getCacheDir() / "gitv3"
+           / (hashString(HashAlgorithm::SHA256, key).to_string(HashFormat::Nix32, false) + (shallow ? "-shallow" : ""));
 }
 
 // Returns the name of the HEAD branch.
@@ -56,13 +56,13 @@ Path getCachePath(std::string_view key, bool shallow)
 //
 //   ref: refs/heads/main       HEAD
 //   ...
-std::optional<std::string> readHead(const Path & path)
+std::optional<std::string> readHead(const std::filesystem::path & path)
 {
     auto [status, output] = runProgram(
         RunOptions{
             .program = "git",
             // FIXME: use 'HEAD' to avoid returning all refs
-            .args = {"ls-remote", "--symref", path},
+            .args = {"ls-remote", "--symref", path.string()},
             .isInteractive = true,
         });
     if (status != 0)
@@ -87,9 +87,9 @@ std::optional<std::string> readHead(const Path & path)
 // Persist the HEAD ref from the remote repo in the local cached repo.
 bool storeCachedHead(const std::string & actualUrl, bool shallow, const std::string & headRef)
 {
-    Path cacheDir = getCachePath(actualUrl, shallow);
+    std::filesystem::path cacheDir = getCachePath(actualUrl, shallow);
     try {
-        runProgram("git", true, {"-C", cacheDir, "--git-dir", ".", "symbolic-ref", "--", "HEAD", headRef});
+        runProgram("git", true, {"-C", cacheDir.string(), "--git-dir", ".", "symbolic-ref", "--", "HEAD", headRef});
     } catch (ExecError & e) {
         if (
 #ifndef WIN32 // TODO abstract over exit status handling on Windows
@@ -110,13 +110,13 @@ std::optional<std::string> readHeadCached(const std::string & actualUrl, bool sh
 {
     // Create a cache path to store the branch of the HEAD ref. Append something
     // in front of the URL to prevent collision with the repository itself.
-    Path cacheDir = getCachePath(actualUrl, shallow);
-    Path headRefFile = cacheDir + "/HEAD";
+    std::filesystem::path cacheDir = getCachePath(actualUrl, shallow);
+    std::filesystem::path headRefFile = cacheDir / "HEAD";
 
     time_t now = time(0);
     struct stat st;
     std::optional<std::string> cachedRef;
-    if (stat(headRefFile.c_str(), &st) == 0) {
+    if (stat(headRefFile.string().c_str(), &st) == 0) {
         cachedRef = readHead(cacheDir);
         if (cachedRef != std::nullopt && *cachedRef != gitInitialBranch && isCacheFileWithinTtl(now, st)) {
             debug("using cached HEAD ref '%s' for repo '%s'", *cachedRef, actualUrl);
@@ -169,8 +169,6 @@ struct GitInputScheme : InputScheme
             return {};
 
         auto url2(url);
-        if (hasPrefix(url2.scheme, "git+"))
-            url2.scheme = std::string(url2.scheme, 4);
         url2.query.clear();
 
         Attrs attrs;
@@ -197,28 +195,183 @@ struct GitInputScheme : InputScheme
         return "git";
     }
 
-    StringSet allowedAttrs() const override
+    std::string schemeDescription() const override
     {
-        return {
-            "url",
-            "ref",
-            "rev",
-            "shallow",
-            "submodules",
-            "lfs",
-            "exportIgnore",
-            "lastModified",
-            "revCount",
-            "narHash",
-            "allRefs",
-            "name",
-            "dirtyRev",
-            "dirtyShortRev",
-            "verifyCommit",
-            "keytype",
-            "publicKey",
-            "publicKeys",
+        return stripIndentation(R"(
+          Fetch a Git tree and copy it to the Nix store.
+          This is similar to [`builtins.fetchGit`](@docroot@/language/builtins.md#builtins-fetchGit).
+        )");
+    }
+
+    const std::map<std::string, AttributeInfo> & allowedAttrs() const override
+    {
+        static const std::map<std::string, AttributeInfo> attrs = {
+            {
+                "url",
+                {
+                    .type = "String",
+                    .required = true,
+                    .doc = R"(
+                      The URL formats supported are the same as for Git itself.
+
+                      > **Example**
+                      >
+                      > ```nix
+                      > fetchTree {
+                      >   type = "git";
+                      >   url = "git@github.com:NixOS/nixpkgs.git";
+                      > }
+                      > ```
+
+                      > **Note**
+                      >
+                      > If the URL points to a local directory, and no `ref` or `rev` is given, Nix only considers files added to the Git index, as listed by `git ls-files` but uses the *current file contents* of the Git working directory.
+                    )",
+                },
+            },
+            {
+                "ref",
+                {
+                    .type = "String",
+                    .required = false,
+                    .doc = R"(
+                      By default, this has no effect. This becomes relevant only once `shallow` cloning is disabled.
+
+                      A [Git reference](https://git-scm.com/book/en/v2/Git-Internals-Git-References), such as a branch or tag name.
+
+                      Default: `"HEAD"`
+                    )",
+                },
+            },
+            {
+                "rev",
+                {
+                    .type = "String",
+                    .required = false,
+                    .doc = R"(
+                      A Git revision; a commit hash.
+
+                      Default: the tip of `ref`
+                    )",
+                },
+            },
+            {
+                "shallow",
+                {
+                    .type = "Bool",
+                    .required = false,
+                    .doc = R"(
+                      Make a shallow clone when fetching the Git tree.
+                      When this is enabled, the options `ref` and `allRefs` have no effect anymore.
+
+                      Default: `true`
+                    )",
+                },
+            },
+            {
+                "submodules",
+                {
+                    .type = "Bool",
+                    .required = false,
+                    .doc = R"(
+                      Also fetch submodules if available.
+
+                      Default: `false`
+                    )",
+                },
+            },
+            {
+                "lfs",
+                {
+                    .type = "Bool",
+                    .required = false,
+                    .doc = R"(
+                      Fetch any [Git LFS](https://git-lfs.com/) files.
+
+                      Default: `false`
+                    )",
+                },
+            },
+            {
+                "exportIgnore",
+                {},
+            },
+            {
+                "lastModified",
+                {
+                    .type = "Integer",
+                    .required = false,
+                    .doc = R"(
+                      Unix timestamp of the fetched commit.
+
+                      If set, pass through the value to the output attribute set.
+                      Otherwise, generated from the fetched Git tree.
+                    )",
+                },
+            },
+            {
+                "revCount",
+                {
+                    .type = "Integer",
+                    .required = false,
+                    .doc = R"(
+                      Number of revisions in the history of the Git repository before the fetched commit.
+
+                      If set, pass through the value to the output attribute set.
+                      Otherwise, generated from the fetched Git tree.
+                    )",
+                },
+            },
+            {
+                "narHash",
+                {},
+            },
+            {
+                "allRefs",
+                {
+                    .type = "Bool",
+                    .required = false,
+                    .doc = R"(
+                      By default, this has no effect. This becomes relevant only once `shallow` cloning is disabled.
+
+                      Whether to fetch all references (eg. branches and tags) of the repository.
+                      With this argument being true, it's possible to load a `rev` from *any* `ref`.
+                      (Without setting this option, only `rev`s from the specified `ref` are supported).
+
+                      Default: `false`
+                    )",
+                },
+            },
+            {
+                "name",
+                {},
+            },
+            {
+                "dirtyRev",
+                {},
+            },
+            {
+                "dirtyShortRev",
+                {},
+            },
+            {
+                "verifyCommit",
+                {},
+            },
+            {
+                "keytype",
+                {},
+            },
+            {
+                "publicKey",
+                {},
+            },
+            {
+                "publicKeys",
+                {},
+            },
         };
+        return attrs;
     }
 
     std::optional<Input> inputFromAttrs(const Settings & settings, const Attrs & attrs) const override
@@ -283,7 +436,7 @@ struct GitInputScheme : InputScheme
         return res;
     }
 
-    void clone(const Settings & settings, ref<Store> store, const Input & input, const std::filesystem::path & destDir)
+    void clone(const Settings & settings, Store & store, const Input & input, const std::filesystem::path & destDir)
         const override
     {
         auto repoInfo = getRepoInfo(input);
@@ -300,7 +453,7 @@ struct GitInputScheme : InputScheme
         if (input.getRev())
             throw UnimplementedError("cloning a specific revision is not implemented");
 
-        args.push_back(destDir);
+        args.push_back(destDir.string());
 
         runProgram("git", true, args, {}, true);
     }
@@ -672,7 +825,7 @@ struct GitInputScheme : InputScheme
                       PathFilter filter = [&](const Path & path) { return baseNameOf(path) != ".git"; };
                       return store.addToStore(
                           "source",
-                          {getFSSourceAccessor(), CanonPath(tmpDir)},
+                          {getFSSourceAccessor(), CanonPath(tmpDir.string())},
                           ContentAddressMethod::Raw::NixArchive,
                           HashAlgorithm::SHA256,
                           {},
@@ -691,7 +844,7 @@ struct GitInputScheme : InputScheme
 
                       unpackTarfile(*source, tmpDir);
 
-                      return store.addToStore("source", {getFSSourceAccessor(), CanonPath(tmpDir)});
+                      return store.addToStore("source", {getFSSourceAccessor(), CanonPath(tmpDir.string())});
                   }();
 
         auto accessor = store.getFSAccessor(storePath);
@@ -702,8 +855,7 @@ struct GitInputScheme : InputScheme
     }
 
     std::pair<ref<SourceAccessor>, Input>
-    getAccessorFromCommit(const Settings & settings, ref<Store> store, RepoInfo & repoInfo, Input && input) const
-
+    getAccessorFromCommit(const Settings & settings, Store & store, RepoInfo & repoInfo, Input && input) const
     {
         assert(!repoInfo.workdirInfo.isDirty);
 
@@ -775,7 +927,7 @@ struct GitInputScheme : InputScheme
                     auto fetchRef = getAllRefsAttr(input)             ? "refs/*:refs/*"
                                     : input.getRev()                  ? input.getRev()->gitRev()
                                     : ref.compare(0, 5, "refs/") == 0 ? fmt("%1%:%1%", ref)
-                                    : ref == "HEAD"                   ? ref
+                                    : ref == "HEAD"                   ? "HEAD:HEAD"
                                                                       : fmt("%1%:%1%", "refs/heads/" + ref);
 
                     repo->fetch(repoUrl.to_string(), fetchRef, shallow);
@@ -855,13 +1007,13 @@ struct GitInputScheme : InputScheme
              * as well. */
             warn("Using Nix 2.19 semantics to export Git repository '%s'.", input.to_string());
             auto accessorModern = accessor;
-            accessor = getLegacyGitAccessor(*store, repoInfo, repoDir, rev, options);
+            accessor = getLegacyGitAccessor(store, repoInfo, repoDir, rev, options);
             if (expectedNarHash) {
                 auto narHashLegacy =
-                    fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
+                    fetchToStore2(settings, store, {accessor}, FetchMode::DryRun, input.getName()).second;
                 if (expectedNarHash != narHashLegacy) {
                     auto narHashModern =
-                        fetchToStore2(settings, *store, {accessorModern}, FetchMode::DryRun, input.getName()).second;
+                        fetchToStore2(settings, store, {accessorModern}, FetchMode::DryRun, input.getName()).second;
                     if (expectedNarHash == narHashModern)
                         accessor = accessorModern;
                 }
@@ -870,12 +1022,12 @@ struct GitInputScheme : InputScheme
             /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Nix applying Git filters,
              * `export-ignore` or `export-subst`. Nix >= 2.20 doesn't do those, so we may get a NAR hash mismatch. If
              * that happens, try again using `git archive`. */
-            auto narHashNew = fetchToStore2(settings, *store, {accessor}, FetchMode::DryRun, input.getName()).second;
+            auto narHashNew = fetchToStore2(settings, store, {accessor}, FetchMode::DryRun, input.getName()).second;
             if (expectedNarHash && accessor->pathExists(CanonPath(".gitattributes"))) {
                 if (expectedNarHash != narHashNew) {
-                    auto accessorLegacy = getLegacyGitAccessor(*store, repoInfo, repoDir, rev, options);
+                    auto accessorLegacy = getLegacyGitAccessor(store, repoInfo, repoDir, rev, options);
                     auto narHashLegacy =
-                        fetchToStore2(settings, *store, {accessorLegacy}, FetchMode::DryRun, input.getName()).second;
+                        fetchToStore2(settings, store, {accessorLegacy}, FetchMode::DryRun, input.getName()).second;
                     if (expectedNarHash == narHashLegacy) {
                         warn(
                             "Git input '%s' specifies a NAR hash '%s' that was created by Nix < 2.20.\n"
@@ -943,7 +1095,7 @@ struct GitInputScheme : InputScheme
     }
 
     std::pair<ref<SourceAccessor>, Input>
-    getAccessorFromWorkdir(const Settings & settings, ref<Store> store, RepoInfo & repoInfo, Input && input) const
+    getAccessorFromWorkdir(const Settings & settings, Store & store, RepoInfo & repoInfo, Input && input) const
     {
         auto repoPath = repoInfo.getPath().value();
 
@@ -1027,7 +1179,7 @@ struct GitInputScheme : InputScheme
     }
 
     std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, ref<Store> store, const Input & _input) const override
+    getAccessor(const Settings & settings, Store & store, const Input & _input) const override
     {
         Input input(_input);
 
@@ -1049,7 +1201,7 @@ struct GitInputScheme : InputScheme
         return {accessor, std::move(final)};
     }
 
-    std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
+    std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
     {
         auto options = getGitAccessorOptions(input);
 

@@ -13,7 +13,7 @@
 namespace nix::fetchers {
 
 DownloadFileResult downloadFile(
-    ref<Store> store,
+    Store & store,
     const Settings & settings,
     const std::string & url,
     const std::string & name,
@@ -28,7 +28,7 @@ DownloadFileResult downloadFile(
             {"name", name},
         }}};
 
-    auto cached = settings.getCache()->lookupStorePath(key, *store);
+    auto cached = settings.getCache()->lookupStorePath(key, store);
 
     auto useCached = [&]() -> DownloadFileResult {
         return {
@@ -74,7 +74,7 @@ DownloadFileResult downloadFile(
         dumpString(res.data, sink);
         auto hash = hashString(HashAlgorithm::SHA256, res.data);
         auto info = ValidPathInfo::makeFromCA(
-            *store,
+            store,
             name,
             FixedOutputInfo{
                 .method = FileIngestionMethod::Flat,
@@ -84,7 +84,7 @@ DownloadFileResult downloadFile(
             hashString(HashAlgorithm::SHA256, sink.s));
         info.narSize = sink.s.size();
         auto source = StringSource{sink.s};
-        store->addToStore(info, source, NoRepair, NoCheckSigs);
+        store.addToStore(info, source, NoRepair, NoCheckSigs);
         storePath = std::move(info.path);
     }
 
@@ -93,7 +93,7 @@ DownloadFileResult downloadFile(
         key.second.insert_or_assign("url", url);
         assert(!res.urls.empty());
         infoAttrs.insert_or_assign("url", *res.urls.rbegin());
-        settings.getCache()->upsert(key, *store, infoAttrs, *storePath);
+        settings.getCache()->upsert(key, store, infoAttrs, *storePath);
     }
 
     return {
@@ -214,7 +214,7 @@ static DownloadTarballResult downloadTarball_(
     return attrsToResult(infoAttrs);
 }
 
-ref<SourceAccessor> downloadTarball(ref<Store> store, const Settings & settings, const std::string & url)
+ref<SourceAccessor> downloadTarball(Store & store, const Settings & settings, const std::string & url)
 {
     /* Go through Input::getAccessor() to ensure that the resulting
        accessor has a fingerprint. */
@@ -278,7 +278,7 @@ struct CurlInputScheme : InputScheme
            HTTP request. Now that we've processed the Nix-specific
            attributes above, remove them so we don't also send them as
            part of the HTTP request. */
-        for (auto & param : allowedAttrs())
+        for (auto & [param, _] : allowedAttrs())
             url.query.erase(param);
 
         input.attrs.insert_or_assign("type", std::string{schemeName()});
@@ -286,18 +286,83 @@ struct CurlInputScheme : InputScheme
         return input;
     }
 
-    StringSet allowedAttrs() const override
+    static const std::map<std::string, AttributeInfo> & allowedAttrsImpl()
     {
-        return {
-            "type",
-            "url",
-            "narHash",
-            "name",
-            "unpack",
-            "rev",
-            "revCount",
-            "lastModified",
+        static const std::map<std::string, AttributeInfo> attrs = {
+            {
+                "url",
+                {
+                    .type = "String",
+                    .required = true,
+                    .doc = R"(
+                      Supported protocols:
+
+                      - `https`
+
+                        > **Example**
+                        >
+                        > ```nix
+                        > fetchTree {
+                        >   type = "file";
+                        >   url = "https://example.com/index.html";
+                        > }
+                        > ```
+
+                      - `http`
+
+                        Insecure HTTP transfer for legacy sources.
+
+                        > **Warning**
+                        >
+                        > HTTP performs no encryption or authentication.
+                        > Use a `narHash` known in advance to ensure the output has expected contents.
+
+                      - `file`
+
+                        A file on the local file system.
+
+                        > **Example**
+                        >
+                        > ```nix
+                        > fetchTree {
+                        >   type = "file";
+                        >   url = "file:///home/eelco/nix/README.md";
+                        > }
+                        > ```
+                    )",
+                },
+            },
+            {
+                "narHash",
+                {},
+            },
+            {
+                "name",
+                {},
+            },
+            {
+                "unpack",
+                {},
+            },
+            {
+                "rev",
+                {},
+            },
+            {
+                "revCount",
+                {},
+            },
+            {
+                "lastModified",
+                {},
+            },
         };
+        return attrs;
+    }
+
+    const std::map<std::string, AttributeInfo> & allowedAttrs() const override
+    {
+        return allowedAttrsImpl();
     }
 
     std::optional<Input> inputFromAttrs(const Settings & settings, const Attrs & attrs) const override
@@ -332,6 +397,14 @@ struct FileInputScheme : CurlInputScheme
         return "file";
     }
 
+    std::string schemeDescription() const override
+    {
+        return stripIndentation(R"(
+          Place a plain file into the Nix store.
+          This is similar to [`builtins.fetchurl`](@docroot@/language/builtins.md#builtins-fetchurl)
+        )");
+    }
+
     bool isValidURL(const ParsedURL & url, bool requireTree) const override
     {
         auto parsedUrlScheme = parseUrlScheme(url.scheme);
@@ -341,7 +414,7 @@ struct FileInputScheme : CurlInputScheme
     }
 
     std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, ref<Store> store, const Input & _input) const override
+    getAccessor(const Settings & settings, Store & store, const Input & _input) const override
     {
         auto input(_input);
 
@@ -351,10 +424,10 @@ struct FileInputScheme : CurlInputScheme
            tarballs. */
         auto file = downloadFile(store, settings, getStrAttr(input.attrs, "url"), input.getName());
 
-        auto narHash = store->queryPathInfo(file.storePath)->narHash;
+        auto narHash = store.queryPathInfo(file.storePath)->narHash;
         input.attrs.insert_or_assign("narHash", narHash.to_string(HashFormat::SRI, true));
 
-        auto accessor = ref{store->getFSAccessor(file.storePath)};
+        auto accessor = ref{store.getFSAccessor(file.storePath)};
 
         accessor->setPathDisplay("«" + input.to_string(true) + "»");
 
@@ -369,6 +442,34 @@ struct TarballInputScheme : CurlInputScheme
         return "tarball";
     }
 
+    std::string schemeDescription() const override
+    {
+        return stripIndentation(R"(
+          Download a tar archive and extract it into the Nix store.
+          This has the same underlying implementation as [`builtins.fetchTarball`](@docroot@/language/builtins.md#builtins-fetchTarball)
+        )");
+    }
+
+    const std::map<std::string, AttributeInfo> & allowedAttrs() const override
+    {
+        static const std::map<std::string, AttributeInfo> attrs = [] {
+            auto attrs = CurlInputScheme::allowedAttrsImpl();
+            // Override the "url" attribute to add tarball-specific example
+            attrs["url"].doc = R"(
+              > **Example**
+              >
+              > ```nix
+              > fetchTree {
+              >   type = "tarball";
+              >   url = "https://github.com/NixOS/nixpkgs/tarball/nixpkgs-23.11";
+              > }
+              > ```
+            )";
+            return attrs;
+        }();
+        return attrs;
+    }
+
     bool isValidURL(const ParsedURL & url, bool requireTree) const override
     {
         auto parsedUrlScheme = parseUrlScheme(url.scheme);
@@ -379,7 +480,7 @@ struct TarballInputScheme : CurlInputScheme
     }
 
     std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, ref<Store> store, const Input & _input) const override
+    getAccessor(const Settings & settings, Store & store, const Input & _input) const override
     {
         auto input(_input);
 
@@ -404,7 +505,7 @@ struct TarballInputScheme : CurlInputScheme
         return {result.accessor, input};
     }
 
-    std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
+    std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
     {
         if (auto narHash = input.getNarHash())
             return "tarball:" + narHash->to_string(HashFormat::SRI, true);

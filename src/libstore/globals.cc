@@ -116,7 +116,7 @@ void loadConfFile(AbstractConfig & config)
         }
     };
 
-    applyConfigFile(settings.nixConfDir + "/nix.conf");
+    applyConfigFile((settings.nixConfDir / "nix.conf").string());
 
     /* We only want to send overrides to the daemon, i.e. stuff from
        ~/.nix/nix.conf or the command line. */
@@ -145,7 +145,7 @@ std::vector<Path> getUserConfigFiles()
     std::vector<Path> files;
     auto dirs = getConfigDirs();
     for (auto & dir : dirs) {
-        files.insert(files.end(), dir + "/nix.conf");
+        files.insert(files.end(), (dir / "nix.conf").string());
     }
     return files;
 }
@@ -256,6 +256,15 @@ Path Settings::getDefaultSSLCertFile()
         if (pathAccessible(fn))
             return fn;
     return "";
+}
+
+const ExternalBuilder * Settings::findExternalDerivationBuilderIfSupported(const Derivation & drv)
+{
+    if (auto it = std::ranges::find_if(
+            externalBuilders.get(), [&](const auto & handler) { return handler.systems.contains(drv.platform); });
+        it != externalBuilders.get().end())
+        return &*it;
+    return nullptr;
 }
 
 std::string nixVersion = PACKAGE_VERSION;
@@ -381,8 +390,6 @@ unsigned int MaxBuildJobsSetting::parse(const std::string & str) const
     }
 }
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Settings::ExternalBuilder, systems, program, args);
-
 template<>
 Settings::ExternalBuilders BaseSetting<Settings::ExternalBuilders>::parse(const std::string & str) const
 {
@@ -481,7 +488,7 @@ void initLibStore(bool loadConfig)
     /* On macOS, don't use the per-session TMPDIR (as set e.g. by
        sshd). This breaks build users because they don't have access
        to the TMPDIR, in particular in ‘nix-store --serve’. */
-    if (hasPrefix(defaultTempDir(), "/var/folders/"))
+    if (hasPrefix(defaultTempDir().string(), "/var/folders/"))
         unsetenv("TMPDIR");
 #endif
 
