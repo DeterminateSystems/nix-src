@@ -75,9 +75,9 @@ class Settings : public Config
 
 public:
 
-    static unsigned int getDefaultCores();
-
     Settings();
+
+    static unsigned int getDefaultCores();
 
     Path nixPrefix;
 
@@ -101,7 +101,7 @@ public:
     /**
      * The directory where system configuration files are stored.
      */
-    Path nixConfDir;
+    std::filesystem::path nixConfDir;
 
     /**
      * A list of user configuration files to load.
@@ -189,7 +189,7 @@ public:
         0,
         "cores",
         R"(
-          Sets the value of the `NIX_BUILD_CORES` environment variable in the [invocation of the `builder` executable](@docroot@/language/derivations.md#builder-execution) of a derivation.
+          Sets the value of the `NIX_BUILD_CORES` environment variable in the [invocation of the `builder` executable](@docroot@/store/building.md#builder-execution) of a derivation.
           The `builder` executable can use this variable to control its own maximum amount of parallelism.
 
           <!--
@@ -199,7 +199,7 @@ public:
           -->
           For instance, in Nixpkgs, if the attribute `enableParallelBuilding` for the `mkDerivation` build helper is set to `true`, it passes the `-j${NIX_BUILD_CORES}` flag to GNU Make.
 
-          If set to `0`, nix will detect the number of CPU cores and pass this number via NIX_BUILD_CORES.
+          If set to `0`, nix will detect the number of CPU cores and pass this number via `NIX_BUILD_CORES`.
 
           > **Note**
           >
@@ -288,7 +288,7 @@ public:
 
     Setting<std::string> builders{
         this,
-        "@" + nixConfDir + "/machines",
+        "@" + nixConfDir.string() + "/machines",
         "builders",
         R"(
           A semicolon- or newline-separated list of build machines.
@@ -790,6 +790,8 @@ public:
         "build-dir",
         R"(
             Override the `build-dir` store setting for all stores that have this setting.
+
+            See also the per-store [`build-dir`](@docroot@/store/types/local-store.md#store-local-store-build-dir) setting.
         )"};
 
     Setting<PathSet> allowedImpureHostPrefixes{
@@ -1137,7 +1139,7 @@ public:
 
     Setting<std::string> netrcFile{
         this,
-        fmt("%s/%s", nixConfDir, "netrc"),
+        (nixConfDir / "netrc").string(),
         "netrc-file",
         R"(
           If set to an absolute path to a `netrc` file, Nix uses the HTTP
@@ -1370,13 +1372,6 @@ public:
           Set it to 1 to warn on all paths.
         )"};
 
-    struct ExternalBuilder
-    {
-        std::vector<std::string> systems;
-        Path program;
-        std::vector<std::string> args;
-    };
-
     using ExternalBuilders = std::vector<ExternalBuilder>;
 
     Setting<ExternalBuilders> externalBuilders{
@@ -1440,6 +1435,12 @@ public:
         //        Current system: 'aarch64-darwin' with features {apple-virt, benchmark, big-parallel, nixos-test}
         // Xp::ExternalBuilders
     };
+
+    /**
+     * Finds the first external derivation builder that supports this
+     * derivation, or else returns a null pointer.
+     */
+    const ExternalBuilder * findExternalDerivationBuilderIfSupported(const Derivation & drv);
 };
 
 // FIXME: don't use a global variable.

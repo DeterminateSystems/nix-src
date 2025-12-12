@@ -113,7 +113,7 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
             if (!store.isValidPath(path)) {
                 auto narHash = hashString(HashAlgorithm::SHA256, saved.s);
 
-                ValidPathInfo info{path, narHash};
+                ValidPathInfo info{path, {store, narHash}};
                 if (deriver != "")
                     info.deriver = store.parseStorePath(deriver);
                 info.references = references;

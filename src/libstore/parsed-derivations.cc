@@ -33,7 +33,8 @@ std::optional<StructuredAttrs> StructuredAttrs::tryExtract(StringPairs & env)
 
 std::pair<std::string_view, std::string> StructuredAttrs::unparse() const
 {
-    return {envVarName, structuredAttrs.dump()};
+    // TODO don't copy the JSON object just to dump it.
+    return {envVarName, static_cast<nlohmann::json>(structuredAttrs).dump()};
 }
 
 void StructuredAttrs::checkKeyNotInUse(const StringPairs & env)
@@ -97,9 +98,9 @@ static nlohmann::json pathInfoToJSON(Store & store, const StorePathSet & storePa
     return jsonList;
 }
 
-nlohmann::json StructuredAttrs::prepareStructuredAttrs(
+nlohmann::json::object_t StructuredAttrs::prepareStructuredAttrs(
     Store & store,
-    const DerivationOptions & drvOptions,
+    const DerivationOptions<StorePath> & drvOptions,
     const StorePathSet & inputPaths,
     const DerivationOutputs & outputs) const
 {
@@ -113,14 +114,14 @@ nlohmann::json StructuredAttrs::prepareStructuredAttrs(
     json["outputs"] = std::move(outputsJson);
 
     /* Handle exportReferencesGraph. */
-    for (auto & [key, storePaths] : drvOptions.getParsedExportReferencesGraph(store)) {
-        json[key] = pathInfoToJSON(store, store.exportReferences(storePaths, storePaths));
+    for (auto & [key, storePaths] : drvOptions.exportReferencesGraph) {
+        json[key] = pathInfoToJSON(store, store.exportReferences(storePaths, inputPaths));
     }
 
     return json;
 }
 
-std::string StructuredAttrs::writeShell(const nlohmann::json & json)
+std::string StructuredAttrs::writeShell(const nlohmann::json::object_t & json)
 {
 
     auto handleSimpleType = [](const nlohmann::json & value) -> std::optional<std::string> {
@@ -144,7 +145,7 @@ std::string StructuredAttrs::writeShell(const nlohmann::json & json)
 
     std::string jsonSh;
 
-    for (auto & [key, value] : json.items()) {
+    for (auto & [key, value] : json) {
 
         if (!std::regex_match(key, shVarName))
             continue;

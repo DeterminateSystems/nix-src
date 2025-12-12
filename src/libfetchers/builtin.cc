@@ -39,7 +39,7 @@ static void builtinFetchTree(const BuiltinBuilderContext & ctx)
 
     // FIXME: disable use of the git/tarball cache
 
-    auto input = Input::fromAttrs(myFetchSettings, jsonToAttrs(ctx.drv.structuredAttrs->structuredAttrs["input"]));
+    auto input = Input::fromAttrs(myFetchSettings, jsonToAttrs(ctx.drv.structuredAttrs->structuredAttrs.at("input")));
 
     std::cerr << fmt("fetching '%s'...\n", input.to_string());
 
@@ -48,7 +48,7 @@ static void builtinFetchTree(const BuiltinBuilderContext & ctx)
        Nix's daemon so we can use the real store? */
     auto tmpStore = openStore(ctx.tmpDirInSandbox + "/nix");
 
-    auto [accessor, lockedInput] = input.getAccessor(myFetchSettings, tmpStore);
+    auto [accessor, lockedInput] = input.getAccessor(myFetchSettings, *tmpStore);
 
     auto source = sinkToSource([&](Sink & sink) { accessor->dumpPath(CanonPath::root, sink); });
 

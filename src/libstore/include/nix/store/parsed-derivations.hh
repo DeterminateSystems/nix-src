@@ -9,6 +9,7 @@
 namespace nix {
 
 class Store;
+template<typename Input>
 struct DerivationOptions;
 struct DerivationOutput;
 
@@ -18,7 +19,7 @@ struct StructuredAttrs
 {
     static constexpr std::string_view envVarName{"__json"};
 
-    nlohmann::json structuredAttrs;
+    nlohmann::json::object_t structuredAttrs;
 
     bool operator==(const StructuredAttrs &) const = default;
 
@@ -45,9 +46,9 @@ struct StructuredAttrs
      */
     static void checkKeyNotInUse(const StringPairs & env);
 
-    nlohmann::json prepareStructuredAttrs(
+    nlohmann::json::object_t prepareStructuredAttrs(
         Store & store,
-        const DerivationOptions & drvOptions,
+        const DerivationOptions<StorePath> & drvOptions,
         const StorePathSet & inputPaths,
         const DerivationOutputs & outputs) const;
 
@@ -62,7 +63,7 @@ struct StructuredAttrs
      * `prepareStructuredAttrs`, *not* the original `structuredAttrs`
      * field.
      */
-    static std::string writeShell(const nlohmann::json & prepared);
+    static std::string writeShell(const nlohmann::json::object_t & prepared);
 };
 
 } // namespace nix

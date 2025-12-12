@@ -52,13 +52,14 @@ gtest = dependency('gmock')
 deps_private += gtest
 
 subdir('nix-meson-build-support/common')
-subdir('nix-meson-build-support/asan-options')
 
 sources = files(
+  'build-result.cc',
   'common-protocol.cc',
   'content-address.cc',
   'derivation-advanced-attrs.cc',
-  'derivation.cc',
+  'derivation/external-formats.cc',
+  'derivation/invariants.cc',
   'derived-path.cc',
   'downstream-placeholder.cc',
   'dummy-store.cc',
@@ -84,6 +85,7 @@ sources = files(
   'store-reference.cc',
   'uds-remote-store.cc',
   'worker-protocol.cc',
+  'write-derivation.cc',
 )
 
 include_dirs = [ include_directories('.') ]
@@ -105,7 +107,7 @@ this_exe = executable(
 test(
   meson.project_name(),
   this_exe,
-  env : asan_test_options_env + {
+  env : {
     '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
     'HOME' : meson.current_build_dir() / 'test-home',
     'NIX_REMOTE' : meson.current_build_dir() / 'test-home' / 'store',
@@ -139,7 +141,7 @@ if get_option('benchmarks')
   benchmark(
     'nix-store-benchmarks',
     benchmark_exe,
-    env : asan_test_options_env + {
+    env : {
       '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
     },
   )

@@ -37,12 +37,12 @@ libgit2 = dependency('libgit2')
 deps_private += libgit2
 
 subdir('nix-meson-build-support/common')
-subdir('nix-meson-build-support/asan-options')
 
 sources = files(
   'access-tokens.cc',
   'git-utils.cc',
   'git.cc',
+  'input.cc',
   'nix_api_fetchers.cc',
   'public-key.cc',
 )
@@ -64,7 +64,7 @@ this_exe = executable(
 test(
   meson.project_name(),
   this_exe,
-  env : asan_test_options_env + {
+  env : {
     '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
   },
   protocol : 'gtest',

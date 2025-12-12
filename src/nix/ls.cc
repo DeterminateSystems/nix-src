@@ -1,6 +1,6 @@
 #include "nix/cmd/command.hh"
 #include "nix/store/store-api.hh"
-#include "nix/store/nar-accessor.hh"
+#include "nix/util/nar-accessor.hh"
 #include "nix/main/common-args.hh"
 #include <nlohmann/json.hpp>
 
@@ -79,7 +79,12 @@ struct MixLs : virtual Args, MixJSON, MixLongListing
         if (json) {
             if (showDirectory)
                 throw UsageError("'--directory' is useless with '--json'");
-            logger->cout("%s", listNar(accessor, path, recursive));
+            nlohmann::json j;
+            if (recursive)
+                j = listNarDeep(*accessor, path);
+            else
+                j = listNarShallow(*accessor, path);
+            logger->cout("%s", j.dump());
         } else
             listText(accessor, std::move(path));
     }
@@ -109,10 +114,7 @@ struct CmdLsStore : StoreCommand, MixLs
     void run(ref<Store> store) override
     {
         auto [storePath, rest] = store->toStorePath(path);
-        auto accessor = store->getFSAccessor(storePath);
-        if (!accessor)
-            throw InvalidPath("path '%1%' is not a valid store path", store->printStorePath(storePath));
-        list(ref{std::move(accessor)}, CanonPath{rest});
+        list(store->requireStoreObjectAccessor(storePath), CanonPath{rest});
     }
 };
 
@@ -142,7 +144,11 @@ struct CmdLsNar : Command, MixLs
 
     void run() override
     {
-        list(makeNarAccessor(readFile(narPath)), CanonPath{path});
+        AutoCloseFD fd = toDescriptor(open(narPath.c_str(), O_RDONLY));
+        if (!fd)
+            throw SysError("opening NAR file '%s'", narPath);
+        auto source = FdSource{fd.get()};
+        list(makeLazyNarAccessor(source, seekableGetNarBytes(fd.get())), CanonPath{path});
     }
 };
 

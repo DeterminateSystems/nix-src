@@ -43,7 +43,7 @@ public:
     Path getRegistryPath()
     {
         if (registry_path.empty()) {
-            return fetchers::getUserRegistryPath();
+            return fetchers::getUserRegistryPath().string();
         } else {
             return registry_path;
         }
@@ -68,7 +68,7 @@ struct CmdRegistryList : StoreCommand
     {
         using namespace fetchers;
 
-        auto registries = getRegistries(fetchSettings, store);
+        auto registries = getRegistries(fetchSettings, *store);
 
         for (auto & registry : registries) {
             for (auto & entry : registry->entries) {
@@ -189,14 +189,14 @@ struct CmdRegistryPin : RegistryCommand, EvalCommand
         auto registry = getRegistry();
         auto ref = parseFlakeRef(fetchSettings, url);
         auto lockedRef = parseFlakeRef(fetchSettings, locked);
-        registry->remove(ref.input);
-        auto resolvedInput = lockedRef.resolve(fetchSettings, store).input;
-        auto resolved = resolvedInput.getAccessor(fetchSettings, store).second;
+        auto resolvedInput = lockedRef.resolve(fetchSettings, *store).input;
+        auto resolved = resolvedInput.getAccessor(fetchSettings, *store).second;
         if (!resolved.isLocked(fetchSettings))
             warn("flake '%s' is not locked", resolved.to_string());
         fetchers::Attrs extraAttrs;
         if (ref.subdir != "")
             extraAttrs["dir"] = ref.subdir;
+        registry->remove(ref.input);
         registry->add(ref.input, resolved, extraAttrs);
         registry->write(getRegistryPath());
     }
@@ -230,7 +230,7 @@ struct CmdRegistryResolve : StoreCommand
     {
         for (auto & url : urls) {
             auto ref = parseFlakeRef(fetchSettings, url);
-            auto resolved = ref.resolve(fetchSettings, store);
+            auto resolved = ref.resolve(fetchSettings, *store);
             logger->cout("%s", resolved.to_string());
         }
     }

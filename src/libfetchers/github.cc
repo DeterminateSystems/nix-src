@@ -41,18 +41,16 @@ struct GitArchiveInputScheme : InputScheme
         /* This ignores empty path segments for back-compat. Older versions used a tokenizeString here. */
         auto path = url.pathSegments(/*skipEmpty=*/true) | std::ranges::to<std::vector<std::string>>();
 
-        std::optional<Hash> rev;
+        std::optional<std::string> rev;
         std::optional<std::string> ref;
         std::optional<std::string> host_url;
 
         auto size = path.size();
         if (size == 3) {
             if (std::regex_match(path[2], revRegex))
-                rev = Hash::parseAny(path[2], HashAlgorithm::SHA1);
-            else if (isLegalRefName(path[2]))
-                ref = path[2];
+                rev = path[2];
             else
-                throw BadURL("in URL '%s', '%s' is not a commit hash or branch/tag name", url, path[2]);
+                ref = path[2];
         } else if (size > 3) {
             std::string rs;
             for (auto i = std::next(path.begin(), 2); i != path.end(); i++) {
@@ -61,12 +59,7 @@ struct GitArchiveInputScheme : InputScheme
                     rs += "/";
                 }
             }
-
-            if (isLegalRefName(rs)) {
-                ref = rs;
-            } else {
-                throw BadURL("in URL '%s', '%s' is not a branch/tag name", url, rs);
-            }
+            ref = rs;
         } else if (size < 2)
             throw BadURL("URL '%s' is invalid", url);
 
@@ -74,60 +67,95 @@ struct GitArchiveInputScheme : InputScheme
             if (name == "rev") {
                 if (rev)
                     throw BadURL("URL '%s' contains multiple commit hashes", url);
-                rev = Hash::parseAny(value, HashAlgorithm::SHA1);
+                rev = value;
             } else if (name == "ref") {
-                if (!isLegalRefName(value))
-                    throw BadURL("URL '%s' contains an invalid branch/tag name", url);
                 if (ref)
                     throw BadURL("URL '%s' contains multiple branch/tag names", url);
                 ref = value;
-            } else if (name == "host") {
-                if (!std::regex_match(value, hostRegex))
-                    throw BadURL("URL '%s' contains an invalid instance host", url);
+            } else if (name == "host")
                 host_url = value;
-            }
             // FIXME: barf on unsupported attributes
         }
 
-        if (ref && rev)
-            throw BadURL("URL '%s' contains both a commit hash and a branch/tag name %s %s", url, *ref, rev->gitRev());
-
-        Input input{};
-        input.attrs.insert_or_assign("type", std::string{schemeName()});
-        input.attrs.insert_or_assign("owner", path[0]);
-        input.attrs.insert_or_assign("repo", path[1]);
+        Attrs attrs;
+        attrs.insert_or_assign("type", std::string{schemeName()});
+        attrs.insert_or_assign("owner", path[0]);
+        attrs.insert_or_assign("repo", path[1]);
         if (rev)
-            input.attrs.insert_or_assign("rev", rev->gitRev());
+            attrs.insert_or_assign("rev", *rev);
         if (ref)
-            input.attrs.insert_or_assign("ref", *ref);
+            attrs.insert_or_assign("ref", *ref);
         if (host_url)
-            input.attrs.insert_or_assign("host", *host_url);
+            attrs.insert_or_assign("host", *host_url);
 
         auto narHash = url.query.find("narHash");
         if (narHash != url.query.end())
-            input.attrs.insert_or_assign("narHash", narHash->second);
+            attrs.insert_or_assign("narHash", narHash->second);
 
-        return input;
+        return inputFromAttrs(settings, attrs);
     }
 
-    StringSet allowedAttrs() const override
+    const std::map<std::string, AttributeInfo> & allowedAttrs() const override
     {
-        return {
-            "owner",
-            "repo",
-            "ref",
-            "rev",
-            "narHash",
-            "lastModified",
-            "host",
-            "treeHash",
+        static const std::map<std::string, AttributeInfo> attrs = {
+            {
+                "owner",
+                {},
+            },
+            {
+                "repo",
+                {},
+            },
+            {
+                "ref",
+                {},
+            },
+            {
+                "rev",
+                {},
+            },
+            {
+                "narHash",
+                {},
+            },
+            {
+                "lastModified",
+                {},
+            },
+            {
+                "host",
+                {},
+            },
+            {
+                "treeHash",
+                {},
+            },
         };
+        return attrs;
     }
 
     std::optional<Input> inputFromAttrs(const fetchers::Settings & settings, const Attrs & attrs) const override
     {
         getStrAttr(attrs, "owner");
         getStrAttr(attrs, "repo");
+
+        auto ref = maybeGetStrAttr(attrs, "ref");
+        auto rev = maybeGetStrAttr(attrs, "rev");
+        if (ref && rev)
+            throw BadURL(
+                "input %s contains both a commit hash ('%s') and a branch/tag name ('%s')",
+                attrsToJSON(attrs),
+                *rev,
+                *ref);
+
+        if (rev)
+            Hash::parseAny(*rev, HashAlgorithm::SHA1);
+
+        if (ref && !isLegalRefName(*ref))
+            throw BadURL("input %s contains an invalid branch/tag name", attrsToJSON(attrs));
+
+        if (auto host = maybeGetStrAttr(attrs, "host"); host && !std::regex_match(*host, hostRegex))
+            throw BadURL("input %s contains an invalid instance host", attrsToJSON(attrs));
 
         Input input{};
         input.attrs = attrs;
@@ -233,7 +261,7 @@ struct GitArchiveInputScheme : InputScheme
         std::optional<Hash> treeHash;
     };
 
-    virtual RefInfo getRevFromRef(const Settings & settings, nix::ref<Store> store, const Input & input) const = 0;
+    virtual RefInfo getRevFromRef(const Settings & settings, nix::Store & store, const Input & input) const = 0;
 
     virtual DownloadUrl getDownloadUrl(const Settings & settings, const Input & input) const = 0;
 
@@ -243,7 +271,7 @@ struct GitArchiveInputScheme : InputScheme
         time_t lastModified;
     };
 
-    std::pair<Input, TarballInfo> downloadArchive(const Settings & settings, ref<Store> store, Input input) const
+    std::pair<Input, TarballInfo> downloadArchive(const Settings & settings, Store & store, Input input) const
     {
         if (!maybeGetStrAttr(input.attrs, "ref"))
             input.attrs.insert_or_assign("ref", "HEAD");
@@ -316,7 +344,7 @@ struct GitArchiveInputScheme : InputScheme
     }
 
     std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, ref<Store> store, const Input & _input) const override
+    getAccessor(const Settings & settings, Store & store, const Input & _input) const override
     {
         auto [input, tarballInfo] = downloadArchive(settings, store, _input);
 
@@ -347,7 +375,7 @@ struct GitArchiveInputScheme : InputScheme
         return input.getRev().has_value() && (settings.trustTarballsFromGitForges || input.getNarHash().has_value());
     }
 
-    std::optional<std::string> getFingerprint(ref<Store> store, const Input & input) const override
+    std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
     {
         if (auto rev = input.getRev())
             return "github:" + rev->gitRev();
@@ -361,6 +389,12 @@ struct GitHubInputScheme : GitArchiveInputScheme
     std::string_view schemeName() const override
     {
         return "github";
+    }
+
+    std::string schemeDescription() const override
+    {
+        // TODO
+        return "";
     }
 
     std::optional<std::pair<std::string, std::string>> accessHeaderFromToken(const std::string & token) const override
@@ -389,7 +423,7 @@ struct GitHubInputScheme : GitArchiveInputScheme
         return getStrAttr(input.attrs, "repo");
     }
 
-    RefInfo getRevFromRef(const Settings & settings, nix::ref<Store> store, const Input & input) const override
+    RefInfo getRevFromRef(const Settings & settings, nix::Store & store, const Input & input) const override
     {
         auto host = getHost(input);
         auto url = fmt(
@@ -402,7 +436,8 @@ struct GitHubInputScheme : GitArchiveInputScheme
         Headers headers = makeHeadersWithAuthTokens(settings, host, input);
 
         auto downloadResult = downloadFile(store, settings, url, "source", headers);
-        auto json = nlohmann::json::parse(store->getFSAccessor(downloadResult.storePath)->readFile(CanonPath::root));
+        auto json = nlohmann::json::parse(
+            store.requireStoreObjectAccessor(downloadResult.storePath)->readFile(CanonPath::root));
 
         return RefInfo{
             .rev = Hash::parseAny(std::string{json["sha"]}, HashAlgorithm::SHA1),
@@ -426,7 +461,7 @@ struct GitHubInputScheme : GitArchiveInputScheme
         return DownloadUrl{parseURL(url), headers};
     }
 
-    void clone(const Settings & settings, ref<Store> store, const Input & input, const std::filesystem::path & destDir)
+    void clone(const Settings & settings, Store & store, const Input & input, const std::filesystem::path & destDir)
         const override
     {
         auto host = getHost(input);
@@ -441,6 +476,12 @@ struct GitLabInputScheme : GitArchiveInputScheme
     std::string_view schemeName() const override
     {
         return "gitlab";
+    }
+
+    std::string schemeDescription() const override
+    {
+        // TODO
+        return "";
     }
 
     std::optional<std::pair<std::string, std::string>> accessHeaderFromToken(const std::string & token) const override
@@ -462,7 +503,7 @@ struct GitLabInputScheme : GitArchiveInputScheme
         return std::make_pair(token.substr(0, fldsplit), token.substr(fldsplit + 1));
     }
 
-    RefInfo getRevFromRef(const Settings & settings, nix::ref<Store> store, const Input & input) const override
+    RefInfo getRevFromRef(const Settings & settings, nix::Store & store, const Input & input) const override
     {
         auto host = maybeGetStrAttr(input.attrs, "host").value_or("gitlab.com");
         // See rate limiting note below
@@ -476,7 +517,8 @@ struct GitLabInputScheme : GitArchiveInputScheme
         Headers headers = makeHeadersWithAuthTokens(settings, host, input);
 
         auto downloadResult = downloadFile(store, settings, url, "source", headers);
-        auto json = nlohmann::json::parse(store->getFSAccessor(downloadResult.storePath)->readFile(CanonPath::root));
+        auto json = nlohmann::json::parse(
+            store.requireStoreObjectAccessor(downloadResult.storePath)->readFile(CanonPath::root));
 
         if (json.is_array() && json.size() >= 1 && json[0]["id"] != nullptr) {
             return RefInfo{.rev = Hash::parseAny(std::string(json[0]["id"]), HashAlgorithm::SHA1)};
@@ -507,7 +549,7 @@ struct GitLabInputScheme : GitArchiveInputScheme
         return DownloadUrl{parseURL(url), headers};
     }
 
-    void clone(const Settings & settings, ref<Store> store, const Input & input, const std::filesystem::path & destDir)
+    void clone(const Settings & settings, Store & store, const Input & input, const std::filesystem::path & destDir)
         const override
     {
         auto host = maybeGetStrAttr(input.attrs, "host").value_or("gitlab.com");
@@ -527,6 +569,12 @@ struct SourceHutInputScheme : GitArchiveInputScheme
         return "sourcehut";
     }
 
+    std::string schemeDescription() const override
+    {
+        // TODO
+        return "";
+    }
+
     std::optional<std::pair<std::string, std::string>> accessHeaderFromToken(const std::string & token) const override
     {
         // SourceHut supports both PAT and OAuth2. See
@@ -537,7 +585,7 @@ struct SourceHutInputScheme : GitArchiveInputScheme
         // Once it is implemented, however, should work as expected.
     }
 
-    RefInfo getRevFromRef(const Settings & settings, nix::ref<Store> store, const Input & input) const override
+    RefInfo getRevFromRef(const Settings & settings, nix::Store & store, const Input & input) const override
     {
         // TODO: In the future, when the sourcehut graphql API is implemented for mercurial
         // and with anonymous access, this method should use it instead.
@@ -552,13 +600,10 @@ struct SourceHutInputScheme : GitArchiveInputScheme
 
         std::string refUri;
         if (ref == "HEAD") {
-            auto file =
-                store->toRealPath(downloadFile(store, settings, fmt("%s/HEAD", base_url), "source", headers).storePath);
-            std::ifstream is(file);
-            std::string line;
-            getline(is, line);
+            auto downloadFileResult = downloadFile(store, settings, fmt("%s/HEAD", base_url), "source", headers);
+            auto contents = store.requireStoreObjectAccessor(downloadFileResult.storePath)->readFile(CanonPath::root);
 
-            auto remoteLine = git::parseLsRemoteLine(line);
+            auto remoteLine = git::parseLsRemoteLine(getLine(contents).first);
             if (!remoteLine) {
                 throw BadURL("in '%d', couldn't resolve HEAD ref '%d'", input.to_string(), ref);
             }
@@ -568,9 +613,9 @@ struct SourceHutInputScheme : GitArchiveInputScheme
         }
         std::regex refRegex(refUri);
 
-        auto file = store->toRealPath(
-            downloadFile(store, settings, fmt("%s/info/refs", base_url), "source", headers).storePath);
-        std::ifstream is(file);
+        auto downloadFileResult = downloadFile(store, settings, fmt("%s/info/refs", base_url), "source", headers);
+        auto contents = store.requireStoreObjectAccessor(downloadFileResult.storePath)->readFile(CanonPath::root);
+        std::istringstream is(contents);
 
         std::string line;
         std::optional<std::string> id;
@@ -600,7 +645,7 @@ struct SourceHutInputScheme : GitArchiveInputScheme
         return DownloadUrl{parseURL(url), headers};
     }
 
-    void clone(const Settings & settings, ref<Store> store, const Input & input, const std::filesystem::path & destDir)
+    void clone(const Settings & settings, Store & store, const Input & input, const std::filesystem::path & destDir)
         const override
     {
         auto host = maybeGetStrAttr(input.attrs, "host").value_or("git.sr.ht");

@@ -6,6 +6,7 @@
 #include "nix/main/loggers.hh"
 #include "nix/main/progress-bar.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/util.hh"
 
 #include <algorithm>
 #include <exception>
@@ -64,18 +65,19 @@ void printMissing(ref<Store> store, const MissingPaths & missing, Verbosity lvl)
     }
 
     if (!missing.willSubstitute.empty()) {
-        const float downloadSizeMiB = missing.downloadSize / (1024.f * 1024.f);
-        const float narSizeMiB = missing.narSize / (1024.f * 1024.f);
         if (missing.willSubstitute.size() == 1) {
             printMsg(
-                lvl, "this path will be fetched (%.2f MiB download, %.2f MiB unpacked):", downloadSizeMiB, narSizeMiB);
+                lvl,
+                "this path will be fetched (%s download, %s unpacked):",
+                renderSize(missing.downloadSize),
+                renderSize(missing.narSize));
         } else {
             printMsg(
                 lvl,
-                "these %d paths will be fetched (%.2f MiB download, %.2f MiB unpacked):",
+                "these %d paths will be fetched (%s download, %s unpacked):",
                 missing.willSubstitute.size(),
-                downloadSizeMiB,
-                narSizeMiB);
+                renderSize(missing.downloadSize),
+                renderSize(missing.narSize));
         }
         std::vector<const StorePath *> willSubstituteSorted = {};
         std::for_each(missing.willSubstitute.begin(), missing.willSubstitute.end(), [&](const StorePath & p) {
@@ -307,7 +309,7 @@ void printVersion(const std::string & programName)
         std::cout << "System type: " << settings.thisSystem << "\n";
         std::cout << "Additional system types: " << concatStringsSep(", ", settings.extraPlatforms.get()) << "\n";
         std::cout << "Features: " << concatStringsSep(", ", cfg) << "\n";
-        std::cout << "System configuration file: " << settings.nixConfDir + "/nix.conf" << "\n";
+        std::cout << "System configuration file: " << (settings.nixConfDir / "nix.conf") << "\n";
         std::cout << "User configuration files: " << concatStringsSep(":", settings.nixUserConfFiles) << "\n";
         std::cout << "Store directory: " << settings.nixStore << "\n";
         std::cout << "State directory: " << settings.nixStateDir << "\n";
@@ -324,16 +326,7 @@ int handleExceptions(const std::string & programName, std::function<void()> fun)
 
     std::string error = ANSI_RED "error:" ANSI_NORMAL " ";
     try {
-        try {
-            fun();
-        } catch (...) {
-            /* Subtle: we have to make sure that any `interrupted'
-               condition is discharged before we reach printMsg()
-               below, since otherwise it will throw an (uncaught)
-               exception. */
-            setInterruptThrown();
-            throw;
-        }
+        fun();
     } catch (Exit & e) {
         return e.status;
     } catch (UsageError & e) {
@@ -411,7 +404,7 @@ RunPager::~RunPager()
 PrintFreed::~PrintFreed()
 {
     if (show)
-        std::cout << fmt("%d store paths deleted, %s freed\n", results.paths.size(), showBytes(results.bytesFreed));
+        std::cout << fmt("%d store paths deleted, %s freed\n", results.paths.size(), renderSize(results.bytesFreed));
 }
 
 } // namespace nix

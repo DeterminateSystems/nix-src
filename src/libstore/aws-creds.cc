@@ -1,6 +1,6 @@
 #include "nix/store/aws-creds.hh"
 
-#if NIX_WITH_CURL_S3
+#if NIX_WITH_AWS_AUTH
 
 #  include <aws/crt/Types.h>
 #  include "nix/store/s3-url.hh"
@@ -22,35 +22,13 @@
 
 namespace nix {
 
-namespace {
-
-static void initAwsCrt()
+AwsAuthError::AwsAuthError(int errorCode)
+    : Error("AWS authentication error: '%s' (%d)", aws_error_str(errorCode), errorCode)
+    , errorCode(errorCode)
 {
-    struct CrtWrapper
-    {
-        Aws::Crt::ApiHandle apiHandle;
-
-        CrtWrapper()
-        {
-            apiHandle.InitializeLogging(Aws::Crt::LogLevel::Warn, static_cast<FILE *>(nullptr));
-        }
-
-        ~CrtWrapper()
-        {
-            try {
-                // CRITICAL: Clear credential provider cache BEFORE AWS CRT shuts down
-                // This ensures all providers (which hold references to ClientBootstrap)
-                // are destroyed while AWS CRT is still valid
-                clearAwsCredentialsCache();
-                // Now it's safe for ApiHandle destructor to run
-            } catch (...) {
-                ignoreExceptionInDestructor();
-            }
-        }
-    };
-
-    static CrtWrapper crt;
 }
+
+namespace {
 
 static AwsCredentials getCredentialsFromProvider(std::shared_ptr<Aws::Crt::Auth::ICredentialsProvider> provider)
 {
@@ -63,8 +41,7 @@ static AwsCredentials getCredentialsFromProvider(std::shared_ptr<Aws::Crt::Auth:
 
     provider->GetCredentials([prom](std::shared_ptr<Aws::Crt::Auth::Credentials> credentials, int errorCode) {
         if (errorCode != 0 || !credentials) {
-            prom->set_exception(
-                std::make_exception_ptr(AwsAuthError("Failed to resolve AWS credentials: error code %d", errorCode)));
+            prom->set_exception(std::make_exception_ptr(AwsAuthError(errorCode)));
         } else {
             auto accessKeyId = Aws::Crt::ByteCursorToStringView(credentials->GetAccessKeyId());
             auto secretAccessKey = Aws::Crt::ByteCursorToStringView(credentials->GetSecretAccessKey());
@@ -95,82 +72,104 @@ static AwsCredentials getCredentialsFromProvider(std::shared_ptr<Aws::Crt::Auth:
     return fut.get(); // This will throw if set_exception was called
 }
 
-// Global credential provider cache using boost's concurrent map
-// Key: profile name (empty string for default profile)
-using CredentialProviderCache =
-    boost::concurrent_flat_map<std::string, std::shared_ptr<Aws::Crt::Auth::ICredentialsProvider>>;
-
-static CredentialProviderCache credentialProviderCache;
-
 } // anonymous namespace
 
-AwsCredentials getAwsCredentials(const std::string & profile)
+class AwsCredentialProviderImpl : public AwsCredentialProvider
 {
-    // Get or create credential provider with caching
-    std::shared_ptr<Aws::Crt::Auth::ICredentialsProvider> provider;
+public:
+    AwsCredentialProviderImpl()
+    {
+        // Map Nix's verbosity to AWS CRT log level
+        Aws::Crt::LogLevel logLevel;
+        if (verbosity >= lvlVomit) {
+            logLevel = Aws::Crt::LogLevel::Trace;
+        } else if (verbosity >= lvlDebug) {
+            logLevel = Aws::Crt::LogLevel::Debug;
+        } else if (verbosity >= lvlChatty) {
+            logLevel = Aws::Crt::LogLevel::Info;
+        } else {
+            logLevel = Aws::Crt::LogLevel::Warn;
+        }
+        apiHandle.InitializeLogging(logLevel, stderr);
+    }
 
-    // Try to find existing provider
-    credentialProviderCache.visit(profile, [&](const auto & pair) { provider = pair.second; });
+    AwsCredentials getCredentialsRaw(const std::string & profile);
 
-    if (!provider) {
-        // Create new provider if not found
-        debug(
-            "[pid=%d] creating new AWS credential provider for profile '%s'",
-            getpid(),
-            profile.empty() ? "(default)" : profile.c_str());
-
+    AwsCredentials getCredentials(const ParsedS3URL & url) override
+    {
+        auto profile = url.profile.value_or("");
         try {
-            initAwsCrt();
-
-            if (profile.empty()) {
-                Aws::Crt::Auth::CredentialsProviderChainDefaultConfig config;
-                config.Bootstrap = Aws::Crt::ApiHandle::GetOrCreateStaticDefaultClientBootstrap();
-                provider = Aws::Crt::Auth::CredentialsProvider::CreateCredentialsProviderChainDefault(config);
-            } else {
-                Aws::Crt::Auth::CredentialsProviderProfileConfig config;
-                config.Bootstrap = Aws::Crt::ApiHandle::GetOrCreateStaticDefaultClientBootstrap();
-                // This is safe because the underlying C library will copy this string
-                // c.f. https://github.com/awslabs/aws-c-auth/blob/main/source/credentials_provider_profile.c#L220
-                config.ProfileNameOverride = Aws::Crt::ByteCursorFromCString(profile.c_str());
-                provider = Aws::Crt::Auth::CredentialsProvider::CreateCredentialsProviderProfile(config);
-            }
-        } catch (Error & e) {
-            e.addTrace(
-                {},
-                "while creating AWS credentials provider for %s",
-                profile.empty() ? "default profile" : fmt("profile '%s'", profile));
+            return getCredentialsRaw(profile);
+        } catch (AwsAuthError & e) {
+            warn("AWS authentication failed for S3 request %s: %s", url.toHttpsUrl(), e.message());
+            credentialProviderCache.erase(profile);
             throw;
         }
+    }
 
-        if (!provider) {
-            throw AwsAuthError(
-                "Failed to create AWS credentials provider for %s",
-                profile.empty() ? "default profile" : fmt("profile '%s'", profile));
-        }
+    std::shared_ptr<Aws::Crt::Auth::ICredentialsProvider> createProviderForProfile(const std::string & profile);
 
-        // Insert into cache (try_emplace is thread-safe and won't overwrite if another thread added it)
-        credentialProviderCache.try_emplace(profile, provider);
+private:
+    Aws::Crt::ApiHandle apiHandle;
+    boost::concurrent_flat_map<std::string, std::shared_ptr<Aws::Crt::Auth::ICredentialsProvider>>
+        credentialProviderCache;
+};
+
+std::shared_ptr<Aws::Crt::Auth::ICredentialsProvider>
+AwsCredentialProviderImpl::createProviderForProfile(const std::string & profile)
+{
+    debug(
+        "[pid=%d] creating new AWS credential provider for profile '%s'",
+        getpid(),
+        profile.empty() ? "(default)" : profile.c_str());
+
+    if (profile.empty()) {
+        Aws::Crt::Auth::CredentialsProviderChainDefaultConfig config;
+        config.Bootstrap = Aws::Crt::ApiHandle::GetOrCreateStaticDefaultClientBootstrap();
+        return Aws::Crt::Auth::CredentialsProvider::CreateCredentialsProviderChainDefault(config);
+    }
+
+    Aws::Crt::Auth::CredentialsProviderProfileConfig config;
+    config.Bootstrap = Aws::Crt::ApiHandle::GetOrCreateStaticDefaultClientBootstrap();
+    // This is safe because the underlying C library will copy this string
+    // c.f. https://github.com/awslabs/aws-c-auth/blob/main/source/credentials_provider_profile.c#L220
+    config.ProfileNameOverride = Aws::Crt::ByteCursorFromCString(profile.c_str());
+    return Aws::Crt::Auth::CredentialsProvider::CreateCredentialsProviderProfile(config);
+}
+
+AwsCredentials AwsCredentialProviderImpl::getCredentialsRaw(const std::string & profile)
+{
+    std::shared_ptr<Aws::Crt::Auth::ICredentialsProvider> provider;
+
+    credentialProviderCache.try_emplace_and_cvisit(
+        profile,
+        nullptr,
+        [&](auto & kv) { provider = kv.second = createProviderForProfile(profile); },
+        [&](const auto & kv) { provider = kv.second; });
+
+    if (!provider) {
+        credentialProviderCache.erase_if(profile, [](const auto & kv) {
+            [[maybe_unused]] auto [_, provider] = kv;
+            return !provider;
+        });
+
+        throw AwsAuthError(
+            "Failed to create AWS credentials provider for %s",
+            profile.empty() ? "default profile" : fmt("profile '%s'", profile));
     }
 
     return getCredentialsFromProvider(provider);
 }
 
-void invalidateAwsCredentials(const std::string & profile)
+ref<AwsCredentialProvider> makeAwsCredentialsProvider()
 {
-    credentialProviderCache.erase(profile);
+    return make_ref<AwsCredentialProviderImpl>();
 }
 
-void clearAwsCredentialsCache()
+ref<AwsCredentialProvider> getAwsCredentialsProvider()
 {
-    credentialProviderCache.clear();
-}
-
-AwsCredentials preResolveAwsCredentials(const ParsedS3URL & s3Url)
-{
-    std::string profile = s3Url.profile.value_or("");
-
-    // Get credentials (automatically cached)
-    return getAwsCredentials(profile);
+    static auto instance = makeAwsCredentialsProvider();
+    return instance;
 }
 
 } // namespace nix

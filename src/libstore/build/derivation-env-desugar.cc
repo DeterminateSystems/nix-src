@@ -18,14 +18,17 @@ std::string & DesugaredEnv::atFileEnvPair(std::string_view name, std::string fil
 }
 
 DesugaredEnv DesugaredEnv::create(
-    Store & store, const Derivation & drv, const DerivationOptions & drvOptions, const StorePathSet & inputPaths)
+    Store & store,
+    const Derivation & drv,
+    const DerivationOptions<StorePath> & drvOptions,
+    const StorePathSet & inputPaths)
 {
     DesugaredEnv res;
 
     if (drv.structuredAttrs) {
         auto json = drv.structuredAttrs->prepareStructuredAttrs(store, drvOptions, inputPaths, drv.outputs);
         res.atFileEnvPair("NIX_ATTRS_SH_FILE", ".attrs.sh") = StructuredAttrs::writeShell(json);
-        res.atFileEnvPair("NIX_ATTRS_JSON_FILE", ".attrs.json") = json.dump();
+        res.atFileEnvPair("NIX_ATTRS_JSON_FILE", ".attrs.json") = static_cast<nlohmann::json>(std::move(json)).dump();
     } else {
         /* In non-structured mode, set all bindings either directory in the
            environment or via a file, as specified by
@@ -46,7 +49,7 @@ DesugaredEnv DesugaredEnv::create(
         }
 
         /* Handle exportReferencesGraph(), if set. */
-        for (auto & [fileName, storePaths] : drvOptions.getParsedExportReferencesGraph(store)) {
+        for (auto & [fileName, storePaths] : drvOptions.exportReferencesGraph) {
             /* Write closure info to <fileName>. */
             res.extraFiles.insert_or_assign(
                 fileName, store.makeValidityRegistration(store.exportReferences(storePaths, inputPaths), false, false));

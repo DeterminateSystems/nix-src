@@ -10,15 +10,15 @@
 
 namespace nix::fetchers {
 
-std::shared_ptr<Registry> Registry::read(const Settings & settings, const Path & path, RegistryType type)
+std::shared_ptr<Registry> Registry::read(const Settings & settings, const SourcePath & path, RegistryType type)
 {
     debug("reading registry '%s'", path);
 
-    if (!pathExists(path))
+    if (!path.pathExists())
         return std::make_shared<Registry>(type);
 
     try {
-        return read(settings, path, readFile(path), type);
+        return read(settings, path.to_string(), path.readFile(), type);
     } catch (Error & e) {
         warn("cannot read flake registry '%s': %s", path, e.what());
         return std::make_shared<Registry>(type);
@@ -31,7 +31,6 @@ Registry::read(const Settings & settings, std::string_view whence, std::string_v
     auto registry = std::make_shared<Registry>(type);
 
     try {
-
         auto json = nlohmann::json::parse(jsonStr);
 
         auto version = json.value("version", 0);
@@ -65,7 +64,7 @@ Registry::read(const Settings & settings, std::string_view whence, std::string_v
     return registry;
 }
 
-void Registry::write(const Path & path)
+void Registry::write(const std::filesystem::path & path)
 {
     nlohmann::json arr;
     for (auto & entry : entries) {
@@ -83,7 +82,7 @@ void Registry::write(const Path & path)
     json["version"] = 2;
     json["flakes"] = std::move(arr);
 
-    createDirs(dirOf(path));
+    createDirs(path.parent_path());
     writeFile(path, json.dump(2));
 }
 
@@ -99,31 +98,38 @@ void Registry::remove(const Input & input)
         entries.end());
 }
 
-static Path getSystemRegistryPath()
+static std::filesystem::path getSystemRegistryPath()
 {
-    return settings.nixConfDir + "/registry.json";
+    return settings.nixConfDir / "registry.json";
 }
 
 static std::shared_ptr<Registry> getSystemRegistry(const Settings & settings)
 {
-    static auto systemRegistry = Registry::read(settings, getSystemRegistryPath(), Registry::System);
+    static auto systemRegistry = Registry::read(
+        settings,
+        SourcePath{getFSSourceAccessor(), CanonPath{getSystemRegistryPath().string()}}.resolveSymlinks(),
+        Registry::System);
     return systemRegistry;
 }
 
-Path getUserRegistryPath()
+std::filesystem::path getUserRegistryPath()
 {
-    return getConfigDir() + "/registry.json";
+    return getConfigDir() / "registry.json";
 }
 
 std::shared_ptr<Registry> getUserRegistry(const Settings & settings)
 {
-    static auto userRegistry = Registry::read(settings, getUserRegistryPath(), Registry::User);
+    static auto userRegistry = Registry::read(
+        settings,
+        SourcePath{getFSSourceAccessor(), CanonPath{getUserRegistryPath().string()}}.resolveSymlinks(),
+        Registry::User);
     return userRegistry;
 }
 
-std::shared_ptr<Registry> getCustomRegistry(const Settings & settings, const Path & p)
+std::shared_ptr<Registry> getCustomRegistry(const Settings & settings, const std::filesystem::path & p)
 {
-    static auto customRegistry = Registry::read(settings, p, Registry::Custom);
+    static auto customRegistry = Registry::read(
+        settings, SourcePath{getFSSourceAccessor(), CanonPath{p.string()}}.resolveSymlinks(), Registry::Custom);
     return customRegistry;
 }
 
@@ -138,7 +144,7 @@ void overrideRegistry(const Input & from, const Input & to, const Attrs & extraA
     getFlagRegistry()->add(from, to, extraAttrs);
 }
 
-static std::shared_ptr<Registry> getGlobalRegistry(const Settings & settings, ref<Store> store)
+static std::shared_ptr<Registry> getGlobalRegistry(const Settings & settings, Store & store)
 {
     static auto reg = [&]() {
         try {
@@ -147,14 +153,19 @@ static std::shared_ptr<Registry> getGlobalRegistry(const Settings & settings, re
                 return std::make_shared<Registry>(Registry::Global); // empty registry
             }
 
-            if (!isAbsolute(path)) {
-                auto storePath = downloadFile(store, settings, path, "flake-registry.json").storePath;
-                if (auto store2 = store.dynamic_pointer_cast<LocalFSStore>())
-                    store2->addPermRoot(storePath, getCacheDir() + "/flake-registry.json");
-                path = store->toRealPath(storePath);
-            }
-
-            return Registry::read(settings, path, Registry::Global);
+            return Registry::read(
+                settings,
+                [&] -> SourcePath {
+                    if (!isAbsolute(path)) {
+                        auto storePath = downloadFile(store, settings, path, "flake-registry.json").storePath;
+                        if (auto store2 = dynamic_cast<LocalFSStore *>(&store))
+                            store2->addPermRoot(storePath, (getCacheDir() / "flake-registry.json").string());
+                        return {store.requireStoreObjectAccessor(storePath)};
+                    } else {
+                        return SourcePath{getFSSourceAccessor(), CanonPath{path}}.resolveSymlinks();
+                    }
+                }(),
+                Registry::Global);
         } catch (Error & e) {
             warn(
                 "cannot fetch global flake registry '%s', will use builtin fallback registry: %s",
@@ -173,7 +184,7 @@ static std::shared_ptr<Registry> getGlobalRegistry(const Settings & settings, re
     return reg;
 }
 
-Registries getRegistries(const Settings & settings, ref<Store> store)
+Registries getRegistries(const Settings & settings, Store & store)
 {
     Registries registries;
     registries.push_back(getFlagRegistry());
@@ -184,7 +195,7 @@ Registries getRegistries(const Settings & settings, ref<Store> store)
 }
 
 std::pair<Input, Attrs>
-lookupInRegistries(const Settings & settings, ref<Store> store, const Input & _input, UseRegistries useRegistries)
+lookupInRegistries(const Settings & settings, Store & store, const Input & _input, UseRegistries useRegistries)
 {
     Attrs extraAttrs;
     int n = 0;

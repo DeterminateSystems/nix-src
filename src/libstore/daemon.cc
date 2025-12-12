@@ -313,7 +313,7 @@ static void performOp(
     switch (op) {
 
     case WorkerProto::Op::IsValidPath: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         bool result = store->isValidPath(path);
         logger->stopWork();
@@ -340,7 +340,7 @@ static void performOp(
     }
 
     case WorkerProto::Op::HasSubstitutes: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         StorePathSet paths; // FIXME
         paths.insert(path);
@@ -360,7 +360,7 @@ static void performOp(
     }
 
     case WorkerProto::Op::QueryPathHash: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         auto hash = store->queryPathInfo(path)->narHash;
         logger->stopWork();
@@ -372,7 +372,7 @@ static void performOp(
     case WorkerProto::Op::QueryReferrers:
     case WorkerProto::Op::QueryValidDerivers:
     case WorkerProto::Op::QueryDerivationOutputs: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         StorePathSet paths;
         if (op == WorkerProto::Op::QueryReferences)
@@ -390,7 +390,7 @@ static void performOp(
     }
 
     case WorkerProto::Op::QueryDerivationOutputNames: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         auto names = store->readDerivation(path).outputNames();
         logger->stopWork();
@@ -399,7 +399,7 @@ static void performOp(
     }
 
     case WorkerProto::Op::QueryDerivationOutputMap: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         auto outputs = store->queryPartialDerivationOutputMap(path);
         logger->stopWork();
@@ -408,11 +408,11 @@ static void performOp(
     }
 
     case WorkerProto::Op::QueryDeriver: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         auto info = store->queryPathInfo(path);
         logger->stopWork();
-        conn.to << (info->deriver ? store->printStorePath(*info->deriver) : "");
+        WorkerProto::write(*store, conn, info->deriver);
         break;
     }
 
@@ -421,7 +421,7 @@ static void performOp(
         logger->startWork();
         auto path = store->queryPathFromHashPart(hashPart);
         logger->stopWork();
-        conn.to << (path ? store->printStorePath(*path) : "");
+        WorkerProto::write(*store, conn, path);
         break;
     }
 
@@ -506,7 +506,7 @@ static void performOp(
                 store->addToStoreFromDump(*dumpSource, baseName, FileSerialisationMethod::NixArchive, method, hashAlgo);
             logger->stopWork();
 
-            conn.to << store->printStorePath(path);
+            WorkerProto::write(*store, wconn, path);
         }
         break;
     }
@@ -543,7 +543,7 @@ static void performOp(
                 NoRepair);
         });
         logger->stopWork();
-        conn.to << store->printStorePath(path);
+        WorkerProto::write(*store, wconn, path);
         break;
     }
 
@@ -592,7 +592,7 @@ static void performOp(
     }
 
     case WorkerProto::Op::BuildDerivation: {
-        auto drvPath = store->parseStorePath(readString(conn.from));
+        auto drvPath = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         BasicDerivation drv;
         /*
          * Note: unlike wopEnsurePath, this operation reads a
@@ -669,7 +669,7 @@ static void performOp(
     }
 
     case WorkerProto::Op::EnsurePath: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         store->ensurePath(path);
         logger->stopWork();
@@ -678,7 +678,7 @@ static void performOp(
     }
 
     case WorkerProto::Op::AddTempRoot: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         store->addTempRoot(path);
         logger->stopWork();
@@ -734,15 +734,17 @@ static void performOp(
         conn.to << size;
 
         for (auto & [target, links] : roots)
-            for (auto & link : links)
-                conn.to << link << store->printStorePath(target);
+            for (auto & link : links) {
+                conn.to << link;
+                WorkerProto::write(*store, wconn, target);
+            }
 
         break;
     }
 
     case WorkerProto::Op::CollectGarbage: {
         GCOptions options;
-        options.action = (GCOptions::GCAction) readInt(conn.from);
+        options.action = WorkerProto::Serialise<GCOptions::GCAction>::read(*store, rconn);
         options.pathsToDelete = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
         conn.from >> options.ignoreLiveness >> options.maxFreed;
         options.censor = !trusted;
@@ -801,7 +803,7 @@ static void performOp(
     }
 
     case WorkerProto::Op::QuerySubstitutablePathInfo: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         SubstitutablePathInfos infos;
         store->querySubstitutablePathInfos({{path, std::nullopt}}, infos);
@@ -810,7 +812,8 @@ static void performOp(
         if (i == infos.end())
             conn.to << 0;
         else {
-            conn.to << 1 << (i->second.deriver ? store->printStorePath(*i->second.deriver) : "");
+            conn.to << 1;
+            WorkerProto::write(*store, wconn, i->second.deriver);
             WorkerProto::write(*store, wconn, i->second.references);
             conn.to << i->second.downloadSize << i->second.narSize;
         }
@@ -831,8 +834,8 @@ static void performOp(
         logger->stopWork();
         conn.to << infos.size();
         for (auto & i : infos) {
-            conn.to << store->printStorePath(i.first)
-                    << (i.second.deriver ? store->printStorePath(*i.second.deriver) : "");
+            WorkerProto::write(*store, wconn, i.first);
+            WorkerProto::write(*store, wconn, i.second.deriver);
             WorkerProto::write(*store, wconn, i.second.references);
             conn.to << i.second.downloadSize << i.second.narSize;
         }
@@ -848,7 +851,7 @@ static void performOp(
     }
 
     case WorkerProto::Op::QueryPathInfo: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         std::shared_ptr<const ValidPathInfo> info;
         logger->startWork();
         info = store->queryPathInfo(path);
@@ -882,7 +885,7 @@ static void performOp(
     }
 
     case WorkerProto::Op::AddSignatures: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         StringSet sigs = readStrings<StringSet>(conn.from);
         logger->startWork();
         store->addSignatures(path, sigs);
@@ -892,21 +895,20 @@ static void performOp(
     }
 
     case WorkerProto::Op::NarFromPath: {
-        auto path = store->parseStorePath(readString(conn.from));
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
         logger->stopWork();
-        dumpPath(store->toRealPath(path), conn.to);
+        store->narFromPath(path, conn.to);
         break;
     }
 
     case WorkerProto::Op::AddToStoreNar: {
         bool repair, dontCheckSigs;
-        auto path = store->parseStorePath(readString(conn.from));
-        auto deriver = readString(conn.from);
+        auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
+        auto deriver = WorkerProto::Serialise<std::optional<StorePath>>::read(*store, rconn);
         auto narHash = Hash::parseAny(readString(conn.from), HashAlgorithm::SHA256);
-        ValidPathInfo info{path, narHash};
-        if (deriver != "")
-            info.deriver = store->parseStorePath(deriver);
+        ValidPathInfo info{path, {*store, narHash}};
+        info.deriver = std::move(deriver);
         info.references = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
         conn.from >> info.registrationTime >> info.narSize >> info.ultimate;
         info.sigs = readStrings<StringSet>(conn.from);
@@ -964,9 +966,9 @@ static void performOp(
     case WorkerProto::Op::RegisterDrvOutput: {
         logger->startWork();
         if (GET_PROTOCOL_MINOR(conn.protoVersion) < 31) {
-            auto outputId = DrvOutput::parse(readString(conn.from));
+            auto outputId = WorkerProto::Serialise<DrvOutput>::read(*store, rconn);
             auto outputPath = StorePath(readString(conn.from));
-            store->registerDrvOutput(Realisation{.id = outputId, .outPath = outputPath});
+            store->registerDrvOutput(Realisation{{.outPath = outputPath}, outputId});
         } else {
             auto realisation = WorkerProto::Serialise<Realisation>::read(*store, rconn);
             store->registerDrvOutput(realisation);
@@ -977,7 +979,7 @@ static void performOp(
 
     case WorkerProto::Op::QueryRealisation: {
         logger->startWork();
-        auto outputId = DrvOutput::parse(readString(conn.from));
+        auto outputId = WorkerProto::Serialise<DrvOutput>::read(*store, rconn);
         auto info = store->queryRealisation(outputId);
         logger->stopWork();
         if (GET_PROTOCOL_MINOR(conn.protoVersion) < 31) {
@@ -988,7 +990,7 @@ static void performOp(
         } else {
             std::set<Realisation> realisations;
             if (info)
-                realisations.insert(*info);
+                realisations.insert({*info, outputId});
             WorkerProto::write(*store, wconn, realisations);
         }
         break;
@@ -1034,6 +1036,7 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
     auto monitor = !recursive ? std::make_unique<MonitorFdHup>(from.fd) : nullptr;
     (void) monitor; // suppress warning
+    ReceiveInterrupts receiveInterrupts;
 #endif
 
     /* Exchange the greeting. */

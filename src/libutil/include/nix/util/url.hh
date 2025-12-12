@@ -330,10 +330,13 @@ struct ParsedUrlScheme
 
 ParsedUrlScheme parseUrlScheme(std::string_view scheme);
 
-/* Detects scp-style uris (e.g. git@github.com:NixOS/nix) and fixes
-   them by removing the `:` and assuming a scheme of `ssh://`. Also
-   changes absolute paths into file:// URLs. */
-ParsedURL fixGitURL(const std::string & url);
+/**
+ * Detects scp-style uris (e.g. `git@github.com:NixOS/nix`) and fixes
+ * them by removing the `:` and assuming a scheme of `ssh://`. Also
+ * drops `git+` from the scheme (e.g. `git+https://` to `https://`)
+ * and changes absolute paths into `file://` URLs.
+ */
+ParsedURL fixGitURL(std::string url);
 
 /**
  * Whether a string is valid as RFC 3986 scheme name.
@@ -408,6 +411,17 @@ struct VerbatimURL
                 [](const ParsedURL & url) -> std::string_view { return url.scheme; }},
             raw);
     }
+
+    /**
+     * Get the last non-empty path segment from the URL.
+     *
+     * This is useful for extracting filenames from URLs.
+     * For example, "https://example.com/path/to/file.txt?query=value"
+     * returns "file.txt".
+     *
+     * @return The last non-empty path segment, or std::nullopt if no such segment exists.
+     */
+    std::optional<std::string> lastPathSegment() const;
 };
 
 std::ostream & operator<<(std::ostream & os, const VerbatimURL & url);
