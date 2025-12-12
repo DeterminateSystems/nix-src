@@ -1454,11 +1454,16 @@ namespace fetchers {
 
 ref<GitRepo> Settings::getTarballCache() const
 {
+#if 1
+    static auto repoDir = std::filesystem::path(getCacheDir()) / "tarball-cache";
+    return GitRepo::openRepo(repoDir, /*create=*/true, /*bare=*/true, /*packfilesOnly=*/true);
+#else
     auto tarballCache(_tarballCache.lock());
     if (!*tarballCache)
         *tarballCache =
             GitRepo::openRepo(getCacheDir() / "tarball-cache", /*create=*/true, /*bare=*/true, /*packfilesOnly=*/true);
     return ref<GitRepo>(*tarballCache);
+#endif
 }
 
 } // namespace fetchers
