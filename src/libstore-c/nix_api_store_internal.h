@@ -15,6 +15,11 @@ struct StorePath
     nix::StorePath path;
 };
 
+struct DerivedPath
+{
+    nix::SingleDerivedPath drv_path;
+};
+
 struct nix_derivation
 {
     nix::Derivation drv;
