@@ -1398,10 +1398,15 @@ namespace fetchers {
 
 ref<GitRepo> Settings::getTarballCache() const
 {
+    /* v1: Had either only loose objects or thin packfiles referring to loose objects
+     * v2: Must have only packfiles with no loose objects. Should get repacked periodically
+     * for optimal packfiles.
+     */
+    static auto repoDir = std::filesystem::path(getCacheDir()) / "tarball-cache-v2";
     auto tarballCache(_tarballCache.lock());
     if (!*tarballCache)
         *tarballCache =
-            GitRepo::openRepo(getCacheDir() / "tarball-cache", {.create = true, .bare = true, .packfilesOnly = true});
+            GitRepo::openRepo(repoDir, {.create = true, .bare = true, .packfilesOnly = true});
     return ref<GitRepo>(*tarballCache);
 }
 
