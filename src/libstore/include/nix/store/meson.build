@@ -57,6 +57,7 @@ headers = [ config_pub_h ] + files(
   'make-content-addressed.hh',
   'names.hh',
   'nar-accessor.hh',
+  'nar-cache.hh',
   'nar-info-disk-cache.hh',
   'nar-info.hh',
   'outputs-spec.hh',
