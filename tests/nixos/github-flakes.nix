@@ -266,7 +266,7 @@ in
 
       # Fetching with an incorrect NAR hash should fail.
       out = client.fail(f"nix eval --no-trust-tarballs-from-git-forges --raw --expr '(fetchTree \"github:fancy-enterprise/private-flake/{info['revision']}?narHash=sha256-HsrRFZYg69qaVe/wDyWBYLeS6ca7ACEJg2Z%2BGpEFw4A%3D\").narHash' 2>&1")
-      assert "NAR hash mismatch in input" in out, "NAR hash check did not fail with the expected error"
+      assert "mismatch in field 'narHash'" in out, "NAR hash check did not fail with the expected error"
 
       # Fetching without a narHash should succeed if trust-github is set and fail otherwise.
       client.succeed(f"nix eval --raw --expr 'builtins.fetchTree github:github:fancy-enterprise/private-flake/{info['revision']}'")

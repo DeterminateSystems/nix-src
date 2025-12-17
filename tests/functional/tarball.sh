@@ -38,6 +38,9 @@ test_tarball() {
 
     [[ $(nix eval --impure --expr "(fetchTree file://$tarball).lastModified") = 1000000000 ]]
 
+    # fetchTree with a narHash is implicitly final, so it doesn't return attributes like lastModified.
+    [[ $(nix eval --impure --expr "(fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; }) ? lastModified") = false ]]
+
     nix-instantiate --strict --eval -E "!((import (fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; })) ? submodules)" >&2
     nix-instantiate --strict --eval -E "!((import (fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; })) ? submodules)" 2>&1 | grep 'true'
 
