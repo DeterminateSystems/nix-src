@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.32 and Determinate Nix 3.14.0.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.15.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -168,3 +168,18 @@ This section lists the differences between upstream Nix 2.32 and Determinate Nix
 * Add `nix ps` command [DeterminateSystems/nix-src#282](https://github.com/DeterminateSystems/nix-src/pull/282)
 
 * Backward compatibility for Nix < 2.20: Git inputs using git-archive [DeterminateSystems/nix-src#278](https://github.com/DeterminateSystems/nix-src/pull/278)
+
+<!-- Determinate Nix version 3.15.0 -->
+
+* Fix typo in release notes by @edolstra in [DeterminateSystems/nix-src#290](https://github.com/DeterminateSystems/nix-src/pull/290)
+
+* Add filterAttrs builtin by @not-ronjinger in [DeterminateSystems/nix-src#291](https://github.com/DeterminateSystems/nix-src/pull/291)
+
+* Sync with upstream 2.33.0 by @edolstra in [DeterminateSystems/nix-src#293](https://github.com/DeterminateSystems/nix-src/pull/293)
+
+* Random fixes by @edolstra in [DeterminateSystems/nix-src#299](https://github.com/DeterminateSystems/nix-src/pull/299)
+
+* fetchTree: Implicitly set __final = true when a narHash is supplied by @edolstra in [DeterminateSystems/nix-src#297](https://github.com/DeterminateSystems/nix-src/pull/297)
+
+
+* @not-ronjinger made their first contribution in [DeterminateSystems/nix-src#291](https://github.com/DeterminateSystems/nix-src/pull/291)
