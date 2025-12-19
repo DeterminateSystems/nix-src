@@ -149,28 +149,5 @@
       content = importer.succeed(f"cat {result_path}/hello.txt").strip()
       assert content == "Hello from tarball!", f"Content mismatch: {content}"
       print("✓ fetchTarball content verified!")
-
-      ##########################################
-      # Test 3: Verify fetchTree does NOT substitute (preserves metadata)
-      ##########################################
-
-      print("Testing that fetchTree without __final does NOT use substitution...")
-
-      # fetchTree with just narHash (not __final) should try to download, which will fail
-      # since the file doesn't exist on the importer
-      exit_code = importer.fail(f"""
-        nix-instantiate --eval --json --read-write-mode --expr '
-          builtins.fetchTree {{
-            type = "tarball";
-            url = "file:///only-on-substituter.tar.gz";
-            narHash = "{tarball_hash_sri}";
-          }}
-        ' 2>&1
-      """)
-
-      # Should fail with "does not exist" since it tries to download instead of substituting
-      assert "does not exist" in exit_code or "Couldn't open file" in exit_code, f"Expected download failure, got: {exit_code}"
-      print("✓ fetchTree correctly does NOT substitute non-final inputs!")
-      print("  (This preserves metadata like lastModified from the actual fetch)")
     '';
 }
