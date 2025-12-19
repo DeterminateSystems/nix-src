@@ -404,11 +404,12 @@ struct EvalSettings : Config
 /**
  * Conventionally part of the default nix path in impure mode.
  */
-Path getNixDefExpr();
+std::filesystem::path getNixDefExpr();
 
 /**
- * Stack size for evaluator threads.
+ * Stack size for evaluator threads. This used to be 64 MiB, but macOS as deployed on GitHub Actions has a
+ * hard limit slightly under that, so we round it down a bit.
  */
-constexpr size_t evalStackSize = 64 * 1024 * 1024;
+constexpr size_t evalStackSize = 60 * 1024 * 1024;
 
 } // namespace nix

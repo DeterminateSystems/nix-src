@@ -11,6 +11,12 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/url.hh"
 
+#include "nix/store/config.hh"
+#if NIX_WITH_AWS_AUTH
+#  include "nix/store/aws-creds.hh"
+#endif
+#include "nix/store/s3-url.hh"
+
 namespace nix {
 
 struct FileTransferSettings : Config
@@ -64,12 +70,12 @@ struct FileTransferSettings : Config
 
     Setting<size_t> downloadBufferSize{
         this,
-        64 * 1024 * 1024,
+        1 * 1024 * 1024,
         "download-buffer-size",
         R"(
           The size of Nix's internal download buffer in bytes during `curl` transfers. If data is
           not processed quickly enough to exceed the size of this buffer, downloads may stall.
-          The default is 67108864 (64 MiB).
+          The default is 1048576 (1 MiB).
         )"};
 };
 
@@ -77,21 +83,84 @@ extern FileTransferSettings fileTransferSettings;
 
 extern const unsigned int RETRY_TIME_MS_DEFAULT;
 
+/**
+ * HTTP methods supported by FileTransfer.
+ */
+enum struct HttpMethod {
+    Get,
+    Put,
+    Head,
+    Post,
+    Delete,
+};
+
+/**
+ * Username and optional password for HTTP basic authentication.
+ * These are used with curl's CURLOPT_USERNAME and CURLOPT_PASSWORD options
+ * for various protocols including HTTP, FTP, and others.
+ */
+struct UsernameAuth
+{
+    std::string username;
+    std::optional<std::string> password;
+};
+
+enum class PauseTransfer : bool {
+    No = false,
+    Yes = true,
+};
+
 struct FileTransferRequest
 {
     VerbatimURL uri;
     Headers headers;
     std::string expectedETag;
-    bool verifyTLS = true;
-    bool head = false;
-    bool post = false;
+    HttpMethod method = HttpMethod::Get;
     size_t tries = fileTransferSettings.tries;
     unsigned int baseRetryTimeMs = RETRY_TIME_MS_DEFAULT;
     ActivityId parentAct;
     bool decompress = true;
-    std::optional<std::string> data;
+
+    struct UploadData
+    {
+        UploadData(StringSource & s)
+            : sizeHint(s.s.length())
+            , source(&s)
+        {
+        }
+
+        UploadData(std::size_t sizeHint, RestartableSource & source)
+            : sizeHint(sizeHint)
+            , source(&source)
+        {
+        }
+
+        std::size_t sizeHint = 0;
+        RestartableSource * source = nullptr;
+    };
+
+    std::optional<UploadData> data;
     std::string mimeType;
-    std::function<void(std::string_view data)> dataCallback;
+
+    /**
+     * Callbacked invoked with a chunk of received data.
+     * Can pause the transfer by returning PauseTransfer::Yes. No data must be consumed
+     * if transfer is paused.
+     */
+    std::function<PauseTransfer(std::string_view data)> dataCallback;
+
+    /**
+     * Optional username and password for HTTP basic authentication.
+     * When provided, these credentials will be used with curl's CURLOPT_USERNAME/PASSWORD option.
+     */
+    std::optional<UsernameAuth> usernameAuth;
+#if NIX_WITH_AWS_AUTH
+    /**
+     * Pre-resolved AWS session token for S3 requests.
+     * When provided along with usernameAuth, this will be used instead of fetching fresh credentials.
+     */
+    std::optional<std::string> preResolvedAwsSessionToken;
+#endif
 
     FileTransferRequest(VerbatimURL uri)
         : uri(std::move(uri))
@@ -99,10 +168,48 @@ struct FileTransferRequest
     {
     }
 
-    std::string verb() const
+    /**
+     * Returns the method description for logging purposes.
+     */
+    std::string verb(bool continuous = false) const
     {
-        return data ? "upload" : "download";
+        switch (method) {
+        case HttpMethod::Head:
+        case HttpMethod::Get:
+            return continuous ? "downloading" : "download";
+        case HttpMethod::Put:
+        case HttpMethod::Post:
+            assert(data);
+            return continuous ? "uploading" : "upload";
+        case HttpMethod::Delete:
+            return continuous ? "deleting" : "delete";
+        }
+        unreachable();
     }
+
+    std::string noun() const
+    {
+        switch (method) {
+        case HttpMethod::Head:
+        case HttpMethod::Get:
+            return "download";
+        case HttpMethod::Put:
+        case HttpMethod::Post:
+            assert(data);
+            return "upload";
+        case HttpMethod::Delete:
+            return "deletion";
+        }
+        unreachable();
+    }
+
+    void setupForS3();
+
+private:
+    friend struct curlFileTransfer;
+#if NIX_WITH_AWS_AUTH
+    std::optional<std::string> awsSigV4Provider;
+#endif
 };
 
 struct FileTransferResult
@@ -145,6 +252,25 @@ class Store;
 
 struct FileTransfer
 {
+protected:
+    class Item
+    {};
+
+public:
+    /**
+     * An opaque handle to the file transfer. Can be used to reference an in-flight transfer operations.
+     */
+    struct ItemHandle
+    {
+        std::reference_wrapper<Item> item;
+        friend struct FileTransfer;
+
+        ItemHandle(Item & item)
+            : item(item)
+        {
+        }
+    };
+
     virtual ~FileTransfer() {}
 
     /**
@@ -152,7 +278,13 @@ struct FileTransfer
      * the download. The future may throw a FileTransferError
      * exception.
      */
-    virtual void enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) = 0;
+    virtual ItemHandle
+    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) = 0;
+
+    /**
+     * Unpause a transfer that has been previously paused by a dataCallback.
+     */
+    virtual void unpauseTransfer(ItemHandle handle) = 0;
 
     std::future<FileTransferResult> enqueueFileTransfer(const FileTransferRequest & request);
 
@@ -165,6 +297,11 @@ struct FileTransfer
      * Synchronously upload a file.
      */
     FileTransferResult upload(const FileTransferRequest & request);
+
+    /**
+     * Synchronously delete a resource.
+     */
+    FileTransferResult deleteResource(const FileTransferRequest & request);
 
     /**
      * Download a file, writing its data to a sink. The sink will be

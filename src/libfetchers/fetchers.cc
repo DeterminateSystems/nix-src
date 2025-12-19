@@ -5,6 +5,7 @@
 #include "nix/util/json-utils.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/fetchers/fetch-to-store.hh"
+#include "nix/util/url.hh"
 #include "nix/util/forwarding-source-accessor.hh"
 #include "nix/util/archive.hh"
 
@@ -27,18 +28,9 @@ void registerInputScheme(std::shared_ptr<InputScheme> && inputScheme)
         throw Error("Input scheme with name %s already registered", schemeName);
 }
 
-nlohmann::json dumpRegisterInputSchemeInfo()
+const InputSchemeMap & getAllInputSchemes()
 {
-    using nlohmann::json;
-
-    auto res = json::object();
-
-    for (auto & [name, scheme] : inputSchemes()) {
-        auto & r = res[name] = json::object();
-        r["allowedAttrs"] = scheme->allowedAttrs();
-    }
-
-    return res;
+    return inputSchemes();
 }
 
 Input Input::fromURL(const Settings & settings, const std::string & url, bool requireTree)
@@ -65,6 +57,12 @@ Input Input::fromURL(const Settings & settings, const ParsedURL & url, bool requ
             fixupInput(*res);
             return std::move(*res);
         }
+    }
+
+    // Provide a helpful hint when user tries file+git instead of git+file
+    auto parsedScheme = parseUrlScheme(url.scheme);
+    if (parsedScheme.application == "file" && parsedScheme.transport == "git") {
+        throw Error("input '%s' is unsupported; did you mean 'git+file' instead of 'file+git'?", url);
     }
 
     throw Error("input '%s' is unsupported", url);
@@ -114,7 +112,7 @@ Input Input::fromAttrs(const Settings & settings, Attrs && attrs)
     return std::move(*res);
 }
 
-std::optional<std::string> Input::getFingerprint(ref<Store> store) const
+std::optional<std::string> Input::getFingerprint(Store & store) const
 {
     if (!scheme)
         return std::nullopt;
@@ -199,7 +197,7 @@ bool Input::contains(const Input & other) const
 }
 
 // FIXME: remove
-std::tuple<StorePath, ref<SourceAccessor>, Input> Input::fetchToStore(const Settings & settings, ref<Store> store) const
+std::tuple<StorePath, ref<SourceAccessor>, Input> Input::fetchToStore(const Settings & settings, Store & store) const
 {
     if (!scheme)
         throw Error("cannot fetch unsupported input '%s'", attrsToJSON(toAttrs()));
@@ -207,9 +205,9 @@ std::tuple<StorePath, ref<SourceAccessor>, Input> Input::fetchToStore(const Sett
     try {
         auto [accessor, result] = getAccessorUnchecked(settings, store);
 
-        auto storePath = nix::fetchToStore(settings, *store, SourcePath(accessor), FetchMode::Copy, result.getName());
+        auto storePath = nix::fetchToStore(settings, store, SourcePath(accessor), FetchMode::Copy, result.getName());
 
-        auto narHash = store->queryPathInfo(storePath)->narHash;
+        auto narHash = store.queryPathInfo(storePath)->narHash;
         result.attrs.insert_or_assign("narHash", narHash.to_string(HashFormat::SRI, true));
 
         result.attrs.insert_or_assign("__final", Explicit<bool>(true));
@@ -282,7 +280,7 @@ void Input::checkLocks(Input specified, Input & result)
     }
 }
 
-std::pair<ref<SourceAccessor>, Input> Input::getAccessor(const Settings & settings, ref<Store> store) const
+std::pair<ref<SourceAccessor>, Input> Input::getAccessor(const Settings & settings, Store & store) const
 {
     try {
         auto [accessor, result] = getAccessorUnchecked(settings, store);
@@ -313,7 +311,7 @@ struct SubstitutedSourceAccessor : ForwardingSourceAccessor
     }
 };
 
-std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings & settings, ref<Store> store) const
+std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings & settings, Store & store) const
 {
     // FIXME: cache the accessor
 
@@ -322,10 +320,10 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
 
     std::optional<StorePath> storePath;
     if (isFinal() && getNarHash())
-        storePath = computeStorePath(*store);
+        storePath = computeStorePath(store);
 
     auto makeStoreAccessor = [&]() -> std::pair<ref<SourceAccessor>, Input> {
-        auto accessor = make_ref<SubstitutedSourceAccessor>(ref{store->getFSAccessor(*storePath)});
+        auto accessor = make_ref<SubstitutedSourceAccessor>(store.requireStoreObjectAccessor(*storePath));
 
         // FIXME: use the NAR hash for fingerprinting Git trees that have a .gitattributes file, since we don't know if
         // we used `git archive` or libgit2 to fetch it.
@@ -340,7 +338,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         if (accessor->fingerprint) {
             settings.getCache()->upsert(
                 makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
-                {{"hash", store->queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
+                {{"hash", store.queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
         }
 
         // FIXME: ideally we would use the `showPath()` of the
@@ -354,8 +352,8 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
        reuse it. We only do this for final inputs, since otherwise
        there is a risk that we don't return the same attributes (like
        `lastModified`) that the "real" fetcher would return. */
-    if (storePath && store->isValidPath(*storePath)) {
-        debug("using input '%s' in '%s'", to_string(), store->printStorePath(*storePath));
+    if (storePath && store.isValidPath(*storePath)) {
+        debug("using input '%s' in '%s'", to_string(), store.printStorePath(*storePath));
         return makeStoreAccessor();
     }
 
@@ -372,7 +370,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         if (storePath) {
             // Fall back to substitution.
             try {
-                store->ensurePath(*storePath);
+                store.ensurePath(*storePath);
                 warn(
                     "Successfully substituted input '%s' after failing to fetch it from its original location: %s",
                     to_string(),
@@ -396,7 +394,7 @@ Input Input::applyOverrides(std::optional<std::string> ref, std::optional<Hash> 
     return scheme->applyOverrides(*this, ref, rev);
 }
 
-void Input::clone(const Settings & settings, ref<Store> store, const std::filesystem::path & destDir) const
+void Input::clone(const Settings & settings, Store & store, const std::filesystem::path & destDir) const
 {
     assert(scheme);
     scheme->clone(settings, store, *this, destDir);
@@ -513,7 +511,7 @@ void InputScheme::putFile(
 }
 
 void InputScheme::clone(
-    const Settings & settings, ref<Store> store, const Input & input, const std::filesystem::path & destDir) const
+    const Settings & settings, Store & store, const Input & input, const std::filesystem::path & destDir) const
 {
     if (std::filesystem::exists(destDir))
         throw Error("cannot clone into existing path %s", destDir);
@@ -522,9 +520,9 @@ void InputScheme::clone(
 
     Activity act(*logger, lvlTalkative, actUnknown, fmt("copying '%s' to %s...", input2.to_string(), destDir));
 
-    auto source = sinkToSource([&](Sink & sink) { accessor->dumpPath(CanonPath::root, sink); });
-
-    restorePath(destDir, *source);
+    RestoreSink sink(/*startFsync=*/false);
+    sink.dstPath = destDir;
+    copyRecursive(*accessor, CanonPath::root, sink, CanonPath::root);
 }
 
 std::optional<ExperimentalFeature> InputScheme::experimentalFeature() const
@@ -548,10 +546,11 @@ using namespace nix;
 fetchers::PublicKey adl_serializer<fetchers::PublicKey>::from_json(const json & json)
 {
     fetchers::PublicKey res = {};
-    if (auto type = optionalValueAt(json, "type"))
+    auto & obj = getObject(json);
+    if (auto * type = optionalValueAt(obj, "type"))
         res.type = getString(*type);
 
-    res.key = getString(valueAt(json, "key"));
+    res.key = getString(valueAt(obj, "key"));
 
     return res;
 }

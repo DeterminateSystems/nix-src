@@ -1,16 +1,13 @@
 #pragma once
 ///@file
 #include "nix/store/config.hh"
+#include "nix/util/url.hh"
+#include "nix/util/util.hh"
 
-#if NIX_WITH_S3_SUPPORT || NIX_WITH_CURL_S3
-
-#  include "nix/util/url.hh"
-#  include "nix/util/util.hh"
-
-#  include <optional>
-#  include <string>
-#  include <variant>
-#  include <vector>
+#include <optional>
+#include <string>
+#include <variant>
+#include <vector>
 
 namespace nix {
 
@@ -29,6 +26,7 @@ struct ParsedS3URL
     std::optional<std::string> profile;
     std::optional<std::string> region;
     std::optional<std::string> scheme;
+    std::optional<std::string> versionId;
     /**
      * The endpoint can be either missing, be an absolute URI (with a scheme like `http:`)
      * or an authority (so an IP address or a registered name).
@@ -56,5 +54,3 @@ struct ParsedS3URL
 };
 
 } // namespace nix
-
-#endif

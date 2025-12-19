@@ -48,10 +48,10 @@ json printValueAsJSON(
     if (strict && state.executor->enabled && !Executor::amWorkerThread)
         parallelForceDeep(state, v, pos);
 
-    std::function<void(json & res, Value & v, PosIdx pos)> recurse;
-
-    recurse = [&](json & res, Value & v, PosIdx pos) {
+    auto recurse = [&](this const auto & recurse, json & res, Value & v, PosIdx pos) -> void {
         checkInterrupt();
+
+        auto _level = state.addCallDepth(pos);
 
         if (strict)
             state.forceValue(v, pos);
@@ -68,7 +68,7 @@ json printValueAsJSON(
 
         case nString: {
             copyContext(v, context);
-            res = v.c_str();
+            res = v.string_view();
             break;
         }
 

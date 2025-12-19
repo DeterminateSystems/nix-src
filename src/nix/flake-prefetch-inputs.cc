@@ -38,8 +38,7 @@ struct CmdFlakePrefetchInputs : FlakeCommand
 
         std::atomic<size_t> nrFailed{0};
 
-        std::function<void(const Node & node)> visit;
-        visit = [&](const Node & node) {
+        auto visit = [&](this const auto & visit, const Node & node) {
             if (!state_.lock()->done.insert(&node).second)
                 return;
 
@@ -48,7 +47,7 @@ struct CmdFlakePrefetchInputs : FlakeCommand
                     return;
                 try {
                     Activity act(*logger, lvlInfo, actUnknown, fmt("fetching '%s'", lockedNode->lockedRef));
-                    auto accessor = lockedNode->lockedRef.input.getAccessor(fetchSettings, store).first;
+                    auto accessor = lockedNode->lockedRef.input.getAccessor(fetchSettings, *store).first;
                     if (!evalSettings.lazyTrees)
                         fetchToStore(
                             fetchSettings, *store, accessor, FetchMode::Copy, lockedNode->lockedRef.input.getName());

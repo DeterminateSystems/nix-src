@@ -110,7 +110,7 @@ struct PrimOp
     /**
      * Optional free-form documentation about the primop.
      */
-    const char * doc = nullptr;
+    std::optional<std::string> doc;
 
     /**
      * Add a trace item, while calling the `<name>` builtin.
@@ -337,6 +337,7 @@ public:
     EvalMemory & operator=(const EvalMemory &) = delete;
     EvalMemory & operator=(EvalMemory &&) = delete;
 
+    inline void * allocBytes(size_t n);
     inline Value * allocValue();
     inline Env & allocEnv(size_t size);
 
@@ -350,7 +351,7 @@ public:
     ListBuilder buildList(size_t size)
     {
         stats.nrListElems += size;
-        return ListBuilder(size);
+        return ListBuilder(*this, size);
     }
 
     const Statistics & getStats() const &
@@ -476,18 +477,18 @@ private:
 
     /* Cache for calls to addToStore(); maps source paths to the store
        paths. */
-    ref<boost::concurrent_flat_map<SourcePath, StorePath>> srcToStore;
+    const ref<boost::concurrent_flat_map<SourcePath, StorePath>> srcToStore;
 
     /**
      * A cache that maps paths to "resolved" paths for importing Nix
      * expressions, i.e. `/foo` to `/foo/default.nix`.
      */
-    ref<boost::concurrent_flat_map<SourcePath, SourcePath>> importResolutionCache;
+    const ref<boost::concurrent_flat_map<SourcePath, SourcePath>> importResolutionCache;
 
     /**
      * A cache from resolved paths to values.
      */
-    ref<boost::concurrent_flat_map<
+    const ref<boost::concurrent_flat_map<
         SourcePath,
         Value *,
         std::hash<SourcePath>,
@@ -510,12 +511,19 @@ private:
     /**
      * Cache used by prim_match().
      */
-    ref<RegexCache> regexCache;
+    const ref<RegexCache> regexCache;
 
 public:
 
+    /**
+     * @param lookupPath     Only used during construction.
+     * @param store          The store to use for instantiation
+     * @param fetchSettings  Must outlive the lifetime of this EvalState!
+     * @param settings       Must outlive the lifetime of this EvalState!
+     * @param buildStore     The store to use for builds ("import from derivation", C API `nix_string_realise`)
+     */
     EvalState(
-        const LookupPath & _lookupPath,
+        const LookupPath & lookupPath,
         ref<Store> store,
         const fetchers::Settings & fetchSettings,
         const EvalSettings & settings,
@@ -596,12 +604,13 @@ public:
      * Parse a Nix expression from the specified file.
      */
     Expr * parseExprFromFile(const SourcePath & path);
-    Expr * parseExprFromFile(const SourcePath & path, std::shared_ptr<StaticEnv> & staticEnv);
+    Expr * parseExprFromFile(const SourcePath & path, const std::shared_ptr<StaticEnv> & staticEnv);
 
     /**
      * Parse a Nix expression from the specified string.
      */
-    Expr * parseExprFromString(std::string s, const SourcePath & basePath, std::shared_ptr<StaticEnv> & staticEnv);
+    Expr *
+    parseExprFromString(std::string s, const SourcePath & basePath, const std::shared_ptr<StaticEnv> & staticEnv);
     Expr * parseExprFromString(std::string s, const SourcePath & basePath);
 
     Expr * parseStdin();
@@ -791,7 +800,7 @@ public:
 
 #if NIX_USE_BOEHMGC
     /** A GC root for the baseEnv reference. */
-    std::shared_ptr<Env *> baseEnvP;
+    const std::shared_ptr<Env *> baseEnvP;
 #endif
 
 public:
@@ -805,7 +814,7 @@ public:
     /**
      * The same, but used during parsing to resolve variables.
      */
-    std::shared_ptr<StaticEnv> staticBaseEnv; // !!! should be private
+    const std::shared_ptr<StaticEnv> staticBaseEnv; // !!! should be private
 
     /**
      * Internal primops not exposed to the user.
@@ -887,7 +896,7 @@ private:
         size_t length,
         Pos::Origin origin,
         const SourcePath & basePath,
-        std::shared_ptr<StaticEnv> & staticEnv);
+        const std::shared_ptr<StaticEnv> & staticEnv);
 
     /**
      * Current Nix call stack depth, used with `max-call-depth`

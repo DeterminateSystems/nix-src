@@ -28,4 +28,4 @@ clearStore
 nix build --no-link "$flake2Dir#bar" --no-eval-cache --substitute --substituters "$cache"
 
 clearStore
-expectStderr 1 nix build --no-link "$flake2Dir#bar" --no-eval-cache | grepQuiet "The path.*does not exist"
+expectStderr 1 nix build --no-link "$flake2Dir#bar" --no-eval-cache | grepQuiet "Git repository.*does not exist"
