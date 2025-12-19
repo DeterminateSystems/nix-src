@@ -381,11 +381,6 @@ AttrPath AttrCursor::getAttrPath(Symbol name) const
     return attrPath;
 }
 
-std::string toAttrPathStr(EvalState & state, const AttrPath & attrPath)
-{
-    return dropEmptyInitThenConcatStringsSep(".", state.symbols.resolve(attrPath));
-}
-
 std::string AttrCursor::getAttrPathStr() const
 {
     return getAttrPath().to_string(root->state);

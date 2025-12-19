@@ -709,6 +709,7 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
                 keyDecoded = base64::decode(k.key);
             } catch (Error & e) {
                 e.addTrace({}, "while decoding public key '%s' used for git signature", k.key);
+                throw;
             }
             auto fingerprint =
                 trim(hashString(HashAlgorithm::SHA256, keyDecoded).to_string(nix::HashFormat::Base64, false), "=");
@@ -1119,6 +1120,13 @@ struct GitFileSystemObjectSinkImpl : GitFileSystemObjectSink
         : repo(repo)
         , repoPool(repo->getPool())
     {
+    }
+
+    ~GitFileSystemObjectSinkImpl()
+    {
+        // Make sure the worker threads are destroyed before any state
+        // they're referring to.
+        workers.shutdown();
     }
 
     struct Child;

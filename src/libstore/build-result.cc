@@ -2,8 +2,6 @@
 #include "nix/util/json-utils.hh"
 #include <array>
 
-#include <nlohmann/json.hpp>
-
 namespace nix {
 
 bool BuildResult::operator==(const BuildResult &) const noexcept = default;
