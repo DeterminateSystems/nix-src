@@ -77,7 +77,6 @@ struct FetchTreeParams
     bool emptyRevFallback = false;
     bool allowNameArgument = false;
     bool isFetchGit = false;
-    bool isFinal = false;
 };
 
 static void fetchTree(
@@ -202,12 +201,8 @@ static void fetchTree(
 
     state.checkURI(input.toURLString());
 
-    if (params.isFinal) {
+    if (input.getNarHash())
         input.attrs.insert_or_assign("__final", Explicit<bool>(true));
-    } else {
-        if (input.isFinal())
-            throw Error("input '%s' is not allowed to use the '__final' attribute", input.to_string());
-    }
 
     auto cachedInput =
         state.inputCache->getAccessor(state.fetchSettings, *state.store, input, fetchers::UseRegistries::No);
@@ -346,18 +341,6 @@ static RegisterPrimOp primop_fetchTree({
         return doc;
     }(),
     .fun = prim_fetchTree,
-});
-
-void prim_fetchFinalTree(EvalState & state, const PosIdx pos, Value ** args, Value & v)
-{
-    fetchTree(state, pos, args, v, {.isFinal = true});
-}
-
-static RegisterPrimOp primop_fetchFinalTree({
-    .name = "fetchFinalTree",
-    .args = {"input"},
-    .fun = prim_fetchFinalTree,
-    .internal = true,
 });
 
 static void fetch(

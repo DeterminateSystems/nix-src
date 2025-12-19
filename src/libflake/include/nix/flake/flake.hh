@@ -246,11 +246,4 @@ void emitTreeAttrs(
     bool emptyRevFallback = false,
     bool forceDirty = false);
 
-/**
- * An internal builtin similar to `fetchTree`, except that it
- * always treats the input as final (i.e. no attributes can be
- * added/removed/changed).
- */
-void prim_fetchFinalTree(EvalState & state, const PosIdx pos, Value ** args, Value & v);
-
 } // namespace nix
