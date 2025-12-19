@@ -7,8 +7,6 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/json-impls.hh"
 
-#include <nlohmann/json_fwd.hpp>
-
 namespace nix {
 
 MakeError(BadHash, Error);
@@ -215,11 +213,6 @@ parseHashAlgoOpt(std::string_view s, const ExperimentalFeatureSettings & xpSetti
  * And the reverse.
  */
 std::string_view printHashAlgo(HashAlgorithm ha);
-
-/**
- * Write a JSON serialisation of the format `{"algo":"<sha1|...>","base16":"<hex>"}`.
- */
-void to_json(nlohmann::json & json, const Hash & hash);
 
 struct AbstractHashSink : virtual Sink
 {
