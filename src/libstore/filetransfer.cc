@@ -57,8 +57,9 @@ struct curlFileTransfer : public FileTransfer
         CURL * req = 0;
         // buffer to accompany the `req` above
         char errbuf[CURL_ERROR_SIZE];
-        bool active = false; // whether the handle has been added to the multi object
-        bool paused = false; // whether the request has been paused previously
+        bool active = false;   // whether the handle has been added to the multi object
+        bool paused = false;   // whether the request has been paused previously
+        bool enqueued = false; // whether the request has been added the incoming queue
         std::string statusMsg;
 
         unsigned int attempt = 0;
@@ -152,7 +153,7 @@ struct curlFileTransfer : public FileTransfer
             if (requestHeaders)
                 curl_slist_free_all(requestHeaders);
             try {
-                if (!done)
+                if (!done && enqueued)
                     fail(FileTransferError(
                         Interrupted, {}, "%s of '%s' was interrupted", Uncolored(request.noun()), request.uri));
             } catch (...) {
@@ -961,6 +962,7 @@ struct curlFileTransfer : public FileTransfer
             if (state->isQuitting())
                 throw nix::Error("cannot enqueue download request because the download thread is shutting down");
             state->incoming.push(item);
+            item->enqueued = true;
         }
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
         writeFull(wakeupPipe.writeSide.get(), " ");
