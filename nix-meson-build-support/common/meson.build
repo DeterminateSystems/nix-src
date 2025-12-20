@@ -5,6 +5,15 @@ if not (host_machine.system() == 'windows' and cxx.get_id() == 'gcc')
   deps_private += dependency('threads')
 endif
 
+if host_machine.system() == 'cygwin'
+  # -std=gnu on cygwin defines 'unix', which conflicts with the namespace
+  add_project_arguments(
+    '-D_POSIX_C_SOURCE=200809L',
+    '-D_GNU_SOURCE',
+    language : 'cpp',
+  )
+endif
+
 add_project_arguments(
   '-Wdeprecated-copy',
   '-Werror=suggest-override',
@@ -33,10 +42,28 @@ if cxx.get_id() == 'clang'
   add_project_arguments('-fpch-instantiate-templates', language : 'cpp')
 endif
 
-# Clang gets grumpy about missing libasan symbols if -shared-libasan is not
-# passed when building shared libs, at least on Linux
-if cxx.get_id() == 'clang' and ('address' in get_option('b_sanitize') or 'undefined' in get_option(
-  'b_sanitize',
-))
-  add_project_link_arguments('-shared-libasan', language : 'cpp')
+# Detect if we're using libstdc++ (GCC's standard library)
+# libstdc++ uses Intel TBB as backend for C++17 parallel algorithms when <execution> is included.
+# boost::concurrent_flat_map includes <execution>, which would require linking against TBB.
+# Since we don't actually use parallel algorithms, disable the TBB backend to avoid the dependency.
+# TBB is a dependency of blake3 and leaking into our build environment.
+is_using_libstdcxx = cxx.compiles(
+  '''
+  #include <ciso646>
+  #ifndef __GLIBCXX__
+  #error "not libstdc++"
+  #endif
+  int main() { return 0; }
+''',
+  name : 'using libstdc++',
+)
+
+if is_using_libstdcxx
+  add_project_arguments('-D_GLIBCXX_USE_TBB_PAR_BACKEND=0', language : 'cpp')
 endif
+
+# Darwin ld doesn't like "X.Y.ZpreABCD+W"
+nix_soversion = meson.project_version().split('+')[0].split('pre')[0]
+
+subdir('assert-fail')
+subdir('asan-options')

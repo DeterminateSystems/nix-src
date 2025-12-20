@@ -6,16 +6,9 @@ Additionally, see [Testing Nix](./testing.md) for further instructions on how to
 
 ## Building Nix with Debug Symbols
 
-In the development shell, set the `mesonBuildType` environment variable to `debug` before configuring the build:
+In the development shell, `mesonBuildType` is set automatically to `debugoptimized`. This builds Nix with debug symbols, which are essential for effective debugging.
 
-```console
-[nix-shell]$ export mesonBuildType=debugoptimized
-```
-
-Then, proceed to build Nix as described in [Building Nix](./building.md).
-This will build Nix with debug symbols, which are essential for effective debugging.
-
-It is also possible to build without debugging for faster build:
+It is also possible to build without optimization for faster build:
 
 ```console
 [nix-shell]$ NIX_HARDENING_ENABLE=$(printLines $NIX_HARDENING_ENABLE | grep -v fortify)
@@ -23,6 +16,19 @@ It is also possible to build without debugging for faster build:
 ```
 
 (The first line is needed because `fortify` hardening requires at least some optimization.)
+
+## Building Nix with sanitizers
+
+Nix can be built with [Address](https://clang.llvm.org/docs/AddressSanitizer.html) and
+[UB](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html) sanitizers using LLVM
+or GCC. This is useful when debugging memory corruption issues.
+
+```console
+[nix-shell]$ export mesonBuildType=debugoptimized
+[nix-shell]$ appendToVar mesonFlags "-Dlibexpr:gc=disabled" # Disable Boehm
+[nix-shell]$ appendToVar mesonFlags "-Dbindings=false" # Disable nix-perl
+[nix-shell]$ appendToVar mesonFlags "-Db_sanitize=address,undefined"
+```
 
 ## Debugging the Nix Binary
 

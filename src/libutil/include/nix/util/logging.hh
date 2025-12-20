@@ -56,9 +56,9 @@ struct LoggerSettings : Config
           expression evaluation errors.
         )"};
 
-    Setting<Path> jsonLogPath{
+    Setting<std::optional<std::filesystem::path>> jsonLogPath{
         this,
-        "",
+        {},
         "json-log-path",
         R"(
           A file or Unix domain socket to which JSON records of Nix's log output are

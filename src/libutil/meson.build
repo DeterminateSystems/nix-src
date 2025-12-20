@@ -57,9 +57,14 @@ deps_private += blake3
 
 boost = dependency(
   'boost',
-  modules : [ 'context', 'coroutine', 'iostreams', 'url' ],
+  modules : [
+    'context',
+    'coroutine',
+    'iostreams',
+    'url',
+  ],
   include_type : 'system',
-  version : '>=1.82.0',
+  version : '>=1.87.0',
 )
 # boost is a public dependency, but not a pkg-config dependency unfortunately, so we
 # put in `deps_other`.
@@ -141,7 +146,9 @@ sources = [ config_priv_h ] + files(
   'json-utils.cc',
   'logging.cc',
   'memory-source-accessor.cc',
+  'memory-source-accessor/json.cc',
   'mounted-source-accessor.cc',
+  'nar-accessor.cc',
   'pos-table.cc',
   'position.cc',
   'posix-source-accessor.cc',
@@ -151,8 +158,8 @@ sources = [ config_priv_h ] + files(
   'source-accessor.cc',
   'source-path.cc',
   'strings.cc',
-  'subdir-source-accessor.cc',
   'suggestions.cc',
+  'table.cc',
   'tarfile.cc',
   'tee-logger.cc',
   'terminal.cc',
@@ -192,6 +199,7 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixutil',
   sources,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

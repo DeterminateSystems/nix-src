@@ -50,11 +50,17 @@ sources = files(
   'mercurial.cc',
   'path.cc',
   'registry.cc',
-  'store-path-accessor.cc',
   'tarball.cc',
 )
 
 subdir('include/nix/fetchers')
+
+# Generate builtin-flake-registry.json.gen.hh
+subdir('nix-meson-build-support/generate-header')
+
+sources += gen_header.process(
+  'builtin-flake-registry.json',
+)
 
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
@@ -62,6 +68,7 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixfetchers',
   sources,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

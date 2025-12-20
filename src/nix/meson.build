@@ -88,11 +88,13 @@ nix_sources = [ config_priv_h ] + files(
   'make-content-addressed.cc',
   'man-pages.cc',
   'nar.cc',
+  'nario.cc',
   'optimise-store.cc',
   'path-from-hash-part.cc',
   'path-info.cc',
   'prefetch.cc',
   'profile.cc',
+  'ps.cc',
   'realisation.cc',
   'registry.cc',
   'repl.cc',
@@ -230,6 +232,7 @@ foreach linkname : nix_symlinks
     env : {'MSYS' : 'winsymlinks:lnk'},
     # TODO(Ericson2314): Don't do this once we have the `meson.override_find_program` working)
     build_by_default : true,
+    depends : this_exe,
   )
   # TODO(Ericson3214): Doesn't yet work
   #meson.override_find_program(linkname, t)
@@ -251,6 +254,7 @@ custom_target(
   env : {'MSYS' : 'winsymlinks:lnk'},
   # TODO(Ericson2314): Don't do this once we have the `meson.override_find_program` working)
   build_by_default : true,
+  depends : this_exe,
 )
 # TODO(Ericson3214): Doesn't yet work
 #meson.override_find_program(linkname, t)

@@ -58,8 +58,6 @@ Nix can be built for various platforms, as specified in [`flake.nix`]:
 [`flake.nix`]: https://github.com/nixos/nix/blob/master/flake.nix
 
 - `x86_64-linux`
-- `x86_64-darwin`
-- `i686-linux`
 - `aarch64-linux`
 - `aarch64-darwin`
 - `armv6l-linux`
@@ -174,7 +172,7 @@ You can use any of the other supported environments in place of `nix-cli-ccacheS
 ## Editor integration
 
 The `clangd` LSP server is installed by default on the `clang`-based `devShell`s.
-See [supported compilation environments](#compilation-environments) and instructions how to [set up a shell with flakes](#nix-with-flakes).
+See [supported compilation environments](#compilation-environments) and instructions how to [set up a shell](#building-nix).
 
 To use the LSP with your editor, you will want a `compile_commands.json` file telling `clangd` how we are compiling the code.
 Meson's configure always produces this inside the build directory.

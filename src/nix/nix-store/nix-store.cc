@@ -14,6 +14,7 @@
 #include "nix/util/posix-source-accessor.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/path-with-outputs.hh"
+#include "nix/store/export-import.hh"
 
 #include "man-pages.hh"
 
@@ -602,7 +603,7 @@ static void registerValidity(bool reregister, bool hashGiven, bool canonicalise)
 #endif
             if (!hashGiven) {
                 HashResult hash = hashPath(
-                    {store->getFSAccessor(false), CanonPath{info->path.to_string()}},
+                    {store->requireStoreObjectAccessor(info->path, /*requireValidPath=*/false)},
                     FileSerialisationMethod::NixArchive,
                     HashAlgorithm::SHA256);
                 info->narHash = hash.hash;
@@ -774,7 +775,7 @@ static void opExport(Strings opFlags, Strings opArgs)
         paths.insert(store->followLinksToStorePath(i));
 
     FdSink sink(getStandardOutput());
-    store->exportPaths(paths, sink);
+    exportPaths(*store, paths, sink, 1);
     sink.flush();
 }
 
@@ -787,7 +788,7 @@ static void opImport(Strings opFlags, Strings opArgs)
         throw UsageError("no arguments expected");
 
     FdSource source(STDIN_FILENO);
-    auto paths = store->importPaths(source, NoCheckSigs);
+    auto paths = importPaths(*store, source, NoCheckSigs);
 
     for (auto & i : paths)
         cout << fmt("%s\n", store->printStorePath(i)) << std::flush;
@@ -988,14 +989,10 @@ static void opServe(Strings opFlags, Strings opArgs)
         case ServeProto::Command::ImportPaths: {
             if (!writeAllowed)
                 throw Error("importing paths is not allowed");
-            store->importPaths(in, NoCheckSigs); // FIXME: should we skip sig checking?
-            out << 1;                            // indicate success
-            break;
-        }
-
-        case ServeProto::Command::ExportPaths: {
-            readInt(in); // obsolete
-            store->exportPaths(ServeProto::Serialise<StorePathSet>::read(*store, rconn), out);
+            // FIXME: should we skip sig checking?
+            importPaths(*store, in, NoCheckSigs);
+            // indicate success
+            out << 1;
             break;
         }
 
@@ -1060,7 +1057,10 @@ static void opServe(Strings opFlags, Strings opArgs)
             auto deriver = readString(in);
             ValidPathInfo info{
                 store->parseStorePath(path),
-                Hash::parseAny(readString(in), HashAlgorithm::SHA256),
+                {
+                    *store,
+                    Hash::parseAny(readString(in), HashAlgorithm::SHA256),
+                },
             };
             if (deriver != "")
                 info.deriver = store->parseStorePath(deriver);

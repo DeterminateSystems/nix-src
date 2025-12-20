@@ -16,7 +16,7 @@
 #include "nix_api_util_internal.h"
 
 #if NIX_USE_BOEHMGC
-#  include <mutex>
+#  include <boost/unordered/concurrent_flat_map.hpp>
 #endif
 
 /**
@@ -39,6 +39,8 @@ static T * unsafe_new_with_self(F && init)
     // Initialize with placement new
     return new (p) T(init(static_cast<T *>(p)));
 }
+
+extern "C" {
 
 nix_err nix_libexpr_init(nix_c_context * context)
 {
@@ -67,8 +69,8 @@ nix_err nix_expr_eval_from_string(
         context->last_err_code = NIX_OK;
     try {
         nix::Expr * parsedExpr = state->state.parseExprFromString(expr, state->state.rootPath(nix::CanonPath(path)));
-        state->state.eval(parsedExpr, value->value);
-        state->state.forceValue(value->value, nix::noPos);
+        state->state.eval(parsedExpr, *value->value);
+        state->state.forceValue(*value->value, nix::noPos);
         state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
@@ -79,8 +81,8 @@ nix_err nix_value_call(nix_c_context * context, EvalState * state, Value * fn, n
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        state->state.callFunction(fn->value, arg->value, value->value, nix::noPos);
-        state->state.forceValue(value->value, nix::noPos);
+        state->state.callFunction(*fn->value, *arg->value, *value->value, nix::noPos);
+        state->state.forceValue(*value->value, nix::noPos);
         state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
@@ -91,9 +93,15 @@ nix_err nix_value_call_multi(
 {
     if (context)
         context->last_err_code = NIX_OK;
+
+    std::vector<nix::Value *> internal_args;
+    internal_args.reserve(nargs);
+    for (size_t i = 0; i < nargs; i++)
+        internal_args.push_back(args[i]->value);
+
     try {
-        state->state.callFunction(fn->value, {(nix::Value **) args, nargs}, value->value, nix::noPos);
-        state->state.forceValue(value->value, nix::noPos);
+        state->state.callFunction(*fn->value, {internal_args.data(), nargs}, *value->value, nix::noPos);
+        state->state.forceValue(*value->value, nix::noPos);
         state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
@@ -104,7 +112,7 @@ nix_err nix_value_force(nix_c_context * context, EvalState * state, nix_value * 
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        state->state.forceValue(value->value, nix::noPos);
+        state->state.forceValue(*value->value, nix::noPos);
         state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
@@ -115,7 +123,7 @@ nix_err nix_value_force_deep(nix_c_context * context, EvalState * state, nix_val
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        state->state.forceValueDeep(value->value);
+        state->state.forceValueDeep(*value->value);
         state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
@@ -140,7 +148,9 @@ nix_eval_state_builder * nix_eval_state_builder_new(nix_c_context * context, Sto
 
 void nix_eval_state_builder_free(nix_eval_state_builder * builder)
 {
-    delete builder;
+    if (builder)
+        builder->~nix_eval_state_builder();
+    operator delete(builder, static_cast<std::align_val_t>(alignof(nix_eval_state_builder)));
 }
 
 nix_err nix_eval_state_builder_load(nix_c_context * context, nix_eval_state_builder * builder)
@@ -206,32 +216,26 @@ EvalState * nix_state_create(nix_c_context * context, const char ** lookupPath_c
 
 void nix_state_free(EvalState * state)
 {
-    delete state;
+    if (state)
+        state->~EvalState();
+    operator delete(state, static_cast<std::align_val_t>(alignof(EvalState)));
 }
 
 #if NIX_USE_BOEHMGC
-std::unordered_map<
+boost::concurrent_flat_map<
     const void *,
     unsigned int,
     std::hash<const void *>,
     std::equal_to<const void *>,
     traceable_allocator<std::pair<const void * const, unsigned int>>>
-    nix_refcounts;
-
-std::mutex nix_refcount_lock;
+    nix_refcounts{};
 
 nix_err nix_gc_incref(nix_c_context * context, const void * p)
 {
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        std::scoped_lock lock(nix_refcount_lock);
-        auto f = nix_refcounts.find(p);
-        if (f != nix_refcounts.end()) {
-            f->second++;
-        } else {
-            nix_refcounts[p] = 1;
-        }
+        nix_refcounts.insert_or_visit({p, 1}, [](auto & kv) { kv.second++; });
     }
     NIXC_CATCH_ERRS
 }
@@ -242,12 +246,12 @@ nix_err nix_gc_decref(nix_c_context * context, const void * p)
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        std::scoped_lock lock(nix_refcount_lock);
-        auto f = nix_refcounts.find(p);
-        if (f != nix_refcounts.end()) {
-            if (--f->second == 0)
-                nix_refcounts.erase(f);
-        } else
+        bool fail = true;
+        nix_refcounts.erase_if(p, [&](auto & kv) {
+            fail = false;
+            return !--kv.second;
+        });
+        if (fail)
             throw std::runtime_error("nix_gc_decref: object was not referenced");
     }
     NIXC_CATCH_ERRS
@@ -292,3 +296,5 @@ void nix_gc_register_finalizer(void * obj, void * cd, void (*finalizer)(void * o
     GC_REGISTER_FINALIZER(obj, finalizer, cd, 0, 0);
 #endif
 }
+
+} // extern "C"

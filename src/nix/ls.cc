@@ -1,15 +1,16 @@
 #include "nix/cmd/command.hh"
 #include "nix/store/store-api.hh"
-#include "nix/store/nar-accessor.hh"
+#include "nix/util/nar-accessor.hh"
 #include "nix/main/common-args.hh"
 #include <nlohmann/json.hpp>
 
+#include "ls.hh"
+
 using namespace nix;
 
-struct MixLs : virtual Args, MixJSON
+struct MixLs : virtual Args, MixJSON, MixLongListing
 {
     bool recursive = false;
-    bool verbose = false;
     bool showDirectory = false;
 
     MixLs()
@@ -19,13 +20,6 @@ struct MixLs : virtual Args, MixJSON
             .shortName = 'R',
             .description = "List subdirectories recursively.",
             .handler = {&recursive, true},
-        });
-
-        addFlag({
-            .longName = "long",
-            .shortName = 'l',
-            .description = "Show detailed file information.",
-            .handler = {&verbose, true},
         });
 
         addFlag({
@@ -41,13 +35,13 @@ struct MixLs : virtual Args, MixJSON
         std::function<void(const SourceAccessor::Stat &, const CanonPath &, std::string_view, bool)> doPath;
 
         auto showFile = [&](const CanonPath & curPath, std::string_view relPath) {
-            if (verbose) {
+            if (longListing) {
                 auto st = accessor->lstat(curPath);
                 std::string tp = st.type == SourceAccessor::Type::tRegular
                                      ? (st.isExecutable ? "-r-xr-xr-x" : "-r--r--r--")
                                  : st.type == SourceAccessor::Type::tSymlink ? "lrwxrwxrwx"
                                                                              : "dr-xr-xr-x";
-                auto line = fmt("%s %20d %s", tp, st.fileSize.value_or(0), relPath);
+                auto line = fmt("%s %9d %s", tp, st.fileSize.value_or(0), relPath);
                 if (st.type == SourceAccessor::Type::tSymlink)
                     line += " -> " + accessor->readLink(curPath);
                 logger->cout(line);
@@ -85,7 +79,12 @@ struct MixLs : virtual Args, MixJSON
         if (json) {
             if (showDirectory)
                 throw UsageError("'--directory' is useless with '--json'");
-            logger->cout("%s", listNar(accessor, path, recursive));
+            nlohmann::json j;
+            if (recursive)
+                j = listNarDeep(*accessor, path);
+            else
+                j = listNarShallow(*accessor, path);
+            logger->cout("%s", j.dump());
         } else
             listText(accessor, std::move(path));
     }
@@ -115,7 +114,7 @@ struct CmdLsStore : StoreCommand, MixLs
     void run(ref<Store> store) override
     {
         auto [storePath, rest] = store->toStorePath(path);
-        list(store->getFSAccessor(), CanonPath{storePath.to_string()} / CanonPath{rest});
+        list(store->requireStoreObjectAccessor(storePath), CanonPath{rest});
     }
 };
 
@@ -145,7 +144,11 @@ struct CmdLsNar : Command, MixLs
 
     void run() override
     {
-        list(makeNarAccessor(readFile(narPath)), CanonPath{path});
+        AutoCloseFD fd = toDescriptor(open(narPath.c_str(), O_RDONLY));
+        if (!fd)
+            throw SysError("opening NAR file '%s'", narPath);
+        auto source = FdSource{fd.get()};
+        list(makeLazyNarAccessor(source, seekableGetNarBytes(fd.get())), CanonPath{path});
     }
 };
 

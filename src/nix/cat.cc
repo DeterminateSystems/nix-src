@@ -1,6 +1,11 @@
 #include "nix/cmd/command.hh"
 #include "nix/store/store-api.hh"
-#include "nix/store/nar-accessor.hh"
+#include "nix/util/archive.hh"
+#include "nix/util/nar-accessor.hh"
+#include "nix/util/serialise.hh"
+#include "nix/util/source-accessor.hh"
+
+#include <nlohmann/json.hpp>
 
 using namespace nix;
 
@@ -41,7 +46,7 @@ struct CmdCatStore : StoreCommand, MixCat
     void run(ref<Store> store) override
     {
         auto [storePath, rest] = store->toStorePath(path);
-        cat(store->getFSAccessor(), CanonPath{storePath.to_string()} / CanonPath{rest});
+        cat(store->requireStoreObjectAccessor(storePath), CanonPath{rest});
     }
 };
 
@@ -71,7 +76,44 @@ struct CmdCatNar : StoreCommand, MixCat
 
     void run(ref<Store> store) override
     {
-        cat(makeNarAccessor(readFile(narPath)), CanonPath{path});
+        AutoCloseFD fd = toDescriptor(open(narPath.c_str(), O_RDONLY));
+        if (!fd)
+            throw SysError("opening NAR file '%s'", narPath);
+        auto source = FdSource{fd.get()};
+
+        struct CatRegularFileSink : NullFileSystemObjectSink
+        {
+            CanonPath neededPath = CanonPath::root;
+            bool found = false;
+
+            void createRegularFile(const CanonPath & path, std::function<void(CreateRegularFileSink &)> crf) override
+            {
+                struct : CreateRegularFileSink, FdSink
+                {
+                    void isExecutable() override {}
+                } crfSink;
+
+                crfSink.fd = INVALID_DESCRIPTOR;
+
+                if (path == neededPath) {
+                    logger->stop();
+                    crfSink.skipContents = false;
+                    crfSink.fd = getStandardOutput();
+                    found = true;
+                } else {
+                    crfSink.skipContents = true;
+                }
+
+                crf(crfSink);
+            }
+        } sink;
+
+        sink.neededPath = CanonPath(path);
+        /* NOTE: We still parse the whole file to validate that it's a correct NAR. */
+        parseDump(sink, source);
+
+        if (!sink.found)
+            throw Error("NAR does not contain regular file '%1%'", path);
     }
 };
 

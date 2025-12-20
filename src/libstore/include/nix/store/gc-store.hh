@@ -1,9 +1,9 @@
 #pragma once
 ///@file
 
-#include <unordered_set>
-
 #include "nix/store/store-api.hh"
+#include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/unordered/unordered_flat_set.hpp>
 
 namespace nix {
 
@@ -11,30 +11,37 @@ namespace nix {
 // several root types.
 using GcRootInfo = std::string;
 
-typedef std::unordered_map<StorePath, std::unordered_set<GcRootInfo>> Roots;
+typedef boost::unordered_flat_map<
+    StorePath,
+    boost::unordered_flat_set<GcRootInfo, StringViewHash, std::equal_to<>>,
+    std::hash<StorePath>>
+    Roots;
+
+/**
+ * Garbage collector operation:
+ *
+ * - `gcReturnLive`: return the set of paths reachable from
+ *   (i.e. in the closure of) the roots.
+ *
+ * - `gcReturnDead`: return the set of paths not reachable from
+ *   the roots.
+ *
+ * - `gcDeleteDead`: actually delete the latter set.
+ *
+ * - `gcDeleteSpecific`: delete the paths listed in
+ *    `pathsToDelete`, insofar as they are not reachable.
+ */
+enum class GCAction {
+    gcReturnLive,
+    gcReturnDead,
+    gcDeleteDead,
+    gcDeleteSpecific,
+};
 
 struct GCOptions
 {
-    /**
-     * Garbage collector operation:
-     *
-     * - `gcReturnLive`: return the set of paths reachable from
-     *   (i.e. in the closure of) the roots.
-     *
-     * - `gcReturnDead`: return the set of paths not reachable from
-     *   the roots.
-     *
-     * - `gcDeleteDead`: actually delete the latter set.
-     *
-     * - `gcDeleteSpecific`: delete the paths listed in
-     *    `pathsToDelete`, insofar as they are not reachable.
-     */
-    typedef enum {
-        gcReturnLive,
-        gcReturnDead,
-        gcDeleteDead,
-        gcDeleteSpecific,
-    } GCAction;
+    using GCAction = nix::GCAction;
+    using enum GCAction;
 
     GCAction action{gcDeleteDead};
 

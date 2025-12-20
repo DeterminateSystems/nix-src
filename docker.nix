@@ -8,9 +8,10 @@
   # Image configuration
   name ? "nix",
   tag ? "latest",
+  fromImage ? null,
   bundleNixpkgs ? true,
   channelName ? "nixpkgs",
-  channelURL ? "https://nixos.org/channels/nixpkgs-unstable",
+  channelURL ? "https://channels.nixos.org/nixpkgs-unstable",
   extraPkgs ? [ ],
   maxLayers ? 70,
   nixConf ? { },
@@ -27,6 +28,8 @@
     "org.opencontainers.image.description" = "Nix container image";
   },
   Cmd ? [ (lib.getExe bashInteractive) ],
+  extraPrePaths ? [ ],
+  extraPostPaths ? [ ],
   # Default Packages
   nix ? pkgs.nix,
   bashInteractive ? pkgs.bashInteractive,
@@ -281,7 +284,10 @@ let
 
           # may get replaced by pkgs.dockerTools.caCertificates
           mkdir -p $out/etc/ssl/certs
+          # Old NixOS compatibility.
           ln -s /nix/var/nix/profiles/default/etc/ssl/certs/ca-bundle.crt $out/etc/ssl/certs
+          # NixOS canonical location
+          ln -s /nix/var/nix/profiles/default/etc/ssl/certs/ca-bundle.crt $out/etc/ssl/certs/ca-certificates.crt
 
           cat $passwdContentsPath > $out/etc/passwd
           echo "" >> $out/etc/passwd
@@ -349,6 +355,7 @@ dockerTools.buildLayeredImageWithNixDb {
     gid
     uname
     gname
+    fromImage
     ;
 
   contents = [ baseSystem ];
@@ -370,11 +377,15 @@ dockerTools.buildLayeredImageWithNixDb {
     Env = [
       "USER=${uname}"
       "PATH=${
-        lib.concatStringsSep ":" [
-          "${userHome}/.nix-profile/bin"
-          "/nix/var/nix/profiles/default/bin"
-          "/nix/var/nix/profiles/default/sbin"
-        ]
+        lib.concatStringsSep ":" (
+          extraPrePaths
+          ++ [
+            "${userHome}/.nix-profile/bin"
+            "/nix/var/nix/profiles/default/bin"
+            "/nix/var/nix/profiles/default/sbin"
+          ]
+          ++ extraPostPaths
+        )
       }"
       "MANPATH=${
         lib.concatStringsSep ":" [

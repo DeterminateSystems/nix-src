@@ -93,13 +93,13 @@ try3() {
     # Asserting input format fails.
     #
 
-    expectStderr 1 nix hash convert --hash-algo "$1" --from sri "$2" | grepQuiet "is not SRI"
-    expectStderr 1 nix hash convert --hash-algo "$1" --from nix32 "$2" | grepQuiet "input hash"
-    expectStderr 1 nix hash convert --hash-algo "$1" --from base16 "$3" | grepQuiet "input hash"
-    expectStderr 1 nix hash convert --hash-algo "$1" --from nix32 "$4" | grepQuiet "input hash"
+    expectStderr 1 nix hash convert --hash-algo "$1" --from sri "$2" | grepQuiet "'base16', but '--from sri'"
+    expectStderr 1 nix hash convert --hash-algo "$1" --from nix32 "$2" | grepQuiet "'base16', but '--from nix32'"
+    expectStderr 1 nix hash convert --hash-algo "$1" --from base16 "$3" | grepQuiet "'nix32', but '--from base16'"
+    expectStderr 1 nix hash convert --hash-algo "$1" --from nix32 "$4" | grepQuiet "'base64', but '--from nix32'"
 
     # Base-16 hashes can be in uppercase.
-    nix hash convert --hash-algo "$1" --from base16 "$(echo $2 | tr [a-z] [A-Z])"
+    nix hash convert --hash-algo "$1" --from base16 "$(echo "$2" | tr '[:lower:]' '[:upper:]')"
 }
 
 try3 sha1 "800d59cfcd3c05e900cb4e214be48f6b886a08df" "vw46m23bizj4n8afrc0fj19wrp7mj3c0" "gA1Zz808BekAy04hS+SPa4hqCN8="

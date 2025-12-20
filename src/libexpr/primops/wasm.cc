@@ -186,7 +186,7 @@ static void wasm_make_string(
         throw Error("unable to copy bytes from WASM memory: %s", WasmEdge_ResultGetMessage(res));
 
     auto [valueId, value] = nixCtx.allocValue();
-    value.mkString(s);
+    value.mkString(s, nixCtx.state.mem);
 
     out[0] = WasmEdge_ValueGenI32(valueId);
 }
@@ -253,7 +253,7 @@ static void wasm_make_null(
     const WasmEdge_Value * in,
     WasmEdge_Value * out)
 {
-    out[0] = WasmEdge_ValueGenI32(nixCtx.addValue(&nixCtx.state.vNull));
+    out[0] = WasmEdge_ValueGenI32(nixCtx.addValue(&Value::vNull));
 }
 
 static void wasm_make_list(
@@ -306,7 +306,8 @@ static void wasm_copy_list(
     int32_t ptr = WasmEdge_ValueGetI32(in[1]);
     int32_t len = WasmEdge_ValueGetI32(in[2]);
 
-    if (!len) return;
+    if (!len)
+        return;
 
     auto & value = **nixCtx.values.at(valueId);
     nixCtx.state.forceList(value, noPos, "while copying a list into WASM");

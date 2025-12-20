@@ -112,6 +112,7 @@ struct CmdSign : StorePathsCommand
             .labels = {"file"},
             .handler = {&secretKeyFile},
             .completer = completePath,
+            .required = true,
         });
     }
 
@@ -122,9 +123,6 @@ struct CmdSign : StorePathsCommand
 
     void run(ref<Store> store, StorePaths && storePaths) override
     {
-        if (secretKeyFile.empty())
-            throw UsageError("you must specify a secret key file using '-k'");
-
         SecretKey secretKey(readFile(secretKeyFile));
         LocalSigner signer(std::move(secretKey));
 
@@ -152,7 +150,7 @@ static auto rCmdSign = registerCommand2<CmdSign>({"store", "sign"});
 
 struct CmdKeyGenerateSecret : Command
 {
-    std::optional<std::string> keyName;
+    std::string keyName;
 
     CmdKeyGenerateSecret()
     {
@@ -161,6 +159,7 @@ struct CmdKeyGenerateSecret : Command
             .description = "Identifier of the key (e.g. `cache.example.org-1`).",
             .labels = {"name"},
             .handler = {&keyName},
+            .required = true,
         });
     }
 
@@ -178,11 +177,8 @@ struct CmdKeyGenerateSecret : Command
 
     void run() override
     {
-        if (!keyName)
-            throw UsageError("required argument '--key-name' is missing");
-
         logger->stop();
-        writeFull(getStandardOutput(), SecretKey::generate(*keyName).to_string());
+        writeFull(getStandardOutput(), SecretKey::generate(keyName).to_string());
     }
 };
 

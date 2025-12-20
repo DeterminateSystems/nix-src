@@ -44,6 +44,8 @@ config_priv_h = configure_file(
 subdir('nix-meson-build-support/common')
 
 sources = files(
+  'alignment.cc',
+  'archive.cc',
   'args.cc',
   'base-n.cc',
   'canon-path.cc',
@@ -61,8 +63,11 @@ sources = files(
   'json-utils.cc',
   'logging.cc',
   'lru-cache.cc',
+  'memory-source-accessor.cc',
   'monitorfdhup.cc',
+  'nar-listing.cc',
   'nix_api_util.cc',
+  'nix_api_util_internal.cc',
   'pool.cc',
   'position.cc',
   'processes.cc',
@@ -71,6 +76,7 @@ sources = files(
   'strings.cc',
   'suggestions.cc',
   'terminal.cc',
+  'topo-sort.cc',
   'url.cc',
   'util.cc',
   'xml-writer.cc',

@@ -61,9 +61,14 @@ struct UDSRemoteStore : virtual IndirectRootStore, virtual RemoteStore
         return LocalFSStore::getFSAccessor(requireValidPath);
     }
 
+    std::shared_ptr<SourceAccessor> getFSAccessor(const StorePath & path, bool requireValidPath = true) override
+    {
+        return LocalFSStore::getFSAccessor(path, requireValidPath);
+    }
+
     void narFromPath(const StorePath & path, Sink & sink) override
     {
-        LocalFSStore::narFromPath(path, sink);
+        Store::narFromPath(path, sink);
     }
 
     /**

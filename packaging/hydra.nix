@@ -62,18 +62,21 @@ let
         "nix-cmd"
         "nix-cli"
         "nix-functional-tests"
+        "nix-json-schema-checks"
       ]
       ++ lib.optionals enableBindings [
         "nix-perl-bindings"
       ]
       ++ lib.optionals enableDocs [
         "nix-manual"
+        "nix-manual-manpages-only"
         "nix-internal-api-docs"
         "nix-external-api-docs"
+        "nix-kaitai-struct-checks"
       ]
     );
 in
-{
+rec {
   /**
     An internal check to make sure our package listing is complete.
   */

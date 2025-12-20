@@ -35,7 +35,6 @@
       ];
       linuxSystems = linux32BitSystems ++ linux64BitSystems;
       darwinSystems = [
-        "x86_64-darwin"
         "aarch64-darwin"
       ];
       systems = linuxSystems ++ darwinSystems;
@@ -362,6 +361,7 @@
           # TODO probably should be `nix-cli`
           nix = self.packages.${system}.nix-everything;
           nix-manual = nixpkgsFor.${system}.native.nixComponents2.nix-manual;
+          nix-manual-manpages-only = nixpkgsFor.${system}.native.nixComponents2.nix-manual-manpages-only;
           nix-internal-api-docs = nixpkgsFor.${system}.native.nixComponents2.nix-internal-api-docs;
           nix-external-api-docs = nixpkgsFor.${system}.native.nixComponents2.nix-external-api-docs;
 
@@ -440,6 +440,14 @@
                 supportsCross = false;
               };
 
+              "nix-json-schema-checks" = {
+                supportsCross = false;
+              };
+
+              "nix-kaitai-struct-checks" = {
+                supportsCross = false;
+              };
+
               "nix-perl-bindings" = {
                 supportsCross = false;
               };
@@ -489,6 +497,27 @@
                 ln -s ${image} $image
                 echo "file binary-dist $image" >> $out/nix-support/hydra-build-products
               '';
+        }
+      );
+
+      apps = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgsFor.${system}.native;
+          opener = if pkgs.stdenv.isDarwin then "open" else "xdg-open";
+        in
+        {
+          open-manual = {
+            type = "app";
+            program = "${pkgs.writeShellScript "open-nix-manual" ''
+              path="${self.packages.${system}.nix-manual.site}/index.html"
+              if ! ${opener} "$path"; then
+                echo "Failed to open manual with ${opener}. Manual is located at:"
+                echo "$path"
+              fi
+            ''}";
+            meta.description = "Open the Nix manual in your browser";
+          };
         }
       );
 

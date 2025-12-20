@@ -34,6 +34,7 @@ sources = files(
   'derived-path.cc',
   'outputs-spec.cc',
   'path.cc',
+  'test-main.cc',
 )
 
 subdir('include/nix/store/tests')
@@ -44,6 +45,7 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nix-store-test-support',
   sources,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   # TODO: Remove `-lrapidcheck` when https://github.com/emil-e/rapidcheck/pull/326

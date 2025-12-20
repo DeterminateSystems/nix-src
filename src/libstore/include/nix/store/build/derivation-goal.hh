@@ -14,9 +14,6 @@ namespace nix {
 
 using std::map;
 
-/** Used internally */
-void runPostBuildHook(Store & store, Logger & logger, const StorePath & drvPath, const StorePathSet & outputPaths);
-
 /**
  * A goal for realising a single output of a derivation. Various sorts of
  * fetching (which will be done by other goal types) is tried, and if none of
@@ -43,12 +40,16 @@ struct DerivationGoal : public Goal
      */
     OutputName wantedOutput;
 
+    /**
+     * @param storeDerivation See `DerivationBuildingGoal`. This is just passed along.
+     */
     DerivationGoal(
         const StorePath & drvPath,
         const Derivation & drv,
         const OutputName & wantedOutput,
         Worker & worker,
-        BuildMode buildMode = bmNormal);
+        BuildMode buildMode,
+        bool storeDerivation);
     ~DerivationGoal() = default;
 
     void timedOut(Error && ex) override
@@ -83,7 +84,7 @@ private:
     /**
      * The states.
      */
-    Co haveDerivation();
+    Co haveDerivation(bool storeDerivation);
 
     /**
      * Return `std::nullopt` if the output is unknown, e.g. un unbuilt
@@ -92,23 +93,19 @@ private:
      * of the wanted output, and a `PathStatus` with the
      * current status of that output.
      */
-    std::optional<std::pair<Realisation, PathStatus>> checkPathValidity();
+    std::optional<std::pair<UnkeyedRealisation, PathStatus>> checkPathValidity();
 
     /**
      * Aborts if any output is not valid or corrupt, and otherwise
      * returns a 'Realisation' for the wanted output.
      */
-    Realisation assertPathValidity();
+    UnkeyedRealisation assertPathValidity();
 
     Co repairClosure();
 
-    /**
-     * @param builtOutput Must be set if `status` is successful.
-     */
-    Done done(
-        BuildResult::Status status,
-        std::optional<Realisation> builtOutput = std::nullopt,
-        std::optional<Error> ex = {});
+    Done doneSuccess(BuildResult::Success::Status status, UnkeyedRealisation builtOutput);
+
+    Done doneFailure(BuildError ex);
 };
 
 } // namespace nix

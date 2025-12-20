@@ -58,9 +58,13 @@ struct CmdShowDerivation : InstallablesCommand, MixPrintJSON
             if (!drvPath.isDerivation())
                 continue;
 
-            jsonRoot[store->printStorePath(drvPath)] = store->readDerivation(drvPath).toJSON(*store);
+            jsonRoot[drvPath.to_string()] = store->readDerivation(drvPath);
         }
-        printJSON(jsonRoot);
+        printJSON(
+            nlohmann::json{
+                {"version", expectedJsonVersionDerivation},
+                {"derivations", std::move(jsonRoot)},
+            });
     }
 };
 

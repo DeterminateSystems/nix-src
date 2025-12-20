@@ -257,10 +257,15 @@ static StorePath getDerivationEnvironment(ref<Store> store, ref<Store> evalStore
     drv.args = {store->printStorePath(getEnvShPath)};
 
     /* Remove derivation checks. */
-    drv.env.erase("allowedReferences");
-    drv.env.erase("allowedRequisites");
-    drv.env.erase("disallowedReferences");
-    drv.env.erase("disallowedRequisites");
+    if (drv.structuredAttrs) {
+        drv.structuredAttrs->structuredAttrs.erase("outputChecks");
+    } else {
+        drv.env.erase("allowedReferences");
+        drv.env.erase("allowedRequisites");
+        drv.env.erase("disallowedReferences");
+        drv.env.erase("disallowedRequisites");
+    }
+
     drv.env.erase("name");
 
     /* Rehash and write the derivation. FIXME: would be nice to use
@@ -268,26 +273,24 @@ static StorePath getDerivationEnvironment(ref<Store> store, ref<Store> evalStore
     drv.name += "-env";
     drv.env.emplace("name", drv.name);
     drv.inputSrcs.insert(std::move(getEnvShPath));
-    if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
-        for (auto & output : drv.outputs) {
-            output.second = DerivationOutput::Deferred{}, drv.env[output.first] = hashPlaceholder(output.first);
-        }
-    } else {
-        for (auto & output : drv.outputs) {
-            output.second = DerivationOutput::Deferred{};
-            drv.env[output.first] = "";
-        }
-        auto hashesModulo = hashDerivationModulo(*evalStore, drv, true);
-
-        for (auto & output : drv.outputs) {
-            Hash h = hashesModulo.hashes.at(output.first);
-            auto outPath = store->makeOutputPath(output.first, h, drv.name);
-            output.second = DerivationOutput::InputAddressed{
-                .path = outPath,
-            };
-            drv.env[output.first] = store->printStorePath(outPath);
-        }
+    for (auto & [outputName, output] : drv.outputs) {
+        std::visit(
+            overloaded{
+                [&](const DerivationOutput::InputAddressed &) {
+                    output = DerivationOutput::Deferred{};
+                    drv.env[outputName] = "";
+                },
+                [&](const DerivationOutput::CAFixed &) {
+                    output = DerivationOutput::Deferred{};
+                    drv.env[outputName] = "";
+                },
+                [&](const auto &) {
+                    // Do nothing for other types (CAFloating, Deferred, Impure)
+                },
+            },
+            output.raw);
     }
+    drv.fillInOutputPaths(*evalStore);
 
     auto shellDrvPath = writeDerivation(*evalStore, drv);
 
@@ -304,10 +307,9 @@ static StorePath getDerivationEnvironment(ref<Store> store, ref<Store> evalStore
     // path, so return the first non-empty output path.
     for (auto & [_0, optPath] : evalStore->queryPartialDerivationOutputMap(shellDrvPath)) {
         assert(optPath);
-        auto & outPath = *optPath;
-        auto st = store->getFSAccessor()->lstat(CanonPath(outPath.to_string()));
-        if (st.fileSize.value_or(0))
-            return outPath;
+        auto accessor = evalStore->requireStoreObjectAccessor(*optPath);
+        if (auto st = accessor->maybeLstat(CanonPath::root); st && st->fileSize.value_or(0))
+            return *optPath;
     }
 
     throw Error("get-env.sh failed to produce an environment");
@@ -504,7 +506,10 @@ struct Common : InstallableCommand, MixProfile
 
         debug("reading environment file '%s'", store->printStorePath(shellOutPath));
 
-        return {BuildEnvironment::parseJSON(store->getFSAccessor()->readFile(shellOutPath.to_string())), shellOutPath};
+        return {
+            BuildEnvironment::parseJSON(store->requireStoreObjectAccessor(shellOutPath)->readFile(CanonPath::root)),
+            shellOutPath,
+        };
     }
 };
 
@@ -629,13 +634,12 @@ struct CmdDevelop : Common, MixEnvironment
                     fmt("[ -n \"$PS1\" ] && PS1+=%s;\n", escapeShellArgAlways(developSettings.bashPromptSuffix.get()));
         }
 
-        writeFull(rcFileFd.get(), script);
-
         setEnviron();
         // prevent garbage collection until shell exits
         setEnv("NIX_GCROOT", store->printStorePath(gcroot).c_str());
 
         Path shell = "bash";
+        bool foundInteractive = false;
 
         try {
             auto state = getEvalState();
@@ -658,19 +662,17 @@ struct CmdDevelop : Common, MixEnvironment
                 Strings{"legacyPackages." + settings.thisSystem.get() + "."},
                 nixpkgsLockFlags);
 
-            bool found = false;
-
             for (auto & path : Installable::toStorePathSet(
                      getEvalStore(), store, Realise::Outputs, OperateOn::Output, {bashInstallable})) {
                 auto s = store->printStorePath(path) + "/bin/bash";
                 if (pathExists(s)) {
                     shell = s;
-                    found = true;
+                    foundInteractive = true;
                     break;
                 }
             }
 
-            if (!found)
+            if (!foundInteractive)
                 throw Error("package 'nixpkgs#bashInteractive' does not provide a 'bin/bash'");
 
         } catch (Error &) {
@@ -680,6 +682,11 @@ struct CmdDevelop : Common, MixEnvironment
         // Override SHELL with the one chosen for this environment.
         // This is to make sure the system shell doesn't leak into the build environment.
         setEnv("SHELL", shell.c_str());
+        // https://github.com/NixOS/nix/issues/5873
+        script += fmt("SHELL=\"%s\"\n", shell);
+        if (foundInteractive)
+            script += fmt("PATH=\"%s${PATH:+:$PATH}\"\n", std::filesystem::path(shell).parent_path());
+        writeFull(rcFileFd.get(), script);
 
 #ifdef _WIN32 // TODO re-enable on Windows
         throw UnimplementedError("Cannot yet spawn processes on Windows");

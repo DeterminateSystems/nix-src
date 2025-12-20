@@ -100,20 +100,24 @@ struct CmdBundle : InstallableValueCommand
         if (!evalState->isDerivation(*vRes))
             throw Error("the bundler '%s' does not produce a derivation", bundler.what());
 
-        auto attr1 = vRes->attrs()->get(evalState->sDrvPath);
+        auto attr1 = vRes->attrs()->get(evalState->s.drvPath);
         if (!attr1)
             throw Error("the bundler '%s' does not produce a derivation", bundler.what());
 
         NixStringContext context2;
         auto drvPath = evalState->coerceToStorePath(attr1->pos, *attr1->value, context2, "");
 
+        evalState->waitForAllPaths();
+
         drvPath.requireDerivation();
 
-        auto attr2 = vRes->attrs()->get(evalState->sOutPath);
+        auto attr2 = vRes->attrs()->get(evalState->s.outPath);
         if (!attr2)
             throw Error("the bundler '%s' does not produce a derivation", bundler.what());
 
         auto outPath = evalState->coerceToStorePath(attr2->pos, *attr2->value, context2, "");
+
+        evalState->waitForAllPaths();
 
         store->buildPaths({
             DerivedPath::Built{
@@ -123,7 +127,7 @@ struct CmdBundle : InstallableValueCommand
         });
 
         if (!outLink) {
-            auto * attr = vRes->attrs()->get(evalState->sName);
+            auto * attr = vRes->attrs()->get(evalState->s.name);
             if (!attr)
                 throw Error("attribute 'name' missing");
             outLink = evalState->forceStringNoCtx(*attr->value, attr->pos, "");

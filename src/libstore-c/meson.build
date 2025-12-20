@@ -35,6 +35,8 @@ include_dirs = [ include_directories('.') ]
 
 headers = files(
   'nix_api_store.h',
+  'nix_api_store/derivation.h',
+  'nix_api_store/store_path.h',
 )
 
 # TODO don't install this once tests don't use it and/or move the header into `libstore`, non-`c`
@@ -46,6 +48,7 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixstorec',
   sources,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

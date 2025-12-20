@@ -54,32 +54,38 @@ deps_private += gtest
 subdir('nix-meson-build-support/common')
 
 sources = files(
+  'build-result.cc',
   'common-protocol.cc',
   'content-address.cc',
   'derivation-advanced-attrs.cc',
-  'derivation.cc',
+  'derivation/external-formats.cc',
+  'derivation/invariants.cc',
   'derived-path.cc',
   'downstream-placeholder.cc',
+  'dummy-store.cc',
   'http-binary-cache-store.cc',
   'legacy-ssh-store.cc',
   'local-binary-cache-store.cc',
   'local-overlay-store.cc',
   'local-store.cc',
   'machines.cc',
+  'main.cc',
   'nar-info-disk-cache.cc',
   'nar-info.cc',
   'nix_api_store.cc',
   'outputs-spec.cc',
   'path-info.cc',
   'path.cc',
+  'realisation.cc',
   'references.cc',
   's3-binary-cache-store.cc',
-  's3.cc',
+  's3-url.cc',
   'serve-protocol.cc',
   'ssh-store.cc',
   'store-reference.cc',
   'uds-remote-store.cc',
   'worker-protocol.cc',
+  'write-derivation.cc',
 )
 
 include_dirs = [ include_directories('.') ]
@@ -130,10 +136,13 @@ if get_option('benchmarks')
     link_args : linker_export_flags,
     install : true,
     cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
-    cpp_args : [
-      '-DNIX_UNIT_TEST_DATA="' + meson.current_source_dir() + '/data"',
-    ],
   )
 
-  benchmark('nix-store-benchmarks', benchmark_exe)
+  benchmark(
+    'nix-store-benchmarks',
+    benchmark_exe,
+    env : {
+      '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
+    },
+  )
 endif

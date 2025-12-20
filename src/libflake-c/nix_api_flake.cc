@@ -10,6 +10,8 @@
 
 #include "nix/flake/flake.hh"
 
+extern "C" {
+
 nix_flake_settings * nix_flake_settings_new(nix_c_context * context)
 {
     nix_clear_err(context);
@@ -198,8 +200,26 @@ nix_value * nix_locked_flake_get_output_attrs(
     nix_clear_err(context);
     try {
         auto v = nix_alloc_value(context, evalState);
-        nix::flake::callFlake(evalState->state, *lockedFlake->lockedFlake, v->value);
+        nix::flake::callFlake(evalState->state, *lockedFlake->lockedFlake, *v->value);
         return v;
     }
     NIXC_CATCH_ERRS_NULL
 }
+
+nix_err nix_locked_flake_read_path(
+    nix_c_context * context,
+    nix_locked_flake * lockedFlake,
+    const char * path,
+    nix_get_string_callback callback,
+    void * user_data)
+{
+    nix_clear_err(context);
+    try {
+        auto source_path = lockedFlake->lockedFlake->flake.path.parent() / nix::CanonPath(path);
+        auto v = source_path.readFile();
+        return call_nix_get_string_callback(v, callback, user_data);
+    }
+    NIXC_CATCH_ERRS
+}
+
+} // extern "C"

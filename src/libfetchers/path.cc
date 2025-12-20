@@ -1,7 +1,6 @@
 #include "nix/fetchers/fetchers.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/archive.hh"
-#include "nix/fetchers/store-path-accessor.hh"
 #include "nix/fetchers/cache.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/fetchers/fetch-settings.hh"
@@ -18,9 +17,9 @@ struct PathInputScheme : InputScheme
         if (url.authority && url.authority->host.size())
             throw Error("path URL '%s' should not have an authority ('%s')", url, *url.authority);
 
-        Input input{settings};
+        Input input{};
         input.attrs.insert_or_assign("type", "path");
-        input.attrs.insert_or_assign("path", url.path);
+        input.attrs.insert_or_assign("path", renderUrlPathEnsureLegal(url.path));
 
         for (auto & [name, value] : url.query)
             if (name == "rev" || name == "narHash")
@@ -41,32 +40,54 @@ struct PathInputScheme : InputScheme
         return "path";
     }
 
-    StringSet allowedAttrs() const override
+    std::string schemeDescription() const override
     {
-        return {
-            "path",
+        // TODO
+        return "";
+    }
+
+    const std::map<std::string, AttributeInfo> & allowedAttrs() const override
+    {
+        static const std::map<std::string, AttributeInfo> attrs = {
+            {
+                "path",
+                {},
+            },
             /* Allow the user to pass in "fake" tree info
                attributes. This is useful for making a pinned tree work
                the same as the repository from which is exported (e.g.
                path:/nix/store/...-source?lastModified=1585388205&rev=b0c285...).
              */
-            "rev",
-            "revCount",
-            "lastModified",
-            "narHash",
+            {
+                "rev",
+                {},
+            },
+            {
+                "revCount",
+                {},
+            },
+            {
+                "lastModified",
+                {},
+            },
+            {
+                "narHash",
+                {},
+            },
         };
+        return attrs;
     }
 
     std::optional<Input> inputFromAttrs(const Settings & settings, const Attrs & attrs) const override
     {
         getStrAttr(attrs, "path");
 
-        Input input{settings};
+        Input input{};
         input.attrs = attrs;
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         auto query = attrsToQuery(input.attrs);
         query.erase("path");
@@ -74,7 +95,7 @@ struct PathInputScheme : InputScheme
         query.erase("__final");
         return ParsedURL{
             .scheme = "path",
-            .path = getStrAttr(input.attrs, "path"),
+            .path = splitString<std::vector<std::string>>(getStrAttr(input.attrs, "path"), "/"),
             .query = query,
         };
     }
@@ -102,7 +123,7 @@ struct PathInputScheme : InputScheme
             return path;
     }
 
-    bool isLocked(const Input & input) const override
+    bool isLocked(const Settings & settings, const Input & input) const override
     {
         return (bool) input.getNarHash();
     }
@@ -117,7 +138,8 @@ struct PathInputScheme : InputScheme
         throw Error("cannot fetch input '%s' because it uses a relative path", input.to_string());
     }
 
-    std::pair<ref<SourceAccessor>, Input> getAccessor(ref<Store> store, const Input & _input) const override
+    std::pair<ref<SourceAccessor>, Input>
+    getAccessor(const Settings & settings, Store & store, const Input & _input) const override
     {
         Input input(_input);
         auto path = getStrAttr(input.attrs, "path");
@@ -125,28 +147,28 @@ struct PathInputScheme : InputScheme
         auto absPath = getAbsPath(input);
 
         // FIXME: check whether access to 'path' is allowed.
-        auto storePath = store->maybeParseStorePath(absPath.string());
+        auto storePath = store.maybeParseStorePath(absPath.string());
 
         if (storePath)
-            store->addTempRoot(*storePath);
+            store.addTempRoot(*storePath);
 
         time_t mtime = 0;
-        if (!storePath || storePath->name() != "source" || !store->isValidPath(*storePath)) {
+        if (!storePath || storePath->name() != "source" || !store.isValidPath(*storePath)) {
             Activity act(*logger, lvlTalkative, actUnknown, fmt("copying %s to the store", absPath));
             // FIXME: try to substitute storePath.
             auto src = sinkToSource(
                 [&](Sink & sink) { mtime = dumpPathAndGetMtime(absPath.string(), sink, defaultPathFilter); });
-            storePath = store->addToStoreFromDump(*src, "source");
+            storePath = store.addToStoreFromDump(*src, "source");
         }
 
-        auto accessor = makeStorePathAccessor(store, *storePath);
+        auto accessor = store.requireStoreObjectAccessor(*storePath);
 
         // To prevent `fetchToStore()` copying the path again to Nix
         // store, pre-create an entry in the fetcher cache.
-        auto info = store->queryPathInfo(*storePath);
+        auto info = store.queryPathInfo(*storePath);
         accessor->fingerprint =
-            fmt("path:%s", store->queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true));
-        input.settings->getCache()->upsert(
+            fmt("path:%s", store.queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true));
+        settings.getCache()->upsert(
             makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
             {{"hash", info->narHash.to_string(HashFormat::SRI, true)}});
 

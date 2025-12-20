@@ -11,44 +11,10 @@
 }:
 
 let
-  prevStdenv = stdenv;
-in
-
-let
   inherit (pkgs) lib;
-
-  stdenv = if prevStdenv.isDarwin && prevStdenv.isx86_64 then darwinStdenv else prevStdenv;
-
-  # Fix the following error with the default x86_64-darwin SDK:
-  #
-  #     error: aligned allocation function of type 'void *(std::size_t, std::align_val_t)' is only available on macOS 10.13 or newer
-  #
-  # Despite the use of the 10.13 deployment target here, the aligned
-  # allocation function Clang uses with this setting actually works
-  # all the way back to 10.6.
-  # NOTE: this is not just a version constraint, but a request to make Darwin
-  #       provide this version level of support. Removing this minimum version
-  #       request will regress the above error.
-  darwinStdenv = pkgs.overrideSDK prevStdenv { darwinMinVersion = "10.13"; };
-
 in
 scope: {
   inherit stdenv;
-
-  aws-sdk-cpp =
-    (pkgs.aws-sdk-cpp.override {
-      apis = [
-        "identity-management"
-        "s3"
-        "transfer"
-      ];
-      customMemoryManagement = false;
-    }).overrideAttrs
-      {
-        # only a stripped down version is built, which takes a lot less resources
-        # to build, so we don't need a "big-parallel" machine.
-        requiredSystemFeatures = [ ];
-      };
 
   boehmgc =
     (pkgs.boehmgc.override {
@@ -73,8 +39,23 @@ scope: {
     nativeBuildInputs = prevAttrs.nativeBuildInputs ++ [ pkgs.buildPackages.bmake ];
     postInstall =
       lib.replaceStrings [ "lowdown.so.1" "lowdown.1.dylib" ] [ "lowdown.so.2" "lowdown.2.dylib" ]
-        prevAttrs.postInstall;
+        (prevAttrs.postInstall or "");
   });
+
+  # TODO: Remove this when https://github.com/NixOS/nixpkgs/pull/442682 is included in a stable release
+  toml11 =
+    if lib.versionAtLeast pkgs.toml11.version "4.4.0" then
+      pkgs.toml11
+    else
+      pkgs.toml11.overrideAttrs rec {
+        version = "4.4.0";
+        src = pkgs.fetchFromGitHub {
+          owner = "ToruNiina";
+          repo = "toml11";
+          tag = "v${version}";
+          hash = "sha256-sgWKYxNT22nw376ttGsTdg0AMzOwp8QH3E8mx0BZJTQ=";
+        };
+      };
 
   # TODO Hack until https://github.com/NixOS/nixpkgs/issues/45462 is fixed.
   boost =
@@ -93,40 +74,6 @@ scope: {
         # Need to remove `--with-*` to use `--with-libraries=...`
         buildPhase = lib.replaceStrings [ "--without-python" ] [ "" ] old.buildPhase;
         installPhase = lib.replaceStrings [ "--without-python" ] [ "" ] old.installPhase;
-      });
-
-  libgit2 =
-    if lib.versionAtLeast pkgs.libgit2.version "1.9.0" then
-      pkgs.libgit2
-    else
-      pkgs.libgit2.overrideAttrs (attrs: {
-        # libgit2: Nixpkgs 24.11 has < 1.9.0, which needs our patches
-        nativeBuildInputs =
-          attrs.nativeBuildInputs or [ ]
-          # gitMinimal does not build on Windows. See packbuilder patch.
-          ++ lib.optionals (!stdenv.hostPlatform.isWindows) [
-            # Needed for `git apply`; see `prePatch`
-            pkgs.buildPackages.gitMinimal
-          ];
-        # Only `git apply` can handle git binary patches
-        prePatch =
-          attrs.prePatch or ""
-          + lib.optionalString (!stdenv.hostPlatform.isWindows) ''
-            patch() {
-              git apply
-            }
-          '';
-        patches =
-          attrs.patches or [ ]
-          ++ [
-            ./patches/libgit2-mempack-thin-packfile.patch
-          ]
-          # gitMinimal does not build on Windows, but fortunately this patch only
-          # impacts interruptibility
-          ++ lib.optionals (!stdenv.hostPlatform.isWindows) [
-            # binary patch; see `prePatch`
-            ./patches/libgit2-packbuilder-callback-interruptible.patch
-          ];
       });
 
   wasmedge = pkgs.wasmedge.overrideAttrs (attrs: {

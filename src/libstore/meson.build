@@ -108,14 +108,30 @@ subdir('nix-meson-build-support/libatomic')
 
 boost = dependency(
   'boost',
-  modules : [ 'container', 'regex' ],
+  modules : [
+    'container',
+    # Shouldn't list, because can header-only, and Meson currently looks for libs
+    #'regex',
+    'url',
+  ],
   include_type : 'system',
 )
 # boost is a public dependency, but not a pkg-config dependency unfortunately, so we
 # put in `deps_other`.
 deps_other += boost
 
-curl = dependency('libcurl', 'curl')
+curl = dependency('libcurl', 'curl', version : '>= 7.75.0')
+if curl.version().version_compare('>=8.16.0') and curl.version().version_compare(
+  '<8.17.0',
+)
+  # Out of precaution, avoid building with libcurl version that suffer from https://github.com/curl/curl/issues/19334.
+  error(
+    'curl @0@ has issues with write pausing, please use libcurl < 8.16 or >= 8.17, see https://github.com/curl/curl/issues/19334'.format(
+      curl.version(),
+    ),
+  )
+endif
+
 deps_private += curl
 
 # seccomp only makes sense on Linux
@@ -144,27 +160,16 @@ deps_public += nlohmann_json
 sqlite = dependency('sqlite3', 'sqlite', version : '>=3.6.19')
 deps_private += sqlite
 
-# AWS C++ SDK has bad pkg-config. See
-# https://github.com/aws/aws-sdk-cpp/issues/2673 for details.
-aws_s3 = dependency('aws-cpp-sdk-s3', required : false)
-# The S3 store definitions in the header will be hidden based on this variables.
-configdata_pub.set('NIX_WITH_S3_SUPPORT', aws_s3.found().to_int())
-if aws_s3.found()
-  aws_s3 = declare_dependency(
-    include_directories : include_directories(aws_s3.get_variable('includedir')),
-    link_args : [
-      '-L' + aws_s3.get_variable('libdir'),
-      '-laws-cpp-sdk-transfer',
-      '-laws-cpp-sdk-s3',
-      '-laws-cpp-sdk-identity-management',
-      '-laws-cpp-sdk-cognito-identity',
-      '-laws-cpp-sdk-sts',
-      '-laws-cpp-sdk-core',
-      '-laws-crt-cpp',
-    ],
-  ).as_system('system')
+s3_aws_auth = get_option('s3-aws-auth')
+aws_crt_cpp = cxx.find_library('aws-crt-cpp', required : s3_aws_auth)
+
+if s3_aws_auth.enabled()
+  deps_other += aws_crt_cpp
+  aws_c_common = cxx.find_library('aws-c-common', required : true)
+  deps_other += aws_c_common
 endif
-deps_other += aws_s3
+
+configdata_pub.set('NIX_WITH_AWS_AUTH', s3_aws_auth.enabled().to_int())
 
 subdir('nix-meson-build-support/generate-header')
 
@@ -267,11 +272,16 @@ config_priv_h = configure_file(
 subdir('nix-meson-build-support/common')
 
 sources = files(
+  'active-builds.cc',
   'async-path-writer.cc',
   'binary-cache-store.cc',
   'build-result.cc',
+  'build/derivation-builder.cc',
   'build/derivation-building-goal.cc',
+  'build/derivation-check.cc',
+  'build/derivation-env-desugar.cc',
   'build/derivation-goal.cc',
+  'build/derivation-resolution-goal.cc',
   'build/derivation-trampoline-goal.cc',
   'build/drv-output-substitution-goal.cc',
   'build/entry-points.cc',
@@ -302,13 +312,13 @@ sources = files(
   'local-binary-cache-store.cc',
   'local-fs-store.cc',
   'local-overlay-store.cc',
+  'local-store-active-builds.cc',
   'local-store.cc',
   'log-store.cc',
   'machines.cc',
   'make-content-addressed.cc',
   'misc.cc',
   'names.cc',
-  'nar-accessor.cc',
   'nar-info-disk-cache.cc',
   'nar-info.cc',
   'optimise-store.cc',
@@ -327,7 +337,7 @@ sources = files(
   'remote-store.cc',
   'restricted-store.cc',
   's3-binary-cache-store.cc',
-  's3.cc',
+  's3-url.cc',
   'serve-protocol-connection.cc',
   'serve-protocol.cc',
   'sqlite.cc',
@@ -341,6 +351,11 @@ sources = files(
   'worker-protocol-connection.cc',
   'worker-protocol.cc',
 )
+
+# AWS credentials code requires AWS CRT, so only compile when enabled
+if s3_aws_auth.enabled()
+  sources += files('aws-creds.cc')
+endif
 
 subdir('include/nix/store')
 
@@ -362,6 +377,7 @@ this_library = library(
   generated_headers,
   sources,
   config_priv_h,
+  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

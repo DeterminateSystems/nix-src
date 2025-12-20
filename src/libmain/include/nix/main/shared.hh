@@ -29,6 +29,8 @@ void parseCmdLine(
     const Strings & args,
     std::function<bool(Strings::iterator & arg, const Strings::iterator & end)> parseArg);
 
+std::string version();
+
 void printVersion(const std::string & programName);
 
 /**
@@ -88,8 +90,6 @@ private:
 extern volatile ::sig_atomic_t blockInt;
 
 /* GC helpers. */
-
-std::string showBytes(uint64_t bytes);
 
 struct GCResults;
 

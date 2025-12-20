@@ -121,6 +121,16 @@ public:
             return o->origin;
         return std::monostate{};
     }
+
+    /**
+     * Remove all origins from the table.
+     */
+    void clear()
+    {
+        auto lines = linesCache.lock();
+        lines->clear();
+        state_.lock()->origins.clear();
+    }
 };
 
 } // namespace nix

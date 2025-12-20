@@ -13,6 +13,7 @@ namespace nix {
 /* Note: you generally shouldn't change the protocol version. Define a
    new `WorkerProto::Feature` instead. */
 #define PROTOCOL_VERSION (1 << 8 | 38)
+#define MINIMUM_PROTOCOL_VERSION (1 << 8 | 18)
 #define GET_PROTOCOL_MAJOR(x) ((x) & 0xff00)
 #define GET_PROTOCOL_MINOR(x) ((x) & 0x00ff)
 
@@ -36,6 +37,7 @@ struct ValidPathInfo;
 struct UnkeyedValidPathInfo;
 enum BuildMode : uint8_t;
 enum TrustedFlag : bool;
+enum class GCAction;
 
 /**
  * The "worker protocol", used by unix:// and ssh-ng:// stores.
@@ -65,6 +67,7 @@ struct WorkerProto
     {
         Source & from;
         Version version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -75,6 +78,7 @@ struct WorkerProto
     {
         Sink & to;
         Version version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -135,6 +139,8 @@ struct WorkerProto
     using Feature = std::string;
     using FeatureSet = std::set<Feature, std::less<>>;
 
+    static constexpr std::string_view featureQueryActiveBuilds{"queryActiveBuilds"};
+
     static const FeatureSet allFeatures;
 };
 
@@ -152,7 +158,7 @@ enum struct WorkerProto::Op : uint64_t {
     AddIndirectRoot = 12,
     SyncWithGC = 13,
     FindRoots = 14,
-    ExportPath = 16,   // obsolete
+    // ExportPath = 16, // removed
     QueryDeriver = 18, // obsolete
     SetOptions = 19,
     CollectGarbage = 20,
@@ -162,7 +168,7 @@ enum struct WorkerProto::Op : uint64_t {
     QueryFailedPaths = 24,
     ClearFailedPaths = 25,
     QueryPathInfo = 26,
-    ImportPaths = 27,                // obsolete
+    // ImportPaths = 27, // removed
     QueryDerivationOutputNames = 28, // obsolete
     QueryPathFromHashPart = 29,
     QuerySubstitutablePathInfos = 30,
@@ -183,6 +189,7 @@ enum struct WorkerProto::Op : uint64_t {
     AddBuildLog = 45,
     BuildPathsWithResults = 46,
     AddPermRoot = 47,
+    QueryActiveBuilds = 48,
 };
 
 struct WorkerProto::ClientHandshakeInfo
@@ -261,6 +268,8 @@ template<>
 DECLARE_WORKER_SERIALISER(UnkeyedValidPathInfo);
 template<>
 DECLARE_WORKER_SERIALISER(BuildMode);
+template<>
+DECLARE_WORKER_SERIALISER(GCAction);
 template<>
 DECLARE_WORKER_SERIALISER(std::optional<TrustedFlag>);
 template<>

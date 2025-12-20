@@ -37,7 +37,8 @@ StoreReference SSHStoreConfig::getReference() const
     };
 }
 
-struct SSHStore : virtual RemoteStore
+struct alignas(8) /* Work around ASAN failures on i686-linux. */
+    SSHStore : virtual RemoteStore
 {
     using Config = SSHStoreConfig;
 
@@ -143,12 +144,17 @@ struct MountedSSHStore : virtual SSHStore, virtual LocalFSStore
 
     void narFromPath(const StorePath & path, Sink & sink) override
     {
-        return LocalFSStore::narFromPath(path, sink);
+        return Store::narFromPath(path, sink);
     }
 
     ref<SourceAccessor> getFSAccessor(bool requireValidPath) override
     {
         return LocalFSStore::getFSAccessor(requireValidPath);
+    }
+
+    std::shared_ptr<SourceAccessor> getFSAccessor(const StorePath & path, bool requireValidPath) override
+    {
+        return LocalFSStore::getFSAccessor(path, requireValidPath);
     }
 
     std::optional<std::string> getBuildLogExact(const StorePath & path) override

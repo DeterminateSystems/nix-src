@@ -343,6 +343,25 @@ struct EvalSettings : Config
           more explicit.
     )"};
 
+    Setting<unsigned> bindingsUpdateLayerRhsSizeThreshold{
+        this,
+        sizeof(void *) == 4 ? 8192 : 16,
+        "eval-attrset-update-layer-rhs-threshold",
+        R"(
+          Tunes the maximum size of an attribute set that, when used
+          as a right operand in an [attribute set update expression](@docroot@/language/operators.md#update),
+          uses a more space-efficient linked-list representation of attribute sets.
+
+          Setting this to larger values generally leads to less memory allocations,
+          but may lead to worse evaluation performance.
+
+          A value of `0` disables this optimization completely.
+
+          This is an advanced performance tuning option and typically should not be changed.
+          The default value is chosen to balance performance and memory usage. On 32 bit systems
+          where memory is scarce, the default is a large value to reduce the amount of allocations.
+    )"};
+
     Setting<bool> lazyTrees{
         this,
         false,
@@ -377,17 +396,20 @@ struct EvalSettings : Config
           * Any evaluation that uses `builtins.parallel`
 
           The value `0` causes Nix to use all available CPU cores in the system.
+
+          Note that enabling the debugger (`--debugger`) disables multi-threaded evaluation.
         )"};
 };
 
 /**
  * Conventionally part of the default nix path in impure mode.
  */
-Path getNixDefExpr();
+std::filesystem::path getNixDefExpr();
 
 /**
- * Stack size for evaluator threads.
+ * Stack size for evaluator threads. This used to be 64 MiB, but macOS as deployed on GitHub Actions has a
+ * hard limit slightly under that, so we round it down a bit.
  */
-constexpr size_t evalStackSize = 64 * 1024 * 1024;
+constexpr size_t evalStackSize = 60 * 1024 * 1024;
 
 } // namespace nix

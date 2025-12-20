@@ -6,12 +6,13 @@
 #include "nix/store/pathlocks.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/indirect-root-store.hh"
+#include "nix/store/active-builds.hh"
 #include "nix/util/sync.hh"
 
 #include <chrono>
 #include <future>
 #include <string>
-#include <unordered_set>
+#include <boost/unordered/unordered_flat_set.hpp>
 
 namespace nix {
 
@@ -54,13 +55,15 @@ private:
 
             This is also the location where [`--keep-failed`](@docroot@/command-ref/opt-common.md#opt-keep-failed) leaves its files.
 
-            If Nix runs without sandbox, or if the platform does not support sandboxing with bind mounts (e.g. macOS), then the [`builder`](@docroot@/language/derivations.md#attr-builder)'s environment will contain this directory, instead of the virtual location [`sandbox-build-dir`](#conf-sandbox-build-dir).
+            If Nix runs without sandbox, or if the platform does not support sandboxing with bind mounts (e.g. macOS), then the [`builder`](@docroot@/language/derivations.md#attr-builder)'s environment will contain this directory, instead of the virtual location [`sandbox-build-dir`](@docroot@/command-ref/conf-file.md#conf-sandbox-build-dir).
 
             > **Warning**
             >
             > `build-dir` must not be set to a world-writable directory.
             > Placing temporary build directories in a world-writable place allows other users to access or modify build data that is currently in use.
             > This alone is merely an impurity, but combined with another factor this has allowed malicious derivations to escape the build sandbox.
+
+            See also the global [`build-dir`](@docroot@/command-ref/conf-file.md#conf-build-dir) setting.
         )"};
 public:
     Path getBuildDir() const;
@@ -125,7 +128,10 @@ public:
     StoreReference getReference() const override;
 };
 
-class LocalStore : public virtual IndirectRootStore, public virtual GcStore
+class LocalStore : public virtual IndirectRootStore,
+                   public virtual GcStore,
+                   public virtual TrackActiveBuildsStore,
+                   public virtual QueryActiveBuildsStore
 {
 public:
 
@@ -174,6 +180,10 @@ private:
         std::unique_ptr<PublicKeys> publicKeys;
     };
 
+    /**
+     * Mutable state. It's behind a `ref` to reduce false sharing
+     * between immutable and mutable fields.
+     */
     ref<Sync<State>> _state;
 
 public:
@@ -381,10 +391,10 @@ public:
     void cacheDrvOutputMapping(
         State & state, const uint64_t deriver, const std::string & outputName, const StorePath & output);
 
-    std::optional<const Realisation> queryRealisation_(State & state, const DrvOutput & id);
-    std::optional<std::pair<int64_t, Realisation>> queryRealisationCore_(State & state, const DrvOutput & id);
+    std::optional<const UnkeyedRealisation> queryRealisation_(State & state, const DrvOutput & id);
+    std::optional<std::pair<int64_t, UnkeyedRealisation>> queryRealisationCore_(State & state, const DrvOutput & id);
     void queryRealisationUncached(
-        const DrvOutput &, Callback<std::shared_ptr<const Realisation>> callback) noexcept override;
+        const DrvOutput &, Callback<std::shared_ptr<const UnkeyedRealisation>> callback) noexcept override;
 
     std::optional<std::string> getVersion() override;
 
@@ -438,7 +448,7 @@ private:
 
     std::pair<std::filesystem::path, AutoCloseFD> createTempDirInStore();
 
-    typedef std::unordered_set<ino_t> InodeHash;
+    typedef boost::unordered_flat_set<ino_t> InodeHash;
 
     InodeHash loadInodeHash();
     Strings readDirectoryIgnoringInodes(const Path & path, const InodeHash & inodeHash);
@@ -453,6 +463,24 @@ private:
 
     friend struct PathSubstitutionGoal;
     friend struct DerivationGoal;
+
+private:
+
+    std::filesystem::path activeBuildsDir;
+
+    struct ActiveBuildFile
+    {
+        AutoCloseFD fd;
+        AutoDelete del;
+    };
+
+    Sync<std::unordered_map<uint64_t, ActiveBuildFile>> activeBuilds;
+
+    std::vector<ActiveBuildInfo> queryActiveBuilds() override;
+
+    BuildHandle buildStarted(const ActiveBuild & build) override;
+
+    void buildFinished(const BuildHandle & handle) override;
 };
 
 } // namespace nix

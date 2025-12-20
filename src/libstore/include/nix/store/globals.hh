@@ -75,9 +75,9 @@ class Settings : public Config
 
 public:
 
-    static unsigned int getDefaultCores();
-
     Settings();
+
+    static unsigned int getDefaultCores();
 
     Path nixPrefix;
 
@@ -101,7 +101,7 @@ public:
     /**
      * The directory where system configuration files are stored.
      */
-    Path nixConfDir;
+    std::filesystem::path nixConfDir;
 
     /**
      * A list of user configuration files to load.
@@ -189,7 +189,7 @@ public:
         0,
         "cores",
         R"(
-          Sets the value of the `NIX_BUILD_CORES` environment variable in the [invocation of the `builder` executable](@docroot@/language/derivations.md#builder-execution) of a derivation.
+          Sets the value of the `NIX_BUILD_CORES` environment variable in the [invocation of the `builder` executable](@docroot@/store/building.md#builder-execution) of a derivation.
           The `builder` executable can use this variable to control its own maximum amount of parallelism.
 
           <!--
@@ -199,7 +199,7 @@ public:
           -->
           For instance, in Nixpkgs, if the attribute `enableParallelBuilding` for the `mkDerivation` build helper is set to `true`, it passes the `-j${NIX_BUILD_CORES}` flag to GNU Make.
 
-          If set to `0`, nix will detect the number of CPU cores and pass this number via NIX_BUILD_CORES.
+          If set to `0`, nix will detect the number of CPU cores and pass this number via `NIX_BUILD_CORES`.
 
           > **Note**
           >
@@ -225,12 +225,8 @@ public:
           The following system types are widely used, as Nix is actively supported on these platforms:
 
           - `x86_64-linux`
-          - `x86_64-darwin`
-          - `i686-linux`
           - `aarch64-linux`
           - `aarch64-darwin`
-          - `armv6l-linux`
-          - `armv7l-linux`
 
           In general, you do not have to modify this setting.
           While you can force Nix to run a Darwin-specific `builder` executable on a Linux machine, the result would obviously be wrong.
@@ -292,7 +288,7 @@ public:
 
     Setting<std::string> builders{
         this,
-        "@" + nixConfDir + "/machines",
+        "@" + nixConfDir.string() + "/machines",
         "builders",
         R"(
           A semicolon- or newline-separated list of build machines.
@@ -794,6 +790,8 @@ public:
         "build-dir",
         R"(
             Override the `build-dir` store setting for all stores that have this setting.
+
+            See also the per-store [`build-dir`](@docroot@/store/types/local-store.md#store-local-store-build-dir) setting.
         )"};
 
     Setting<PathSet> allowedImpureHostPrefixes{
@@ -1141,7 +1139,7 @@ public:
 
     Setting<std::string> netrcFile{
         this,
-        fmt("%s/%s", nixConfDir, "netrc"),
+        (nixConfDir / "netrc").string(),
         "netrc-file",
         R"(
           If set to an absolute path to a `netrc` file, Nix uses the HTTP
@@ -1374,13 +1372,6 @@ public:
           Set it to 1 to warn on all paths.
         )"};
 
-    struct ExternalBuilder
-    {
-        std::vector<std::string> systems;
-        Path program;
-        std::vector<std::string> args;
-    };
-
     using ExternalBuilders = std::vector<ExternalBuilder>;
 
     Setting<ExternalBuilders> externalBuilders{
@@ -1402,54 +1393,26 @@ public:
               "builder": "/nix/store/s1qkj0ph…-bash-5.2p37/bin/bash",
               "env": {
                 "HOME": "/homeless-shelter",
-                "NIX_BUILD_CORES": "14",
-                "NIX_BUILD_TOP": "/build",
-                "NIX_LOG_FD": "2",
-                "NIX_STORE": "/nix/store",
-                "PATH": "/path-not-set",
-                "PWD": "/build",
-                "TEMP": "/build",
-                "TEMPDIR": "/build",
-                "TERM": "xterm-256color",
-                "TMP": "/build",
-                "TMPDIR": "/build",
-                "__structuredAttrs": "",
-                "buildInputs": "",
                 "builder": "/nix/store/s1qkj0ph…-bash-5.2p37/bin/bash",
-                "cmakeFlags": "",
-                "configureFlags": "",
-                "depsBuildBuild": "",
-                "depsBuildBuildPropagated": "",
-                "depsBuildTarget": "",
-                "depsBuildTargetPropagated": "",
-                "depsHostHost": "",
-                "depsHostHostPropagated": "",
-                "depsTargetTarget": "",
-                "depsTargetTargetPropagated": "",
-                "doCheck": "1",
-                "doInstallCheck": "1",
-                "mesonFlags": "",
-                "name": "hello-2.12.2",
                 "nativeBuildInputs": "/nix/store/l31j72f1…-version-check-hook",
-                "out": "/nix/store/2yx2prgx…-hello-2.12.2",
-                "outputs": "out",
-                "patches": "",
-                "pname": "hello",
-                "postInstallCheck": "stat \"${!outputBin}/bin/hello\"\n",
-                "propagatedBuildInputs": "",
-                "propagatedNativeBuildInputs": "",
-                "src": "/nix/store/dw402azx…-hello-2.12.2.tar.gz",
-                "stdenv": "/nix/store/i8bw5nqg…-stdenv-linux",
-                "strictDeps": "",
-                "system": "aarch64-linux",
-                "version": "2.12.2"
+                "out": "/nix/store/2yx2prgx…-hello-2.12.2"
+                …
+              },
+              "inputPaths": [
+                "/nix/store/14dciax3…-glibc-2.32-54-dev",
+                "/nix/store/1azs5s8z…-gettext-0.21",
+                …
+              ],
+              "outputs": {
+                "out": "/nix/store/2yx2prgx…-hello-2.12.2"
               },
               "realStoreDir": "/nix/store",
               "storeDir": "/nix/store",
               "system": "aarch64-linux",
               "tmpDir": "/private/tmp/nix-build-hello-2.12.2.drv-0/build",
               "tmpDirInSandbox": "/build",
-              "topTmpDir": "/private/tmp/nix-build-hello-2.12.2.drv-0"
+              "topTmpDir": "/private/tmp/nix-build-hello-2.12.2.drv-0",
+              "version": 1
             }
         )",
         {},   // aliases
@@ -1472,6 +1435,12 @@ public:
         //        Current system: 'aarch64-darwin' with features {apple-virt, benchmark, big-parallel, nixos-test}
         // Xp::ExternalBuilders
     };
+
+    /**
+     * Finds the first external derivation builder that supports this
+     * derivation, or else returns a null pointer.
+     */
+    const ExternalBuilder * findExternalDerivationBuilderIfSupported(const Derivation & drv);
 };
 
 // FIXME: don't use a global variable.

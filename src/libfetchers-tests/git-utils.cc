@@ -48,7 +48,7 @@ public:
 
     ref<GitRepo> openRepo()
     {
-        return GitRepo::openRepo(tmpDir, true, false);
+        return GitRepo::openRepo(tmpDir, {.create = true});
     }
 
     std::string getRepoName() const
@@ -92,7 +92,7 @@ TEST_F(GitUtilsTest, sink_basic)
     // sink->createHardlink("foo-1.1/links/foo-2", CanonPath("foo-1.1/hello"));
 
     auto result = repo->dereferenceSingletonDirectory(sink->flush());
-    auto accessor = repo->getAccessor(result, false, getRepoName());
+    auto accessor = repo->getAccessor(result, {}, getRepoName());
     auto entries = accessor->readDirectory(CanonPath::root);
     ASSERT_EQ(entries.size(), 5u);
     ASSERT_EQ(accessor->readFile(CanonPath("hello")), "hello world");
@@ -176,6 +176,12 @@ TEST_F(GitUtilsTest, peel_reference)
 
 TEST(GitUtils, isLegalRefName)
 {
+    ASSERT_TRUE(isLegalRefName("A/b"));
+    ASSERT_TRUE(isLegalRefName("AaA/b"));
+    ASSERT_TRUE(isLegalRefName("FOO/BAR/BAZ"));
+    ASSERT_TRUE(isLegalRefName("HEAD"));
+    ASSERT_TRUE(isLegalRefName("refs/tags/1.2.3"));
+    ASSERT_TRUE(isLegalRefName("refs/heads/master"));
     ASSERT_TRUE(isLegalRefName("foox"));
     ASSERT_TRUE(isLegalRefName("1337"));
     ASSERT_TRUE(isLegalRefName("foo.baz"));

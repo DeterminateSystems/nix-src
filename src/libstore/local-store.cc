@@ -125,6 +125,7 @@ LocalStore::LocalStore(ref<const Config> config)
     , schemaPath(dbDir + "/schema")
     , tempRootsDir(config->stateDir + "/temproots")
     , fnTempRoots(fmt("%s/%d", tempRootsDir, getpid()))
+    , activeBuildsDir(config->stateDir + "/active-builds")
 {
     auto state(_state->lock());
     state->stmts = std::make_unique<State::Stmts>();
@@ -146,6 +147,7 @@ LocalStore::LocalStore(ref<const Config> config)
         createDirs(gcRootsDir);
         replaceSymlink(profilesDir, gcRootsDir + "/profiles");
     }
+    createDirs(activeBuildsDir);
 
     for (auto & perUserDir : {profilesDir + "/per-user", gcRootsDir + "/per-user"}) {
         createDirs(perUserDir);
@@ -457,12 +459,17 @@ LocalStore::~LocalStore()
 
 StoreReference LocalStoreConfig::getReference() const
 {
+    auto params = getQueryParams();
+    /* Back-compatibility kludge. Tools like nix-output-monitor expect 'local'
+       and can't parse 'local://'. */
+    if (params.empty())
+        return {.variant = StoreReference::Local{}};
     return {
         .variant =
             StoreReference::Specified{
                 .scheme = *uriSchemes().begin(),
             },
-        .params = getQueryParams(),
+        .params = std::move(params),
     };
 }
 
@@ -717,8 +724,7 @@ uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info, boo
         }
     }
 
-    pathInfoCache->lock()->upsert(
-        std::string(info.path.to_string()), PathInfoCacheValue{.value = std::make_shared<const ValidPathInfo>(info)});
+    pathInfoCache->lock()->upsert(info.path, PathInfoCacheValue{.value = std::make_shared<const ValidPathInfo>(info)});
 
     return id;
 }
@@ -753,7 +759,7 @@ std::shared_ptr<const ValidPathInfo> LocalStore::queryPathInfoInternal(State & s
         throw Error("invalid-path entry for '%s': %s", printStorePath(path), e.what());
     }
 
-    auto info = std::make_shared<ValidPathInfo>(path, narHash);
+    auto info = std::make_shared<ValidPathInfo>(path, UnkeyedValidPathInfo(*this, narHash));
 
     info->id = id;
 
@@ -984,16 +990,22 @@ void LocalStore::registerValidPaths(const ValidPathInfos & infos)
            error if a cycle is detected and roll back the
            transaction.  Cycles can only occur when a derivation
            has multiple outputs. */
-        topoSort(
-            paths,
-            {[&](const StorePath & path) {
-                auto i = infos.find(path);
-                return i == infos.end() ? StorePathSet() : i->second.references;
-            }},
-            {[&](const StorePath & path, const StorePath & parent) {
-                return BuildError(
-                    "cycle detected in the references of '%s' from '%s'", printStorePath(path), printStorePath(parent));
-            }});
+        auto topoSortResult = topoSort(paths, [&](const StorePath & path) {
+            auto i = infos.find(path);
+            return i == infos.end() ? StorePathSet() : i->second.references;
+        });
+
+        std::visit(
+            overloaded{
+                [&](const Cycle<StorePath> & cycle) {
+                    throw BuildError(
+                        BuildResult::Failure::OutputRejected,
+                        "cycle detected in the references of '%s' from '%s'",
+                        printStorePath(cycle.path),
+                        printStorePath(cycle.parent));
+                },
+                [](auto &) { /* Success, continue */ }},
+            topoSortResult);
 
         txn.commit();
     });
@@ -1010,7 +1022,7 @@ void LocalStore::invalidatePath(State & state, const StorePath & path)
     /* Note that the foreign key constraints on the Refs table take
        care of deleting the references entries for `path'. */
 
-    pathInfoCache->lock()->erase(std::string(path.to_string()));
+    pathInfoCache->lock()->erase(path);
 }
 
 const PublicKeys & LocalStore::getPublicKeys()
@@ -1028,7 +1040,7 @@ bool LocalStore::pathInfoIsUntrusted(const ValidPathInfo & info)
 
 bool LocalStore::realisationIsUntrusted(const Realisation & realisation)
 {
-    return config->requireSigs && !realisation.checkSignatures(getPublicKeys());
+    return config->requireSigs && !realisation.checkSignatures(realisation.id, getPublicKeys());
 }
 
 void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs)
@@ -1040,15 +1052,13 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
         /* In case we are not interested in reading the NAR: discard it. */
         bool narRead = false;
         Finally cleanup = [&]() {
-            if (!narRead) {
-                NullFileSystemObjectSink sink;
+            if (!narRead)
                 try {
-                    parseDump(sink, source);
+                    source.skip(info.narSize);
                 } catch (...) {
                     // TODO: should Interrupted be handled here?
                     ignoreExceptionInDestructor();
                 }
-            }
         };
 
         addTempRoot(info.path);
@@ -1057,7 +1067,7 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
 
             PathLocks outputLock;
 
-            auto realPath = Store::toRealPath(info.path);
+            auto realPath = toRealPath(info.path);
 
             /* Lock the output path.  But don't lock if we're being called
             from a build hook (whose parent process already acquired a
@@ -1237,10 +1247,8 @@ StorePath LocalStore::addToStoreFromDump(
 
     auto desc = ContentAddressWithReferences::fromParts(
         hashMethod,
-        methodsMatch
-            ? dumpHash
-            : hashPath(PosixSourceAccessor::createAtRoot(tempPath), hashMethod.getFileIngestionMethod(), hashAlgo)
-                  .first,
+        methodsMatch ? dumpHash
+                     : hashPath(makeFSSourceAccessor(tempPath), hashMethod.getFileIngestionMethod(), hashAlgo).first,
         {
             .others = references,
             // caller is not capable of creating a self-reference, because this is content-addressed without modulus
@@ -1256,7 +1264,7 @@ StorePath LocalStore::addToStoreFromDump(
         /* The first check above is an optimisation to prevent
            unnecessary lock acquisition. */
 
-        auto realPath = Store::toRealPath(dstPath);
+        auto realPath = toRealPath(dstPath);
 
         PathLocks outputLock({realPath});
 
@@ -1303,7 +1311,7 @@ StorePath LocalStore::addToStoreFromDump(
                 syncParent(realPath);
             }
 
-            ValidPathInfo info{*this, name, std::move(desc), narHash.hash};
+            auto info = ValidPathInfo::makeFromCA(*this, name, std::move(desc), narHash.hash);
             info.narSize = narHash.numBytesDigested;
             registerValidPath(info);
         }
@@ -1325,7 +1333,7 @@ std::pair<std::filesystem::path, AutoCloseFD> LocalStore::createTempDirInStore()
         /* There is a slight possibility that `tmpDir' gets deleted by
            the GC between createTempDir() and when we acquire a lock on it.
            We'll repeat until 'tmpDir' exists and we've locked it. */
-        tmpDirFn = createTempDir(config->realStoreDir, "tmp");
+        tmpDirFn = createTempDir(std::filesystem::path{config->realStoreDir.get()}, "tmp");
         tmpDirFd = openDirectory(tmpDirFn);
         if (!tmpDirFd) {
             continue;
@@ -1375,18 +1383,15 @@ bool LocalStore::verifyStore(bool checkContents, RepairFlag repair)
         for (auto & link : DirectoryIterator{linksDir}) {
             checkInterrupt();
             auto name = link.path().filename();
-            printMsg(lvlTalkative, "checking contents of '%s'", name);
-            PosixSourceAccessor accessor;
-            std::string hash = hashPath(
-                                   PosixSourceAccessor::createAtRoot(link.path()),
-                                   FileIngestionMethod::NixArchive,
-                                   HashAlgorithm::SHA256)
-                                   .first.to_string(HashFormat::Nix32, false);
+            printMsg(lvlTalkative, "checking contents of %s", name);
+            std::string hash =
+                hashPath(makeFSSourceAccessor(link.path()), FileIngestionMethod::NixArchive, HashAlgorithm::SHA256)
+                    .first.to_string(HashFormat::Nix32, false);
             if (hash != name.string()) {
-                printError("link '%s' was modified! expected hash '%s', got '%s'", link.path(), name, hash);
+                printError("link %s was modified! expected hash %s, got '%s'", link.path(), name, hash);
                 if (repair) {
                     std::filesystem::remove(link.path());
-                    printInfo("removed link '%s'", link.path());
+                    printInfo("removed link %s", link.path());
                 } else {
                     errors = true;
                 }
@@ -1407,7 +1412,7 @@ bool LocalStore::verifyStore(bool checkContents, RepairFlag repair)
 
                 auto hashSink = HashSink(info->narHash.algo);
 
-                dumpPath(Store::toRealPath(i), hashSink);
+                dumpPath(toRealPath(i), hashSink);
                 auto current = hashSink.finish();
 
                 if (info->narHash != nullHash && info->narHash != current.hash) {
@@ -1578,7 +1583,7 @@ void LocalStore::addSignatures(const StorePath & storePath, const StringSet & si
     });
 }
 
-std::optional<std::pair<int64_t, Realisation>>
+std::optional<std::pair<int64_t, UnkeyedRealisation>>
 LocalStore::queryRealisationCore_(LocalStore::State & state, const DrvOutput & id)
 {
     auto useQueryRealisedOutput(state.stmts->QueryRealisedOutput.use()(id.strHash())(id.outputName));
@@ -1590,14 +1595,13 @@ LocalStore::queryRealisationCore_(LocalStore::State & state, const DrvOutput & i
 
     return {
         {realisationDbId,
-         Realisation{
-             .id = id,
+         UnkeyedRealisation{
              .outPath = outputPath,
              .signatures = signatures,
          }}};
 }
 
-std::optional<const Realisation> LocalStore::queryRealisation_(LocalStore::State & state, const DrvOutput & id)
+std::optional<const UnkeyedRealisation> LocalStore::queryRealisation_(LocalStore::State & state, const DrvOutput & id)
 {
     auto maybeCore = queryRealisationCore_(state, id);
     if (!maybeCore)
@@ -1623,13 +1627,17 @@ std::optional<const Realisation> LocalStore::queryRealisation_(LocalStore::State
 }
 
 void LocalStore::queryRealisationUncached(
-    const DrvOutput & id, Callback<std::shared_ptr<const Realisation>> callback) noexcept
+    const DrvOutput & id, Callback<std::shared_ptr<const UnkeyedRealisation>> callback) noexcept
 {
     try {
-        auto maybeRealisation =
-            retrySQLite<std::optional<const Realisation>>([&]() { return queryRealisation_(*_state->lock(), id); });
+        if (!experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
+            callback(nullptr);
+            return;
+        }
+        auto maybeRealisation = retrySQLite<std::optional<const UnkeyedRealisation>>(
+            [&]() { return queryRealisation_(*_state->lock(), id); });
         if (maybeRealisation)
-            callback(std::make_shared<const Realisation>(maybeRealisation.value()));
+            callback(std::make_shared<const UnkeyedRealisation>(maybeRealisation.value()));
         else
             callback(nullptr);
 

@@ -16,6 +16,7 @@
 #include "nix/util/xml-writer.hh"
 #include "nix/cmd/legacy.hh"
 #include "nix/expr/eval-settings.hh" // for defexpr
+#include "nix/util/table.hh"
 #include "nix/util/terminal.hh"
 #include "man-pages.hh"
 
@@ -132,7 +133,7 @@ static void getAllExprs(EvalState & state, const SourcePath & path, StringSet & 
             }
             /* Load the expression on demand. */
             auto vArg = state.allocValue();
-            vArg->mkPath(path2);
+            vArg->mkPath(path2, state.mem);
             if (seen.size() == maxAttrs)
                 throw Error("too many Nix expressions in directory '%1%'", path);
             attrs.alloc(attrName).mkApp(&state.getBuiltin("import"), vArg);
@@ -158,7 +159,7 @@ static void loadSourceExpr(EvalState & state, const SourcePath & path, Value & v
        directory). */
     else if (st.type == SourceAccessor::tDirectory) {
         auto attrs = state.buildBindings(maxAttrs);
-        attrs.insert(state.symbols.create("_combineChannels"), &state.vEmptyList);
+        attrs.insert(state.symbols.create("_combineChannels"), &Value::vEmptyList);
         StringSet seen;
         getAllExprs(state, path, seen, attrs);
         v.mkAttrs(attrs);
@@ -483,7 +484,7 @@ static bool keep(PackageInfo & drv)
 static void setMetaFlag(EvalState & state, PackageInfo & drv, const std::string & name, const std::string & value)
 {
     auto v = state.allocValue();
-    v->mkString(value);
+    v->mkString(value, state.mem);
     drv.setMeta(name, v);
 }
 
@@ -763,7 +764,7 @@ static void opSet(Globals & globals, Strings opFlags, Strings opArgs)
     globals.state->store->buildPaths(paths, globals.state->repair ? bmRepair : bmNormal);
 
     debug("switching to new user environment");
-    Path generation = createGeneration(*store2, globals.profile, drv.queryOutPath());
+    auto generation = createGeneration(*store2, globals.profile, drv.queryOutPath());
     switchLink(globals.profile, generation);
 }
 
@@ -822,38 +823,6 @@ static bool cmpElemByName(const PackageInfo & a, const PackageInfo & b)
     auto a_name = a.queryName();
     auto b_name = b.queryName();
     return lexicographical_compare(a_name.begin(), a_name.end(), b_name.begin(), b_name.end(), cmpChars);
-}
-
-typedef std::list<Strings> Table;
-
-void printTable(Table & table)
-{
-    auto nrColumns = table.size() > 0 ? table.front().size() : 0;
-
-    std::vector<size_t> widths;
-    widths.resize(nrColumns);
-
-    for (auto & i : table) {
-        assert(i.size() == nrColumns);
-        Strings::iterator j;
-        size_t column;
-        for (j = i.begin(), column = 0; j != i.end(); ++j, ++column)
-            if (j->size() > widths[column])
-                widths[column] = j->size();
-    }
-
-    for (auto & i : table) {
-        Strings::iterator j;
-        size_t column;
-        for (j = i.begin(), column = 0; j != i.end(); ++j, ++column) {
-            std::string s = *j;
-            replace(s.begin(), s.end(), '\n', ' ');
-            cout << s;
-            if (column < nrColumns - 1)
-                cout << std::string(widths[column] - s.size() + 2, ' ');
-        }
-        cout << std::endl;
-    }
 }
 
 /* This function compares the version of an element against the
@@ -1095,7 +1064,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
                 continue;
 
             /* For table output. */
-            Strings columns;
+            TableRow columns;
 
             /* For XML output. */
             XMLAttrs attrs;
@@ -1230,7 +1199,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
                         else {
                             if (v->type() == nString) {
                                 attrs2["type"] = "string";
-                                attrs2["value"] = v->c_str();
+                                attrs2["value"] = v->string_view();
                                 xml.writeEmptyElement("meta", attrs2);
                             } else if (v->type() == nInt) {
                                 attrs2["type"] = "int";
@@ -1251,7 +1220,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
                                     if (elem->type() != nString)
                                         continue;
                                     XMLAttrs attrs3;
-                                    attrs3["value"] = elem->c_str();
+                                    attrs3["value"] = elem->string_view();
                                     xml.writeEmptyElement("string", attrs3);
                                 }
                             } else if (v->type() == nAttrs) {
@@ -1262,7 +1231,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
                                         continue;
                                     XMLAttrs attrs3;
                                     attrs3["type"] = globals.state->symbols[i.name];
-                                    attrs3["value"] = i.value->c_str();
+                                    attrs3["value"] = i.value->string_view();
                                     xml.writeEmptyElement("string", attrs3);
                                 }
                             }
@@ -1283,7 +1252,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
     }
 
     if (!xmlOutput)
-        printTable(table);
+        printTable(std::cout, table);
 }
 
 static void opSwitchProfile(Globals & globals, Strings opFlags, Strings opArgs)
@@ -1294,7 +1263,7 @@ static void opSwitchProfile(Globals & globals, Strings opFlags, Strings opArgs)
         throw UsageError("exactly one argument expected");
 
     Path profile = absPath(opArgs.front());
-    Path profileLink = settings.useXDGBaseDirectories ? createNixStateDir() + "/profile" : getHome() + "/.nix-profile";
+    auto profileLink = settings.useXDGBaseDirectories ? createNixStateDir() / "profile" : getHome() / ".nix-profile";
 
     switchLink(profileLink, profile);
 }
@@ -1409,14 +1378,15 @@ static int main_nix_env(int argc, char ** argv)
         globals.instSource.type = srcUnknown;
         globals.instSource.systemFilter = "*";
 
-        Path nixExprPath = getNixDefExpr();
+        std::filesystem::path nixExprPath = getNixDefExpr();
 
         if (!pathExists(nixExprPath)) {
             try {
                 createDirs(nixExprPath);
-                replaceSymlink(defaultChannelsDir(), nixExprPath + "/channels");
+                replaceSymlink(defaultChannelsDir(), nixExprPath / "channels");
                 if (!isRootUser())
-                    replaceSymlink(rootChannelsDir(), nixExprPath + "/channels_root");
+                    replaceSymlink(rootChannelsDir(), nixExprPath / "channels_root");
+            } catch (std::filesystem::filesystem_error &) {
             } catch (Error &) {
             }
         }
@@ -1513,7 +1483,8 @@ static int main_nix_env(int argc, char ** argv)
         globals.state->repair = myArgs.repair;
 
         globals.instSource.nixExprPath = std::make_shared<SourcePath>(
-            file != "" ? lookupFileArg(*globals.state, file) : globals.state->rootPath(CanonPath(nixExprPath)));
+            file != "" ? lookupFileArg(*globals.state, file)
+                       : globals.state->rootPath(CanonPath(nixExprPath.string())));
 
         globals.instSource.autoArgs = myArgs.getAutoArgs(*globals.state);
 
@@ -1521,7 +1492,7 @@ static int main_nix_env(int argc, char ** argv)
             globals.profile = getEnv("NIX_PROFILE").value_or("");
 
         if (globals.profile == "")
-            globals.profile = getDefaultProfile();
+            globals.profile = getDefaultProfile().string();
 
         op(globals, std::move(opFlags), std::move(opArgs));
 

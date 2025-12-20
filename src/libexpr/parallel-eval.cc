@@ -5,6 +5,14 @@
 
 namespace nix {
 
+// cache line alignment to prevent false sharing
+struct alignas(64) WaiterDomain
+{
+    std::condition_variable cv;
+};
+
+static std::array<Sync<WaiterDomain>, 128> waiterDomains;
+
 thread_local bool Executor::amWorkerThread{false};
 
 unsigned int Executor::getEvalCores(const EvalSettings & evalSettings)
@@ -15,6 +23,10 @@ unsigned int Executor::getEvalCores(const EvalSettings & evalSettings)
 Executor::Executor(const EvalSettings & evalSettings)
     : evalCores(getEvalCores(evalSettings))
     , enabled(evalCores > 1)
+    , interruptCallback(createInterruptCallback([&]() {
+        for (auto & domain : waiterDomains)
+            domain.lock()->cv.notify_all();
+    }))
 {
     debug("executor using %d threads", evalCores);
     auto state(state_.lock());
@@ -169,27 +181,26 @@ void FutureVector::finishAll()
         std::rethrow_exception(ex);
 }
 
-struct WaiterDomain
-{
-    std::condition_variable cv;
-} __attribute__((aligned(64))); // cache line alignment to prevent false sharing
-
-static std::array<Sync<WaiterDomain>, 128> waiterDomains;
-
 static Sync<WaiterDomain> & getWaiterDomain(detail::ValueBase & v)
 {
     auto domain = (((size_t) &v) >> 5) % waiterDomains.size();
     return waiterDomains[domain];
 }
 
+static std::atomic<uint32_t> nextEvalThreadId{1};
+thread_local uint32_t myEvalThreadId(nextEvalThreadId++);
+
 template<>
-ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, bool awaited)
+ValueStorage<sizeof(void *)>::PackedPointer
+ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer expectedP0)
 {
     state.nrThunksAwaited++;
 
     auto domain = getWaiterDomain(*this).lock();
 
-    if (awaited) {
+    auto threadId = expectedP0 >> discriminatorBits;
+
+    if (static_cast<PrimaryDiscriminator>(expectedP0 & discriminatorMask) == pdAwaited) {
         /* Make sure that the value is still awaited, now that we're
            holding the domain lock. */
         auto p0_ = p0.load(std::memory_order_acquire);
@@ -203,8 +214,12 @@ ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOn
         }
     } else {
         /* Mark this value as being waited on. */
-        PackedPointer p0_ = pdPending;
-        if (!p0.compare_exchange_strong(p0_, pdAwaited, std::memory_order_acquire, std::memory_order_acquire)) {
+        PackedPointer p0_ = expectedP0;
+        if (!p0.compare_exchange_strong(
+                p0_,
+                pdAwaited | (threadId << discriminatorBits),
+                std::memory_order_acquire,
+                std::memory_order_acquire)) {
             /* If the value has been finalized in the meantime (i.e. is
                no longer pending), we're done. */
             auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
@@ -218,7 +233,7 @@ ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOn
     }
 
     /* Wait for another thread to finish this value. */
-    if (state.executor->evalCores <= 1)
+    if (threadId == myEvalThreadId)
         state.error<InfiniteRecursionError>("infinite recursion encountered")
             .atPos(((Value &) *this).determinePos(noPos))
             .debugThrow();
@@ -241,6 +256,7 @@ ValueStorage<sizeof(void *)>::PackedPointer ValueStorage<sizeof(void *)>::waitOn
             return p0_;
         }
         state.nrSpuriousWakeups++;
+        checkInterrupt();
     }
 }
 
@@ -258,9 +274,9 @@ static void prim_parallel(EvalState & state, const PosIdx pos, Value ** args, Va
 
     if (state.executor->evalCores > 1) {
         std::vector<std::pair<Executor::work_t, uint8_t>> work;
-        for (auto v : args[0]->listView())
-            if (!v->isFinished())
-                work.emplace_back([v, &state, pos]() { state.forceValue(*v, pos); }, 0);
+        for (auto value : args[0]->listView())
+            if (!value->isFinished())
+                work.emplace_back([value(allocRootValue(value)), &state, pos]() { state.forceValue(**value, pos); }, 0);
         state.executor->spawn(std::move(work));
     }
 

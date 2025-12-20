@@ -2,34 +2,17 @@ namespace nix {
 
 struct ExternalDerivationBuilder : DerivationBuilderImpl
 {
-    Settings::ExternalBuilder externalBuilder;
+    ExternalBuilder externalBuilder;
 
     ExternalDerivationBuilder(
         LocalStore & store,
         std::unique_ptr<DerivationBuilderCallbacks> miscMethods,
         DerivationBuilderParams params,
-        Settings::ExternalBuilder externalBuilder)
+        ExternalBuilder externalBuilder)
         : DerivationBuilderImpl(store, std::move(miscMethods), std::move(params))
         , externalBuilder(std::move(externalBuilder))
     {
         experimentalFeatureSettings.require(Xp::ExternalBuilders);
-    }
-
-    static std::unique_ptr<ExternalDerivationBuilder> newIfSupported(
-        LocalStore & store, std::unique_ptr<DerivationBuilderCallbacks> & miscMethods, DerivationBuilderParams & params)
-    {
-        for (auto & handler : settings.externalBuilders.get()) {
-            for (auto & system : handler.systems)
-                if (params.drv.platform == system)
-                    return std::make_unique<ExternalDerivationBuilder>(
-                        store, std::move(miscMethods), std::move(params), handler);
-        }
-        return {};
-    }
-
-    bool prepareBuild() override
-    {
-        return DerivationBuilderImpl::prepareBuild();
     }
 
     Path tmpDirInSandbox() override
@@ -45,21 +28,6 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
         createDir(tmpDir, 0700);
     }
 
-    void prepareUser() override
-    {
-        DerivationBuilderImpl::prepareUser();
-    }
-
-    void setUser() override
-    {
-        DerivationBuilderImpl::setUser();
-    }
-
-    void checkSystem() override
-    {
-        // FIXME: should check system features.
-    }
-
     void startChild() override
     {
         if (drvOptions.getRequiredSystemFeatures(drv).count("recursive-nix"))
@@ -67,6 +35,7 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
 
         auto json = nlohmann::json::object();
 
+        json.emplace("version", 1);
         json.emplace("builder", drv.builder);
         {
             auto l = nlohmann::json::array();
@@ -86,6 +55,18 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
         json.emplace("storeDir", store.storeDir);
         json.emplace("realStoreDir", store.config->realStoreDir.get());
         json.emplace("system", drv.platform);
+        {
+            auto l = nlohmann::json::array();
+            for (auto & i : inputPaths)
+                l.push_back(store.printStorePath(i));
+            json.emplace("inputPaths", std::move(l));
+        }
+        {
+            auto l = nlohmann::json::object();
+            for (auto & i : scratchOutputs)
+                l.emplace(i.first, store.printStorePath(i.second));
+            json.emplace("outputs", std::move(l));
+        }
 
         // TODO(cole-h): writing this to stdin is too much effort right now, if we want to revisit
         // that, see this comment by Eelco about how to make it not suck:
@@ -124,5 +105,14 @@ struct ExternalDerivationBuilder : DerivationBuilderImpl
         });
     }
 };
+
+std::unique_ptr<DerivationBuilder> makeExternalDerivationBuilder(
+    LocalStore & store,
+    std::unique_ptr<DerivationBuilderCallbacks> miscMethods,
+    DerivationBuilderParams params,
+    const ExternalBuilder & handler)
+{
+    return std::make_unique<ExternalDerivationBuilder>(store, std::move(miscMethods), std::move(params), handler);
+}
 
 } // namespace nix
