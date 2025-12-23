@@ -49,8 +49,8 @@ VERSIONED_CHARACTERIZATION_TEST(
     "store-path",
     defaultVersion,
     (std::tuple<StorePath, StorePath>{
-        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
-        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo-bar"},
+        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
+        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo-bar"},
     }))
 
 VERSIONED_CHARACTERIZATION_TEST(
@@ -99,7 +99,7 @@ VERSIONED_CHARACTERIZATION_TEST(
     (std::tuple<Realisation, Realisation>{
         Realisation{
             {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
             },
             {
                 .drvHash = Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
@@ -108,7 +108,7 @@ VERSIONED_CHARACTERIZATION_TEST(
         },
         Realisation{
             {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                 .signatures = {"asdf", "qwer"},
             },
             {
@@ -126,7 +126,7 @@ VERSIONED_CHARACTERIZATION_TEST(
     (std::tuple<Realisation>{
         Realisation{
             {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                 .signatures = {"asdf", "qwer"},
                 .dependentRealisations =
                     {
@@ -135,7 +135,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                                 .drvHash = Hash::parseSRI("sha256-b4afnqKCO9oWXgYHb9DeQ2berSwOjS27rSd9TxXDc/U="),
                                 .outputName = "quux",
                             },
-                            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                         },
                     },
             },
@@ -219,7 +219,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                                 "foo",
                                 {
                                     {
-                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                                     },
                                     DrvOutput{
                                         .drvHash =
@@ -232,7 +232,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                                 "bar",
                                 {
                                     {
-                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar"},
+                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar"},
                                     },
                                     DrvOutput{
                                         .drvHash =
@@ -272,11 +272,11 @@ VERSIONED_CHARACTERIZATION_TEST(
         ({
             UnkeyedValidPathInfo info{std::string{defaultStoreDir}, Hash::dummy};
             info.deriver = StorePath{
-                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
             };
             info.references = {
                 StorePath{
-                    "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3q-foo.drv",
+                    "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3o-foo.drv",
                 },
             };
             info.narSize = 34878;
@@ -296,11 +296,11 @@ VERSIONED_CHARACTERIZATION_TEST(
                 Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
             };
             info.deriver = StorePath{
-                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
             };
             info.references = {
                 StorePath{
-                    "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3q-foo.drv",
+                    "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3o-foo.drv",
                 },
             };
             info.narSize = 34878;
@@ -318,7 +318,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                             .others =
                                 {
                                     StorePath{
-                                        "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+                                        "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
                                     },
                                 },
                             .self = true,
@@ -326,7 +326,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                 },
                 Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="));
             info.deriver = StorePath{
-                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
             };
             info.narSize = 34878;
             info.sigs =
@@ -422,7 +422,7 @@ VERSIONED_CHARACTERIZATION_TEST(
     (std::tuple<std::optional<StorePath>, std::optional<StorePath>>{
         std::nullopt,
         std::optional{
-            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo-bar"},
+            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo-bar"},
         },
     }))
 

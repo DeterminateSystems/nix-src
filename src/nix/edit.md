@@ -12,7 +12,7 @@ R""(
 
   ```console
   # nix eval --raw nixpkgs#hello.meta.position
-  /nix/store/fvafw0gvwayzdan642wrv84pzm5bgpmy-source/pkgs/applications/misc/hello/default.nix:15
+  /nix/store/fvafw0gvwayzdan642wrv84pzm5bgpmo-source/pkgs/applications/misc/hello/default.nix:15
   ```
 
 # Description

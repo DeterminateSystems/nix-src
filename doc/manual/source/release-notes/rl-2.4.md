@@ -12,7 +12,7 @@ more than 2800 commits from 195 contributors since release 2.3.
   $ nix build
   error: undefined variable 'bzip3'
 
-         at /nix/store/449lv242z0zsgwv95a8124xi11sp419f-source/flake.nix:88:13:
+         at /nix/store/449lv242z0zsgwv95a8124xi11sp419o-source/flake.nix:88:13:
 
              87|           [ curl
              88|             bzip3 xz brotli editline

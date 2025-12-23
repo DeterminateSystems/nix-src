@@ -6,7 +6,7 @@ use Nix::Store;
 
 my $s = new Nix::Store("dummy://");
 
-my $res = $s->isValidPath("/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar");
+my $res = $s->isValidPath("/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar");
 
 ok(!$res, "should not have path");
 

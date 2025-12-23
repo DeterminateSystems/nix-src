@@ -80,8 +80,8 @@ CHARACTERIZATION_TEST(
     storePath,
     "store-path",
     (std::tuple<StorePath, StorePath>{
-        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
-        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo-bar"},
+        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
+        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo-bar"},
     }))
 
 CHARACTERIZATION_TEST(
@@ -122,7 +122,7 @@ CHARACTERIZATION_TEST(
     (std::tuple<Realisation, Realisation>{
         Realisation{
             {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
             },
             {
                 .drvHash = Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
@@ -131,7 +131,7 @@ CHARACTERIZATION_TEST(
         },
         Realisation{
             {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                 .signatures = {"asdf", "qwer"},
             },
             {
@@ -147,7 +147,7 @@ CHARACTERIZATION_TEST(
     (std::tuple<Realisation>{
         Realisation{
             {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                 .signatures = {"asdf", "qwer"},
                 .dependentRealisations =
                     {
@@ -156,7 +156,7 @@ CHARACTERIZATION_TEST(
                                 .drvHash = Hash::parseSRI("sha256-b4afnqKCO9oWXgYHb9DeQ2berSwOjS27rSd9TxXDc/U="),
                                 .outputName = "quux",
                             },
-                            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                         },
                     },
             },
@@ -197,7 +197,7 @@ CHARACTERIZATION_TEST(
     (std::tuple<std::optional<StorePath>, std::optional<StorePath>>{
         std::nullopt,
         std::optional{
-            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo-bar"},
+            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo-bar"},
         },
     }))
 

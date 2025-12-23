@@ -14,7 +14,7 @@
 
 namespace nixC {
 
-std::string PATH_SUFFIX = "/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-name";
+std::string PATH_SUFFIX = "/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-name";
 
 TEST_F(nix_api_util_context, nix_libstore_init)
 {

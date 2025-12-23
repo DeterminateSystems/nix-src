@@ -12,7 +12,7 @@ R""(
 
   ```console
   # nix store dump-path --store https://cache.nixos.org/ \
-      /nix/store/7crrmih8c52r8fbnqb933dxrsp44md93-glibc-2.25 > glibc.nar
+      /nix/store/7crrmih8c52r8fbnqb933dxrsp44md9o-glibc-2.25 > glibc.nar
   ```
 
 # Description

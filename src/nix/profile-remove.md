@@ -24,7 +24,7 @@ R""(
 * Remove a package by store path:
 
   ```console
-  # nix profile remove /nix/store/rr3y0c6zyk7kjjl8y19s4lsrhn4aiq1z-hello-2.10
+  # nix profile remove /nix/store/rr3y0c6zyk7kjjl8y19s4lsrhn4aiq1o-hello-2.10
   ```
 
 # Description

@@ -16,6 +16,6 @@
 
   ```ShellSession
   $ nix eval nixpkgs#bash
-  «derivation /nix/store/m32cbgbd598f4w299g0hwyv7gbw6rqcg-bash-5.2p26.drv»
+  «derivation /nix/store/m32cbgbd598f4w299g0hwyv7gbw6rqco-bash-5.2p26.drv»
   ```
 

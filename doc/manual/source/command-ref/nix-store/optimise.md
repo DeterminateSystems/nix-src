@@ -32,7 +32,7 @@ Use `-vv` or `-vvv` to get some progress indication.
 
 ```console
 $ nix-store --optimise
-hashing files in `/nix/store/qhqx7l2f1kmwihc9bnxs7rc159hsxnf3-gcc-4.1.1'
+hashing files in `/nix/store/qhqx7l2f1kmwihc9bnxs7rc159hsxnfo-gcc-4.1.1'
 ...
 541838819 bytes (516.74 MiB) freed by hard-linking 54143 files;
 there are 114486 files with equal contents out of 215894 files in total

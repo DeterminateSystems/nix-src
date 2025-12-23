@@ -25,7 +25,7 @@ R""(
     "variables": {
       "src": {
         "type": "exported",
-        "value": "/nix/store/3x7dwzq014bblazs7kq20p9hyzz0qh8g-hello-2.10.tar.gz"
+        "value": "/nix/store/3x7dwzq014bblazs7kq20p9hyzz0qh8o-hello-2.10.tar.gz"
       },
       "postUnpackHooks": {
         "type": "array",

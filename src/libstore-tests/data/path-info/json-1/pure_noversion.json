@@ -3,7 +3,7 @@
   "narHash": "sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc=",
   "narSize": 34878,
   "references": [
-    "/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
-    "/nix/store/n5wkd9frr45pa74if5gpz9j7mifg27fh-foo"
+    "/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
+    "/nix/store/n5wkd9frr45pa74if5gpz9j7mifg27fo-foo"
   ]
 }

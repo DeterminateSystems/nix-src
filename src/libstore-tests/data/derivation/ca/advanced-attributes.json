@@ -15,7 +15,7 @@
     "builder": "/bin/bash",
     "disallowedReferences": "/0nyw57wm2iicnm9rglvjmbci3ikmcp823czdqdzdcgsnnwqps71g dev",
     "disallowedRequisites": "/07f301yqyz8c6wf6bbbavb2q39j4n8kmcly1s09xadyhgy6x2wr8",
-    "exportReferencesGraph": "refs1 /164j69y6zir9z0339n8pjigg3rckinlr77bxsavzizdaaljb7nh9 refs2 /nix/store/qnml92yh97a6fbrs2m5qg5cqlc8vni58-bar.drv",
+    "exportReferencesGraph": "refs1 /164j69y6zir9z0339n8pjigg3rckinlr77bxsavzizdaaljb7nh9 refs2 /nix/store/qnml92yh97a6fbrs2m5qg5cqlc8vni5o-bar.drv",
     "impureEnvVars": "UNICORN",
     "name": "advanced-attributes",
     "out": "/1rz4g4znpzjwh1xymhjpm42vipw92pr73vdgl6xs1hycac8kf2n9",
@@ -27,14 +27,14 @@
   },
   "inputs": {
     "drvs": {
-      "j56sf12rxpcv5swr14vsjn5cwm6bj03h-foo.drv": {
+      "j56sf12rxpcv5swr14vsjn5cwm6bj03o-foo.drv": {
         "dynamicOutputs": {},
         "outputs": [
           "dev",
           "out"
         ]
       },
-      "qnml92yh97a6fbrs2m5qg5cqlc8vni58-bar.drv": {
+      "qnml92yh97a6fbrs2m5qg5cqlc8vni5o-bar.drv": {
         "dynamicOutputs": {},
         "outputs": [
           "dev",
@@ -43,7 +43,7 @@
       }
     },
     "srcs": [
-      "qnml92yh97a6fbrs2m5qg5cqlc8vni58-bar.drv"
+      "qnml92yh97a6fbrs2m5qg5cqlc8vni5o-bar.drv"
     ]
   },
   "name": "advanced-attributes",

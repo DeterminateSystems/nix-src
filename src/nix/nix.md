@@ -128,21 +128,21 @@ If *attrpath* begins with `.` then no prefixes or defaults are attempted. This a
 
 ### Store path
 
-Example: `/nix/store/v5sv61sszx301i0x6xysaqzla09nksnd-hello-2.10`
+Example: `/nix/store/v5sv61sszx301i0x6xysaqzla09nksno-hello-2.10`
 
 These are paths inside the Nix store, or symlinks that resolve to a path in the Nix store.
 
 A [store derivation] is also addressed by store path.
 
-Example: `/nix/store/p7gp6lxdg32h4ka1q398wd9r2zkbbz2v-hello-2.10.drv`
+Example: `/nix/store/p7gp6lxdg32h4ka1q398wd9r2zkbbz2o-hello-2.10.drv`
 
 If you want to refer to an output path of that store derivation, add the output name preceded by a caret (`^`).
 
-Example: `/nix/store/p7gp6lxdg32h4ka1q398wd9r2zkbbz2v-hello-2.10.drv^out`
+Example: `/nix/store/p7gp6lxdg32h4ka1q398wd9r2zkbbz2o-hello-2.10.drv^out`
 
 All outputs can be referred to at once with the special syntax `^*`.
 
-Example: `/nix/store/p7gp6lxdg32h4ka1q398wd9r2zkbbz2v-hello-2.10.drv^*`
+Example: `/nix/store/p7gp6lxdg32h4ka1q398wd9r2zkbbz2o-hello-2.10.drv^*`
 
 ### Nix file
 
@@ -184,7 +184,7 @@ operate are determined as follows:
   and likewise, using a store path to a "drv" file to specify the derivation:
 
   ```console
-  # nix build '/nix/store/gzaflydcr6sb3567hap9q6srzx8ggdgg-glibc-2.33-78.drv^dev,static'
+  # nix build '/nix/store/gzaflydcr6sb3567hap9q6srzx8ggdgo-glibc-2.33-78.drv^dev,static'
   …
   ```
 
@@ -207,17 +207,17 @@ operate are determined as follows:
 
   ```console
   # nix path-info --closure-size --eval-store auto --store https://cache.nixos.org 'nixpkgs#glibc^*'
-  /nix/store/g02b1lpbddhymmcjb923kf0l7s9nww58-glibc-2.33-123                 33208200
-  /nix/store/851dp95qqiisjifi639r0zzg5l465ny4-glibc-2.33-123-bin             36142896
-  /nix/store/kdgs3q6r7xdff1p7a9hnjr43xw2404z7-glibc-2.33-123-debug          155787312
-  /nix/store/n4xa8h6pbmqmwnq0mmsz08l38abb06zc-glibc-2.33-123-static          42488328
-  /nix/store/q6580lr01jpcsqs4r5arlh4ki2c1m9rv-glibc-2.33-123-dev             44200560
+  /nix/store/g02b1lpbddhymmcjb923kf0l7s9nww5o-glibc-2.33-123                 33208200
+  /nix/store/851dp95qqiisjifi639r0zzg5l465nyo-glibc-2.33-123-bin             36142896
+  /nix/store/kdgs3q6r7xdff1p7a9hnjr43xw2404zo-glibc-2.33-123-debug          155787312
+  /nix/store/n4xa8h6pbmqmwnq0mmsz08l38abb06zo-glibc-2.33-123-static          42488328
+  /nix/store/q6580lr01jpcsqs4r5arlh4ki2c1m9ro-glibc-2.33-123-dev             44200560
   ```
 
   and likewise, using a store path to a "drv" file to specify the derivation:
 
   ```console
-  # nix path-info --closure-size '/nix/store/gzaflydcr6sb3567hap9q6srzx8ggdgg-glibc-2.33-78.drv^*'
+  # nix path-info --closure-size '/nix/store/gzaflydcr6sb3567hap9q6srzx8ggdgo-glibc-2.33-78.drv^*'
   …
   ```
 * If you didn't specify the desired outputs, but the derivation has an

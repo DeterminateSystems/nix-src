@@ -10,9 +10,9 @@ description: |
 
   Store paths in JSON are represented as strings containing just the hash and name portion, without the store directory prefix.
 
-  For example: `"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"`
+  For example: `"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"`
 
-  (If the store dir is `/nix/store`, then this corresponds to the path `/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv`.)
+  (If the store dir is `/nix/store`, then this corresponds to the path `/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv`.)
 
   ## Structure
 

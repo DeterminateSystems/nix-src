@@ -49,7 +49,7 @@ nix-instantiate IFD.nix --eval --read-write-mode
 ```
 
 ```
-building '/nix/store/348q1cal6sdgfxs8zqi9v8llrsn4kqkq-hello.drv'...
+building '/nix/store/348q1cal6sdgfxs8zqi9v8llrsn4kqko-hello.drv'...
 "hello world"
 ```
 

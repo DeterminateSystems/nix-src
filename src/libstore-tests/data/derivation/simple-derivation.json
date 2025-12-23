@@ -9,7 +9,7 @@
   },
   "inputs": {
     "drvs": {
-      "c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-dep2.drv": {
+      "c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-dep2.drv": {
         "dynamicOutputs": {},
         "outputs": [
           "cat",
@@ -18,7 +18,7 @@
       }
     },
     "srcs": [
-      "c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-dep1"
+      "c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-dep1"
     ]
   },
   "name": "simple-derivation",

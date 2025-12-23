@@ -2,7 +2,7 @@
   {
     "errorMsg": "no idea why",
     "isNonDeterministic": false,
-    "path": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-xxx",
+    "path": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-xxx",
     "startTime": 0,
     "status": "OutputRejected",
     "stopTime": 0,
@@ -13,7 +13,7 @@
     "errorMsg": "no idea why",
     "isNonDeterministic": true,
     "path": {
-      "drvPath": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+      "drvPath": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
       "outputs": [
         "out"
       ]

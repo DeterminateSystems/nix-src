@@ -50,7 +50,7 @@ INSTANTIATE_TEST_SUITE_P(
     ([] {
         Realisation simple{
             {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"},
+                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"},
             },
             {
                 .drvHash = Hash::parseExplicitFormatUnprefixed(
@@ -85,7 +85,7 @@ INSTANTIATE_TEST_SUITE_P(
                                 HashFormat::Base16),
                             .outputName = "foo",
                         },
-                        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"},
+                        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"},
                     }};
                     return r;
                 }(),

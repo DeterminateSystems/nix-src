@@ -40,18 +40,18 @@ error: 1 dependencies of derivation '/nix/store/[...]-nested-failure-top.drv' fa
 Now:
 
 ```
-error: Cannot build '/nix/store/w37gflm9wz9dcnsgy3sfrmnlvm8qigaj-nested-failure-bottom.drv'.
+error: Cannot build '/nix/store/w37gflm9wz9dcnsgy3sfrmnlvm8qigao-nested-failure-bottom.drv'.
        Reason: builder failed with exit code 1.
        Output paths:
-         /nix/store/yzybs8kp35dfipbzdlqcc6lxz62hax04-nested-failure-bottom
-error: Cannot build '/nix/store/00gr5hlxfc03x2675w6nn3pwfrz2fr62-nested-failure-middle.drv'.
+         /nix/store/yzybs8kp35dfipbzdlqcc6lxz62hax0o-nested-failure-bottom
+error: Cannot build '/nix/store/00gr5hlxfc03x2675w6nn3pwfrz2fr6o-nested-failure-middle.drv'.
        Reason: 1 dependency failed.
        Output paths:
-         /nix/store/h781j5h4bdchmb4c2lvy8qzh8733azhz-nested-failure-middle
-error: Cannot build '/nix/store/8am0ng1gyx8sbzyr0yx6jd5ix3yy5szc-nested-failure-top.drv'.
+         /nix/store/h781j5h4bdchmb4c2lvy8qzh8733azho-nested-failure-middle
+error: Cannot build '/nix/store/8am0ng1gyx8sbzyr0yx6jd5ix3yy5szo-nested-failure-top.drv'.
        Reason: 1 dependency failed.
        Output paths:
-         /nix/store/fh12637kgvp906s9yhi9w2dc7ghfwxs1-nested-failure-top
+         /nix/store/fh12637kgvp906s9yhi9w2dc7ghfwxso-nested-failure-top
 ```
 
 **Full Changelog**: [v3.4.2...v3.5.1](https://github.com/DeterminateSystems/nix-src/compare/v3.4.2...v3.5.1)

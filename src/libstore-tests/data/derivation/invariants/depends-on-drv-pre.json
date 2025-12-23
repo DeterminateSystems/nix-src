@@ -7,7 +7,7 @@
   },
   "inputs": {
     "drvs": {
-      "lg4c4b8r9hlczwprl6kgnzfd9mc1xmkk-dependency.drv": {
+      "lg4c4b8r9hlczwprl6kgnzfd9mc1xmko-dependency.drv": {
         "dynamicOutputs": {},
         "outputs": [
           "out"

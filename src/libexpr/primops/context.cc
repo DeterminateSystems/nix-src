@@ -267,7 +267,7 @@ static RegisterPrimOp primop_getContext(
       evaluates to
 
       ```
-      { "/nix/store/arhvjaf6zmlyn8vh8fgn55rpwnxq0n7l-a.drv" = { outputs = [ "out" ]; }; }
+      { "/nix/store/arhvjaf6zmlyn8vh8fgn55rpwnxq0n7o-a.drv" = { outputs = [ "out" ]; }; }
       ```
     )",
      .fun = prim_getContext});

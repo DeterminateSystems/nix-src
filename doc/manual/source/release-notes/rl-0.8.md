@@ -32,7 +32,7 @@ Nix 0.8 has the following improvements:
   - The cryptographic hashes used in store paths are now 160 bits long,
     but encoded in base-32 so that they are still only 32 characters
     long (e.g.,
-    `/nix/store/csw87wag8bqlqk7ipllbwypb14xainap-atk-1.9.0`). (This is
+    `/nix/store/csw87wag8bqlqk7ipllbwypb14xainao-atk-1.9.0`). (This is
     actually a 160 bit truncation of a SHA-256 hash.)
 
   - Big cleanups and simplifications of the basic store semantics. The
@@ -49,7 +49,7 @@ Nix 0.8 has the following improvements:
     built it (the “deriver”):
 
         $ nix-store -qR $(which firefox)
-        /nix/store/4b0jx7vq80l9aqcnkszxhymsf1ffa5jd-firefox-1.0.1.drv
+        /nix/store/4b0jx7vq80l9aqcnkszxhymsf1ffa5jo-firefox-1.0.1.drv
 
     So to see the build-time dependencies, you can do
 
@@ -63,7 +63,7 @@ Nix 0.8 has the following improvements:
     can query all paths that directly or indirectly use a certain Glibc:
 
         $ nix-store -q --referrers-closure \
-            /nix/store/8lz9yc6zgmc0vlqmn2ipcpkjlmbi51vv-glibc-2.3.4
+            /nix/store/8lz9yc6zgmc0vlqmn2ipcpkjlmbi51vo-glibc-2.3.4
 
   - The concept of fixed-output derivations has been formalised.
     Previously, functions such as `fetchurl` in Nixpkgs used a hack

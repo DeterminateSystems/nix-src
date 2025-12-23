@@ -13,7 +13,7 @@ Here is an example of what the file might look like after installing `zoom-us` f
       "attrPath": "legacyPackages.x86_64-linux.zoom-us",
       "originalUrl": "flake:nixpkgs",
       "storePaths": [
-        "/nix/store/wbhg2ga8f3h87s9h5k0slxk0m81m4cxl-zoom-us-5.3.469451.0927"
+        "/nix/store/wbhg2ga8f3h87s9h5k0slxk0m81m4cxo-zoom-us-5.3.469451.0927"
       ],
       "uri": "github:NixOS/nixpkgs/13d0c311e3ae923a00f734b43fd1d35b47d8943a"
     },

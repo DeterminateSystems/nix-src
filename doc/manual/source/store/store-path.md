@@ -2,7 +2,7 @@
 
 > **Example**
 >
-> `/nix/store/a040m110amc4h71lds2jmr8qrkj2jhxd-git-2.38.1`
+> `/nix/store/a040m110amc4h71lds2jmr8qrkj2jhxo-git-2.38.1`
 >
 > A rendered store path
 
@@ -38,7 +38,7 @@ A store path is rendered to a file system path as the concatenation of
 > **Example**
 >
 > ```
->   /nix/store/b6gvzjyb2pg0kjfwrjmg1vfhh54ad73z-firefox-33.1
+>   /nix/store/b6gvzjyb2pg0kjfwrjmg1vfhh54ad73o-firefox-33.1
 >   |--------| |------------------------------| |----------|
 > store directory            digest                 name
 > ```

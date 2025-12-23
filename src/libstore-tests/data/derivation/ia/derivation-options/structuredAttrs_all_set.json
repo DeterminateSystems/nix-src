@@ -4,10 +4,10 @@
   "allowSubstitutes": false,
   "exportReferencesGraph": {
     "refs1": [
-      "p0hax2lzvjpfc2gwkk62xdglz0fcqfzn-foo"
+      "p0hax2lzvjpfc2gwkk62xdglz0fcqfzo-foo"
     ],
     "refs2": [
-      "vj2i49jm2868j2fmqvxm70vlzmzvgv14-bar.drv"
+      "vj2i49jm2868j2fmqvxm70vlzmzvgv1o-bar.drv"
     ]
   },
   "impureEnvVars": [
@@ -27,10 +27,10 @@
             "drvPath": "self",
             "output": "dev"
           },
-          "r5cff30838majxk5mp3ip2diffi8vpaj-bar"
+          "r5cff30838majxk5mp3ip2diffi8vpao-bar"
         ],
         "disallowedRequisites": [
-          "9b61w26b4avv870dw0ymb6rw4r1hzpws-bar-dev"
+          "9b61w26b4avv870dw0ymb6rw4r1hzpwo-bar-dev"
         ],
         "ignoreSelfRefs": false,
         "maxClosureSize": null,
@@ -47,14 +47,14 @@
       },
       "out": {
         "allowedReferences": [
-          "p0hax2lzvjpfc2gwkk62xdglz0fcqfzn-foo"
+          "p0hax2lzvjpfc2gwkk62xdglz0fcqfzo-foo"
         ],
         "allowedRequisites": [
           {
             "drvPath": "self",
             "output": "bin"
           },
-          "z0rjzy29v9k5qa4nqpykrbzirj7sd43v-foo-dev"
+          "z0rjzy29v9k5qa4nqpykrbzirj7sd43o-foo-dev"
         ],
         "disallowedReferences": [],
         "disallowedRequisites": [],

@@ -3,7 +3,7 @@
   "builder": "/bin/sh",
   "env": {
     "__doc": "Wrong InputAddressed path throws error",
-    "out": "/nix/store/c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-wrong-name"
+    "out": "/nix/store/c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-wrong-name"
   },
   "inputs": {
     "drvs": {},
@@ -12,7 +12,7 @@
   "name": "bad-path",
   "outputs": {
     "out": {
-      "path": "c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-wrong-name"
+      "path": "c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-wrong-name"
     }
   },
   "system": "x86_64-linux",

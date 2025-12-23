@@ -7,7 +7,7 @@ R""(
   ```console
   # nix store prefetch-file https://releases.nixos.org/nix/nix-2.3.10/nix-2.3.10.tar.xz
   Downloaded 'https://releases.nixos.org/nix/nix-2.3.10/nix-2.3.10.tar.xz' to
-  '/nix/store/vbdbi42hgnc4h7pyqzp6h2yf77kw93aw-source' (hash
+  '/nix/store/vbdbi42hgnc4h7pyqzp6h2yf77kw93ao-source' (hash
   'sha256-qKheVd5D0BervxMDbt+1hnTKE2aRWC8XCAwc0SeHt6s=').
   ```
 

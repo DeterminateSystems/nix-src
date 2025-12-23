@@ -19,7 +19,7 @@ R""(
 
   ```console
   # nix store verify --store https://cache.nixos.org/ \
-      /nix/store/v5sv61sszx301i0x6xysaqzla09nksnd-hello-2.10
+      /nix/store/v5sv61sszx301i0x6xysaqzla09nksno-hello-2.10
   ```
 
 # Description

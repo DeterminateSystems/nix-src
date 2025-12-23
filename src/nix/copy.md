@@ -32,7 +32,7 @@ R""(
 * Copy a closure from another machine via SSH:
 
   ```console
-  # nix copy --from ssh://server /nix/store/a6cnl93nk1wxnq84brbbwr6hxw9gp2w9-blender-2.79-rc2
+  # nix copy --from ssh://server /nix/store/a6cnl93nk1wxnq84brbbwr6hxw9gp2wo-blender-2.79-rc2
   ```
 
 * Copy Hello to a binary cache in an Amazon S3 bucket:
@@ -61,7 +61,7 @@ R""(
   ```console
   # nix copy --from ssh://server \
       --profile /nix/var/nix/profiles/system \
-      /nix/store/r14v3km89zm3prwsa521fab5kgzvfbw4-nixos-system-foobar-24.05.20240925.759537f
+      /nix/store/r14v3km89zm3prwsa521fab5kgzvfbwo-nixos-system-foobar-24.05.20240925.759537f
   ```
 
 # Description

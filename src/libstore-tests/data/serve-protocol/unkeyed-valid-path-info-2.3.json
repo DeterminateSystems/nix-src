@@ -13,11 +13,11 @@
   },
   {
     "ca": null,
-    "deriver": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+    "deriver": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
     "narHash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "narSize": 34878,
     "references": [
-      "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3q-foo.drv"
+      "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3o-foo.drv"
     ],
     "registrationTime": null,
     "signatures": [],

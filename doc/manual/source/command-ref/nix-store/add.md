@@ -24,5 +24,5 @@ as symlinks with the same target.
 
 ```console
 $ nix-store --add ./foo.c
-/nix/store/m7lrha58ph6rcnv109yzx1nk1cj7k7zf-foo.c
+/nix/store/m7lrha58ph6rcnv109yzx1nk1cj7k7zo-foo.c
 ```

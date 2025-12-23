@@ -27,7 +27,7 @@ public:
  */
 TEST_F(DerivedPathTest, opaque)
 {
-    std::string_view opaque = "/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-x";
+    std::string_view opaque = "/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-x";
     auto elem = DerivedPath::parse(*store, opaque);
     auto * p = std::get_if<DerivedPath::Opaque>(&elem);
     ASSERT_TRUE(p);
@@ -41,7 +41,7 @@ TEST_F(DerivedPathTest, opaque)
  */
 TEST_F(DerivedPathTest, built_opaque)
 {
-    std::string_view built = "/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-x.drv^bar,foo";
+    std::string_view built = "/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-x.drv^bar,foo";
     auto elem = DerivedPath::parse(*store, built);
     auto * p = std::get_if<DerivedPath::Built>(&elem);
     ASSERT_TRUE(p);
@@ -67,7 +67,7 @@ TEST_F(DerivedPathTest, built_built)
     ExperimentalFeatureSettings mockXpSettings;
     mockXpSettings.set("experimental-features", "dynamic-derivations ca-derivations");
 
-    std::string_view built = "/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-x.drv^foo^bar,baz";
+    std::string_view built = "/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-x.drv^foo^bar,baz";
     auto elem = DerivedPath::parse(*store, built, mockXpSettings);
     auto * p = std::get_if<DerivedPath::Built>(&elem);
     ASSERT_TRUE(p);
@@ -90,7 +90,7 @@ TEST_F(DerivedPathTest, built_built)
 TEST_F(DerivedPathTest, built_built_xp)
 {
     ASSERT_THROW(
-        DerivedPath::parse(*store, "/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-x.drv^foo^bar,baz"),
+        DerivedPath::parse(*store, "/nix/store/g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-x.drv^foo^bar,baz"),
         MissingExperimentalFeature);
 }
 
@@ -98,7 +98,7 @@ TEST_F(DerivedPathTest, built_built_xp)
 
 /* TODO: Disabled due to the following error:
 
-       path '00000000000000000000000000000000-0^0' is not a valid store path:
+       path '0000000000000000000000000000000o-0^0' is not a valid store path:
        name '0^0' contains illegal character '^'
 */
 RC_GTEST_FIXTURE_PROP(DerivedPathTest, DISABLED_prop_legacy_round_rip, (const DerivedPath & o))
@@ -171,14 +171,14 @@ struct DerivedPathJsonTest : DerivedPathTest,
     }
 
 TEST_JSON(
-    SingleDerivedPath, single_opaque, SingleDerivedPath::Opaque{StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"}});
+    SingleDerivedPath, single_opaque, SingleDerivedPath::Opaque{StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"}});
 
 TEST_JSON(
     SingleDerivedPath,
     single_built,
     (SingleDerivedPath::Built{
         .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{
-            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"}}),
+            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"}}),
         .output = "bar",
     }));
 
@@ -188,20 +188,20 @@ TEST_JSON_XP_DYN(
     (SingleDerivedPath::Built{
         .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Built{
             .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{
-                StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"}}),
+                StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"}}),
             .output = "bar",
         }),
         .output = "baz",
     }));
 
-TEST_JSON(DerivedPath, multi_opaque, DerivedPath::Opaque{StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"}});
+TEST_JSON(DerivedPath, multi_opaque, DerivedPath::Opaque{StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"}});
 
 TEST_JSON(
     DerivedPath,
     mutli_built,
     (DerivedPath::Built{
         .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{
-            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"}}),
+            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"}}),
         .outputs = OutputsSpec::Names{"bar", "baz"},
     }));
 
@@ -211,7 +211,7 @@ TEST_JSON_XP_DYN(
     (DerivedPath::Built{
         .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Built{
             .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{
-                StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"}}),
+                StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"}}),
             .output = "bar",
         }),
         .outputs = OutputsSpec::Names{"baz", "quux"},
@@ -223,7 +223,7 @@ TEST_JSON_XP_DYN(
     (DerivedPath::Built{
         .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Built{
             .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{
-                StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"}}),
+                StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"}}),
             .output = "bar",
         }),
         .outputs = OutputsSpec::All{},

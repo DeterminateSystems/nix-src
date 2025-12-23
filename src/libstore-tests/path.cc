@@ -131,7 +131,7 @@ RC_GTEST_FIXTURE_PROP(StorePathTest, prop_check_regex_eq_parse, ())
 
     auto name = *nameFuzzer;
 
-    std::string path = store->storeDir + "/575s52sh487i0ylmbs9pvi606ljdszr0-" + name;
+    std::string path = store->storeDir + "/575s52sh487i0ylmbs9pvi606ljdszro-" + name;
     bool parsed = false;
     try {
         store->parseStorePath(path);
@@ -172,7 +172,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         std::pair{
             "simple",
-            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"},
+            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"},
         }));
 
 } // namespace nix

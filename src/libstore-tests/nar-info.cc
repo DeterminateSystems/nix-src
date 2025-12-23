@@ -45,7 +45,7 @@ static NarInfo makeNarInfo(const Store & store, bool includeImpureInfo)
                     .others =
                         {
                             StorePath{
-                                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+                                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
                             },
                         },
                     .self = true,
@@ -55,7 +55,7 @@ static NarInfo makeNarInfo(const Store & store, bool includeImpureInfo)
     info.narSize = 34878;
     if (includeImpureInfo) {
         info.deriver = StorePath{
-            "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+            "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
         };
         info.registrationTime = 23423;
         info.ultimate = true;

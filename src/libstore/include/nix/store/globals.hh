@@ -1114,18 +1114,18 @@ public:
               The derivation for the built paths.
 
               Example:
-              `/nix/store/5nihn1a7pa8b25l9zafqaqibznlvvp3f-bash-4.4-p23.drv`
+              `/nix/store/5nihn1a7pa8b25l9zafqaqibznlvvp3o-bash-4.4-p23.drv`
 
             - `OUT_PATHS`
               Output paths of the built derivation, separated by a space
               character.
 
               Example:
-              `/nix/store/zf5lbh336mnzf1nlswdn11g4n2m8zh3g-bash-4.4-p23-dev
-              /nix/store/rjxwxwv1fpn9wa2x5ssk5phzwlcv4mna-bash-4.4-p23-doc
-              /nix/store/6bqvbzjkcp9695dq0dpl5y43nvy37pq1-bash-4.4-p23-info
-              /nix/store/r7fng3kk3vlpdlh2idnrbn37vh4imlj2-bash-4.4-p23-man
-              /nix/store/xfghy8ixrhz3kyy6p724iv3cxji088dx-bash-4.4-p23`.
+              `/nix/store/zf5lbh336mnzf1nlswdn11g4n2m8zh3o-bash-4.4-p23-dev
+              /nix/store/rjxwxwv1fpn9wa2x5ssk5phzwlcv4mno-bash-4.4-p23-doc
+              /nix/store/6bqvbzjkcp9695dq0dpl5y43nvy37pqo-bash-4.4-p23-info
+              /nix/store/r7fng3kk3vlpdlh2idnrbn37vh4imljo-bash-4.4-p23-man
+              /nix/store/xfghy8ixrhz3kyy6p724iv3cxji088do-bash-4.4-p23`.
         )"};
 
     Setting<unsigned int> downloadSpeed{

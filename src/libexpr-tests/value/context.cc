@@ -41,7 +41,7 @@ TEST(NixStringContextElemTest, slash_invalid)
  */
 TEST(NixStringContextElemTest, opaque)
 {
-    std::string_view opaque = "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-x";
+    std::string_view opaque = "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-x";
     auto elem = NixStringContextElem::parse(opaque);
     auto * p = std::get_if<NixStringContextElem::Opaque>(&elem.raw);
     ASSERT_TRUE(p);
@@ -55,7 +55,7 @@ TEST(NixStringContextElemTest, opaque)
  */
 TEST(NixStringContextElemTest, drvDeep)
 {
-    std::string_view drvDeep = "=g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-x.drv";
+    std::string_view drvDeep = "=g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-x.drv";
     auto elem = NixStringContextElem::parse(drvDeep);
     auto * p = std::get_if<NixStringContextElem::DrvDeep>(&elem.raw);
     ASSERT_TRUE(p);
@@ -69,7 +69,7 @@ TEST(NixStringContextElemTest, drvDeep)
  */
 TEST(NixStringContextElemTest, built_opaque)
 {
-    std::string_view built = "!foo!g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-x.drv";
+    std::string_view built = "!foo!g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-x.drv";
     auto elem = NixStringContextElem::parse(built);
     auto * p = std::get_if<NixStringContextElem::Built>(&elem.raw);
     ASSERT_TRUE(p);
@@ -95,7 +95,7 @@ TEST(NixStringContextElemTest, built_built)
     ExperimentalFeatureSettings mockXpSettings;
     mockXpSettings.set("experimental-features", "dynamic-derivations ca-derivations");
 
-    std::string_view built = "!foo!bar!g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-x.drv";
+    std::string_view built = "!foo!bar!g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-x.drv";
     auto elem = NixStringContextElem::parse(built, mockXpSettings);
     auto * p = std::get_if<NixStringContextElem::Built>(&elem.raw);
     ASSERT_TRUE(p);
@@ -118,7 +118,7 @@ TEST(NixStringContextElemTest, built_built)
 TEST(NixStringContextElemTest, built_built_xp)
 {
     ASSERT_THROW(
-        NixStringContextElem::parse("!foo!bar!g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-x.drv"), MissingExperimentalFeature);
+        NixStringContextElem::parse("!foo!bar!g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-x.drv"), MissingExperimentalFeature);
 }
 
 #ifndef COVERAGE

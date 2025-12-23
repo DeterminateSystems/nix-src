@@ -49,8 +49,8 @@ VERSIONED_CHARACTERIZATION_TEST(
     "store-path",
     defaultVersion,
     (std::tuple<StorePath, StorePath>{
-        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
-        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo-bar"},
+        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
+        StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo-bar"},
     }))
 
 VERSIONED_CHARACTERIZATION_TEST(
@@ -82,19 +82,19 @@ VERSIONED_CHARACTERIZATION_TEST(
     1 << 8 | 29,
     (std::tuple<DerivedPath, DerivedPath, DerivedPath>{
         DerivedPath::Opaque{
-            .path = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+            .path = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
         },
         DerivedPath::Built{
             .drvPath = makeConstantStorePathRef(
                 StorePath{
-                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
                 }),
             .outputs = OutputsSpec::All{},
         },
         DerivedPath::Built{
             .drvPath = makeConstantStorePathRef(
                 StorePath{
-                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
                 }),
             .outputs = OutputsSpec::Names{"x", "y"},
         },
@@ -107,22 +107,22 @@ VERSIONED_CHARACTERIZATION_TEST(
     1 << 8 | 30,
     (std::tuple<DerivedPath, DerivedPath, DerivedPath, DerivedPath>{
         DerivedPath::Opaque{
-            .path = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+            .path = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
         },
         DerivedPath::Opaque{
-            .path = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"},
+            .path = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"},
         },
         DerivedPath::Built{
             .drvPath = makeConstantStorePathRef(
                 StorePath{
-                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
                 }),
             .outputs = OutputsSpec::All{},
         },
         DerivedPath::Built{
             .drvPath = makeConstantStorePathRef(
                 StorePath{
-                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
                 }),
             .outputs = OutputsSpec::Names{"x", "y"},
         },
@@ -152,7 +152,7 @@ VERSIONED_CHARACTERIZATION_TEST(
     (std::tuple<Realisation, Realisation>{
         Realisation{
             {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
             },
             {
                 .drvHash = Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
@@ -161,7 +161,7 @@ VERSIONED_CHARACTERIZATION_TEST(
         },
         Realisation{
             {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                 .signatures = {"asdf", "qwer"},
             },
             {
@@ -179,7 +179,7 @@ VERSIONED_CHARACTERIZATION_TEST(
     (std::tuple<Realisation>{
         Realisation{
             {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                 .signatures = {"asdf", "qwer"},
                 .dependentRealisations =
                     {
@@ -188,7 +188,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                                 .drvHash = Hash::parseSRI("sha256-b4afnqKCO9oWXgYHb9DeQ2berSwOjS27rSd9TxXDc/U="),
                                 .outputName = "quux",
                             },
-                            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                         },
                     },
             },
@@ -237,7 +237,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                             "foo",
                             {
                                 {
-                                    .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                                    .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                                 },
                                 DrvOutput{
                                     .drvHash = Hash::parseSRI("sha256-b4afnqKCO9oWXgYHb9DeQ2berSwOjS27rSd9TxXDc/U="),
@@ -249,7 +249,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                             "bar",
                             {
                                 {
-                                    .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar"},
+                                    .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar"},
                                 },
                                 DrvOutput{
                                     .drvHash = Hash::parseSRI("sha256-b4afnqKCO9oWXgYHb9DeQ2berSwOjS27rSd9TxXDc/U="),
@@ -290,7 +290,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                                 "foo",
                                 {
                                     {
-                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                                     },
                                     DrvOutput{
                                         .drvHash =
@@ -303,7 +303,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                                 "bar",
                                 {
                                     {
-                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar"},
+                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar"},
                                     },
                                     DrvOutput{
                                         .drvHash =
@@ -349,7 +349,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                                 "foo",
                                 {
                                     {
-                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                                     },
                                     DrvOutput{
                                         .drvHash =
@@ -362,7 +362,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                                 "bar",
                                 {
                                     {
-                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar"},
+                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar"},
                                     },
                                     DrvOutput{
                                         .drvHash =
@@ -393,7 +393,7 @@ VERSIONED_CHARACTERIZATION_TEST(WorkerProtoTest, keyedBuildResult_1_29, "keyed-b
                                             }}},
                                             /* .path = */
                                             DerivedPath::Opaque{
-                                                StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-xxx"},
+                                                StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-xxx"},
                                             },
                                         },
                                         KeyedBuildResult{
@@ -411,7 +411,7 @@ VERSIONED_CHARACTERIZATION_TEST(WorkerProtoTest, keyedBuildResult_1_29, "keyed-b
                                             DerivedPath::Built{
                                                 .drvPath = makeConstantStorePathRef(
                                                     StorePath{
-                                                        "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                                                        "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
                                                     }),
                                                 .outputs = OutputsSpec::Names{"out"},
                                             },
@@ -441,11 +441,11 @@ VERSIONED_CHARACTERIZATION_TEST(
                 Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
             };
             info.deriver = StorePath{
-                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
             };
             info.references = {
                 StorePath{
-                    "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3q-foo.drv",
+                    "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3o-foo.drv",
                 },
             };
             info.registrationTime = 23423;
@@ -463,7 +463,7 @@ VERSIONED_CHARACTERIZATION_TEST(
         ({
             ValidPathInfo info{
                 StorePath{
-                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
                 },
                 UnkeyedValidPathInfo{
                     std::string{defaultStoreDir},
@@ -477,7 +477,7 @@ VERSIONED_CHARACTERIZATION_TEST(
         ({
             ValidPathInfo info{
                 StorePath{
-                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
                 },
                 UnkeyedValidPathInfo{
                     std::string{defaultStoreDir},
@@ -485,16 +485,16 @@ VERSIONED_CHARACTERIZATION_TEST(
                 },
             };
             info.deriver = StorePath{
-                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
             };
             info.references = {
                 // other reference
                 StorePath{
-                    "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3q-foo",
+                    "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3o-foo",
                 },
                 // self reference
                 StorePath{
-                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
                 },
             };
             info.registrationTime = 23423;
@@ -512,7 +512,7 @@ VERSIONED_CHARACTERIZATION_TEST(
         ({
             ValidPathInfo info{
                 StorePath{
-                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
                 },
                 UnkeyedValidPathInfo{
                     std::string{defaultStoreDir},
@@ -527,7 +527,7 @@ VERSIONED_CHARACTERIZATION_TEST(
         ({
             ValidPathInfo info{
                 StorePath{
-                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
                 },
                 UnkeyedValidPathInfo{
                     std::string{defaultStoreDir},
@@ -535,16 +535,16 @@ VERSIONED_CHARACTERIZATION_TEST(
                 },
             };
             info.deriver = StorePath{
-                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
             };
             info.references = {
                 // other reference
                 StorePath{
-                    "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3q-foo",
+                    "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3o-foo",
                 },
                 // self reference
                 StorePath{
-                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+                    "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
                 },
             };
             info.registrationTime = 23423;
@@ -568,7 +568,7 @@ VERSIONED_CHARACTERIZATION_TEST(
                             .others =
                                 {
                                     StorePath{
-                                        "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+                                        "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
                                     },
                                 },
                             .self = true,
@@ -639,7 +639,7 @@ VERSIONED_CHARACTERIZATION_TEST(
     (std::tuple<std::optional<StorePath>, std::optional<StorePath>>{
         std::nullopt,
         std::optional{
-            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo-bar"},
+            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo-bar"},
         },
     }))
 

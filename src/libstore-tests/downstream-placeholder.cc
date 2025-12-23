@@ -15,7 +15,7 @@ TEST(DownstreamPlaceholder, unknownCaOutput)
 
     ASSERT_EQ(
         DownstreamPlaceholder::unknownCaOutput(
-            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"}, "out", mockXpSettings)
+            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"}, "out", mockXpSettings)
             .render(),
         "/0c6rn30q4frawknapgwq386zq358m8r6msvywcvc89n6m5p2dgbz");
 }
@@ -31,7 +31,7 @@ TEST(DownstreamPlaceholder, unknownDerivation)
     ASSERT_EQ(
         DownstreamPlaceholder::unknownDerivation(
             DownstreamPlaceholder::unknownCaOutput(
-                StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv.drv"}, "out", mockXpSettings),
+                StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv.drv"}, "out", mockXpSettings),
             "out",
             mockXpSettings)
             .render(),

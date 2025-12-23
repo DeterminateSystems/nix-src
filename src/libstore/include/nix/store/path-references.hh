@@ -47,7 +47,7 @@ struct FileRefScanResult
  *
  * Note: This function only searches for the hash part of store paths (e.g.,
  * "dc04vv14dak1c1r48qa0m23vr9jy8sm0"), not the name part. A store path like
- * "/nix/store/dc04vv14dak1c1r48qa0m23vr9jy8sm0-foo" will be detected if the
+ * "/nix/store/dc04vv14dak1c1r48qa0m23vr9jy8smo-foo" will be detected if the
  * hash appears anywhere in the scanned content, regardless of the "-foo" suffix.
  *
  * @param accessor Source accessor to read the tree

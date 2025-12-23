@@ -182,7 +182,7 @@
   «partially applied primop map»
 
   nix-repl> builtins.trace lib.id "my-value"
-  trace: «lambda id @ /nix/store/8rrzq23h2zq7sv5l2vhw44kls5w0f654-source/lib/trivial.nix:26:5»
+  trace: «lambda id @ /nix/store/8rrzq23h2zq7sv5l2vhw44kls5w0f65o-source/lib/trivial.nix:26:5»
   "my-value"
   ```
 

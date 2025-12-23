@@ -52,7 +52,7 @@ static ValidPathInfo makeFullKeyed(const Store & store, bool includeImpureInfo)
                     .others =
                         {
                             StorePath{
-                                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+                                "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
                             },
                         },
                     .self = true,
@@ -62,7 +62,7 @@ static ValidPathInfo makeFullKeyed(const Store & store, bool includeImpureInfo)
     info.narSize = 34878;
     if (includeImpureInfo) {
         info.deriver = StorePath{
-            "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+            "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
         };
         info.registrationTime = 23423;
         info.ultimate = true;
@@ -145,8 +145,8 @@ TEST_F(PathInfoTestV2, PathInfo_full_shortRefs)
     // it.references = unkeyed.references;
     auto refs = it.shortRefs();
     ASSERT_EQ(refs.size(), 2u);
-    ASSERT_EQ(*refs.begin(), "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar");
-    ASSERT_EQ(*++refs.begin(), "n5wkd9frr45pa74if5gpz9j7mifg27fh-foo");
+    ASSERT_EQ(*refs.begin(), "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar");
+    ASSERT_EQ(*++refs.begin(), "n5wkd9frr45pa74if5gpz9j7mifg27fo-foo");
 }
 
 } // namespace nix

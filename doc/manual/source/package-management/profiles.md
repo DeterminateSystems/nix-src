@@ -7,9 +7,9 @@ useful to know a bit about how Nix works. In Nix, packages are stored in
 unique locations in the *Nix store* (typically, `/nix/store`). For
 instance, a particular version of the Subversion package might be stored
 in a directory
-`/nix/store/dpmvp969yhdqs7lm2r1a3gng7pyq6vy4-subversion-1.1.3/`, while
+`/nix/store/dpmvp969yhdqs7lm2r1a3gng7pyq6vyo-subversion-1.1.3/`, while
 another version might be stored in
-`/nix/store/5mq2jcn36ldlmh93yj1n8s9c95pj7c5s-subversion-1.1.2`. The long
+`/nix/store/5mq2jcn36ldlmh93yj1n8s9c95pj7c5o-subversion-1.1.2`. The long
 strings prefixed to the directory names are cryptographic hashes (to be
 precise, 160-bit truncations of SHA-256 hashes encoded in a base-32
 notation) of *all* inputs involved in building the package — sources,

@@ -100,10 +100,10 @@ This fact is counterbalanced by the fact that most of those changes are bug fixe
 
   ```
   $ nix formatter build
-  /nix/store/cb9w44vkhk2x4adfxwgdkkf5gjmm856j-treefmt/bin/treefmt
+  /nix/store/cb9w44vkhk2x4adfxwgdkkf5gjmm856o-treefmt/bin/treefmt
   ```
 
-  Note that unlike `nix build`, this prints the full path to the program, not just the store path (in the example above that would be `/nix/store/cb9w44vkhk2x4adfxwgdkkf5gjmm856j-treefmt`).
+  Note that unlike `nix build`, this prints the full path to the program, not just the store path (in the example above that would be `/nix/store/cb9w44vkhk2x4adfxwgdkkf5gjmm856o-treefmt`).
 
 - Amend OSC 8 escape stripping for xterm-style separator [#13109](https://github.com/NixOS/nix/pull/13109)
 

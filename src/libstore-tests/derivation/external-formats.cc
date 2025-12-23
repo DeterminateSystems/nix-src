@@ -50,7 +50,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::pair{
             "inputAddressed",
             DerivationOutput{DerivationOutput::InputAddressed{
-                .path = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-drv-name-output-name"},
+                .path = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-drv-name-output-name"},
             }},
         },
         std::pair{
@@ -182,13 +182,13 @@ Derivation makeSimpleDrv()
     Derivation drv;
     drv.name = "simple-derivation";
     drv.inputSrcs = {
-        StorePath("c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-dep1"),
+        StorePath("c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-dep1"),
     };
     drv.inputDrvs = {
         .map =
             {
                 {
-                    StorePath("c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-dep2.drv"),
+                    StorePath("c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-dep2.drv"),
                     {
                         .value =
                             {
@@ -228,13 +228,13 @@ Derivation makeDynDepDerivation()
     Derivation drv;
     drv.name = "dyn-dep-derivation";
     drv.inputSrcs = {
-        StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-dep1"},
+        StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-dep1"},
     };
     drv.inputDrvs = {
         .map =
             {
                 {
-                    StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-dep2.drv"},
+                    StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-dep2.drv"},
                     DerivedPathMap<StringSet>::ChildNode{
                         .value =
                             {

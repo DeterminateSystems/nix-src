@@ -323,7 +323,7 @@ static RegisterPrimOp primop_fetchTree({
           >   lastModified = 1686503798;
           >   lastModifiedDate = "20230611171638";
           >   narHash = "sha256-rA9RqKP9OlBrgGCPvfd5HVAXDOy8k2SmPtB/ijShNXc=";
-          >   outPath = "/nix/store/l5m6qlvfs9sdw14ja3qbzpglcjlb6j1x-source";
+          >   outPath = "/nix/store/l5m6qlvfs9sdw14ja3qbzpglcjlb6j1o-source";
           >   rev = "ae2e6b3958682513d28f7d633734571fb18285dd";
           >   shortRev = "ae2e6b3";
           > }

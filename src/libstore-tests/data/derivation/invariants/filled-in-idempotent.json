@@ -3,7 +3,7 @@
   "builder": "/bin/sh",
   "env": {
     "__doc": "Correct path stays unchanged",
-    "out": "/nix/store/w4bk7hpyxzgy2gx8fsa8f952435pll3i-filled-in-already"
+    "out": "/nix/store/w4bk7hpyxzgy2gx8fsa8f952435pll3o-filled-in-already"
   },
   "inputs": {
     "drvs": {},
@@ -12,7 +12,7 @@
   "name": "filled-in-already",
   "outputs": {
     "out": {
-      "path": "w4bk7hpyxzgy2gx8fsa8f952435pll3i-filled-in-already"
+      "path": "w4bk7hpyxzgy2gx8fsa8f952435pll3o-filled-in-already"
     }
   },
   "system": "x86_64-linux",

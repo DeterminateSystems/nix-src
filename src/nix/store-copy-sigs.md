@@ -6,7 +6,7 @@ R""(
 
   ```console
   # nix store copy-sigs --substituter https://cache.nixos.org \
-      --recursive /nix/store/y1x7ng5bmc9s8lqrf98brcpk1a7lbcl5-hello-2.12.1
+      --recursive /nix/store/y1x7ng5bmc9s8lqrf98brcpk1a7lbclo-hello-2.12.1
   ```
 
 * To copy signatures from one binary cache to another:
@@ -15,7 +15,7 @@ R""(
   # nix store copy-sigs --substituter https://cache.nixos.org \
       --store file:///tmp/binary-cache \
       --recursive -v \
-      /nix/store/y1x7ng5bmc9s8lqrf98brcpk1a7lbcl5-hello-2.12.1
+      /nix/store/y1x7ng5bmc9s8lqrf98brcpk1a7lbclo-hello-2.12.1
   imported 2 signatures
   ```
 

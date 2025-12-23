@@ -112,7 +112,7 @@ TEST_F(nix_api_expr_test, nix_value_set_get_path_invalid)
 
 TEST_F(nix_api_expr_test, nix_value_set_get_path)
 {
-    const char * p = "/nix/store/40s0qmrfb45vlh6610rk29ym318dswdr-myname";
+    const char * p = "/nix/store/40s0qmrfb45vlh6610rk29ym318dswdo-myname";
     nix_init_path_string(ctx, state, value, p);
 
     ASSERT_STREQ(p, nix_get_path_string(ctx, value));

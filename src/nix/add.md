@@ -20,9 +20,9 @@ Add a directory to the store:
 # echo foo > dir/bar
 
 # nix store add ./dir
-/nix/store/6pmjx56pm94n66n4qw1nff0y1crm8nqg-dir
+/nix/store/6pmjx56pm94n66n4qw1nff0y1crm8nqo-dir
 
-# cat /nix/store/6pmjx56pm94n66n4qw1nff0y1crm8nqg-dir/bar
+# cat /nix/store/6pmjx56pm94n66n4qw1nff0y1crm8nqo-dir/bar
 foo
 ```
 

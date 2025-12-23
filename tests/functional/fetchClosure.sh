@@ -124,7 +124,7 @@ rm -rf "$narCache"
 clearStore
 
 # shellcheck disable=SC2001
-badPath=$(echo "$caPath" | sed -e 's!/store/................................-!/store/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-!')
+badPath=$(echo "$caPath" | sed -e 's!/store/................................-!/store/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxo-!')
 
 [ ! -e "$badPath" ]
 

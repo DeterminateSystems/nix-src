@@ -182,8 +182,8 @@ current user environment:
 
 ```console
 $ nix-store --query --requisites $(which svn)
-/nix/store/5mbglq5ldqld8sj57273aljwkfvj22mc-subversion-1.1.4
-/nix/store/9lz9yc6zgmc0vlqmn2ipcpkjlmbi51vv-glibc-2.3.4
+/nix/store/5mbglq5ldqld8sj57273aljwkfvj22mo-subversion-1.1.4
+/nix/store/9lz9yc6zgmc0vlqmn2ipcpkjlmbi51vo-glibc-2.3.4
 ...
 ```
 
@@ -191,9 +191,9 @@ Print the build-time dependencies of `svn`:
 
 ```console
 $ nix-store --query --requisites $(nix-store --query --deriver $(which svn))
-/nix/store/02iizgn86m42q905rddvg4ja975bk2i4-grep-2.5.1.tar.bz2.drv
-/nix/store/07a2bzxmzwz5hp58nf03pahrv2ygwgs3-gcc-wrapper.sh
-/nix/store/0ma7c9wsbaxahwwl04gbw3fcd806ski4-glibc-2.3.4.drv
+/nix/store/02iizgn86m42q905rddvg4ja975bk2io-grep-2.5.1.tar.bz2.drv
+/nix/store/07a2bzxmzwz5hp58nf03pahrv2ygwgso-gcc-wrapper.sh
+/nix/store/0ma7c9wsbaxahwwl04gbw3fcd806skio-glibc-2.3.4.drv
 ... lots of other paths ...
 ```
 
@@ -205,11 +205,11 @@ Show the build-time dependencies as a tree:
 
 ```console
 $ nix-store --query --tree $(nix-store --query --deriver $(which svn))
-/nix/store/7i5082kfb6yjbqdbiwdhhza0am2xvh6c-subversion-1.1.4.drv
-+---/nix/store/d8afh10z72n8l1cr5w42366abiblgn54-builder.sh
-+---/nix/store/fmzxmpjx2lh849ph0l36snfj9zdibw67-bash-3.0.drv
-|   +---/nix/store/570hmhmx3v57605cqg9yfvvyh0nnb8k8-bash
-|   +---/nix/store/p3srsbd8dx44v2pg6nbnszab5mcwx03v-builder.sh
+/nix/store/7i5082kfb6yjbqdbiwdhhza0am2xvh6o-subversion-1.1.4.drv
++---/nix/store/d8afh10z72n8l1cr5w42366abiblgn5o-builder.sh
++---/nix/store/fmzxmpjx2lh849ph0l36snfj9zdibw6o-bash-3.0.drv
+|   +---/nix/store/570hmhmx3v57605cqg9yfvvyh0nnb8ko-bash
+|   +---/nix/store/p3srsbd8dx44v2pg6nbnszab5mcwx03o-builder.sh
 ...
 ```
 
@@ -217,10 +217,10 @@ Show all paths that depend on the same OpenSSL library as `svn`:
 
 ```console
 $ nix-store --query --referrers $(nix-store --query --binding openssl $(nix-store --query --deriver $(which svn)))
-/nix/store/23ny9l9wixx21632y2wi4p585qhva1q8-sylpheed-1.0.0
-/nix/store/5mbglq5ldqld8sj57273aljwkfvj22mc-subversion-1.1.4
-/nix/store/dpmvp969yhdqs7lm2r1a3gng7pyq6vy4-subversion-1.1.3
-/nix/store/l51240xqsgg8a7yrbqdx1rfzyv6l26fx-lynx-2.8.5
+/nix/store/23ny9l9wixx21632y2wi4p585qhva1qo-sylpheed-1.0.0
+/nix/store/5mbglq5ldqld8sj57273aljwkfvj22mo-subversion-1.1.4
+/nix/store/dpmvp969yhdqs7lm2r1a3gng7pyq6vyo-subversion-1.1.3
+/nix/store/l51240xqsgg8a7yrbqdx1rfzyv6l26fo-lynx-2.8.5
 ```
 
 Show all paths that directly or indirectly depend on the Glibc (C
@@ -228,8 +228,8 @@ library) used by `svn`:
 
 ```console
 $ nix-store --query --referrers-closure $(ldd $(which svn) | grep /libc.so | awk '{print $3}')
-/nix/store/034a6h4vpz9kds5r6kzb9lhh81mscw43-libgnomeprintui-2.8.2
-/nix/store/15l3yi0d45prm7a82pcrknxdh6nzmxza-gawk-3.1.4
+/nix/store/034a6h4vpz9kds5r6kzb9lhh81mscw4o-libgnomeprintui-2.8.2
+/nix/store/15l3yi0d45prm7a82pcrknxdh6nzmxzo-gawk-3.1.4
 ...
 ```
 

@@ -7,7 +7,7 @@
   },
   "inputs": {
     "drvs": {
-      "lg4c4b8r9hlczwprl6kgnzfd9mc1xmkk-dependency.drv": {
+      "lg4c4b8r9hlczwprl6kgnzfd9mc1xmko-dependency.drv": {
         "dynamicOutputs": {},
         "outputs": [
           "out"
@@ -19,7 +19,7 @@
   "name": "depends-on-drv",
   "outputs": {
     "out": {
-      "path": "c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-wrong-name"
+      "path": "c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-wrong-name"
     }
   },
   "system": "x86_64-linux",

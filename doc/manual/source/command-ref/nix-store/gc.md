@@ -62,7 +62,7 @@ To delete all unreachable paths, just do:
 
 ```console
 $ nix-store --gc
-deleting `/nix/store/kq82idx6g0nyzsp2s14gfsc38npai7lf-cairo-1.0.4.tar.gz.drv'
+deleting `/nix/store/kq82idx6g0nyzsp2s14gfsc38npai7lo-cairo-1.0.4.tar.gz.drv'
 ...
 8825586 bytes freed (8.42 MiB)
 ```

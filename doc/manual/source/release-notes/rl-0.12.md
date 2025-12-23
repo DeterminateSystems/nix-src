@@ -75,12 +75,12 @@
     instance, a build will show something like
     
         the following derivations will be built:
-          /nix/store/129sbxnk5n466zg6r1qmq1xjv9zymyy7-activate-configuration.sh.drv
-          /nix/store/7mzy971rdm8l566ch8hgxaf89x7lr7ik-upstart-jobs.drv
+          /nix/store/129sbxnk5n466zg6r1qmq1xjv9zymyyo-activate-configuration.sh.drv
+          /nix/store/7mzy971rdm8l566ch8hgxaf89x7lr7io-upstart-jobs.drv
           ...
         the following paths will be downloaded/copied (30.02 MiB):
-          /nix/store/4m8pvgy2dcjgppf5b4cj5l6wyshjhalj-samba-3.2.4
-          /nix/store/7h1kwcj29ip8vk26rhmx6bfjraxp0g4l-libunwind-0.98.6
+          /nix/store/4m8pvgy2dcjgppf5b4cj5l6wyshjhalo-samba-3.2.4
+          /nix/store/7h1kwcj29ip8vk26rhmx6bfjraxp0g4o-libunwind-0.98.6
           ...
 
   - Language features:

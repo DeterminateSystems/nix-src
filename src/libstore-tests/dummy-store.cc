@@ -45,7 +45,7 @@ TEST(DummyStore, realisation_read)
     EXPECT_EQ(store->queryRealisation({drvHash, outputName}), nullptr);
 
     UnkeyedRealisation value{
-        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"},
+        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv"},
     };
 
     store->buildTrace.insert({drvHash, {{outputName, value}}});
@@ -139,7 +139,7 @@ INSTANTIATE_TEST_SUITE_P(DummyStoreJSON, DummyStoreJsonTest, [] {
                         {
                             "out",
                             UnkeyedRealisation{
-                                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo"},
                             },
                         },
                     });

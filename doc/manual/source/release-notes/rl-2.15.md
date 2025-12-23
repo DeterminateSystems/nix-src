@@ -18,13 +18,13 @@
 
   For example,
   ```shell-session
-  $ nix path-info /nix/store/gzaflydcr6sb3567hap9q6srzx8ggdgg-glibc-2.33-78.drv
+  $ nix path-info /nix/store/gzaflydcr6sb3567hap9q6srzx8ggdgo-glibc-2.33-78.drv
   ```
 
   now gives info about the derivation itself, while
 
   ```shell-session
-  $ nix path-info /nix/store/gzaflydcr6sb3567hap9q6srzx8ggdgg-glibc-2.33-78.drv^*
+  $ nix path-info /nix/store/gzaflydcr6sb3567hap9q6srzx8ggdgo-glibc-2.33-78.drv^*
   ```
   provides information about each of its outputs.
 

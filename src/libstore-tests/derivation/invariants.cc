@@ -127,7 +127,7 @@ TEST_F(FillInOutputPathsTest, fillsDeferredOutputs_empty_string_var)
 
 TEST_F(FillInOutputPathsTest, preservesInputAddressedOutputs)
 {
-    auto expectedPath = StorePath{"w4bk7hpyxzgy2gx8fsa8f952435pll3i-filled-in-already"};
+    auto expectedPath = StorePath{"w4bk7hpyxzgy2gx8fsa8f952435pll3o-filled-in-already"};
 
     Derivation drv;
     drv.name = "filled-in-already";
@@ -154,7 +154,7 @@ TEST_F(FillInOutputPathsTest, preservesInputAddressedOutputs)
 
 TEST_F(FillInOutputPathsTest, throwsOnIncorrectInputAddressedPath)
 {
-    auto wrongPath = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-wrong-name"};
+    auto wrongPath = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-wrong-name"};
 
     Derivation drv;
     drv.name = "bad-path";
@@ -177,7 +177,7 @@ TEST_F(FillInOutputPathsTest, throwsOnIncorrectInputAddressedPath)
 #if 0
 TEST_F(FillInOutputPathsTest, throwsOnIncorrectEnvVar)
 {
-    auto wrongPath = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-wrong-name"};
+    auto wrongPath = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-wrong-name"};
 
     Derivation drv;
     drv.name = "bad-env-var";
@@ -239,7 +239,7 @@ TEST_F(FillInOutputPathsTest, throwsOnPatWhenShouldBeDeffered)
     // Create a CA floating dependency derivation
     auto depDrvPath = makeCAFloatingDependency("dependency");
 
-    auto wrongPath = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-wrong-name"};
+    auto wrongPath = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-wrong-name"};
 
     // Create a derivation that depends on the dependency
     Derivation drv;

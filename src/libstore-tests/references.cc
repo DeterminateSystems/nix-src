@@ -86,9 +86,9 @@ TEST(references, scanForReferencesDeep)
     using File = MemorySourceAccessor::File;
 
     // Create store paths to search for
-    StorePath path1{"dc04vv14dak1c1r48qa0m23vr9jy8sm0-foo"};
-    StorePath path2{"zc842j0rz61mjsp3h3wp5ly71ak6qgdn-bar"};
-    StorePath path3{"a5cn2i4b83gnsm60d38l3kgb8qfplm11-baz"};
+    StorePath path1{"dc04vv14dak1c1r48qa0m23vr9jy8smo-foo"};
+    StorePath path2{"zc842j0rz61mjsp3h3wp5ly71ak6qgdo-bar"};
+    StorePath path3{"a5cn2i4b83gnsm60d38l3kgb8qfplm1o-baz"};
 
     StorePathSet refs{path1, path2, path3};
 

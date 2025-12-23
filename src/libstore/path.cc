@@ -70,7 +70,7 @@ void StorePath::requireDerivation() const
         throw FormatError("store path '%s' is not a valid derivation path", to_string());
 }
 
-StorePath StorePath::dummy("ffffffffffffffffffffffffffffffff-x");
+StorePath StorePath::dummy("fffffffffffffffffffffffffffffffo-x");
 
 StorePath StorePath::random(std::string_view name)
 {

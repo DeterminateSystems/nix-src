@@ -3,7 +3,7 @@
   "builder": "/bin/sh",
   "env": {
     "__doc": "Wrong env var value throws error",
-    "out": "/nix/store/c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-wrong-name"
+    "out": "/nix/store/c015dhfh5l0lp6wxyvdn7bmwhbbr6hro-wrong-name"
   },
   "inputs": {
     "drvs": {},

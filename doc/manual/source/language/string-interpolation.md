@@ -168,7 +168,7 @@ A path in an interpolated expression is first copied into the Nix store, and the
 > "${./foo}"
 > ```
 >
->     "/nix/store/2hhl2nz5v0khbn06ys82nrk99aa1xxdw-foo"
+>     "/nix/store/2hhl2nz5v0khbn06ys82nrk99aa1xxdo-foo"
 
 A derivation interpolates to the [store path] of its first [output](./derivations.md#attr-outputs).
 
@@ -181,7 +181,7 @@ A derivation interpolates to the [store path] of its first [output](./derivation
 > "${pkgs.hello}"
 > ```
 >
->     "/nix/store/4xpfqf29z4m8vbhrqcz064wfmb46w5r7-hello-2.12.1"
+>     "/nix/store/4xpfqf29z4m8vbhrqcz064wfmb46w5ro-hello-2.12.1"
 
 An attribute set interpolates to the return value of the function in the `__toString` applied to the attribute set itself.
 

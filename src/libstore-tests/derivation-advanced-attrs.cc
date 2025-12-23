@@ -134,29 +134,29 @@ TEST_ATERM_JSON(advancedAttributes_structuredAttrs_defaults, "advanced-attribute
  * sense to give them names in this file.
  */
 static SingleDerivedPath
-    pathFoo = SingleDerivedPath::Opaque{StorePath{"p0hax2lzvjpfc2gwkk62xdglz0fcqfzn-foo"}},
-    pathFooDev = SingleDerivedPath::Opaque{StorePath{"z0rjzy29v9k5qa4nqpykrbzirj7sd43v-foo-dev"}},
-    pathBar = SingleDerivedPath::Opaque{StorePath{"r5cff30838majxk5mp3ip2diffi8vpaj-bar"}},
-    pathBarDev = SingleDerivedPath::Opaque{StorePath{"9b61w26b4avv870dw0ymb6rw4r1hzpws-bar-dev"}},
-    pathBarDrvIA = SingleDerivedPath::Opaque{StorePath{"vj2i49jm2868j2fmqvxm70vlzmzvgv14-bar.drv"}},
-    pathBarDrvCA = SingleDerivedPath::Opaque{StorePath{"qnml92yh97a6fbrs2m5qg5cqlc8vni58-bar.drv"}},
+    pathFoo = SingleDerivedPath::Opaque{StorePath{"p0hax2lzvjpfc2gwkk62xdglz0fcqfzo-foo"}},
+    pathFooDev = SingleDerivedPath::Opaque{StorePath{"z0rjzy29v9k5qa4nqpykrbzirj7sd43o-foo-dev"}},
+    pathBar = SingleDerivedPath::Opaque{StorePath{"r5cff30838majxk5mp3ip2diffi8vpao-bar"}},
+    pathBarDev = SingleDerivedPath::Opaque{StorePath{"9b61w26b4avv870dw0ymb6rw4r1hzpwo-bar-dev"}},
+    pathBarDrvIA = SingleDerivedPath::Opaque{StorePath{"vj2i49jm2868j2fmqvxm70vlzmzvgv1o-bar.drv"}},
+    pathBarDrvCA = SingleDerivedPath::Opaque{StorePath{"qnml92yh97a6fbrs2m5qg5cqlc8vni5o-bar.drv"}},
     placeholderFoo =
         SingleDerivedPath::Built{
-            .drvPath = makeConstantStorePathRef(StorePath{"j56sf12rxpcv5swr14vsjn5cwm6bj03h-foo.drv"}),
+            .drvPath = makeConstantStorePathRef(StorePath{"j56sf12rxpcv5swr14vsjn5cwm6bj03o-foo.drv"}),
             .output = "out",
         },
     placeholderFooDev =
         SingleDerivedPath::Built{
-            .drvPath = makeConstantStorePathRef(StorePath{"j56sf12rxpcv5swr14vsjn5cwm6bj03h-foo.drv"}),
+            .drvPath = makeConstantStorePathRef(StorePath{"j56sf12rxpcv5swr14vsjn5cwm6bj03o-foo.drv"}),
             .output = "dev",
         },
     placeholderBar =
         SingleDerivedPath::Built{
-            .drvPath = makeConstantStorePathRef(StorePath{"qnml92yh97a6fbrs2m5qg5cqlc8vni58-bar.drv"}),
+            .drvPath = makeConstantStorePathRef(StorePath{"qnml92yh97a6fbrs2m5qg5cqlc8vni5o-bar.drv"}),
             .output = "out",
         },
     placeholderBarDev = SingleDerivedPath::Built{
-        .drvPath = makeConstantStorePathRef(StorePath{"qnml92yh97a6fbrs2m5qg5cqlc8vni58-bar.drv"}),
+        .drvPath = makeConstantStorePathRef(StorePath{"qnml92yh97a6fbrs2m5qg5cqlc8vni5o-bar.drv"}),
         .output = "dev",
     };
 

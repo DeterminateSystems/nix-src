@@ -232,13 +232,13 @@ If those other derivations *also* abide by this common case (and likewise for tr
   > **Example**
   >
   > ```
-  > /nix/store/lxrn8v5aamkikg6agxwdqd1jz7746wz4-firefox-98.0.2.drv^out
+  > /nix/store/lxrn8v5aamkikg6agxwdqd1jz7746wzo-firefox-98.0.2.drv^out
   > ```
   >
   > This parses like so:
   >
   > ```
-  > /nix/store/lxrn8v5aamkikg6agxwdqd1jz7746wz4-firefox-98.0.2.drv^out
+  > /nix/store/lxrn8v5aamkikg6agxwdqd1jz7746wzo-firefox-98.0.2.drv^out
   > |------------------------------------------------------------| |-|
   > store path (usual encoding)                                    output name
   >                                                           |--|
@@ -301,7 +301,7 @@ The result of this is that it is possible to have a chain of `^<output-name>` at
 > **Example**
 >
 > ```
-> /nix/store/lxrn8v5aamkikg6agxwdqd1jz7746wz4-firefox-98.0.2.drv^foo.drv^bar.drv^out
+> /nix/store/lxrn8v5aamkikg6agxwdqd1jz7746wzo-firefox-98.0.2.drv^foo.drv^bar.drv^out
 > |----------------------------------------------------------------------------| |-|
 > inner deriving path (usual encoding)                                           output name
 > |--------------------------------------------------------------------| |-----|

@@ -1,14 +1,14 @@
 [
-  "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo",
-  "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv",
+  "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo",
+  "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-foo.drv",
   {
-    "drvPath": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+    "drvPath": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
     "outputs": [
       "*"
     ]
   },
   {
-    "drvPath": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+    "drvPath": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
     "outputs": [
       "x",
       "y"

@@ -4,7 +4,7 @@
     "deriver": null,
     "narHash": "sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc=",
     "narSize": 34878,
-    "path": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+    "path": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
     "references": [],
     "registrationTime": 23423,
     "signatures": [],
@@ -14,13 +14,13 @@
   },
   {
     "ca": null,
-    "deriver": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
+    "deriver": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar.drv",
     "narHash": "sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc=",
     "narSize": 34878,
-    "path": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
+    "path": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
     "references": [
-      "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar",
-      "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3q-foo"
+      "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3o-bar",
+      "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3o-foo"
     ],
     "registrationTime": 23423,
     "signatures": [],

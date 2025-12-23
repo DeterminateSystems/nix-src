@@ -18,6 +18,6 @@ It always prints the command to standard output.
 
   ```console
   # nix formatter build
-  /nix/store/cb9w44vkhk2x4adfxwgdkkf5gjmm856j-treefmt/bin/treefmt
+  /nix/store/cb9w44vkhk2x4adfxwgdkkf5gjmm856o-treefmt/bin/treefmt
   ```
 )""

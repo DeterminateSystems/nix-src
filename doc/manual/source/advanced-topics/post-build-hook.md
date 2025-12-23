@@ -93,12 +93,12 @@ Build any derivation, for example:
 ```console
 $ nix-build --expr '(import <nixpkgs> {}).writeText "example" (builtins.toString builtins.currentTime)'
 this derivation will be built:
-  /nix/store/s4pnfbkalzy5qz57qs6yybna8wylkig6-example.drv
-building '/nix/store/s4pnfbkalzy5qz57qs6yybna8wylkig6-example.drv'...
+  /nix/store/s4pnfbkalzy5qz57qs6yybna8wylkigo-example.drv
+building '/nix/store/s4pnfbkalzy5qz57qs6yybna8wylkigo-example.drv'...
 running post-build-hook '/home/grahamc/projects/github.com/NixOS/nix/post-hook.sh'...
-post-build-hook: Signing paths /nix/store/ibcyipq5gf91838ldx40mjsp0b8w9n18-example
-post-build-hook: Uploading paths /nix/store/ibcyipq5gf91838ldx40mjsp0b8w9n18-example
-/nix/store/ibcyipq5gf91838ldx40mjsp0b8w9n18-example
+post-build-hook: Signing paths /nix/store/ibcyipq5gf91838ldx40mjsp0b8w9n1o-example
+post-build-hook: Uploading paths /nix/store/ibcyipq5gf91838ldx40mjsp0b8w9n1o-example
+/nix/store/ibcyipq5gf91838ldx40mjsp0b8w9n1o-example
 ```
 
 Then delete the path from the store, and try substituting it from the
@@ -106,16 +106,16 @@ binary cache:
 
 ```console
 $ rm ./result
-$ nix-store --delete /nix/store/ibcyipq5gf91838ldx40mjsp0b8w9n18-example
+$ nix-store --delete /nix/store/ibcyipq5gf91838ldx40mjsp0b8w9n1o-example
 ```
 
 Now, copy the path back from the cache:
 
 ```console
-$ nix-store --realise /nix/store/ibcyipq5gf91838ldx40mjsp0b8w9n18-example
-copying path '/nix/store/m8bmqwrch6l3h8s0k3d673xpmipcdpsa-example from 's3://example-nix-cache'...
+$ nix-store --realise /nix/store/ibcyipq5gf91838ldx40mjsp0b8w9n1o-example
+copying path '/nix/store/m8bmqwrch6l3h8s0k3d673xpmipcdpso-example from 's3://example-nix-cache'...
 warning: you did not specify '--add-root'; the result might be removed by the garbage collector
-/nix/store/m8bmqwrch6l3h8s0k3d673xpmipcdpsa-example
+/nix/store/m8bmqwrch6l3h8s0k3d673xpmipcdpso-example
 ```
 
 # Conclusion

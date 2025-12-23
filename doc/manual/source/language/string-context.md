@@ -34,12 +34,12 @@ String context elements come in different forms:
     > [`builtins.storePath`] creates a string with a single constant string context element:
     >
     > ```nix
-    > builtins.getContext (builtins.storePath "/nix/store/wkhdf9jinag5750mqlax6z2zbwhqb76n-hello-2.10")
+    > builtins.getContext (builtins.storePath "/nix/store/wkhdf9jinag5750mqlax6z2zbwhqb76o-hello-2.10")
     > ```
     > evaluates to
     > ```nix
     > {
-    >   "/nix/store/wkhdf9jinag5750mqlax6z2zbwhqb76n-hello-2.10" = {
+    >   "/nix/store/wkhdf9jinag5750mqlax6z2zbwhqb76o-hello-2.10" = {
     >     path = true;
     >   };
     > }
@@ -59,13 +59,13 @@ String context elements come in different forms:
     > ```nix
     > builtins.getContext
     >   (builtins.outputOf
-    >     (builtins.storePath "/nix/store/fvchh9cvcr7kdla6n860hshchsba305w-hello-2.12.drv")
+    >     (builtins.storePath "/nix/store/fvchh9cvcr7kdla6n860hshchsba305o-hello-2.12.drv")
     >     "out")
     > ```
     > evaluates to
     > ```nix
     > {
-    >   "/nix/store/fvchh9cvcr7kdla6n860hshchsba305w-hello-2.12.drv" = {
+    >   "/nix/store/fvchh9cvcr7kdla6n860hshchsba305o-hello-2.12.drv" = {
     >     outputs = [ "out" ];
     >   };
     > }
@@ -88,12 +88,12 @@ String context elements come in different forms:
   > ```nix
   > builtins.getContext
   >   (builtins.addDrvOutputDependencies
-  >     (builtins.storePath "/nix/store/fvchh9cvcr7kdla6n860hshchsba305w-hello-2.12.drv"))
+  >     (builtins.storePath "/nix/store/fvchh9cvcr7kdla6n860hshchsba305o-hello-2.12.drv"))
   > ```
   > evaluates to
   > ```nix
   > {
-  >   "/nix/store/fvchh9cvcr7kdla6n860hshchsba305w-hello-2.12.drv" = {
+  >   "/nix/store/fvchh9cvcr7kdla6n860hshchsba305o-hello-2.12.drv" = {
   >     allOutputs = true;
   >   };
   > }

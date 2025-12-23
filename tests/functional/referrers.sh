@@ -10,7 +10,7 @@ clearStore
 
 max=500
 
-reference=$NIX_STORE_DIR/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bla
+reference=$NIX_STORE_DIR/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaao-bla
 touch "$reference"
 (echo "$reference" && echo && echo 0) | nix-store --register-validity
 
@@ -19,9 +19,9 @@ echo "making registration..."
 set +x
 # shellcheck disable=SC2004
 for ((n = 0; n < $max; n++)); do
-    storePath=$NIX_STORE_DIR/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-$n
+    storePath=$NIX_STORE_DIR/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaao-$n
     echo -n > "$storePath"
-    ref2=$NIX_STORE_DIR/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-$((n+1))
+    ref2=$NIX_STORE_DIR/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaao-$((n+1))
     if test $((n+1)) = $max; then
         ref2=$reference
     fi

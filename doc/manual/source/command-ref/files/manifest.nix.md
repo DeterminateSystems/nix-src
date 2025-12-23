@@ -108,15 +108,15 @@ Here is an example of how this file might look like after installing `hello` fro
       "i686-windows"
     ];
     position =
-      "/nix/store/7niq32w715567hbph0q13m5lqna64c1s-nixos-unstable.tar.gz/nixos-unstable.tar.gz/pkgs/applications/misc/hello/default.nix:34";
+      "/nix/store/7niq32w715567hbph0q13m5lqna64c1o-nixos-unstable.tar.gz/nixos-unstable.tar.gz/pkgs/applications/misc/hello/default.nix:34";
     unfree = false;
     unsupported = false;
   };
   name = "hello-2.12.1";
   out = {
-    outPath = "/nix/store/260q5867crm1xjs4khgqpl6vr9kywql1-hello-2.12.1";
+    outPath = "/nix/store/260q5867crm1xjs4khgqpl6vr9kywqlo-hello-2.12.1";
   };
-  outPath = "/nix/store/260q5867crm1xjs4khgqpl6vr9kywql1-hello-2.12.1";
+  outPath = "/nix/store/260q5867crm1xjs4khgqpl6vr9kywqlo-hello-2.12.1";
   outputs = [ "out" ];
   system = "x86_64-linux";
   type = "derivation";

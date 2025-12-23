@@ -27,7 +27,7 @@ paths in the store that refer to it (i.e., depend on it).
 # Example
 
 ```console
-$ nix-store --delete /nix/store/zq0h41l75vlb4z45kzgjjmsjxvcv1qk7-mesa-6.4
+$ nix-store --delete /nix/store/zq0h41l75vlb4z45kzgjjmsjxvcv1qko-mesa-6.4
 0 bytes freed (0.00 MiB)
-error: cannot delete path `/nix/store/zq0h41l75vlb4z45kzgjjmsjxvcv1qk7-mesa-6.4' since it is still alive
+error: cannot delete path `/nix/store/zq0h41l75vlb4z45kzgjjmsjxvcv1qko-mesa-6.4' since it is still alive
 ```
