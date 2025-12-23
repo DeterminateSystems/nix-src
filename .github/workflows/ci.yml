@@ -30,6 +30,18 @@ jobs:
       - uses: DeterminateSystems/determinate-nix-action@main
       - run: nix flake show --all-systems --json
 
+  no-store-paths-in-source:
+    runs-on: UbuntuLatest32Cores128G
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          grep  -r '/nix/store/[0123456789abcdfghijklmnpqrsvwxyz]\{32\}-' . || exit 0
+          echo "Please do not put valid store paths in the documentation or source code."
+          echo "This can cause fetching the artifact as a fixed-output derivation to fail if the store path is present in the fetching closure"
+          exit 1
+
   build_x86_64-linux:
     uses: ./.github/workflows/build.yml
     with:
@@ -78,6 +90,7 @@ jobs:
       - build_x86_64-linux
       - build_aarch64-linux
       - build_aarch64-darwin
+      - no-store-paths-in-source
     if: ${{ always() }}
     steps:
       - run: "true"
