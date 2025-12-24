@@ -15,7 +15,7 @@ R"(
   nixbld11  3535658    0.0s          └───/nix/store/8adzgnxs3s0pbj22qhk9zjxi1fqmz3xv-gcc-14.3.0/bin/g++ -fPIC -fstack-clash-protection -O2 -U_
   nixbld1   3534377    1.8s  /nix/store/nh2dx9cqcy9lw4d4rvd0dbsflwdsbzdy-patchelf-0.18.0.drv (wall=5s)
   nixbld1   3534377    1.8s  └───bash -e /nix/store/v6x3cs394jgqfbi0a42pam708flxaphh-default-builder.sh
-  nixbld1   3535074    0.0s      └───/nix/store/0irlcqx2n3qm6b1pc9rsd2i8qpvcccaj-bash-5.2p37/bin/bash ./configure --disable-dependency-trackin
+  nixbld1   3535074    0.0s      └───/nix/store/21ymxxap3y8hb9ijcfah8ani9cjpv8m6-bash-5.2p37/bin/bash ./configure --disable-dependency-trackin
   ```
 
 # Description
