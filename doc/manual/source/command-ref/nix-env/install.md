@@ -231,7 +231,7 @@ $ nix-env --file '<nixpkgs>' --install --attr hello --dry-run
 (dry run; not doing anything)
 installing ‘hello-2.10’
 this path will be fetched (0.04 MiB download, 0.19 MiB unpacked):
-  /nix/store/wkhdf9jinag5750mqlax6z2zbwhqb76n-hello-2.10
+  /nix/store/ikwkxz4wwlp2g1428n7dy729cg1d9hin-hello-2.10
   ...
 ```
 
