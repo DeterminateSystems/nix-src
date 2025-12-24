@@ -7,7 +7,7 @@ R""(
 
   ```console
   # nix why-depends nixpkgs#hello nixpkgs#glibc
-  /nix/store/v5sv61sszx301i0x6xysaqzla09nksnd-hello-2.10
+  /nix/store/10l19qifk7hjjq47px8m2prqk1gv4isy-hello-2.10
   └───bin/hello: …...................../nix/store/kmmr0ggkywxvnad4z1chqb6lsxi6pqgc-glibc-2.32/lib/ld-linux-x86-64.…
       → /nix/store/kmmr0ggkywxvnad4z1chqb6lsxi6pqgc-glibc-2.32
   ```

@@ -21,7 +21,7 @@ R""(
   ```console
   # nix build nixpkgs#hello nixpkgs#cowsay
   # ls -l result*
-  lrwxrwxrwx 1 … result -> /nix/store/v5sv61sszx301i0x6xysaqzla09nksnd-hello-2.10
+  lrwxrwxrwx 1 … result -> /nix/store/10l19qifk7hjjq47px8m2prqk1gv4isy-hello-2.10
   lrwxrwxrwx 1 … result-1 -> /nix/store/frzgk3v1ycnarpfc2rkynravng27a86d-cowsay-3.03+dfsg2
   ```
 
@@ -29,7 +29,7 @@ R""(
 
   ```console
   # nix build nixpkgs#hello --print-out-paths
-  /nix/store/v5sv61sszx301i0x6xysaqzla09nksnd-hello-2.10
+  /nix/store/10l19qifk7hjjq47px8m2prqk1gv4isy-hello-2.10
   ```
 
 * Build a specific output:

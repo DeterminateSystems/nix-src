@@ -128,7 +128,7 @@ If *attrpath* begins with `.` then no prefixes or defaults are attempted. This a
 
 ### Store path
 
-Example: `/nix/store/v5sv61sszx301i0x6xysaqzla09nksnd-hello-2.10`
+Example: `/nix/store/10l19qifk7hjjq47px8m2prqk1gv4isy-hello-2.10`
 
 These are paths inside the Nix store, or symlinks that resolve to a path in the Nix store.
 

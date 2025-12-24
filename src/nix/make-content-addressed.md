@@ -7,7 +7,7 @@ R""(
   ```console
   # nix store make-content-addressed nixpkgs#hello
   …
-  rewrote '/nix/store/v5sv61sszx301i0x6xysaqzla09nksnd-hello-2.10' to '/nix/store/5skmmcb9svys5lj3kbsrjg7vf2irid63-hello-2.10'
+  rewrote '/nix/store/10l19qifk7hjjq47px8m2prqk1gv4isy-hello-2.10' to '/nix/store/5skmmcb9svys5lj3kbsrjg7vf2irid63-hello-2.10'
   ```
 
   Since the resulting paths are content-addressed, they are always
