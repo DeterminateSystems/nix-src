@@ -22,7 +22,7 @@ R""(
   # nix build nixpkgs#hello nixpkgs#cowsay
   # ls -l result*
   lrwxrwxrwx 1 … result -> /nix/store/v5sv61sszx301i0x6xysaqzla09nksnd-hello-2.10
-  lrwxrwxrwx 1 … result-1 -> /nix/store/rkfrm0z6x6jmi7d3gsmma4j53h15mg33-cowsay-3.03+dfsg2
+  lrwxrwxrwx 1 … result-1 -> /nix/store/frzgk3v1ycnarpfc2rkynravng27a86d-cowsay-3.03+dfsg2
   ```
 
 * Build GNU Hello and print the resulting store path.
@@ -89,7 +89,7 @@ R""(
   already exist:
 
   ```console
-  # nix build /nix/store/rkfrm0z6x6jmi7d3gsmma4j53h15mg33-cowsay-3.03+dfsg2
+  # nix build /nix/store/frzgk3v1ycnarpfc2rkynravng27a86d-cowsay-3.03+dfsg2
   ```
 
 # Description
