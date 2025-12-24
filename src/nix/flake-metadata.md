@@ -40,7 +40,7 @@ R""(
       "type": "indirect"
     },
     "originalUrl": "flake:dwarffs",
-    "path": "/nix/store/hang3792qwdmm2n0d9nsrs5n6bsws6kv-source",
+    "path": "/nix/store/l06r23gw4psl1f547il2hbnwnxaplbaz-source",
     "resolved": {
       "owner": "edolstra",
       "repo": "dwarffs",
