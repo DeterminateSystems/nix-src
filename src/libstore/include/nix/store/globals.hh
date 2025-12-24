@@ -1124,7 +1124,7 @@ public:
               `/nix/store/zf5lbh336mnzf1nlswdn11g4n2m8zh3g-bash-4.4-p23-dev
               /nix/store/rjxwxwv1fpn9wa2x5ssk5phzwlcv4mna-bash-4.4-p23-doc
               /nix/store/c5cxjywi66iwn9dcx5yvwjkvl559ay6p-bash-4.4-p23-info
-              /nix/store/r7fng3kk3vlpdlh2idnrbn37vh4imlj2-bash-4.4-p23-man
+              /nix/store/scz72lskj03ihkcn42ias5mlp4i4gr1k-bash-4.4-p23-man
               /nix/store/xfghy8ixrhz3kyy6p724iv3cxji088dx-bash-4.4-p23`.
         )"};
 
