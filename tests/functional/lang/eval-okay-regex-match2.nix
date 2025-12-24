@@ -155,7 +155,7 @@ builtins.map
     ]
     [
       ''.*pypy.*''
-      ''/nix/store/8w718rm43x7z73xhw9d6vh8s4snrq67h-python3-3.12.10/bin/python3.12''
+      ''/nix/store/iqlzcyc1z7nv804n9wc5k5i0l180wnbs-python3-3.12.10/bin/python3.12''
     ]
     [
       ''(.*/)?\.\.(/.*)?''
@@ -367,7 +367,7 @@ builtins.map
     ]
     [
       ''.*pypy.*''
-      ''/nix/store/8w718rm43x7z73xhw9d6vh8s4snrq67h-python3-3.12.10/bin/python3.12''
+      ''/nix/store/iqlzcyc1z7nv804n9wc5k5i0l180wnbs-python3-3.12.10/bin/python3.12''
     ]
     [
       ''(.*)\.git''
