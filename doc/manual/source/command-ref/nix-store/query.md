@@ -209,7 +209,7 @@ $ nix-store --query --tree $(nix-store --query --deriver $(which svn))
 +---/nix/store/vxnmkc8l8d2ijjha4xwhkfgx9vvc3q4c-builder.sh
 +---/nix/store/rn9776dy82n5qrgz7xbcl1iw4vfkcrkk-bash-3.0.drv
 |   +---/nix/store/x9j20hz6bln1crzn55qifk0bbsm8v5ac-bash
-|   +---/nix/store/p3srsbd8dx44v2pg6nbnszab5mcwx03v-builder.sh
+|   +---/nix/store/ajnn1mcm45wjvn0rlc22gvx2cwhjnazx-builder.sh
 ...
 ```
 
