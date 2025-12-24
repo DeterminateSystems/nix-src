@@ -184,7 +184,7 @@ operate are determined as follows:
   and likewise, using a store path to a "drv" file to specify the derivation:
 
   ```console
-  # nix build '/nix/store/gzaflydcr6sb3567hap9q6srzx8ggdgg-glibc-2.33-78.drv^dev,static'
+  # nix build '/nix/store/fpq78s2h8ffh66v2iy0q1838mhff06y8-glibc-2.33-78.drv^dev,static'
   …
   ```
 
@@ -217,7 +217,7 @@ operate are determined as follows:
   and likewise, using a store path to a "drv" file to specify the derivation:
 
   ```console
-  # nix path-info --closure-size '/nix/store/gzaflydcr6sb3567hap9q6srzx8ggdgg-glibc-2.33-78.drv^*'
+  # nix path-info --closure-size '/nix/store/fpq78s2h8ffh66v2iy0q1838mhff06y8-glibc-2.33-78.drv^*'
   …
   ```
 * If you didn't specify the desired outputs, but the derivation has an
