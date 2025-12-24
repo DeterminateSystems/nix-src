@@ -17,7 +17,7 @@ R""(
 
   ```console
   # nix why-depends --all nixpkgs#thunderbird nixpkgs#xorg.libX11
-  /nix/store/qfc8729nzpdln1h0hvi1ziclsl3m84sr-thunderbird-78.5.1
+  /nix/store/0my2p7psgdzqc5pq6dyl4ld9w6g0np58-thunderbird-78.5.1
   ├───lib/thunderbird/libxul.so: …6wrw-libxcb-1.14/lib:/nix/store/jmwiq1bb3n47a0css8b1q7lhgf7416k5-libX11-1.7.0/lib:/nix/store/ssf…
   │   → /nix/store/jmwiq1bb3n47a0css8b1q7lhgf7416k5-libX11-1.7.0
   ├───lib/thunderbird/libxul.so: …pxyc-libXt-1.2.0/lib:/nix/store/l1sv43bafhkf2iikmdw9y62aybjdhcmm-libXdamage-1.1.5/lib:/nix/store…
