@@ -203,7 +203,7 @@ To install a specific [store derivation] (typically created by
 `nix-instantiate`):
 
 ```console
-$ nix-env --install /nix/store/fibjb1bfbpm5mrsxc4mh2d8n37sxh91i-gcc-3.4.3.drv
+$ nix-env --install /nix/store/8la6y31fmm6i4wfmby6avly1wf718xnj-gcc-3.4.3.drv
 ```
 
 To install a specific output path:
