@@ -208,7 +208,7 @@ $ nix-store --query --tree $(nix-store --query --deriver $(which svn))
 /nix/store/7i5082kfb6yjbqdbiwdhhza0am2xvh6c-subversion-1.1.4.drv
 +---/nix/store/d8afh10z72n8l1cr5w42366abiblgn54-builder.sh
 +---/nix/store/fmzxmpjx2lh849ph0l36snfj9zdibw67-bash-3.0.drv
-|   +---/nix/store/570hmhmx3v57605cqg9yfvvyh0nnb8k8-bash
+|   +---/nix/store/x9j20hz6bln1crzn55qifk0bbsm8v5ac-bash
 |   +---/nix/store/p3srsbd8dx44v2pg6nbnszab5mcwx03v-builder.sh
 ...
 ```
