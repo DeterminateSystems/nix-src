@@ -10,7 +10,7 @@ R""(
   Flake attribute:    legacyPackages.x86_64-linux.gdb
   Original flake URL: flake:nixpkgs
   Locked flake URL:   github:NixOS/nixpkgs/7b38b03d76ab71bdc8dc325e3f6338d984cc35ca
-  Store paths:        /nix/store/indzcw5wvlhx6vwk7k4iq29q15chvr3d-gdb-11.1
+  Store paths:        /nix/store/i6i08pl20rh0lm46g38wk3bfnvhdl43d-gdb-11.1
 
   Name:               blender-bin
   Flake attribute:    packages.x86_64-linux.default
