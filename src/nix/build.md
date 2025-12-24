@@ -48,7 +48,7 @@ R""(
   /nix/store/vswlynn75s0bpba3vl6bi3wyzjym95yi-openssl-3.0.13-debug
   /nix/store/yg75achq89wgqn2fi3gglgsd77kjpi03-openssl-3.0.13-dev
   /nix/store/iabzsa5c73p4f10zfmf5r2qsrn0hl4lk-openssl-3.0.13-doc
-  /nix/store/gjqcvq47cmxazxga0cirspm3jywkmvfv-openssl-3.0.13-man
+  /nix/store/zqmfrpxvcll69a2lyawnpvp15zh421v2-openssl-3.0.13-man
   /nix/store/l3nlzki957anyy7yb25qvwk6cqrnvb67-openssl-3.0.13
   ```
 
