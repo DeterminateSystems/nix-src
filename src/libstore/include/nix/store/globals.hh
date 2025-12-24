@@ -1125,7 +1125,7 @@ public:
               /nix/store/vch71bhyi5akr5zs40k8h2wqxx69j80l-bash-4.4-p23-doc
               /nix/store/c5cxjywi66iwn9dcx5yvwjkvl559ay6p-bash-4.4-p23-info
               /nix/store/scz72lskj03ihkcn42ias5mlp4i4gr1k-bash-4.4-p23-man
-              /nix/store/xfghy8ixrhz3kyy6p724iv3cxji088dx-bash-4.4-p23`.
+              /nix/store/a724znygmd1cac856j3gfsyvih3lw07j-bash-4.4-p23`.
         )"};
 
     Setting<unsigned int> downloadSpeed{
