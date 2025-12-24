@@ -453,11 +453,11 @@ builtins.map
     ]
     [
       ''.*llvm-tblgen.*''
-      ''-DLLVM_TABLEGEN:STRING=/nix/store/xp9hkw8nsw9p81d69yvcg1yr6f7vh71c-llvm-tblgen-18.1.8/bin/llvm-tblgen''
+      ''-DLLVM_TABLEGEN:STRING=/nix/store/sclapmhdj6i9h02y7s5a630kfy55v9h1-llvm-tblgen-18.1.8/bin/llvm-tblgen''
     ]
     [
       ''.*llvm-tblgen.*''
-      ''-DLLVM_TABLEGEN_EXE:STRING=/nix/store/xp9hkw8nsw9p81d69yvcg1yr6f7vh71c-llvm-tblgen-18.1.8/bin/llvm-tblgen''
+      ''-DLLVM_TABLEGEN_EXE:STRING=/nix/store/sclapmhdj6i9h02y7s5a630kfy55v9h1-llvm-tblgen-18.1.8/bin/llvm-tblgen''
     ]
     [
       ''(.+)-b(.+)''
