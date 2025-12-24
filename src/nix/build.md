@@ -46,7 +46,7 @@ R""(
   # nix build "nixpkgs#openssl^*" --print-out-paths
   /nix/store/ah1slww3lfsj02w563wjf1xcz5fayj36-openssl-3.0.13-bin
   /nix/store/vswlynn75s0bpba3vl6bi3wyzjym95yi-openssl-3.0.13-debug
-  /nix/store/yg75achq89wgqn2fi3gglgsd77kjpi03-openssl-3.0.13-dev
+  /nix/store/z71nwwni9dcxdmd3v3a7j24v70c7v7z3-openssl-3.0.13-dev
   /nix/store/iabzsa5c73p4f10zfmf5r2qsrn0hl4lk-openssl-3.0.13-doc
   /nix/store/zqmfrpxvcll69a2lyawnpvp15zh421v2-openssl-3.0.13-man
   /nix/store/l3nlzki957anyy7yb25qvwk6cqrnvb67-openssl-3.0.13
