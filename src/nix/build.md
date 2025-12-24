@@ -37,7 +37,7 @@ R""(
   ```console
   # nix build nixpkgs#glibc.dev
   # ls -ld ./result-dev
-  lrwxrwxrwx 1 … ./result-dev -> /nix/store/dkm3gwl0xrx0wrw6zi5x3px3lpgjhlw4-glibc-2.32-dev
+  lrwxrwxrwx 1 … ./result-dev -> /nix/store/hb4lb9n3gv855llky72hrs4pglpxq70m-glibc-2.32-dev
   ```
 
 * Build all outputs:
