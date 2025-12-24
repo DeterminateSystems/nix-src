@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.15.0.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.15.1.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -148,3 +148,9 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 * Determinate Nix has a builtin function `builtins.filterAttrs`. [DeterminateSystems/nix-src#291](https://github.com/DeterminateSystems/nix-src/pull/291)
 
 * `builtins.fetchTree` implicitly sets `__final = true` when a `narHash` is supplied. This allows the tree to be substituted. [DeterminateSystems/nix-src#297](https://github.com/DeterminateSystems/nix-src/pull/297)
+
+<!-- Determinate Nix version 3.15.1 -->
+
+* Bring back the free alpha by @grahamc in [DeterminateSystems/nix-src#305](https://github.com/DeterminateSystems/nix-src/pull/305)
+
+* Replace substitutable hashes with unlilkey to substitute hashes by @grahamc in [DeterminateSystems/nix-src#306](https://github.com/DeterminateSystems/nix-src/pull/306)
