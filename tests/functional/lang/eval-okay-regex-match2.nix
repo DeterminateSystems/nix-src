@@ -199,7 +199,7 @@ builtins.map
     ]
     [
       ''.*-polly.*''
-      ''/nix/store/0yxfdnfxbzczjxhgdpac81jnas194wfj-gnu-install-dirs.patch''
+      ''/nix/store/21yv6cysn8axxjyh7dbsnnmbp9nprg9i-gnu-install-dirs.patch''
     ]
     [
       ''.*-polly.*''
