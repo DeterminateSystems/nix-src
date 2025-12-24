@@ -16,7 +16,7 @@ R""(
   Flake attribute:    packages.x86_64-linux.default
   Original flake URL: flake:blender-bin
   Locked flake URL:   github:edolstra/nix-warez/91f2ffee657bf834e4475865ae336e2379282d34?dir=blender
-  Store paths:        /nix/store/i798sxl3j40wpdi1rgf391id1b5klw7g-blender-bin-3.1.2
+  Store paths:        /nix/store/rlgr8vjhcv6v2rv7ljgl0pr6g74r0cg9-blender-bin-3.1.2
   ```
 
   Note that you can unambiguously rebuild a package from a profile
