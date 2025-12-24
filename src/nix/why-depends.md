@@ -31,9 +31,9 @@ R""(
 
   ```console
   # nix why-depends nixpkgs#glibc nixpkgs#glibc
-  /nix/store/9df65igwjmf2wbw0gbrrgair6piqjgmi-glibc-2.31
-  └───lib/ld-2.31.so: …che       Do not use /nix/store/9df65igwjmf2wbw0gbrrgair6piqjgmi-glibc-2.31/etc/ld.so.cache.  --…
-      → /nix/store/9df65igwjmf2wbw0gbrrgair6piqjgmi-glibc-2.31
+  /nix/store/q9mknq836i0kblq8g1hm9f3cv9qda0r9-glibc-2.31
+  └───lib/ld-2.31.so: …che       Do not use /nix/store/q9mknq836i0kblq8g1hm9f3cv9qda0r9-glibc-2.31/etc/ld.so.cache.  --…
+      → /nix/store/q9mknq836i0kblq8g1hm9f3cv9qda0r9-glibc-2.31
   ```
 
 * Show why Geeqie has a build-time dependency on `systemd`:
@@ -54,7 +54,7 @@ R""(
 Nix automatically determines potential runtime dependencies between
 store paths by scanning for the *hash parts* of store paths. For
 instance, if there exists a store path
-`/nix/store/9df65igwjmf2wbw0gbrrgair6piqjgmi-glibc-2.31`, and a file
+`/nix/store/q9mknq836i0kblq8g1hm9f3cv9qda0r9-glibc-2.31`, and a file
 inside another store path contains the string `9df65igw…`, then the
 latter store path *refers* to the former, and thus might need it at
 runtime. Nix always maintains the existence of the transitive closure
