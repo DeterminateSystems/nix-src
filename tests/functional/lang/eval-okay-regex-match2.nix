@@ -203,7 +203,7 @@ builtins.map
     ]
     [
       ''.*-polly.*''
-      ''/nix/store/jh2pda7psaasq85b2rrigmkjdbl8d0a1-llvm-lit-cfg-add-libs-to-dylib-path.patch''
+      ''/nix/store/96dqnv9v20fi7glzsah6qx5zypbkrwsh-llvm-lit-cfg-add-libs-to-dylib-path.patch''
     ]
     [
       ''.*-polly.*''
