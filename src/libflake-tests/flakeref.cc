@@ -17,8 +17,6 @@ namespace nix {
 
 TEST(parseFlakeRef, path)
 {
-    experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
-
     fetchers::Settings fetchSettings;
 
     {
@@ -67,8 +65,6 @@ TEST(parseFlakeRef, path)
 
 TEST(parseFlakeRef, GitArchiveInput)
 {
-    experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
-
     fetchers::Settings fetchSettings;
 
     {
@@ -111,7 +107,6 @@ class InputFromURLTest : public ::testing::WithParamInterface<InputFromURLTestCa
 
 TEST_P(InputFromURLTest, attrsAreCorrectAndRoundTrips)
 {
-    experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
     fetchers::Settings fetchSettings;
 
     const auto & testCase = GetParam();

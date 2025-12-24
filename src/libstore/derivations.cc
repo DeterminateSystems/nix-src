@@ -9,6 +9,7 @@
 #include "nix/store/common-protocol-impl.hh"
 #include "nix/util/strings-inline.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/store/async-path-writer.hh"
 
 #include <boost/container/small_vector.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
@@ -154,6 +155,20 @@ StorePath Store::writeDerivation(const Derivation & drv, RepairFlag repair)
     assert(path2 == path);
 
     return path;
+}
+
+StorePath writeDerivation(
+    Store & store, AsyncPathWriter & asyncPathWriter, const Derivation & drv, RepairFlag repair, bool readOnly)
+{
+    auto references = drv.inputSrcs;
+    for (auto & i : drv.inputDrvs.map)
+        references.insert(i.first);
+    return asyncPathWriter.addPath(
+        drv.unparse(store, false),
+        std::string(drv.name) + drvExtension,
+        references,
+        repair,
+        readOnly || settings.readOnlyMode);
 }
 
 namespace {

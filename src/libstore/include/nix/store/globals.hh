@@ -225,12 +225,8 @@ public:
           The following system types are widely used, as Nix is actively supported on these platforms:
 
           - `x86_64-linux`
-          - `x86_64-darwin`
-          - `i686-linux`
           - `aarch64-linux`
           - `aarch64-darwin`
-          - `armv6l-linux`
-          - `armv7l-linux`
 
           In general, you do not have to modify this setting.
           While you can force Nix to run a Darwin-specific `builder` executable on a Linux machine, the result would obviously be wrong.
@@ -1357,11 +1353,12 @@ public:
 
     Setting<std::string> upgradeNixStorePathUrl{
         this,
-        "https://github.com/NixOS/nixpkgs/raw/master/nixos/modules/installer/tools/nix-fallback-paths.nix",
+        "",
         "upgrade-nix-store-path-url",
         R"(
-          Used by `nix upgrade-nix`, the URL of the file that contains the
-          store paths of the latest Nix release.
+          Deprecated. This option was used to configure how `nix upgrade-nix` operated.
+
+          Using this setting has no effect. It will be removed in a future release of Determinate Nix.
         )"};
 
     Setting<uint64_t> warnLargePathThreshold{
@@ -1469,6 +1466,8 @@ std::vector<Path> getUserConfigFiles();
  * not affected by the change.
  */
 extern std::string nixVersion;
+
+extern const std::string determinateNixVersion;
 
 /**
  * @param loadConfig Whether to load configuration from `nix.conf`, `NIX_CONFIG`, etc. May be disabled for unit tests.
