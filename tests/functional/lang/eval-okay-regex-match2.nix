@@ -211,7 +211,7 @@ builtins.map
     ]
     [
       ''.*-polly.*''
-      ''/nix/store/gr73nf6sca9nyzl88x58y3qxrav04yhd-polly-lit-cfg-add-libs-to-dylib-path.patch''
+      ''/nix/store/ybagzhw2933fvgi95qgbyw6i4avahyzr-polly-lit-cfg-add-libs-to-dylib-path.patch''
     ]
     [
       ''(.*/)?\.\.(/.*)?''
