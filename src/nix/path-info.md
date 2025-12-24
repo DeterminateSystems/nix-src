@@ -14,7 +14,7 @@ R""(
 
   ```console
   # nix path-info --recursive --closure-size /run/current-system | sort -nk2
-  /nix/store/hl5xwp9kdrd1zkm0idm3kkby9q66z404-empty                                                96
+  /nix/store/zlnmjjbpv5pwwv911qp0grqi25y80wbs-empty                                                96
   /nix/store/v40fjpq45135avrmnfm8klbvdhf0dcp7-nameservers                                         112
   …
   /nix/store/539jkw9a8dyry7clcv60gk6na816j7y8-etc                                          5783255504
