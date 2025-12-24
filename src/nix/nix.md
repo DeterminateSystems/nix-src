@@ -207,7 +207,7 @@ operate are determined as follows:
 
   ```console
   # nix path-info --closure-size --eval-store auto --store https://cache.nixos.org 'nixpkgs#glibc^*'
-  /nix/store/g02b1lpbddhymmcjb923kf0l7s9nww58-glibc-2.33-123                 33208200
+  /nix/store/i2fn2mjgihz960bwa7ldab5ra5fhxznh-glibc-2.33-123                 33208200
   /nix/store/n2wnn3i47w6dbylh64hdjzgd5rrprdn8-glibc-2.33-123-bin             36142896
   /nix/store/kdgs3q6r7xdff1p7a9hnjr43xw2404z7-glibc-2.33-123-debug          155787312
   /nix/store/n4xa8h6pbmqmwnq0mmsz08l38abb06zc-glibc-2.33-123-static          42488328
