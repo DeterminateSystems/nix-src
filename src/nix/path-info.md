@@ -27,7 +27,7 @@ R""(
   ```console
   # nix path-info --recursive --size --closure-size --human-readable nixpkgs#rustc
   /nix/store/klarszqikbvf6n70581w0381zb7rlzri-ncurses-6.2-dev      386.7 KiB   69.1 MiB
-  /nix/store/0q783wnvixpqz6dxjp16nw296avgczam-libpfm-4.11.0          5.9 MiB   37.4 MiB
+  /nix/store/30rva1kafnr6fyf8y5xxlpnwixvdpv4w-libpfm-4.11.0          5.9 MiB   37.4 MiB
   …
   ```
 
