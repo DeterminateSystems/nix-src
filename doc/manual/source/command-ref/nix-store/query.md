@@ -193,7 +193,7 @@ Print the build-time dependencies of `svn`:
 $ nix-store --query --requisites $(nix-store --query --deriver $(which svn))
 /nix/store/y6qa66l9h0pw161crnlk6y16rdrcljx4-grep-2.5.1.tar.bz2.drv
 /nix/store/z716h753s97jhnzvfank2srqbljswpgm-gcc-wrapper.sh
-/nix/store/0ma7c9wsbaxahwwl04gbw3fcd806ski4-glibc-2.3.4.drv
+/nix/store/f39x0q73rjdyvzm93y9wrkfr6x39lb7f-glibc-2.3.4.drv
 ... lots of other paths ...
 ```
 
