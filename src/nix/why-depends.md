@@ -8,8 +8,8 @@ R""(
   ```console
   # nix why-depends nixpkgs#hello nixpkgs#glibc
   /nix/store/v5sv61sszx301i0x6xysaqzla09nksnd-hello-2.10
-  └───bin/hello: …...................../nix/store/9l06v7fc38c1x3r2iydl15ksgz0ysb82-glibc-2.32/lib/ld-linux-x86-64.…
-      → /nix/store/9l06v7fc38c1x3r2iydl15ksgz0ysb82-glibc-2.32
+  └───bin/hello: …...................../nix/store/kmmr0ggkywxvnad4z1chqb6lsxi6pqgc-glibc-2.32/lib/ld-linux-x86-64.…
+      → /nix/store/kmmr0ggkywxvnad4z1chqb6lsxi6pqgc-glibc-2.32
   ```
 
 * Show all files and paths in the dependency graph leading from
