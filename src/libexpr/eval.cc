@@ -61,7 +61,7 @@ namespace nix {
 /**
  * Just for doc strings. Not for regular string values.
  */
-char * allocString(size_t size)
+static char * allocString(size_t size)
 {
     char * t;
     t = (char *) GC_MALLOC_ATOMIC(size);

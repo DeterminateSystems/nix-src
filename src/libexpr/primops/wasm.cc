@@ -1,7 +1,9 @@
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval-inline.hh"
 
-#include <wasmedge/wasmedge.h>
+#include <wasmtime.hh>
+
+using namespace wasmtime;
 
 namespace nix {
 
@@ -12,18 +14,244 @@ SourcePath realisePath(
     Value & v,
     std::optional<SymlinkResolution> resolveSymlinks = SymlinkResolution::Full);
 
-// FIXME
-char * allocString(size_t size);
-
 using ValueId = uint32_t;
+
+template<typename T, typename E = Error>
+T unwrap(Result<T, E> && res)
+{
+    if (res)
+        return res.ok();
+    throw Error("wasmtime failure: %s", res.err().message());
+}
+
+static Engine & getEngine()
+{
+    static Engine engine;
+    return engine;
+}
+
+static std::span<uint8_t> string2span(std::string_view s)
+{
+    return std::span<uint8_t>((uint8_t *) s.data(), s.size());
+}
+
+static std::string_view span2string(std::span<uint8_t> s)
+{
+    return std::string_view((char *) s.data(), s.size());
+}
+
+template<typename T>
+static std::span<T> subspan(std::span<uint8_t> s, size_t len)
+{
+    assert(s.size() >= len * sizeof(T));
+    return std::span((T *) s.data(), len);
+}
 
 struct NixWasmContext
 {
     EvalState & state;
+    Engine & engine;
     SourcePath wasmPath;
     std::string functionName;
+    Module module;
+    wasmtime::Store wasmStore;
+    Instance instance;
+    Memory memory;
+
     std::vector<RootValue> values;
     std::exception_ptr ex;
+
+    NixWasmContext(EvalState & _state, SourcePath _wasmPath, std::string _functionName)
+        : state(_state)
+        , engine(getEngine())
+        , wasmPath(_wasmPath)
+        , functionName(_functionName)
+        , module(unwrap(Module::compile(engine, string2span(wasmPath.readFile()))))
+        , wasmStore(engine)
+        , instance(({
+            Linker linker(engine);
+
+            unwrap(linker.func_wrap("env", "warn", [this](Caller caller, uint32_t ptr, uint32_t len) {
+                nix::warn(
+                    "'%s' function '%s': %s",
+                    wasmPath,
+                    functionName,
+                    span2string(memory.data(caller).subspan(ptr, len)));
+            }));
+
+            unwrap(linker.func_wrap("env", "get_type", [this](Caller caller, ValueId valueId) -> uint32_t {
+                auto & value = **values.at(valueId);
+                state.forceValue(value, noPos);
+                auto t = value.type();
+                return t == nInt        ? 1
+                       : t == nFloat    ? 2
+                       : t == nBool     ? 3
+                       : t == nString   ? 4
+                       : t == nPath     ? 5
+                       : t == nNull     ? 6
+                       : t == nAttrs    ? 7
+                       : t == nList     ? 8
+                       : t == nFunction ? 9
+                                        : []() -> int { throw Error("unsupported type"); }();
+            }));
+
+            unwrap(linker.func_wrap("env", "make_int", [this](Caller caller, int64_t n) -> ValueId {
+                auto [valueId, value] = allocValue();
+                value.mkInt(n);
+                return valueId;
+            }));
+
+            unwrap(linker.func_wrap("env", "get_int", [this](Caller caller, ValueId valueId) -> int64_t {
+                return state.forceInt(**values.at(valueId), noPos, "while evaluating a value from WASM").value;
+            }));
+
+            unwrap(linker.func_wrap("env", "make_float", [this](Caller caller, double x) -> ValueId {
+                auto [valueId, value] = allocValue();
+                value.mkFloat(x);
+                return valueId;
+            }));
+
+            unwrap(linker.func_wrap("env", "get_float", [this](Caller caller, ValueId valueId) -> double {
+                return state.forceFloat(**values.at(valueId), noPos, "while evaluating a value from WASM");
+            }));
+
+            unwrap(linker.func_wrap("env", "make_string", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
+                auto [valueId, value] = allocValue();
+                value.mkString(span2string(memory.data(caller).subspan(ptr, len)), state.mem);
+                return valueId;
+            }));
+
+            unwrap(linker.func_wrap("env", "get_string_length", [this](Caller caller, ValueId valueId) -> uint32_t {
+                return state.forceString(**values.at(valueId), noPos, "while getting a string length from WASM").size();
+            }));
+
+            unwrap(linker.func_wrap(
+                "env", "copy_string", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
+                    auto s = state.forceString(**values.at(valueId), noPos, "while evaluating a value from WASM");
+                    auto buf = memory.data(caller).subspan(ptr, len);
+                    assert(buf.size() == s.size());
+                    memcpy(buf.data(), s.data(), s.size());
+                }));
+
+            unwrap(linker.func_wrap("env", "make_bool", [this](Caller caller, int32_t b) -> ValueId {
+                return addValue(state.getBool(b));
+            }));
+
+            unwrap(linker.func_wrap("env", "get_bool", [this](Caller caller, ValueId valueId) -> int32_t {
+                return state.forceBool(**values.at(valueId), noPos, "while evaluating a value from WASM");
+            }));
+
+            unwrap(linker.func_wrap(
+                "env", "make_null", [this](Caller caller) -> ValueId { return addValue(&Value::vNull); }));
+
+            unwrap(linker.func_wrap("env", "make_list", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
+                auto vs = subspan<ValueId>(memory.data(caller).subspan(ptr), len);
+
+                auto [valueId, value] = allocValue();
+
+                auto list = state.buildList(len);
+                for (const auto & [n, v] : enumerate(list))
+                    v = *values.at(vs[n]); // FIXME: endianness
+                value.mkList(list);
+
+                return valueId;
+            }));
+
+            unwrap(linker.func_wrap("env", "get_list_length", [this](Caller caller, ValueId valueId) -> uint32_t {
+                auto & value = **values.at(valueId);
+                state.forceList(value, noPos, "while getting a list length from WASM");
+                return value.listSize();
+            }));
+
+            unwrap(linker.func_wrap(
+                "env", "copy_list", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
+                    auto & value = **values.at(valueId);
+                    state.forceList(value, noPos, "while getting a list length from WASM");
+
+                    assert((size_t) len == value.listSize());
+
+                    auto out = subspan<ValueId>(memory.data(caller).subspan(ptr), len);
+
+                    for (const auto & [n, elem] : enumerate(value.listView()))
+                        out[n] = addValue(elem);
+                }));
+
+            unwrap(
+                linker.func_wrap("env", "make_attrset", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
+                    auto mem = memory.data(caller);
+
+                    struct Attr
+                    {
+                        // FIXME: endianness
+                        uint32_t attrNamePtr;
+                        uint32_t attrNameLen;
+                        ValueId value;
+                    };
+
+                    auto attrs = subspan<Attr>(mem.subspan(ptr), len);
+
+                    auto [valueId, value] = allocValue();
+                    auto builder = state.buildBindings(len);
+                    for (auto & attr : attrs)
+                        builder.insert(
+                            state.symbols.create(span2string(mem.subspan(attr.attrNamePtr, attr.attrNameLen))),
+                            *values.at(attr.value));
+                    value.mkAttrs(builder);
+
+                    return valueId;
+                }));
+
+            unwrap(linker.func_wrap("env", "get_attrset_length", [this](Caller caller, ValueId valueId) -> int32_t {
+                auto & value = **values.at(valueId);
+                state.forceAttrs(value, noPos, "while getting an attrset length from WASM");
+                return value.attrs()->size();
+            }));
+
+            unwrap(linker.func_wrap(
+                "env", "copy_attrset", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
+                    auto & value = **values.at(valueId);
+                    state.forceAttrs(value, noPos, "while copying an attrset into WASM");
+
+                    assert((size_t) len == value.attrs()->size());
+
+                    // FIXME: endianness.
+                    struct Attr
+                    {
+                        ValueId value;
+                        uint32_t nameLen;
+                    };
+
+                    auto buf = subspan<Attr>(memory.data(caller).subspan(ptr), len);
+
+                    for (const auto & [n, attr] : enumerate(*value.attrs())) {
+                        buf[n].value = addValue(attr.value);
+                        buf[n].nameLen = state.symbols[attr.name].size();
+                    }
+                }));
+
+            unwrap(linker.func_wrap(
+                "env",
+                "copy_attrname",
+                [this](Caller caller, ValueId valueId, uint32_t attrIdx, uint32_t ptr, uint32_t len) {
+                    auto & value = **values.at(valueId);
+                    state.forceAttrs(value, noPos, "while copying an attr name into WASM");
+
+                    auto & attrs = *value.attrs();
+
+                    assert((size_t) attrIdx < attrs.size());
+
+                    std::string_view name = state.symbols[attrs[attrIdx].name];
+
+                    assert((size_t) len == name.size());
+
+                    memcpy(memory.data(caller).subspan(ptr, len).data(), name.data(), name.size());
+                }));
+
+            unwrap(linker.instantiate(wasmStore, module));
+        }))
+        , memory(std::get<Memory>(*instance.get(wasmStore, "memory")))
+    {
+    }
 
     ValueId addValue(Value * v)
     {
@@ -40,498 +268,22 @@ struct NixWasmContext
     }
 };
 
-enum struct WasmUserError : uint16_t {
-    Exception = 1,
-};
-
-struct FunCtx
-{
-    NixWasmContext & nixCtx;
-    std::string funName;
-    void (*fun)(
-        NixWasmContext & nixCtx,
-        const WasmEdge_CallingFrameContext * callFrameCtx,
-        const WasmEdge_Value * in,
-        WasmEdge_Value * out);
-};
-
-static WasmEdge_Result wrapHostFun(
-    void * _funCtx, const WasmEdge_CallingFrameContext * callFrameCtx, const WasmEdge_Value * in, WasmEdge_Value * out)
-{
-    auto & funCtx(*(FunCtx *) _funCtx);
-    try {
-        funCtx.fun(funCtx.nixCtx, callFrameCtx, in, out);
-        return WasmEdge_Result_Success;
-    } catch (Error & e) {
-        e.addTrace(funCtx.nixCtx.state.positions[noPos], "while calling the WASM host function '%s'", funCtx.funName);
-        funCtx.nixCtx.ex = std::current_exception();
-        return WasmEdge_ResultGen(WasmEdge_ErrCategory_UserLevelError, (uint32_t) WasmUserError::Exception);
-    } catch (...) {
-        funCtx.nixCtx.ex = std::current_exception();
-        return WasmEdge_ResultGen(WasmEdge_ErrCategory_UserLevelError, (uint32_t) WasmUserError::Exception);
-    }
-}
-
-static void wasm_warn(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    int32_t ptr = WasmEdge_ValueGetI32(in[0]);
-    int32_t len = WasmEdge_ValueGetI32(in[1]);
-
-    auto memCtx = WasmEdge_CallingFrameGetMemoryInstance(callFrameCtx, 0);
-
-    std::vector<uint8_t> buf;
-    buf.resize(len);
-    WasmEdge_Result res = WasmEdge_MemoryInstanceGetData(memCtx, buf.data(), ptr, len);
-    if (!WasmEdge_ResultOK(res))
-        throw Error("unable to copy bytes from WASM memory: %s", WasmEdge_ResultGetMessage(res));
-
-    warn(
-        "'%s' function '%s': %s",
-        nixCtx.wasmPath,
-        nixCtx.functionName,
-        std::string_view((char *) buf.data(), buf.size()));
-}
-
-static void wasm_get_type(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    auto & value = **nixCtx.values.at(valueId);
-    nixCtx.state.forceValue(value, noPos);
-    auto t = value.type();
-    out[0] = WasmEdge_ValueGenI64(
-        t == nInt        ? 1
-        : t == nFloat    ? 2
-        : t == nBool     ? 3
-        : t == nString   ? 4
-        : t == nPath     ? 5
-        : t == nNull     ? 6
-        : t == nAttrs    ? 7
-        : t == nList     ? 8
-        : t == nFunction ? 9
-                         : []() -> int { throw Error("unsupported type"); }());
-}
-
-static void wasm_make_int(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    auto n = WasmEdge_ValueGetI64(in[0]);
-    auto [valueId, value] = nixCtx.allocValue();
-    value.mkInt(n);
-    out[0] = WasmEdge_ValueGenI32(valueId);
-}
-
-static void wasm_get_int(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    auto & value = **nixCtx.values.at(valueId);
-    auto n = nixCtx.state.forceInt(value, noPos, "while evaluating a value from WASM");
-    out[0] = WasmEdge_ValueGenI64(n.value);
-}
-
-static void wasm_make_float(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    auto n = WasmEdge_ValueGetF64(in[0]);
-    auto [valueId, value] = nixCtx.allocValue();
-    value.mkFloat(n);
-    out[0] = WasmEdge_ValueGenI32(valueId);
-}
-
-static void wasm_get_float(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    auto & value = **nixCtx.values.at(valueId);
-    auto n = nixCtx.state.forceFloat(value, noPos, "while evaluating a value from WASM");
-    out[0] = WasmEdge_ValueGenF64(n);
-}
-
-static void wasm_make_string(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    int32_t ptr = WasmEdge_ValueGetI32(in[0]);
-    int32_t len = WasmEdge_ValueGetI32(in[1]);
-
-    auto memCtx = WasmEdge_CallingFrameGetMemoryInstance(callFrameCtx, 0);
-
-    auto s = allocString(len + 1);
-    s[len] = 0;
-
-    WasmEdge_Result res = WasmEdge_MemoryInstanceGetData(memCtx, (uint8_t *) s, ptr, len);
-    if (!WasmEdge_ResultOK(res))
-        throw Error("unable to copy bytes from WASM memory: %s", WasmEdge_ResultGetMessage(res));
-
-    auto [valueId, value] = nixCtx.allocValue();
-    value.mkString(s, nixCtx.state.mem);
-
-    out[0] = WasmEdge_ValueGenI32(valueId);
-}
-
-static void wasm_get_string_length(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    auto & value = nixCtx.values.at(valueId);
-    auto s = nixCtx.state.forceString(**value, noPos, "while getting a string length from WASM");
-    out[0] = WasmEdge_ValueGenI64(s.size());
-}
-
-static void wasm_copy_string(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    int32_t ptr = WasmEdge_ValueGetI32(in[1]);
-    int32_t len = WasmEdge_ValueGetI32(in[2]);
-
-    auto & value = **nixCtx.values.at(valueId);
-
-    auto s = nixCtx.state.forceString(value, noPos, "while evaluating a value from WASM");
-
-    assert((size_t) len == s.size());
-
-    auto memCtx = WasmEdge_CallingFrameGetMemoryInstance(callFrameCtx, 0);
-
-    auto res = WasmEdge_MemoryInstanceSetData(memCtx, (const uint8_t *) s.data(), ptr, len);
-    if (!WasmEdge_ResultOK(res))
-        throw Error("unable to copy bytes to WASM memory: %s", WasmEdge_ResultGetMessage(res));
-}
-
-static void wasm_make_bool(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    bool b = WasmEdge_ValueGetI32(in[0]);
-    out[0] = WasmEdge_ValueGenI32(nixCtx.addValue(nixCtx.state.getBool(b)));
-}
-
-static void wasm_get_bool(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    auto & value = **nixCtx.values.at(valueId);
-    out[0] = WasmEdge_ValueGenI32(nixCtx.state.forceBool(value, noPos, "while evaluating a value from WASM") ? 1 : 0);
-}
-
-static void wasm_make_null(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    out[0] = WasmEdge_ValueGenI32(nixCtx.addValue(&Value::vNull));
-}
-
-static void wasm_make_list(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    int32_t ptr = WasmEdge_ValueGetI32(in[0]);
-    int32_t len = WasmEdge_ValueGetI32(in[1]);
-
-    std::vector<ValueId> vs(len);
-
-    auto memCtx = WasmEdge_CallingFrameGetMemoryInstance(callFrameCtx, 0);
-
-    if (len) {
-        WasmEdge_Result res = WasmEdge_MemoryInstanceGetData(memCtx, (uint8_t *) vs.data(), ptr, len * sizeof(ValueId));
-        if (!WasmEdge_ResultOK(res))
-            throw Error("unable to copy bytes from WASM memory: %s", WasmEdge_ResultGetMessage(res));
-    }
-
-    auto [valueId, value] = nixCtx.allocValue();
-    auto list = nixCtx.state.buildList(len);
-    for (const auto & [n, v] : enumerate(list))
-        v = *nixCtx.values.at(vs[n]);
-    value.mkList(list);
-
-    out[0] = WasmEdge_ValueGenI32(valueId);
-}
-
-static void wasm_get_list_length(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    auto & value = **nixCtx.values.at(valueId);
-    nixCtx.state.forceList(value, noPos, "while getting a list length from WASM");
-    out[0] = WasmEdge_ValueGenI64(value.listSize());
-}
-
-static void wasm_copy_list(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    int32_t ptr = WasmEdge_ValueGetI32(in[1]);
-    int32_t len = WasmEdge_ValueGetI32(in[2]);
-
-    if (!len)
-        return;
-
-    auto & value = **nixCtx.values.at(valueId);
-    nixCtx.state.forceList(value, noPos, "while copying a list into WASM");
-
-    assert((size_t) len == value.listSize());
-
-    std::vector<ValueId> vs;
-    for (auto elem : value.listView())
-        // FIXME: endianness.
-        vs.push_back(nixCtx.addValue(elem));
-
-    auto memCtx = WasmEdge_CallingFrameGetMemoryInstance(callFrameCtx, 0);
-
-    auto res = WasmEdge_MemoryInstanceSetData(memCtx, (const uint8_t *) vs.data(), ptr, vs.size() * sizeof(ValueId));
-    if (!WasmEdge_ResultOK(res))
-        throw Error("unable to copy bytes to WASM memory: %s", WasmEdge_ResultGetMessage(res));
-}
-
-static void wasm_make_attrset(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    int32_t ptr = WasmEdge_ValueGetI32(in[0]);
-    int32_t len = WasmEdge_ValueGetI32(in[1]);
-
-    auto memCtx = WasmEdge_CallingFrameGetMemoryInstance(callFrameCtx, 0);
-
-    struct Attr
-    {
-        uint32_t attrNamePtr;
-        uint32_t attrNameLen;
-        ValueId value;
-    };
-
-    std::vector<Attr> attrs(len);
-
-    if (len) {
-        WasmEdge_Result res = WasmEdge_MemoryInstanceGetData(memCtx, (uint8_t *) attrs.data(), ptr, len * sizeof(Attr));
-        if (!WasmEdge_ResultOK(res))
-            throw Error("unable to copy bytes from WASM memory: %s", WasmEdge_ResultGetMessage(res));
-    }
-
-    auto [valueId, value] = nixCtx.allocValue();
-    auto builder = nixCtx.state.buildBindings(len);
-    for (auto & attr : attrs) {
-        std::string name;
-        name.resize(attr.attrNameLen, 0);
-        WasmEdge_Result res =
-            WasmEdge_MemoryInstanceGetData(memCtx, (uint8_t *) name.data(), attr.attrNamePtr, attr.attrNameLen);
-        if (!WasmEdge_ResultOK(res))
-            throw Error("unable to copy bytes from WASM memory: %s", WasmEdge_ResultGetMessage(res));
-        builder.insert(nixCtx.state.symbols.create(name), *nixCtx.values.at(attr.value));
-    }
-    value.mkAttrs(builder);
-
-    out[0] = WasmEdge_ValueGenI32(valueId);
-}
-
-static void wasm_get_attrset_length(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    auto & value = **nixCtx.values.at(valueId);
-    nixCtx.state.forceAttrs(value, noPos, "while getting an attrset length from WASM");
-    out[0] = WasmEdge_ValueGenI64(value.attrs()->size());
-}
-
-static void wasm_copy_attrset(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    int32_t ptr = WasmEdge_ValueGetI32(in[1]);
-    int32_t len = WasmEdge_ValueGetI32(in[2]);
-
-    auto & value = **nixCtx.values.at(valueId);
-    nixCtx.state.forceAttrs(value, noPos, "while copying an attrset into WASM");
-
-    assert((size_t) len == value.attrs()->size());
-
-    // FIXME: endianness.
-    struct Attr
-    {
-        ValueId value;
-        uint32_t nameLen;
-    };
-
-    std::vector<Attr> buf;
-    for (auto & attr : *value.attrs())
-        buf.push_back(
-            {.value = nixCtx.addValue(attr.value), .nameLen = (uint32_t) nixCtx.state.symbols[attr.name].size()});
-
-    auto memCtx = WasmEdge_CallingFrameGetMemoryInstance(callFrameCtx, 0);
-
-    auto res = WasmEdge_MemoryInstanceSetData(memCtx, (const uint8_t *) buf.data(), ptr, len * sizeof(Attr));
-    if (!WasmEdge_ResultOK(res))
-        throw Error("unable to copy bytes to WASM memory: %s", WasmEdge_ResultGetMessage(res));
-}
-
-static void wasm_copy_attrname(
-    NixWasmContext & nixCtx,
-    const WasmEdge_CallingFrameContext * callFrameCtx,
-    const WasmEdge_Value * in,
-    WasmEdge_Value * out)
-{
-    ValueId valueId = WasmEdge_ValueGetI32(in[0]);
-    ValueId attrIdx = WasmEdge_ValueGetI32(in[1]);
-    int32_t ptr = WasmEdge_ValueGetI32(in[2]);
-    int32_t len = WasmEdge_ValueGetI32(in[3]);
-
-    auto & value = **nixCtx.values.at(valueId);
-    nixCtx.state.forceAttrs(value, noPos, "while copying an attr name into WASM");
-
-    auto & attrs = *value.attrs();
-
-    assert((size_t) attrIdx < attrs.size());
-
-    std::string_view name = nixCtx.state.symbols[attrs[attrIdx].name];
-
-    assert((size_t) len == name.size());
-
-    auto memCtx = WasmEdge_CallingFrameGetMemoryInstance(callFrameCtx, 0);
-
-    auto res = WasmEdge_MemoryInstanceSetData(memCtx, (const uint8_t *) name.data(), ptr, len);
-    if (!WasmEdge_ResultOK(res))
-        throw Error("unable to copy bytes to WASM memory: %s", WasmEdge_ResultGetMessage(res));
-}
-
 void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
-    NixWasmContext nixCtx{
-        .state = state,
-        .wasmPath = realisePath(state, pos, *args[0]),
-        .functionName = std::string(
-            state.forceStringNoCtx(*args[1], pos, "while evaluating the second argument of `builtins.wasm`")),
-    };
-    auto wasmFile = nixCtx.wasmPath.readFile();
-
-    WasmEdge_ConfigureContext * confCtx = WasmEdge_ConfigureCreate();
-    Finally d0([&]() { WasmEdge_ConfigureDelete(confCtx); });
-
-    // Disable native (AOT) execution since it's a huge security hole.
-    WasmEdge_ConfigureSetForceInterpreter(confCtx, true);
-
-    // Create the VM.
-    WasmEdge_VMContext * vmCtx = WasmEdge_VMCreate(confCtx, nullptr);
-    Finally d1([&]() { WasmEdge_VMDelete(vmCtx); });
-
-    // Register host functions.
-    auto exportName = WasmEdge_StringCreateByCString("env");
-    auto modCtx = WasmEdge_ModuleInstanceCreate(exportName);
-
-    auto regFun = [&](const char * name,
-                      auto fun,
-                      const std::vector<WasmEdge_ValType> & params,
-                      const std::vector<WasmEdge_ValType> & returns) {
-        auto hostFunType = WasmEdge_FunctionTypeCreate(params.data(), params.size(), returns.data(), returns.size());
-        Finally hostFunTypeDel([&]() { WasmEdge_FunctionTypeDelete(hostFunType); });
-        auto funCtx = new FunCtx(nixCtx, name, fun);
-        auto hostFun = WasmEdge_FunctionInstanceCreate(hostFunType, wrapHostFun, funCtx, 0);
-        auto hostFunName = WasmEdge_StringCreateByCString(name);
-        Finally hostFunNameDel([&]() { WasmEdge_StringDelete(hostFunName); });
-        WasmEdge_ModuleInstanceAddFunction(modCtx, hostFunName, hostFun);
-    };
-
-    auto tNixValue = WasmEdge_ValTypeGenI32();
-    auto tPtr = WasmEdge_ValTypeGenI32();
-
-    regFun("warn", wasm_warn, {tPtr, WasmEdge_ValTypeGenI32()}, {});
-    regFun("get_type", wasm_get_type, {tNixValue}, {WasmEdge_ValTypeGenI32()});
-    regFun("make_int", wasm_make_int, {WasmEdge_ValTypeGenI64()}, {tNixValue});
-    regFun("get_int", wasm_get_int, {tNixValue}, {WasmEdge_ValTypeGenI64()});
-    regFun("make_float", wasm_make_float, {WasmEdge_ValTypeGenF64()}, {tNixValue});
-    regFun("get_float", wasm_get_float, {tNixValue}, {WasmEdge_ValTypeGenF64()});
-    regFun("make_string", wasm_make_string, {tPtr, WasmEdge_ValTypeGenI32()}, {tNixValue});
-    regFun("get_string_length", wasm_get_string_length, {tNixValue}, {WasmEdge_ValTypeGenI32()});
-    regFun("copy_string", wasm_copy_string, {tNixValue, tPtr, WasmEdge_ValTypeGenI32()}, {});
-    regFun("make_bool", wasm_make_bool, {WasmEdge_ValTypeGenI32()}, {tNixValue});
-    regFun("get_bool", wasm_get_bool, {tNixValue}, {WasmEdge_ValTypeGenI32()});
-    regFun("make_null", wasm_make_null, {}, {tNixValue});
-    regFun("make_list", wasm_make_list, {tPtr, WasmEdge_ValTypeGenI32()}, {tNixValue});
-    regFun("get_list_length", wasm_get_list_length, {tNixValue}, {WasmEdge_ValTypeGenI32()});
-    regFun("copy_list", wasm_copy_list, {tNixValue, tPtr, WasmEdge_ValTypeGenI32()}, {});
-    regFun("make_attrset", wasm_make_attrset, {tPtr, WasmEdge_ValTypeGenI32()}, {tNixValue});
-    regFun("get_attrset_length", wasm_get_attrset_length, {tNixValue}, {WasmEdge_ValTypeGenI32()});
-    regFun("copy_attrset", wasm_copy_attrset, {tNixValue, tPtr, WasmEdge_ValTypeGenI32()}, {});
-    regFun(
-        "copy_attrname", wasm_copy_attrname, {tNixValue, WasmEdge_ValTypeGenI32(), tPtr, WasmEdge_ValTypeGenI32()}, {});
-
-    WasmEdge_VMRegisterModuleFromImport(vmCtx, modCtx);
+    auto wasmPath = realisePath(state, pos, *args[0]);
+    std::string functionName =
+        std::string(state.forceStringNoCtx(*args[1], pos, "while evaluating the second argument of `builtins.wasm`"));
 
     try {
-        // Call the WASM function.
-        auto argId = nixCtx.addValue(args[2]);
-        WasmEdge_Value paramList[1] = {WasmEdge_ValueGenI32(argId)};
-        WasmEdge_Value returnList[1];
-        WasmEdge_String funcName = WasmEdge_StringCreateByCString(nixCtx.functionName.c_str());
+        NixWasmContext nixCtx(state, wasmPath, functionName);
 
-        // FIXME: redirect wasmedge log messages
+        auto run = std::get<Func>(*nixCtx.instance.get(nixCtx.wasmStore, nixCtx.functionName));
+
         debug("calling wasm module");
-        WasmEdge_Result res = WasmEdge_VMRunWasmFromBuffer(
-            vmCtx, (const uint8_t *) wasmFile.data(), wasmFile.size(), funcName, paramList, 1, returnList, 1);
 
-        if (WasmEdge_ResultOK(res))
-            v = **nixCtx.values.at(WasmEdge_ValueGetI32(returnList[0]));
-        else if (
-            WasmEdge_ResultGetCategory(res) == WasmEdge_ErrCategory_UserLevelError
-            && WasmEdge_ResultGetCode(res) == (uint32_t) WasmUserError::Exception)
-            std::rethrow_exception(nixCtx.ex);
-        else
-            throw Error("WASM execution error: %s", WasmEdge_ResultGetMessage(res));
+        v = **nixCtx.values.at(unwrap(run.call(nixCtx.wasmStore, {(int32_t) nixCtx.addValue(args[2])})).at(0).i32());
     } catch (Error & e) {
-        e.addTrace(
-            state.positions[pos],
-            "while executing the WASM function '%s' from '%s'",
-            nixCtx.functionName,
-            nixCtx.wasmPath);
+        e.addTrace(state.positions[pos], "while executing the WASM function '%s' from '%s'", functionName, wasmPath);
         throw;
     }
 }

@@ -14,7 +14,7 @@
   boehmgc,
   nlohmann_json,
   toml11,
-  wasmedge,
+  wasmtime,
 
   # Configuration Options
 
@@ -65,7 +65,7 @@ mkMesonLibrary (finalAttrs: {
 
   buildInputs = [
     toml11
-    wasmedge
+    wasmtime
   ];
 
   propagatedBuildInputs = [

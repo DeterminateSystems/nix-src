@@ -76,7 +76,5 @@ scope: {
         installPhase = lib.replaceStrings [ "--without-python" ] [ "" ] old.installPhase;
       });
 
-  wasmedge = pkgs.wasmedge.overrideAttrs (attrs: {
-    cmakeFlags = attrs.cmakeFlags or [ ] ++ [ "-DWASMEDGE_USE_LLVM=OFF" ];
-  });
+  wasmtime = pkgs.callPackage ./wasmtime.nix { };
 }
