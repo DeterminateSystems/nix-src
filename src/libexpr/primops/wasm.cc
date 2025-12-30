@@ -21,7 +21,7 @@ T unwrap(Result<T, E> && res)
 {
     if (res)
         return res.ok();
-    throw Error("wasmtime failure: %s", res.err().message());
+    throw Error(res.err().message());
 }
 
 static Engine & getEngine()
@@ -45,6 +45,37 @@ static std::span<T> subspan(std::span<uint8_t> s, size_t len)
 {
     assert(s.size() >= len * sizeof(T));
     return std::span((T *) s.data(), len);
+}
+
+template<typename R, typename... Args>
+static void regFun_(Linker & linker, std::string_view name, std::function<R(Args...)> f)
+{
+    unwrap(linker.func_wrap("env", name, [f(std::move(f))](Args... args) -> Result<R, Trap> {
+        try {
+            return f(args...);
+        } catch (Error & e) {
+            return Trap(e.what());
+        }
+    }));
+}
+
+template<typename... Args>
+static void regFun_(Linker & linker, std::string_view name, std::function<void(Args...)> f)
+{
+    unwrap(linker.func_wrap("env", name, [f(std::move(f))](Args... args) -> Result<std::monostate, Trap> {
+        try {
+            f(args...);
+            return std::monostate();
+        } catch (Error & e) {
+            return Trap(e.what());
+        }
+    }));
+}
+
+template<typename F>
+static void regFun(Linker & linker, std::string_view name, F f)
+{
+    regFun_(linker, name, std::function(f));
 }
 
 struct NixWasmContext
@@ -71,15 +102,15 @@ struct NixWasmContext
         , instance(({
             Linker linker(engine);
 
-            unwrap(linker.func_wrap("env", "warn", [this](Caller caller, uint32_t ptr, uint32_t len) {
+            regFun(linker, "warn", [this](Caller caller, uint32_t ptr, uint32_t len) {
                 nix::warn(
                     "'%s' function '%s': %s",
                     wasmPath,
                     functionName,
                     span2string(memory.data(caller).subspan(ptr, len)));
-            }));
+            });
 
-            unwrap(linker.func_wrap("env", "get_type", [this](Caller caller, ValueId valueId) -> uint32_t {
+            regFun(linker, "get_type", [this](Caller caller, ValueId valueId) -> uint32_t {
                 auto & value = **values.at(valueId);
                 state.forceValue(value, noPos);
                 auto t = value.type();
@@ -93,58 +124,56 @@ struct NixWasmContext
                        : t == nList     ? 8
                        : t == nFunction ? 9
                                         : []() -> int { throw Error("unsupported type"); }();
-            }));
+            });
 
-            unwrap(linker.func_wrap("env", "make_int", [this](Caller caller, int64_t n) -> ValueId {
+            regFun(linker, "make_int", [this](Caller caller, int64_t n) -> ValueId {
                 auto [valueId, value] = allocValue();
                 value.mkInt(n);
                 return valueId;
-            }));
+            });
 
-            unwrap(linker.func_wrap("env", "get_int", [this](Caller caller, ValueId valueId) -> int64_t {
+            regFun(linker, "get_int", [this](ValueId valueId) -> int64_t {
                 return state.forceInt(**values.at(valueId), noPos, "while evaluating a value from WASM").value;
-            }));
+            });
 
-            unwrap(linker.func_wrap("env", "make_float", [this](Caller caller, double x) -> ValueId {
+            regFun(linker, "make_float", [this](Caller caller, double x) -> ValueId {
                 auto [valueId, value] = allocValue();
                 value.mkFloat(x);
                 return valueId;
-            }));
+            });
 
-            unwrap(linker.func_wrap("env", "get_float", [this](Caller caller, ValueId valueId) -> double {
+            regFun(linker, "get_float", [this](Caller caller, ValueId valueId) -> double {
                 return state.forceFloat(**values.at(valueId), noPos, "while evaluating a value from WASM");
-            }));
+            });
 
-            unwrap(linker.func_wrap("env", "make_string", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
+            regFun(linker, "make_string", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
                 auto [valueId, value] = allocValue();
                 value.mkString(span2string(memory.data(caller).subspan(ptr, len)), state.mem);
                 return valueId;
-            }));
+            });
 
-            unwrap(linker.func_wrap("env", "get_string_length", [this](Caller caller, ValueId valueId) -> uint32_t {
+            regFun(linker, "get_string_length", [this](Caller caller, ValueId valueId) -> uint32_t {
                 return state.forceString(**values.at(valueId), noPos, "while getting a string length from WASM").size();
-            }));
+            });
 
-            unwrap(linker.func_wrap(
-                "env", "copy_string", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
-                    auto s = state.forceString(**values.at(valueId), noPos, "while evaluating a value from WASM");
-                    auto buf = memory.data(caller).subspan(ptr, len);
-                    assert(buf.size() == s.size());
-                    memcpy(buf.data(), s.data(), s.size());
-                }));
+            regFun(linker, "copy_string", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
+                auto s = state.forceString(**values.at(valueId), noPos, "while evaluating a value from WASM");
+                auto buf = memory.data(caller).subspan(ptr, len);
+                assert(buf.size() == s.size());
+                memcpy(buf.data(), s.data(), s.size());
+            });
 
-            unwrap(linker.func_wrap("env", "make_bool", [this](Caller caller, int32_t b) -> ValueId {
+            regFun(linker, "make_bool", [this](Caller caller, int32_t b) -> ValueId {
                 return addValue(state.getBool(b));
-            }));
+            });
 
-            unwrap(linker.func_wrap("env", "get_bool", [this](Caller caller, ValueId valueId) -> int32_t {
+            regFun(linker, "get_bool", [this](Caller caller, ValueId valueId) -> int32_t {
                 return state.forceBool(**values.at(valueId), noPos, "while evaluating a value from WASM");
-            }));
+            });
 
-            unwrap(linker.func_wrap(
-                "env", "make_null", [this](Caller caller) -> ValueId { return addValue(&Value::vNull); }));
+            regFun(linker, "make_null", [this](Caller caller) -> ValueId { return addValue(&Value::vNull); });
 
-            unwrap(linker.func_wrap("env", "make_list", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
+            regFun(linker, "make_list", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
                 auto vs = subspan<ValueId>(memory.data(caller).subspan(ptr), len);
 
                 auto [valueId, value] = allocValue();
@@ -155,82 +184,79 @@ struct NixWasmContext
                 value.mkList(list);
 
                 return valueId;
-            }));
+            });
 
-            unwrap(linker.func_wrap("env", "get_list_length", [this](Caller caller, ValueId valueId) -> uint32_t {
+            regFun(linker, "get_list_length", [this](Caller caller, ValueId valueId) -> uint32_t {
                 auto & value = **values.at(valueId);
                 state.forceList(value, noPos, "while getting a list length from WASM");
                 return value.listSize();
-            }));
+            });
 
-            unwrap(linker.func_wrap(
-                "env", "copy_list", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
-                    auto & value = **values.at(valueId);
-                    state.forceList(value, noPos, "while getting a list length from WASM");
+            regFun(linker, "copy_list", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
+                auto & value = **values.at(valueId);
+                state.forceList(value, noPos, "while getting a list length from WASM");
 
-                    assert((size_t) len == value.listSize());
+                assert((size_t) len == value.listSize());
 
-                    auto out = subspan<ValueId>(memory.data(caller).subspan(ptr), len);
+                auto out = subspan<ValueId>(memory.data(caller).subspan(ptr), len);
 
-                    for (const auto & [n, elem] : enumerate(value.listView()))
-                        out[n] = addValue(elem);
-                }));
+                for (const auto & [n, elem] : enumerate(value.listView()))
+                    out[n] = addValue(elem);
+            });
 
-            unwrap(
-                linker.func_wrap("env", "make_attrset", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
-                    auto mem = memory.data(caller);
+            regFun(linker, "make_attrset", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
+                auto mem = memory.data(caller);
 
-                    struct Attr
-                    {
-                        // FIXME: endianness
-                        uint32_t attrNamePtr;
-                        uint32_t attrNameLen;
-                        ValueId value;
-                    };
+                struct Attr
+                {
+                    // FIXME: endianness
+                    uint32_t attrNamePtr;
+                    uint32_t attrNameLen;
+                    ValueId value;
+                };
 
-                    auto attrs = subspan<Attr>(mem.subspan(ptr), len);
+                auto attrs = subspan<Attr>(mem.subspan(ptr), len);
 
-                    auto [valueId, value] = allocValue();
-                    auto builder = state.buildBindings(len);
-                    for (auto & attr : attrs)
-                        builder.insert(
-                            state.symbols.create(span2string(mem.subspan(attr.attrNamePtr, attr.attrNameLen))),
-                            *values.at(attr.value));
-                    value.mkAttrs(builder);
+                auto [valueId, value] = allocValue();
+                auto builder = state.buildBindings(len);
+                for (auto & attr : attrs)
+                    builder.insert(
+                        state.symbols.create(span2string(mem.subspan(attr.attrNamePtr, attr.attrNameLen))),
+                        *values.at(attr.value));
+                value.mkAttrs(builder);
 
-                    return valueId;
-                }));
+                return valueId;
+            });
 
-            unwrap(linker.func_wrap("env", "get_attrset_length", [this](Caller caller, ValueId valueId) -> int32_t {
+            regFun(linker, "get_attrset_length", [this](Caller caller, ValueId valueId) -> int32_t {
                 auto & value = **values.at(valueId);
                 state.forceAttrs(value, noPos, "while getting an attrset length from WASM");
                 return value.attrs()->size();
-            }));
+            });
 
-            unwrap(linker.func_wrap(
-                "env", "copy_attrset", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
-                    auto & value = **values.at(valueId);
-                    state.forceAttrs(value, noPos, "while copying an attrset into WASM");
+            regFun(linker, "copy_attrset", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
+                auto & value = **values.at(valueId);
+                state.forceAttrs(value, noPos, "while copying an attrset into WASM");
 
-                    assert((size_t) len == value.attrs()->size());
+                assert((size_t) len == value.attrs()->size());
 
-                    // FIXME: endianness.
-                    struct Attr
-                    {
-                        ValueId value;
-                        uint32_t nameLen;
-                    };
+                // FIXME: endianness.
+                struct Attr
+                {
+                    ValueId value;
+                    uint32_t nameLen;
+                };
 
-                    auto buf = subspan<Attr>(memory.data(caller).subspan(ptr), len);
+                auto buf = subspan<Attr>(memory.data(caller).subspan(ptr), len);
 
-                    for (const auto & [n, attr] : enumerate(*value.attrs())) {
-                        buf[n].value = addValue(attr.value);
-                        buf[n].nameLen = state.symbols[attr.name].size();
-                    }
-                }));
+                for (const auto & [n, attr] : enumerate(*value.attrs())) {
+                    buf[n].value = addValue(attr.value);
+                    buf[n].nameLen = state.symbols[attr.name].size();
+                }
+            });
 
-            unwrap(linker.func_wrap(
-                "env",
+            regFun(
+                linker,
                 "copy_attrname",
                 [this](Caller caller, ValueId valueId, uint32_t attrIdx, uint32_t ptr, uint32_t len) {
                     auto & value = **values.at(valueId);
@@ -245,7 +271,7 @@ struct NixWasmContext
                     assert((size_t) len == name.size());
 
                     memcpy(memory.data(caller).subspan(ptr, len).data(), name.data(), name.size());
-                }));
+                });
 
             unwrap(linker.instantiate(wasmStore, module));
         }))
