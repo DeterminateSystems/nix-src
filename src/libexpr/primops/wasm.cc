@@ -89,7 +89,7 @@ struct NixWasmContext
     Instance instance;
     Memory memory;
 
-    std::vector<RootValue> values;
+    ValueVector values;
     std::exception_ptr ex;
 
     NixWasmContext(EvalState & _state, SourcePath _wasmPath, std::string _functionName)
@@ -111,7 +111,7 @@ struct NixWasmContext
             });
 
             regFun(linker, "get_type", [this](Caller caller, ValueId valueId) -> uint32_t {
-                auto & value = **values.at(valueId);
+                auto & value = *values.at(valueId);
                 state.forceValue(value, noPos);
                 auto t = value.type();
                 return t == nInt        ? 1
@@ -133,7 +133,7 @@ struct NixWasmContext
             });
 
             regFun(linker, "get_int", [this](ValueId valueId) -> int64_t {
-                return state.forceInt(**values.at(valueId), noPos, "while evaluating a value from WASM").value;
+                return state.forceInt(*values.at(valueId), noPos, "while evaluating a value from WASM").value;
             });
 
             regFun(linker, "make_float", [this](Caller caller, double x) -> ValueId {
@@ -143,7 +143,7 @@ struct NixWasmContext
             });
 
             regFun(linker, "get_float", [this](Caller caller, ValueId valueId) -> double {
-                return state.forceFloat(**values.at(valueId), noPos, "while evaluating a value from WASM");
+                return state.forceFloat(*values.at(valueId), noPos, "while evaluating a value from WASM");
             });
 
             regFun(linker, "make_string", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
@@ -153,11 +153,11 @@ struct NixWasmContext
             });
 
             regFun(linker, "get_string_length", [this](Caller caller, ValueId valueId) -> uint32_t {
-                return state.forceString(**values.at(valueId), noPos, "while getting a string length from WASM").size();
+                return state.forceString(*values.at(valueId), noPos, "while getting a string length from WASM").size();
             });
 
             regFun(linker, "copy_string", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
-                auto s = state.forceString(**values.at(valueId), noPos, "while evaluating a value from WASM");
+                auto s = state.forceString(*values.at(valueId), noPos, "while evaluating a value from WASM");
                 auto buf = memory.data(caller).subspan(ptr, len);
                 assert(buf.size() == s.size());
                 memcpy(buf.data(), s.data(), s.size());
@@ -168,7 +168,7 @@ struct NixWasmContext
             });
 
             regFun(linker, "get_bool", [this](Caller caller, ValueId valueId) -> int32_t {
-                return state.forceBool(**values.at(valueId), noPos, "while evaluating a value from WASM");
+                return state.forceBool(*values.at(valueId), noPos, "while evaluating a value from WASM");
             });
 
             regFun(linker, "make_null", [this](Caller caller) -> ValueId { return addValue(&Value::vNull); });
@@ -180,20 +180,20 @@ struct NixWasmContext
 
                 auto list = state.buildList(len);
                 for (const auto & [n, v] : enumerate(list))
-                    v = *values.at(vs[n]); // FIXME: endianness
+                    v = values.at(vs[n]); // FIXME: endianness
                 value.mkList(list);
 
                 return valueId;
             });
 
             regFun(linker, "get_list_length", [this](Caller caller, ValueId valueId) -> uint32_t {
-                auto & value = **values.at(valueId);
+                auto & value = *values.at(valueId);
                 state.forceList(value, noPos, "while getting a list length from WASM");
                 return value.listSize();
             });
 
             regFun(linker, "copy_list", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
-                auto & value = **values.at(valueId);
+                auto & value = *values.at(valueId);
                 state.forceList(value, noPos, "while getting a list length from WASM");
 
                 assert((size_t) len == value.listSize());
@@ -222,20 +222,20 @@ struct NixWasmContext
                 for (auto & attr : attrs)
                     builder.insert(
                         state.symbols.create(span2string(mem.subspan(attr.attrNamePtr, attr.attrNameLen))),
-                        *values.at(attr.value));
+                        values.at(attr.value));
                 value.mkAttrs(builder);
 
                 return valueId;
             });
 
             regFun(linker, "get_attrset_length", [this](Caller caller, ValueId valueId) -> int32_t {
-                auto & value = **values.at(valueId);
+                auto & value = *values.at(valueId);
                 state.forceAttrs(value, noPos, "while getting an attrset length from WASM");
                 return value.attrs()->size();
             });
 
             regFun(linker, "copy_attrset", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
-                auto & value = **values.at(valueId);
+                auto & value = *values.at(valueId);
                 state.forceAttrs(value, noPos, "while copying an attrset into WASM");
 
                 assert((size_t) len == value.attrs()->size());
@@ -259,7 +259,7 @@ struct NixWasmContext
                 linker,
                 "copy_attrname",
                 [this](Caller caller, ValueId valueId, uint32_t attrIdx, uint32_t ptr, uint32_t len) {
-                    auto & value = **values.at(valueId);
+                    auto & value = *values.at(valueId);
                     state.forceAttrs(value, noPos, "while copying an attr name into WASM");
 
                     auto & attrs = *value.attrs();
@@ -282,7 +282,7 @@ struct NixWasmContext
     ValueId addValue(Value * v)
     {
         auto id = values.size();
-        values.emplace_back(allocRootValue(v));
+        values.emplace_back(v);
         return id;
     }
 
@@ -307,7 +307,7 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 
         debug("calling wasm module");
 
-        v = **nixCtx.values.at(unwrap(run.call(nixCtx.wasmStore, {(int32_t) nixCtx.addValue(args[2])})).at(0).i32());
+        v = *nixCtx.values.at(unwrap(run.call(nixCtx.wasmStore, {(int32_t) nixCtx.addValue(args[2])})).at(0).i32());
     } catch (Error & e) {
         e.addTrace(state.positions[pos], "while executing the WASM function '%s' from '%s'", functionName, wasmPath);
         throw;
