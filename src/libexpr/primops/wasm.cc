@@ -271,6 +271,22 @@ struct NixWasmContext
                     memcpy(memory.data(caller).subspan(ptr, len).data(), name.data(), name.size());
                 });
 
+            regFun(
+                linker, "call_function", [this](Caller caller, ValueId funId, uint32_t ptr, uint32_t len) -> ValueId {
+                    auto & fun = *values.at(funId);
+                    state.forceFunction(fun, noPos, "while calling a function from WASM");
+
+                    ValueVector args;
+                    for (auto argId : subspan<ValueId>(memory.data(caller).subspan(ptr), len))
+                        args.push_back(values.at(argId));
+
+                    auto [valueId, value] = allocValue();
+
+                    state.callFunction(fun, args, value, noPos);
+
+                    return valueId;
+                });
+
             unwrap(linker.instantiate(wasmStore, module));
         }))
         , memory(std::get<Memory>(*instance.get(wasmStore, "memory")))
