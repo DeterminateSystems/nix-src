@@ -152,16 +152,17 @@ struct NixWasmContext
                 return valueId;
             });
 
-            regFun(linker, "get_string_length", [this](Caller caller, ValueId valueId) -> uint32_t {
-                return state.forceString(*values.at(valueId), noPos, "while getting a string length from WASM").size();
-            });
-
-            regFun(linker, "copy_string", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
-                auto s = state.forceString(*values.at(valueId), noPos, "while evaluating a value from WASM");
-                auto buf = memory.data(caller).subspan(ptr, len);
-                assert(buf.size() == s.size());
-                memcpy(buf.data(), s.data(), s.size());
-            });
+            regFun(
+                linker,
+                "copy_string",
+                [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t maxLen) -> uint32_t {
+                    auto s = state.forceString(*values.at(valueId), noPos, "while evaluating a value from WASM");
+                    if (s.size() <= maxLen) {
+                        auto buf = memory.data(caller).subspan(ptr, maxLen);
+                        memcpy(buf.data(), s.data(), s.size());
+                    }
+                    return s.size();
+                });
 
             regFun(linker, "make_bool", [this](Caller caller, int32_t b) -> ValueId {
                 return addValue(state.getBool(b));
@@ -186,23 +187,20 @@ struct NixWasmContext
                 return valueId;
             });
 
-            regFun(linker, "get_list_length", [this](Caller caller, ValueId valueId) -> uint32_t {
-                auto & value = *values.at(valueId);
-                state.forceList(value, noPos, "while getting a list length from WASM");
-                return value.listSize();
-            });
+            regFun(
+                linker, "copy_list", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t maxLen) -> uint32_t {
+                    auto & value = *values.at(valueId);
+                    state.forceList(value, noPos, "while getting a list from WASM");
 
-            regFun(linker, "copy_list", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
-                auto & value = *values.at(valueId);
-                state.forceList(value, noPos, "while getting a list length from WASM");
+                    if (value.listSize() <= maxLen) {
+                        auto out = subspan<ValueId>(memory.data(caller).subspan(ptr), value.listSize());
 
-                assert((size_t) len == value.listSize());
+                        for (const auto & [n, elem] : enumerate(value.listView()))
+                            out[n] = addValue(elem);
+                    }
 
-                auto out = subspan<ValueId>(memory.data(caller).subspan(ptr), len);
-
-                for (const auto & [n, elem] : enumerate(value.listView()))
-                    out[n] = addValue(elem);
-            });
+                    return value.listSize();
+                });
 
             regFun(linker, "make_attrset", [this](Caller caller, uint32_t ptr, uint32_t len) -> ValueId {
                 auto mem = memory.data(caller);
@@ -228,32 +226,32 @@ struct NixWasmContext
                 return valueId;
             });
 
-            regFun(linker, "get_attrset_length", [this](Caller caller, ValueId valueId) -> int32_t {
-                auto & value = *values.at(valueId);
-                state.forceAttrs(value, noPos, "while getting an attrset length from WASM");
-                return value.attrs()->size();
-            });
+            regFun(
+                linker,
+                "copy_attrset",
+                [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t maxLen) -> uint32_t {
+                    auto & value = *values.at(valueId);
+                    state.forceAttrs(value, noPos, "while copying an attrset into WASM");
 
-            regFun(linker, "copy_attrset", [this](Caller caller, ValueId valueId, uint32_t ptr, uint32_t len) {
-                auto & value = *values.at(valueId);
-                state.forceAttrs(value, noPos, "while copying an attrset into WASM");
+                    if (value.attrs()->size() <= maxLen) {
+                        // FIXME: endianness.
+                        struct Attr
+                        {
+                            ValueId value;
+                            uint32_t nameLen;
+                        };
 
-                assert((size_t) len == value.attrs()->size());
+                        auto buf = subspan<Attr>(memory.data(caller).subspan(ptr), maxLen);
 
-                // FIXME: endianness.
-                struct Attr
-                {
-                    ValueId value;
-                    uint32_t nameLen;
-                };
+                        // FIXME: for determinism, we should return attributes in lexicographically sorted order.
+                        for (const auto & [n, attr] : enumerate(*value.attrs())) {
+                            buf[n].value = addValue(attr.value);
+                            buf[n].nameLen = state.symbols[attr.name].size();
+                        }
+                    }
 
-                auto buf = subspan<Attr>(memory.data(caller).subspan(ptr), len);
-
-                for (const auto & [n, attr] : enumerate(*value.attrs())) {
-                    buf[n].value = addValue(attr.value);
-                    buf[n].nameLen = state.symbols[attr.name].size();
-                }
-            });
+                    return value.attrs()->size();
+                });
 
             regFun(
                 linker,
