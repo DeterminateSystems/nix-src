@@ -310,6 +310,17 @@ struct NixWasmContext
         auto id = addValue(v);
         return {id, *v};
     }
+
+    Func getFunction(std::string_view name)
+    {
+        auto ext = instance.get(wasmStore, name);
+        if (!ext)
+            throw Error("WASM module '%s' does not export function '%s'", wasmPath, name);
+        auto fun = std::get_if<Func>(&*ext);
+        if (!fun)
+            throw Error("export '%s' of WASM module '%s' is not a function", name, wasmPath);
+        return *fun;
+    }
 };
 
 void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -321,14 +332,14 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
     try {
         NixWasmContext nixCtx(state, wasmPath, functionName);
 
-        auto init = std::get<Func>(*nixCtx.instance.get(nixCtx.wasmStore, "nix_wasm_init_v1"));
-        unwrap(init.call(nixCtx.wasmStore, {}));
-
-        auto run = std::get<Func>(*nixCtx.instance.get(nixCtx.wasmStore, nixCtx.functionName));
-
         debug("calling wasm module");
 
-        v = *nixCtx.values.at(unwrap(run.call(nixCtx.wasmStore, {(int32_t) nixCtx.addValue(args[2])})).at(0).i32());
+        unwrap(nixCtx.getFunction("nix_wasm_init_v1").call(nixCtx.wasmStore, {}));
+
+        v = *nixCtx.values.at(
+            unwrap(nixCtx.getFunction(nixCtx.functionName).call(nixCtx.wasmStore, {(int32_t) nixCtx.addValue(args[2])}))
+                .at(0)
+                .i32());
     } catch (Error & e) {
         e.addTrace(state.positions[pos], "while executing the WASM function '%s' from '%s'", functionName, wasmPath);
         throw;
