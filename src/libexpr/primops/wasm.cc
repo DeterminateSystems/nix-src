@@ -102,6 +102,10 @@ struct NixWasmContext
         , instance(({
             Linker linker(engine);
 
+            regFun(linker, "panic", [this](Caller caller, uint32_t ptr, uint32_t len) {
+                throw Error("WASM panic: %s", Uncolored(span2string(memory.data(caller).subspan(ptr, len))));
+            });
+
             regFun(linker, "warn", [this](Caller caller, uint32_t ptr, uint32_t len) {
                 nix::warn(
                     "'%s' function '%s': %s",
@@ -316,6 +320,9 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 
     try {
         NixWasmContext nixCtx(state, wasmPath, functionName);
+
+        auto init = std::get<Func>(*nixCtx.instance.get(nixCtx.wasmStore, "nix_wasm_init_v1"));
+        unwrap(init.call(nixCtx.wasmStore, {}));
 
         auto run = std::get<Func>(*nixCtx.instance.get(nixCtx.wasmStore, nixCtx.functionName));
 
