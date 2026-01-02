@@ -335,16 +335,21 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
         std::string(state.forceStringNoCtx(*args[1], pos, "while evaluating the second argument of `builtins.wasm`"));
 
     try {
-        NixWasmContext nixCtx(state, wasmPath);
+        // FIXME: make thread-safe.
+        // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
+        static std::unordered_map<SourcePath, ref<NixWasmContext>> wasmContexts;
+
+        auto nixCtx = wasmContexts.find(wasmPath);
+        if (nixCtx == wasmContexts.end()) {
+            auto ctx = make_ref<NixWasmContext>(state, wasmPath);
+            nixCtx = wasmContexts.emplace(wasmPath, std::move(ctx)).first;
+            nixCtx->second->runFunction("nix_wasm_init_v1", {});
+        }
 
         debug("calling wasm module");
 
-        nixCtx.runFunction("nix_wasm_init_v1", {});
-
-        v = *nixCtx.values.at(
-            nixCtx.runFunction(functionName, {(int32_t) nixCtx.addValue(args[2])})
-                .at(0)
-                .i32());
+        v = *nixCtx->second->values.at(
+            nixCtx->second->runFunction(functionName, {(int32_t) nixCtx->second->addValue(args[2])}).at(0).i32());
     } catch (Error & e) {
         e.addTrace(state.positions[pos], "while executing the WASM function '%s' from '%s'", functionName, wasmPath);
         throw;
