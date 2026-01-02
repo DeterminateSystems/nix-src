@@ -83,7 +83,7 @@ struct NixWasmContext
     EvalState & state;
     Engine & engine;
     SourcePath wasmPath;
-    std::string functionName;
+    std::optional<std::string> functionName;
     Module module;
     wasmtime::Store wasmStore;
     Instance instance;
@@ -92,11 +92,10 @@ struct NixWasmContext
     ValueVector values;
     std::exception_ptr ex;
 
-    NixWasmContext(EvalState & _state, SourcePath _wasmPath, std::string _functionName)
+    NixWasmContext(EvalState & _state, SourcePath _wasmPath)
         : state(_state)
         , engine(getEngine())
         , wasmPath(_wasmPath)
-        , functionName(_functionName)
         , module(unwrap(Module::compile(engine, string2span(wasmPath.readFile()))))
         , wasmStore(engine)
         , instance(({
@@ -110,7 +109,7 @@ struct NixWasmContext
                 nix::warn(
                     "'%s' function '%s': %s",
                     wasmPath,
-                    functionName,
+                    functionName.value_or("<unknown>"),
                     span2string(memory.data(caller).subspan(ptr, len)));
             });
 
@@ -321,6 +320,12 @@ struct NixWasmContext
             throw Error("export '%s' of WASM module '%s' is not a function", name, wasmPath);
         return *fun;
     }
+
+    std::vector<Val> runFunction(std::string_view name, const std::vector<Val> & args)
+    {
+        functionName = name;
+        return unwrap(getFunction(name).call(wasmStore, args));
+    }
 };
 
 void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -330,14 +335,14 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
         std::string(state.forceStringNoCtx(*args[1], pos, "while evaluating the second argument of `builtins.wasm`"));
 
     try {
-        NixWasmContext nixCtx(state, wasmPath, functionName);
+        NixWasmContext nixCtx(state, wasmPath);
 
         debug("calling wasm module");
 
-        unwrap(nixCtx.getFunction("nix_wasm_init_v1").call(nixCtx.wasmStore, {}));
+        nixCtx.runFunction("nix_wasm_init_v1", {});
 
         v = *nixCtx.values.at(
-            unwrap(nixCtx.getFunction(nixCtx.functionName).call(nixCtx.wasmStore, {(int32_t) nixCtx.addValue(args[2])}))
+            nixCtx.runFunction(functionName, {(int32_t) nixCtx.addValue(args[2])})
                 .at(0)
                 .i32());
     } catch (Error & e) {
