@@ -53,7 +53,7 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
             throw Error("cannot add store directory to WASI config");
         // FIXME: add temp dir
 
-        auto module = unwrap(Module::compile(engine, string2span(readFile(realPathInSandbox(drv.builder)))));
+        auto module = unwrap(Module::compile(engine, string2span(readFile(realPathInHost(drv.builder)))));
         wasmtime::Store wasmStore(engine);
         unwrap(wasmStore.context().set_wasi(std::move(wasiConfig)));
         auto instance = unwrap(linker.instantiate(wasmStore, module));
