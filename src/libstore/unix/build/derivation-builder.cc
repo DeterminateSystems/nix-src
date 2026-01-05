@@ -291,6 +291,7 @@ protected:
         return Strings({store.printStorePath(drvPath)});
     }
 
+    // FIXME: misnomer
     virtual Path realPathInSandbox(const Path & p)
     {
         return store.toRealPath(p);
@@ -1997,6 +1998,7 @@ StorePath DerivationBuilderImpl::makeFallbackPath(const StorePath & path)
 #include "linux-derivation-builder.cc"
 #include "darwin-derivation-builder.cc"
 #include "external-derivation-builder.cc"
+#include "wasi-derivation-builder.cc"
 
 namespace nix {
 
@@ -2027,6 +2029,9 @@ std::unique_ptr<DerivationBuilder> makeDerivationBuilder(
             // FIXME: cache derivationType
             useSandbox = params.drv.type().isSandboxed() && !params.drvOptions.noChroot;
     }
+
+    if (params.drv.platform == "wasm32-wasip1")
+        return std::make_unique<WasiDerivationBuilder>(store, std::move(miscMethods), std::move(params));
 
     if (store.storeDir != store.config->realStoreDir.get()) {
 #ifdef __linux__

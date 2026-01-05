@@ -420,6 +420,7 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 
         NixWasmInstance instance{state, instancePre->second};
 
+        // FIXME: use the "start" function if present.
         instance.runFunction("nix_wasm_init_v1", {});
 
         v = *instance.values.at(instance.runFunction(functionName, {(int32_t) instance.addValue(args[2])}).at(0).i32());
