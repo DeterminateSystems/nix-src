@@ -49,7 +49,7 @@ For example:
 error: Cannot delete path '/nix/store/6fcrjgfjip2ww3sx51rrmmghfsf60jvi-patchelf-0.14.3'
   because it's referenced by the GC root '/home/eelco/Dev/nix-master/build/result'.
 
-error: Cannot delete path '/nix/store/rn0qyn3kmky26xgpr2n10vr787g57lff-cowsay-3.8.4'
+error: Cannot delete path '/nix/store/lf3lrf8bjfn8xvr0az9q96y989sxs5r9-cowsay-3.8.4'
   because it's referenced by the GC root '/proc/3600568/environ'.
 
 error: Cannot delete path '/nix/store/klyng5rpdkwi5kbxkncy4gjwb490dlhb-foo.drv'
