@@ -44,12 +44,18 @@ typedef std::map<FlakeId, FlakeInput> FlakeInputs;
 struct FlakeInput
 {
     std::optional<FlakeRef> ref;
+
     /**
-     * true = process flake to get outputs
-     *
-     * false = (fetched) static source path
+     * Whether to call the `flake.nix` file in this input to get its outputs.
      */
     bool isFlake = true;
+
+    /**
+     * Whether to fetch this input at evaluation time or at build
+     * time.
+     */
+    bool buildTime = false;
+
     std::optional<InputAttrPath> follows;
     FlakeInputs overrides;
 };
@@ -116,7 +122,8 @@ struct Flake
     }
 };
 
-Flake getFlake(EvalState & state, const FlakeRef & flakeRef, fetchers::UseRegistries useRegistries);
+Flake getFlake(
+    EvalState & state, const FlakeRef & flakeRef, fetchers::UseRegistries useRegistries, bool requireLockable = true);
 
 /**
  * Fingerprint of a locked flake; used as a cache key.
@@ -212,6 +219,11 @@ struct LockFlags
      * for those inputs will be ignored.
      */
     std::set<InputAttrPath> inputUpdates;
+
+    /**
+     * Whether to require a locked input.
+     */
+    bool requireLockable = true;
 };
 
 LockedFlake
@@ -233,12 +245,5 @@ void emitTreeAttrs(
     Value & v,
     bool emptyRevFallback = false,
     bool forceDirty = false);
-
-/**
- * An internal builtin similar to `fetchTree`, except that it
- * always treats the input as final (i.e. no attributes can be
- * added/removed/changed).
- */
-void prim_fetchFinalTree(EvalState & state, const PosIdx pos, Value ** args, Value & v);
 
 } // namespace nix

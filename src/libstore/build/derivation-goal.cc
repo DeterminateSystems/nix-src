@@ -466,6 +466,13 @@ Goal::Done DerivationGoal::doneSuccess(BuildResult::Success::Status status, Unke
         }},
     };
 
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
     mcExpectedBuilds.reset();
 
     if (status == BuildResult::Success::Built)
@@ -482,6 +489,13 @@ Goal::Done DerivationGoal::doneFailure(BuildError ex)
         .status = ex.status,
         .errorMsg = fmt("%s", Uncolored(ex.info().msg)),
     };
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
     mcExpectedBuilds.reset();
 

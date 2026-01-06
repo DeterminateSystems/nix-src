@@ -66,6 +66,7 @@ scope: {
         "--with-coroutine"
         "--with-iostreams"
         "--with-url"
+        "--with-thread"
       ];
       enableIcu = false;
     }).overrideAttrs

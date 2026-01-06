@@ -110,8 +110,12 @@ StorePath Store::addToStore(
     auto sink = sourceToSink([&](Source & source) {
         LengthSource lengthSource(source);
         storePath = addToStoreFromDump(lengthSource, name, fsm, method, hashAlgo, references, repair);
-        if (settings.warnLargePathThreshold && lengthSource.total >= settings.warnLargePathThreshold)
-            warn("copied large path '%s' to the store (%s)", path, renderSize(lengthSource.total));
+        if (settings.warnLargePathThreshold && lengthSource.total >= settings.warnLargePathThreshold) {
+            static bool failOnLargePath = getEnv("_NIX_TEST_FAIL_ON_LARGE_PATH").value_or("") == "1";
+            if (failOnLargePath)
+                throw Error("doesn't copy large path '%s' to the store (%d)", path, renderSize(lengthSource.total));
+            warn("copied large path '%s' to the store (%d)", path, renderSize(lengthSource.total));
+        }
     });
     dumpPath(path, *sink, fsm, filter);
     sink->finish();
@@ -519,6 +523,23 @@ ref<const ValidPathInfo> Store::queryPathInfo(const StorePath & storePath)
     queryPathInfo(storePath, {[&](std::future<ref<const ValidPathInfo>> result) {
                       try {
                           promise.set_value(result.get());
+                      } catch (...) {
+                          promise.set_exception(std::current_exception());
+                      }
+                  }});
+
+    return promise.get_future().get();
+}
+
+std::shared_ptr<const ValidPathInfo> Store::maybeQueryPathInfo(const StorePath & storePath)
+{
+    std::promise<std::shared_ptr<const ValidPathInfo>> promise;
+
+    queryPathInfo(storePath, {[&](std::future<ref<const ValidPathInfo>> result) {
+                      try {
+                          promise.set_value(result.get());
+                      } catch (InvalidPath &) {
+                          promise.set_value(nullptr);
                       } catch (...) {
                           promise.set_exception(std::current_exception());
                       }

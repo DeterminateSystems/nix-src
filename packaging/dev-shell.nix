@@ -214,7 +214,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
     };
 
     # Remove the version suffix to avoid unnecessary attempts to substitute in nix develop
-    version = lib.fileContents ../.version;
+    version = lib.fileContents ../.version-determinate;
     name = finalAttrs.pname;
 
     installFlags = "sysconfdir=$(out)/etc";
@@ -258,9 +258,12 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
 
     # We use this shell with the local checkout, not unpackPhase.
     src = null;
+
     # Workaround https://sourceware.org/pipermail/gdb-patches/2025-October/221398.html
     # Remove when gdb fix is rolled out everywhere.
     separateDebugInfo = false;
+
+    mesonBuildType = "debugoptimized";
 
     env = {
       # For `make format`, to work without installing pre-commit
