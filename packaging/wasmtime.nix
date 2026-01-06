@@ -29,6 +29,8 @@ rust_1_89.packages.stable.rustPlatform.buildRustPackage (finalAttrs: {
   cargoBuildFlags = [
     "--package"
     "wasmtime-c-api"
+    "--no-default-features"
+    "--features cranelift,wasi,pooling-allocator,wat,demangle,gc-null"
   ];
 
   outputs = [
