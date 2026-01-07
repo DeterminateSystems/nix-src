@@ -203,9 +203,19 @@ void HttpBinaryCacheStore::getFile(const std::string & path, Sink & sink)
     try {
         getFileTransfer()->download(std::move(request), sink);
     } catch (FileTransferError & e) {
-        if (e.error == FileTransfer::NotFound || e.error == FileTransfer::Forbidden)
+        if (e.error == FileTransfer::NotFound)
             throw NoSuchBinaryCacheFile(
                 "file '%s' does not exist in binary cache '%s'", path, config->getHumanReadableURI());
+        if (e.error == FileTransfer::Forbidden)
+            /* Rethrow with more context, preserving the original error message which includes the HTTP status code */
+            throw FileTransferError(
+                e.error,
+                e.response,
+                "%s\nUnable to access file '%s' in binary cache '%s'.\n"
+                "If the binary cache requires authentication, check that your access token is valid and not expired.",
+                e.what(),
+                path,
+                config->getHumanReadableURI());
         maybeDisable();
         throw;
     }
