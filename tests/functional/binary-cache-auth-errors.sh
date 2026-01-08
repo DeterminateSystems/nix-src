@@ -16,17 +16,23 @@ clearCache
 outPath=$(nix-build dependencies.nix --no-out-link)
 nix copy --to "file://$cacheDir" "$outPath"
 
-# Start the HTTP server on a random port using our test server script
+# Function to start the test HTTP server with a specific return code
 TEST_SERVER="$_NIX_TEST_SOURCE_DIR/binary-cache-auth-errors_test-http-server.py"
-CACHE_DIR="$cacheDir" RETURN_CODE=200 python3 "$TEST_SERVER" > "$TEST_ROOT/port" 2>&1 &
-SERVER_PID=$!
-sleep 1
-HTTP_PORT=$(cat "$TEST_ROOT/port")
+startHttpServer() {
+    local return_code=$1
+    CACHE_DIR="$cacheDir" RETURN_CODE="$return_code" python3 "$TEST_SERVER" > "$TEST_ROOT/port" 2>&1 &
+    SERVER_PID=$!
+    sleep 1
+    HTTP_PORT=$(cat "$TEST_ROOT/port")
+}
 
 cleanup() {
     kill $SERVER_PID 2>/dev/null || true
 }
 trap cleanup EXIT
+
+# Start the HTTP server on a random port
+startHttpServer 200
 
 # Test 1: Normal operation (200 OK) should work
 clearStore
@@ -39,10 +45,7 @@ sleep 1
 
 # Test 2: 404 errors should say "does not exist in binary cache"
 clearStore
-CACHE_DIR="$cacheDir" RETURN_CODE=404 python3 "$TEST_SERVER" > "$TEST_ROOT/port" 2>&1 &
-SERVER_PID=$!
-sleep 1
-HTTP_PORT=$(cat "$TEST_ROOT/port")
+startHttpServer 404
 
 if nix-store --substituters "http://127.0.0.1:$HTTP_PORT" --no-require-sigs -r "$outPath" 2>&1 | tee "$TEST_ROOT/log-404"; then
     echo "Expected substitution to fail with 404"
@@ -61,10 +64,7 @@ sleep 1
 
 # Test 3: 401 errors should mention authentication and NOT say "does not exist"
 clearStore
-CACHE_DIR="$cacheDir" RETURN_CODE=401 python3 "$TEST_SERVER" > "$TEST_ROOT/port" 2>&1 &
-SERVER_PID=$!
-sleep 1
-HTTP_PORT=$(cat "$TEST_ROOT/port")
+startHttpServer 401
 
 if nix-store --substituters "http://127.0.0.1:$HTTP_PORT" --no-require-sigs -r "$outPath" 2>&1 | tee "$TEST_ROOT/log-401"; then
     echo "Expected substitution to fail with 401"
@@ -88,10 +88,7 @@ sleep 1
 
 # Test 4: 403 errors should also mention authentication and NOT say "does not exist"
 clearStore
-CACHE_DIR="$cacheDir" RETURN_CODE=403 python3 "$TEST_SERVER" > "$TEST_ROOT/port" 2>&1 &
-SERVER_PID=$!
-sleep 1
-HTTP_PORT=$(cat "$TEST_ROOT/port")
+startHttpServer 403
 
 if nix-store --substituters "http://127.0.0.1:$HTTP_PORT" --no-require-sigs -r "$outPath" 2>&1 | tee "$TEST_ROOT/log-403"; then
     echo "Expected substitution to fail with 403"
