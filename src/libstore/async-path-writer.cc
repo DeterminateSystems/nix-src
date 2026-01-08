@@ -18,6 +18,7 @@ struct AsyncPathWriterImpl : AsyncPathWriter
         Hash hash;
         StorePathSet references;
         RepairFlag repair;
+        std::shared_ptr<const Provenance> provenance;
         std::promise<void> promise;
     };
 
@@ -69,8 +70,13 @@ struct AsyncPathWriterImpl : AsyncPathWriter
         workerThread.join();
     }
 
-    StorePath
-    addPath(std::string contents, std::string name, StorePathSet references, RepairFlag repair, bool readOnly) override
+    StorePath addPath(
+        std::string contents,
+        std::string name,
+        StorePathSet references,
+        RepairFlag repair,
+        bool readOnly,
+        std::shared_ptr<const Provenance> provenance) override
     {
         auto hash = hashString(HashAlgorithm::SHA256, contents);
 
@@ -93,6 +99,7 @@ struct AsyncPathWriterImpl : AsyncPathWriter
                     .hash = hash,
                     .references = std::move(references),
                     .repair = repair,
+                    .provenance = provenance,
                     .promise = std::move(promise),
                 });
             wakeupCV.notify_all();
@@ -159,7 +166,8 @@ struct AsyncPathWriterImpl : AsyncPathWriter
                 ContentAddressMethod::Raw::Text,
                 HashAlgorithm::SHA256,
                 item.references,
-                item.repair);
+                item.repair,
+                item.provenance);
             assert(storePath == item.storePath);
         }
     }

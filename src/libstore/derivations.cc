@@ -127,16 +127,22 @@ static auto infoForDerivation(Store & store, const Derivation & drv)
     };
 }
 
-StorePath writeDerivation(Store & store, const Derivation & drv, RepairFlag repair, bool readOnly)
+StorePath writeDerivation(
+    Store & store,
+    const Derivation & drv,
+    RepairFlag repair,
+    bool readOnly,
+    std::shared_ptr<const Provenance> provenance)
 {
     if (readOnly || settings.readOnlyMode) {
         auto [_x, _y, _z, path] = infoForDerivation(store, drv);
         return path;
     } else
-        return store.writeDerivation(drv, repair);
+        return store.writeDerivation(drv, repair, provenance);
 }
 
-StorePath Store::writeDerivation(const Derivation & drv, RepairFlag repair)
+StorePath
+Store::writeDerivation(const Derivation & drv, RepairFlag repair, std::shared_ptr<const Provenance> provenance)
 {
     auto [suffix, contents, references, path] = infoForDerivation(*this, drv);
 
@@ -151,14 +157,20 @@ StorePath Store::writeDerivation(const Derivation & drv, RepairFlag repair)
         ContentAddressMethod::Raw::Text,
         HashAlgorithm::SHA256,
         references,
-        repair);
+        repair,
+        provenance);
     assert(path2 == path);
 
     return path;
 }
 
 StorePath writeDerivation(
-    Store & store, AsyncPathWriter & asyncPathWriter, const Derivation & drv, RepairFlag repair, bool readOnly)
+    Store & store,
+    AsyncPathWriter & asyncPathWriter,
+    const Derivation & drv,
+    RepairFlag repair,
+    bool readOnly,
+    std::shared_ptr<const Provenance> provenance)
 {
     auto references = drv.inputSrcs;
     for (auto & i : drv.inputDrvs.map)
@@ -168,7 +180,8 @@ StorePath writeDerivation(
         std::string(drv.name) + drvExtension,
         references,
         repair,
-        readOnly || settings.readOnlyMode);
+        readOnly || settings.readOnlyMode,
+        provenance);
 }
 
 namespace {

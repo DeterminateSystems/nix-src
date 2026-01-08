@@ -4,6 +4,7 @@
     "deriver": null,
     "narHash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "narSize": 34878,
+    "provenance": null,
     "references": [],
     "registrationTime": null,
     "signatures": [],
@@ -16,6 +17,7 @@
     "deriver": "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
     "narHash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "narSize": 34878,
+    "provenance": null,
     "references": [
       "g1w7hyyyy1w7hy3qg1w7hy3qgqqqqy3q-foo.drv"
     ],

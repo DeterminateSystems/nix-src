@@ -1476,9 +1476,7 @@ struct CmdFlakePrefetch : FlakeCommand, MixJSON
     {
         auto originalRef = getFlakeRef();
         auto resolvedRef = originalRef.resolve(fetchSettings, *store);
-        auto [accessor, lockedRef] = resolvedRef.lazyFetch(getEvalState()->fetchSettings, *store);
-        auto storePath =
-            fetchToStore(getEvalState()->fetchSettings, *store, accessor, FetchMode::Copy, lockedRef.input.getName());
+        auto [storePath, accessor, lockedRef] = resolvedRef.input.fetchToStore(fetchSettings, *store);
         auto hash = store->queryPathInfo(storePath)->narHash;
 
         if (json) {

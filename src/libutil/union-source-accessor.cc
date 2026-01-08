@@ -85,6 +85,16 @@ struct UnionSourceAccessor : SourceAccessor
         return {path, std::nullopt};
     }
 
+    std::shared_ptr<const Provenance> getProvenance(const CanonPath & path) override
+    {
+        for (auto & accessor : accessors) {
+            auto prov = accessor->getProvenance(path);
+            if (prov)
+                return prov;
+        }
+        return nullptr;
+    }
+
     void invalidateCache(const CanonPath & path) override
     {
         for (auto & accessor : accessors)

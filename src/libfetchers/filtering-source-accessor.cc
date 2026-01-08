@@ -68,6 +68,11 @@ std::pair<CanonPath, std::optional<std::string>> FilteringSourceAccessor::getFin
     return next->getFingerprint(prefix / path);
 }
 
+std::shared_ptr<const Provenance> FilteringSourceAccessor::getProvenance(const CanonPath & path)
+{
+    return next->getProvenance(prefix / path);
+}
+
 void FilteringSourceAccessor::invalidateCache(const CanonPath & path)
 {
     next->invalidateCache(prefix / path);

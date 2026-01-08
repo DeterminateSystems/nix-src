@@ -49,6 +49,7 @@ sources = files(
   'input-cache.cc',
   'mercurial.cc',
   'path.cc',
+  'provenance.cc',
   'registry.cc',
   'tarball.cc',
 )
