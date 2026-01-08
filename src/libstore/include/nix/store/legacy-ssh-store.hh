@@ -73,6 +73,11 @@ struct LegacySSHStore : public virtual Store
 
     ref<Connection> openConnection();
 
+    bool isUsefulProvenance() override
+    {
+        return true;
+    }
+
     void queryPathInfoUncached(
         const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override;
 
@@ -104,7 +109,8 @@ struct LegacySSHStore : public virtual Store
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
         PathFilter & filter,
-        RepairFlag repair) override
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override
     {
         unsupported("addToStore");
     }
@@ -112,11 +118,12 @@ struct LegacySSHStore : public virtual Store
     StorePath addToStoreFromDump(
         Source & dump,
         std::string_view name,
-        FileSerialisationMethod dumpMethod = FileSerialisationMethod::NixArchive,
-        ContentAddressMethod hashMethod = FileIngestionMethod::NixArchive,
-        HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
-        const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) override
+        FileSerialisationMethod dumpMethod,
+        ContentAddressMethod hashMethod,
+        HashAlgorithm hashAlgo,
+        const StorePathSet & references,
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override
     {
         unsupported("addToStore");
     }

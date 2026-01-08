@@ -82,7 +82,8 @@ struct RemoteStore : public virtual Store,
         ContentAddressMethod caMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair);
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance);
 
     /**
      * Add a content-addressable store path. `dump` will be drained.
@@ -90,11 +91,12 @@ struct RemoteStore : public virtual Store,
     StorePath addToStoreFromDump(
         Source & dump,
         std::string_view name,
-        FileSerialisationMethod dumpMethod = FileSerialisationMethod::NixArchive,
-        ContentAddressMethod hashMethod = FileIngestionMethod::NixArchive,
-        HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
-        const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) override;
+        FileSerialisationMethod dumpMethod,
+        ContentAddressMethod hashMethod,
+        HashAlgorithm hashAlgo,
+        const StorePathSet & references,
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override;
 
     void addToStore(const ValidPathInfo & info, Source & nar, RepairFlag repair, CheckSigsFlag checkSigs) override;
 

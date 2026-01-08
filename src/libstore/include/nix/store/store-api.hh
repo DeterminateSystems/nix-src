@@ -43,6 +43,8 @@ struct SourceAccessor;
 class NarInfoDiskCache;
 class Store;
 
+struct Provenance;
+
 typedef std::map<std::string, StorePath> OutputPathMap;
 
 enum CheckSigsFlag : bool { NoCheckSigs = false, CheckSigs = true };
@@ -558,7 +560,8 @@ public:
         HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
         const StorePathSet & references = StorePathSet(),
         PathFilter & filter = defaultPathFilter,
-        RepairFlag repair = NoRepair);
+        RepairFlag repair = NoRepair,
+        std::shared_ptr<const Provenance> provenance = nullptr);
 
     /**
      * Copy the contents of a path to the store and register the
@@ -571,7 +574,8 @@ public:
         ContentAddressMethod method = ContentAddressMethod::Raw::NixArchive,
         HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
         const StorePathSet & references = StorePathSet(),
-        std::optional<Hash> expectedCAHash = {});
+        std::optional<Hash> expectedCAHash = {},
+        std::shared_ptr<const Provenance> provenance = nullptr);
 
     /**
      * Like addToStore(), but the contents of the path are contained
@@ -597,7 +601,8 @@ public:
         ContentAddressMethod hashMethod = ContentAddressMethod::Raw::NixArchive,
         HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
         const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) = 0;
+        RepairFlag repair = NoRepair,
+        std::shared_ptr<const Provenance> provenance = nullptr) = 0;
 
     /**
      * Add a mapping indicating that `deriver!outputName` maps to the output path
@@ -790,7 +795,8 @@ public:
     /**
      * Write a derivation to the Nix store, and return its path.
      */
-    virtual StorePath writeDerivation(const Derivation & drv, RepairFlag repair = NoRepair);
+    virtual StorePath writeDerivation(
+        const Derivation & drv, RepairFlag repair = NoRepair, std::shared_ptr<const Provenance> provenance = nullptr);
 
     /**
      * Read a derivation (which must already be valid).
@@ -913,6 +919,15 @@ public:
     virtual std::optional<std::string> getVersion()
     {
         return {};
+    }
+
+    /**
+     * Whether, when copying *from* this store, a "copied" provenance
+     * record should be added.
+     */
+    virtual bool isUsefulProvenance()
+    {
+        return false;
     }
 
 protected:
