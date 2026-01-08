@@ -617,8 +617,11 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
                 co_return doneFailure(std::move(e));
             }
 
+            auto info = worker.evalStore.maybeQueryPathInfo(drvPath);
+
             DerivationBuilderParams params{
                 .drvPath = drvPath,
+                .drvProvenance = info ? info->provenance : nullptr,
                 .buildResult = buildResult,
                 .drv = *drv,
                 .drvOptions = drvOptions,

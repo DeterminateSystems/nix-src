@@ -4,7 +4,7 @@
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/fetchers/fetch-settings.hh"
-#include "nix/fetchers/fetch-to-store.hh"
+#include "nix/fetchers/provenance.hh"
 #include "nix/util/url.hh"
 #include "nix/util/forwarding-source-accessor.hh"
 #include "nix/util/archive.hh"
@@ -196,7 +196,6 @@ bool Input::contains(const Input & other) const
     return false;
 }
 
-// FIXME: remove
 std::tuple<StorePath, ref<SourceAccessor>, Input> Input::fetchToStore(const Settings & settings, Store & store) const
 {
     if (!scheme)
@@ -341,6 +340,8 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
                 {{"hash", store.queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
         }
 
+        accessor->provenance = std::make_shared<TreeProvenance>(*this);
+
         // FIXME: ideally we would use the `showPath()` of the
         // "real" accessor for this fetcher type.
         accessor->setPathDisplay("«" + to_string(true) + "»");
@@ -364,6 +365,8 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
             result.cachedFingerprint = *fp;
         else
             accessor->fingerprint = result.getFingerprint(store);
+
+        accessor->provenance = std::make_shared<TreeProvenance>(result);
 
         return {accessor, std::move(result)};
     } catch (Error & e) {

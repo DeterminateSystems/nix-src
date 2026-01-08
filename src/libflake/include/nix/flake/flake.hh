@@ -10,6 +10,7 @@
 namespace nix {
 
 class EvalState;
+struct Provenance;
 
 namespace flake {
 
@@ -93,6 +94,11 @@ struct Flake
      * The path of `flake.nix`.
      */
     SourcePath path;
+
+    /**
+     * Cached provenance of `flake.nix` (equivalent to `path.getProvenance()`).
+     */
+    std::shared_ptr<const Provenance> provenance;
 
     /**
      * Pretend that `lockedRef` is dirty.

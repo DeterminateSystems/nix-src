@@ -20,6 +20,7 @@
 #include "nix/store/globals.hh"
 #include "nix/store/build/derivation-env-desugar.hh"
 #include "nix/util/terminal.hh"
+#include "nix/store/provenance.hh"
 
 #include <queue>
 
@@ -1863,6 +1864,8 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
             newInfo.deriver = drvPath;
             newInfo.ultimate = true;
+            if (drvProvenance)
+                newInfo.provenance = std::make_shared<const DerivationProvenance>(drvPath, outputName, drvProvenance);
             store.signPathInfo(newInfo);
 
             finish(newInfo.path);

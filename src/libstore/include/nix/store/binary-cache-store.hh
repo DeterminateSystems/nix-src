@@ -100,6 +100,11 @@ protected:
 
 public:
 
+    bool isUsefulProvenance() override
+    {
+        return true;
+    }
+
     virtual bool fileExists(const std::string & path) = 0;
 
     virtual void upsertFile(
@@ -183,7 +188,8 @@ public:
         ContentAddressMethod hashMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override;
 
     StorePath addToStore(
         std::string_view name,

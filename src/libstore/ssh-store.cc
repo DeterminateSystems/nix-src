@@ -54,6 +54,11 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
     {
     }
 
+    bool isUsefulProvenance() override
+    {
+        return true;
+    }
+
     // FIXME extend daemon protocol, move implementation to RemoteStore
     std::optional<std::string> getBuildLogExact(const StorePath & path) override
     {

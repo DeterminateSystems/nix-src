@@ -9,8 +9,29 @@
 #include "nix/store/store-api.hh"
 #include "nix/fetchers/git-utils.hh"
 #include "nix/fetchers/fetch-settings.hh"
+#include "nix/util/provenance.hh"
+
+#include <nlohmann/json.hpp>
 
 namespace nix::fetchers {
+
+struct FetchurlProvenance : Provenance
+{
+    std::string url;
+
+    FetchurlProvenance(const std::string & url)
+        : url(url)
+    {
+    }
+
+    nlohmann::json to_json() const override
+    {
+        return nlohmann::json{
+            {"type", "fetchurl"},
+            {"url", url},
+        };
+    }
+};
 
 DownloadFileResult downloadFile(
     Store & store,
@@ -83,6 +104,7 @@ DownloadFileResult downloadFile(
             },
             hashString(HashAlgorithm::SHA256, sink.s));
         info.narSize = sink.s.size();
+        info.provenance = std::make_shared<FetchurlProvenance>(url);
         auto source = StringSource{sink.s};
         store.addToStore(info, source, NoRepair, NoCheckSigs);
         storePath = std::move(info.path);

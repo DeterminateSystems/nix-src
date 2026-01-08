@@ -52,6 +52,7 @@ enum RepairFlag : bool;
 struct MemorySourceAccessor;
 struct MountedSourceAccessor;
 struct AsyncPathWriter;
+struct Provenance;
 
 namespace eval_cache {
 class EvalCache;
@@ -1137,6 +1138,19 @@ public:
      * `EvalState`.
      */
     ref<Executor> executor;
+
+private:
+
+    std::shared_ptr<const Provenance> rootProvenance;
+
+public:
+
+    /**
+     * Set the provenance of derivations instantiated by the evaluator.
+     */
+    void setRootProvenance(std::shared_ptr<const Provenance> provenance);
+
+    std::shared_ptr<const Provenance> getRootProvenance();
 };
 
 struct DebugTraceStacker

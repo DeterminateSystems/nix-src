@@ -269,6 +269,7 @@ static Flake readFlake(
         .resolvedRef = resolvedRef,
         .lockedRef = lockedRef,
         .path = flakePath,
+        .provenance = flakePath.getProvenance(),
     };
 
     if (auto description = vInfo.attrs()->get(state.s.description)) {
