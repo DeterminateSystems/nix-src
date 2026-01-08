@@ -26,6 +26,20 @@ startHttpServer() {
     HTTP_PORT=$(cat "$TEST_ROOT/port")
 }
 
+# Function to verify a pattern does NOT appear in a log file
+expectNoMatch() {
+    local pattern=$1
+    local logfile=$2
+    local error_code=$3
+
+    if grep -q "$pattern" "$logfile"; then
+        echo "ERROR: $error_code error incorrectly says '$pattern'"
+        echo "Log contents:"
+        cat "$logfile"
+        exit 1
+    fi
+}
+
 cleanup() {
     kill $SERVER_PID 2>/dev/null || true
 }
@@ -38,6 +52,8 @@ startHttpServer 200
 clearStore
 nix-store --substituters "http://127.0.0.1:$HTTP_PORT" --no-require-sigs -r "$outPath" 2>&1 | tee "$TEST_ROOT/log-200"
 [ -x "$outPath/program" ]
+expectNoMatch "does not exist in binary cache" "$TEST_ROOT/log-200" "200"
+expectNoMatch "HTTP error" "$TEST_ROOT/log-200" "200"
 
 # Stop the server and restart with 404 errors
 kill $SERVER_PID
@@ -75,12 +91,7 @@ grepQuiet "HTTP error 401" "$TEST_ROOT/log-401"
 grepQuiet "access token" "$TEST_ROOT/log-401"
 
 # Verify it does NOT say "does not exist" for 401 errors
-if grep -q "does not exist in binary cache" "$TEST_ROOT/log-401"; then
-    echo "ERROR: 401 error incorrectly says 'does not exist in binary cache'"
-    echo "Log contents:"
-    cat "$TEST_ROOT/log-401"
-    exit 1
-fi
+expectNoMatch "does not exist in binary cache" "$TEST_ROOT/log-401" "401"
 
 # Stop the server and restart with 403 errors
 kill $SERVER_PID
@@ -99,11 +110,6 @@ grepQuiet "HTTP error 403" "$TEST_ROOT/log-403"
 grepQuiet "access token" "$TEST_ROOT/log-403"
 
 # Verify it does NOT say "does not exist" for 403 errors
-if grep -q "does not exist in binary cache" "$TEST_ROOT/log-403"; then
-    echo "ERROR: 403 error incorrectly says 'does not exist in binary cache'"
-    echo "Log contents:"
-    cat "$TEST_ROOT/log-403"
-    exit 1
-fi
+expectNoMatch "does not exist in binary cache" "$TEST_ROOT/log-403" "403"
 
 echo "All HTTP error tests passed!"
