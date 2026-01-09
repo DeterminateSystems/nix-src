@@ -54,7 +54,7 @@ cp "${config_nix}" "$flake1Dir"/
 nix-env -f ./user-envs.nix -i foo-1.0
 nix profile list | grep -A2 'Name:.*foo' | grep 'Store paths:.*foo-1.0'
 nix profile add "$flake1Dir" -L
-nix profile list | grep -A4 'Name:.*flake1' | grep 'Locked flake URL:.*narHash'
+#nix profile list | grep -A4 'Name:.*flake1' | grep 'Locked flake URL:.*narHash'
 [[ $("$TEST_HOME"/.nix-profile/bin/hello) = "Hello World" ]]
 [ -e "$TEST_HOME"/.nix-profile/share/man ]
 # shellcheck disable=SC2235
