@@ -436,7 +436,7 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
     auto useRegistriesTop = useRegistries ? fetchers::UseRegistries::All : fetchers::UseRegistries::No;
     auto useRegistriesInputs = useRegistries ? fetchers::UseRegistries::Limited : fetchers::UseRegistries::No;
 
-    auto flake = getFlake(state, topRef, useRegistriesTop, {}, lockFlags.requireLockable);
+    auto flake = getFlake(state, topRef, useRegistriesTop, {}, false);
 
     if (lockFlags.applyNixConfig) {
         flake.config.apply(settings);
@@ -919,6 +919,8 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
                                 CanonPath((topRef.subdir == "" ? "" : topRef.subdir + "/") + "flake.lock"),
                                 newLockFileS,
                                 commitMessage);
+
+                            flake.lockFilePath().invalidateCache();
                         }
 
                         /* Rewriting the lockfile changed the top-level

@@ -58,7 +58,7 @@ std::pair<StorePath, Hash> fetchToStore2(
         }
     } else {
         static auto barf = getEnv("_NIX_TEST_BARF_ON_UNCACHEABLE").value_or("") == "1";
-        if (barf && !filter)
+        if (barf && !filter && !(path.to_string().starts_with("/") || path.to_string().starts_with("«path:/")))
             throw Error("source path '%s' is uncacheable (filter=%d)", path, (bool) filter);
         // FIXME: could still provide in-memory caching keyed on `SourcePath`.
         debug("source path '%s' is uncacheable", path);
