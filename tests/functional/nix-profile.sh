@@ -4,6 +4,8 @@ source common.sh
 
 TODO_NixOS
 
+requireGit
+
 clearStore
 clearProfiles
 
@@ -12,7 +14,7 @@ restartDaemon
 
 # Make a flake.
 flake1Dir=$TEST_ROOT/flake1
-mkdir -p "$flake1Dir"
+createGitRepo "$flake1Dir"
 
 # shellcheck disable=SC2154,SC1039
 cat > "$flake1Dir"/flake.nix <<EOF
@@ -49,6 +51,9 @@ printf 1.0 > "$flake1Dir"/version
 printf false > "$flake1Dir"/ca.nix
 
 cp "${config_nix}" "$flake1Dir"/
+
+git -C "$flake1Dir" add flake.nix config.nix who version ca.nix
+git -C "$flake1Dir" commit -m 'Initial'
 
 # Test upgrading from nix-env.
 nix-env -f ./user-envs.nix -i foo-1.0
@@ -224,11 +229,11 @@ error: An existing package already provides the following file:
        The conflicting packages have a priority of 5.
        To prioritise the new package:
 
-         nix profile add path:${flake2Dir}#packages.${system}.default --priority 4
+         nix profile add git+file://${flake2Dir}#packages.${system}.default --priority 4
 
        To prioritise the existing package:
 
-         nix profile add path:${flake2Dir}#packages.${system}.default --priority 6
+         nix profile add git+file://${flake2Dir}#packages.${system}.default --priority 6
 EOF
 )
 [[ $("$TEST_HOME"/.nix-profile/bin/hello) = "Hello World" ]]
