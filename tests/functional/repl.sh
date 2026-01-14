@@ -321,7 +321,7 @@ import $testDir/lang/parse-fail-eof-pos.nix
 badDiff=0
 badExitCode=0
 
-nixVersion="$(nix eval --impure --raw --expr 'builtins.nixVersion')"
+nixVersion="$(nix --version | sed 's/nix //')"
 
 # TODO: write a repl interacter for testing. Papering over the differences between readline / editline and between platforms is a pain.
 
