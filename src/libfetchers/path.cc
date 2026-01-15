@@ -156,11 +156,13 @@ struct PathInputScheme : InputScheme
 
             // To prevent `fetchToStore()` copying the path again to Nix
             // store, pre-create an entry in the fetcher cache.
-            auto info = store.queryPathInfo(*storePath);
-            accessor->fingerprint = fmt("path:%s", info->narHash.to_string(HashFormat::SRI, true));
-            settings.getCache()->upsert(
-                makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
-                {{"hash", info->narHash.to_string(HashFormat::SRI, true)}});
+            auto info = store.maybeQueryPathInfo(*storePath);
+            if (info) {
+                accessor->fingerprint = fmt("path:%s", info->narHash.to_string(HashFormat::SRI, true));
+                settings.getCache()->upsert(
+                    makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
+                    {{"hash", info->narHash.to_string(HashFormat::SRI, true)}});
+            }
         }
 
         return {accessor, std::move(input)};
