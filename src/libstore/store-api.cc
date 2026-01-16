@@ -458,6 +458,8 @@ void Store::querySubstitutablePathInfos(const StorePathCAMap & paths, Substituta
                         .downloadSize = narInfo ? narInfo->fileSize : 0,
                         .narSize = info->narSize,
                     });
+
+                break; /* We are done. */
             } catch (InvalidPath &) {
             } catch (SubstituterDisabled &) {
             } catch (Error & e) {
