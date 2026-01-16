@@ -292,9 +292,14 @@ void parseCmdLine(
     LegacyArgs(programName, parseArg).parseCmdline(args);
 }
 
+std::string version()
+{
+    return fmt("(Determinate Nix %s) %s", determinateNixVersion, nixVersion);
+}
+
 void printVersion(const std::string & programName)
 {
-    std::cout << fmt("%1% (Nix) %2%", programName, nixVersion) << std::endl;
+    std::cout << fmt("%s %s", programName, version()) << std::endl;
     if (verbosity > lvlInfo) {
         Strings cfg;
 #if NIX_USE_BOEHMGC
@@ -326,7 +331,7 @@ int handleExceptions(const std::string & programName, std::function<void()> fun)
         return e.status;
     } catch (UsageError & e) {
         logError(e.info());
-        printError("Try '%1% --help' for more information.", programName);
+        printError("\nTry '%1% --help' for more information.", programName);
         return 1;
     } catch (BaseError & e) {
         logError(e.info());

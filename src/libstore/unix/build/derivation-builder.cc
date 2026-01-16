@@ -1,6 +1,7 @@
 #include "nix/store/build/derivation-builder.hh"
 #include "nix/util/file-system.hh"
 #include "nix/store/local-store.hh"
+#include "nix/store/active-builds.hh"
 #include "nix/util/processes.hh"
 #include "nix/store/builtins.hh"
 #include "nix/store/path-references.hh"
@@ -82,6 +83,11 @@ protected:
      * The process ID of the builder.
      */
     Pid pid;
+
+    /**
+     * Handles to track active builds for `nix ps`.
+     */
+    std::optional<TrackActiveBuildsStore::BuildHandle> activeBuildHandle;
 
     LocalStore & store;
 
@@ -234,6 +240,11 @@ protected:
     {
         return acquireUserLock(1, false);
     }
+
+    /**
+     * Construct the `ActiveBuild` object for `ActiveBuildsTracker`.
+     */
+    virtual ActiveBuild getActiveBuild();
 
     /**
      * Return the paths that should be made available in the sandbox.
@@ -490,6 +501,8 @@ bool DerivationBuilderImpl::killChild()
         killSandbox(true);
 
         pid.wait();
+
+        activeBuildHandle.reset();
     }
     return ret;
 }
@@ -522,6 +535,8 @@ SingleDrvOutputs DerivationBuilderImpl::unprepareBuild()
        open and modifies them after they have been chown'ed to
        root. */
     killSandbox(true);
+
+    activeBuildHandle.reset();
 
     /* Terminate the recursive Nix daemon. */
     stopDaemon();
@@ -678,17 +693,17 @@ static void handleChildException(bool sendException)
     }
 }
 
-static bool checkNotWorldWritable(std::filesystem::path path)
+static void checkNotWorldWritable(std::filesystem::path path)
 {
     while (true) {
         auto st = lstat(path);
         if (st.st_mode & S_IWOTH)
-            return false;
+            throw Error("Path %s is world-writable or a symlink. That's not allowed for security.", path);
         if (path == path.parent_path())
             break;
         path = path.parent_path();
     }
-    return true;
+    return;
 }
 
 std::optional<Descriptor> DerivationBuilderImpl::startBuild()
@@ -710,9 +725,8 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
 
     createDirs(buildDir);
 
-    if (buildUser && !checkNotWorldWritable(buildDir))
-        throw Error(
-            "Path %s or a parent directory is world-writable or a symlink. That's not allowed for security.", buildDir);
+    if (buildUser)
+        checkNotWorldWritable(buildDir);
 
     /* Create a temporary directory where the build will take
        place. */
@@ -837,9 +851,26 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
 
     pid.setSeparatePG(true);
 
+    /* Make the build visible to `nix ps`. */
+    if (auto tracker = dynamic_cast<TrackActiveBuildsStore *>(&store))
+        activeBuildHandle.emplace(tracker->buildStarted(getActiveBuild()));
+
     processSandboxSetupMessages();
 
     return builderOut.get();
+}
+
+ActiveBuild DerivationBuilderImpl::getActiveBuild()
+{
+    return {
+        .nixPid = getpid(),
+        .clientPid = std::nullopt, // FIXME
+        .clientUid = std::nullopt, // FIXME
+        .mainPid = pid,
+        .mainUser = UserInfo::fromUid(buildUser ? buildUser->getUID() : getuid()),
+        .startTime = buildResult.startTime,
+        .derivation = drvPath,
+    };
 }
 
 PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
@@ -847,6 +878,11 @@ PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
     /* Allow a user-configurable set of directories from the
        host file system. */
     PathsInChroot pathsInChroot = defaultPathsInChroot;
+
+    for (auto & p : pathsInChroot)
+        if (!p.second.optional && !maybeLstat(p.second.source))
+            throw SysError(
+                "path '%s' is configured as part of the `sandbox-paths` option, but is inaccessible", p.second.source);
 
     if (hasPrefix(store.storeDir, tmpDirInSandbox())) {
         throw Error("`sandbox-build-dir` must not contain the storeDir");
@@ -999,7 +1035,7 @@ void DerivationBuilderImpl::processSandboxSetupMessages()
                     "while waiting for the build environment for '%s' to initialize (%s, previous messages: %s)",
                     store.printStorePath(drvPath),
                     statusToString(status),
-                    concatStringsSep("|", msgs));
+                    concatStringsSep("\n", msgs));
                 throw;
             }
         }();
@@ -1853,7 +1889,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
     /* Apply output checks. This includes checking of the wanted vs got
        hash of fixed-outputs. */
-    checkOutputs(store, drvPath, drv.outputs, drvOptions.outputChecks, infos);
+    checkOutputs(store, drvPath, drv.outputs, drvOptions.outputChecks, infos, *act);
 
     if (buildMode == bmCheck) {
         return {};

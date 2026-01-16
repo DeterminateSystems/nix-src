@@ -71,6 +71,7 @@ nix_err nix_expr_eval_from_string(
         nix::Expr * parsedExpr = state->state.parseExprFromString(expr, state->state.rootPath(nix::CanonPath(path)));
         state->state.eval(parsedExpr, *value->value);
         state->state.forceValue(*value->value, nix::noPos);
+        state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
 }
@@ -82,6 +83,7 @@ nix_err nix_value_call(nix_c_context * context, EvalState * state, Value * fn, n
     try {
         state->state.callFunction(*fn->value, *arg->value, *value->value, nix::noPos);
         state->state.forceValue(*value->value, nix::noPos);
+        state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
 }
@@ -100,6 +102,7 @@ nix_err nix_value_call_multi(
     try {
         state->state.callFunction(*fn->value, {internal_args.data(), nargs}, *value->value, nix::noPos);
         state->state.forceValue(*value->value, nix::noPos);
+        state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
 }
@@ -110,6 +113,7 @@ nix_err nix_value_force(nix_c_context * context, EvalState * state, nix_value * 
         context->last_err_code = NIX_OK;
     try {
         state->state.forceValue(*value->value, nix::noPos);
+        state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
 }
@@ -120,6 +124,7 @@ nix_err nix_value_force_deep(nix_c_context * context, EvalState * state, nix_val
         context->last_err_code = NIX_OK;
     try {
         state->state.forceValueDeep(*value->value);
+        state->state.waitForAllPaths();
     }
     NIXC_CATCH_ERRS
 }

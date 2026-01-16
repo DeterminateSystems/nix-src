@@ -78,7 +78,6 @@ PrimOp getFlake(const Settings & settings)
           ```
         )",
         .fun = prim_getFlake,
-        .experimentalFeature = Xp::Flakes,
     };
 }
 
@@ -120,7 +119,6 @@ nix::PrimOp parseFlakeRef({
       ```
     )",
     .fun = prim_parseFlakeRef,
-    .experimentalFeature = Xp::Flakes,
 });
 
 static void prim_flakeRefToString(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -180,7 +178,6 @@ nix::PrimOp flakeRefToString({
       ```
     )",
     .fun = prim_flakeRefToString,
-    .experimentalFeature = Xp::Flakes,
 });
 
 } // namespace nix::flake::primops

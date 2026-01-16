@@ -1,4 +1,5 @@
 #include "nix/fetchers/filtering-source-accessor.hh"
+#include "nix/util/sync.hh"
 
 #include <boost/unordered/unordered_flat_set.hpp>
 
@@ -67,6 +68,11 @@ std::pair<CanonPath, std::optional<std::string>> FilteringSourceAccessor::getFin
     return next->getFingerprint(prefix / path);
 }
 
+void FilteringSourceAccessor::invalidateCache(const CanonPath & path)
+{
+    next->invalidateCache(prefix / path);
+}
+
 void FilteringSourceAccessor::checkAccess(const CanonPath & path)
 {
     if (!isAllowed(path))
@@ -76,8 +82,8 @@ void FilteringSourceAccessor::checkAccess(const CanonPath & path)
 
 struct AllowListSourceAccessorImpl : AllowListSourceAccessor
 {
-    std::set<CanonPath> allowedPrefixes;
-    boost::unordered_flat_set<CanonPath> allowedPaths;
+    SharedSync<std::set<CanonPath>> allowedPrefixes;
+    SharedSync<boost::unordered_flat_set<CanonPath>> allowedPaths;
 
     AllowListSourceAccessorImpl(
         ref<SourceAccessor> next,
@@ -92,12 +98,12 @@ struct AllowListSourceAccessorImpl : AllowListSourceAccessor
 
     bool isAllowed(const CanonPath & path) override
     {
-        return allowedPaths.contains(path) || path.isAllowed(allowedPrefixes);
+        return allowedPaths.readLock()->contains(path) || path.isAllowed(*allowedPrefixes.readLock());
     }
 
     void allowPrefix(CanonPath prefix) override
     {
-        allowedPrefixes.insert(std::move(prefix));
+        allowedPrefixes.lock()->insert(std::move(prefix));
     }
 };
 

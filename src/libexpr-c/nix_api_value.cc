@@ -194,6 +194,8 @@ ValueType nix_get_type(nix_c_context * context, const nix_value * value)
         switch (v.type()) {
         case nThunk:
             return NIX_TYPE_THUNK;
+        case nFailed:
+            return NIX_TYPE_FAILED;
         case nInt:
             return NIX_TYPE_INT;
         case nFloat:
@@ -386,6 +388,7 @@ nix_value * nix_get_attr_byname(nix_c_context * context, const nix_value * value
         auto attr = v.attrs()->get(s);
         if (attr) {
             state->state.forceValue(*attr->value, nix::noPos);
+            state->state.waitForAllPaths();
             return new_nix_value(attr->value, state->state.mem);
         }
         nix_set_err_msg(context, NIX_ERR_KEY, "missing attribute");
