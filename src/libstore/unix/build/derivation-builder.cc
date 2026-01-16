@@ -291,7 +291,7 @@ protected:
         return Strings({store.printStorePath(drvPath)});
     }
 
-    virtual Path realPathInSandbox(const Path & p)
+    virtual Path realPathInHost(const Path & p)
     {
         return store.toRealPath(p);
     }
@@ -1449,7 +1449,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
     for (auto & [outputName, _] : drv.outputs) {
         auto scratchOutput = get(scratchOutputs, outputName);
         assert(scratchOutput);
-        auto actualPath = realPathInSandbox(store.printStorePath(*scratchOutput));
+        auto actualPath = realPathInHost(store.printStorePath(*scratchOutput));
 
         outputsToSort.insert(outputName);
 
@@ -1569,7 +1569,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
         auto output = get(drv.outputs, outputName);
         auto scratchPath = get(scratchOutputs, outputName);
         assert(output && scratchPath);
-        auto actualPath = realPathInSandbox(store.printStorePath(*scratchPath));
+        auto actualPath = realPathInHost(store.printStorePath(*scratchPath));
 
         auto finish = [&](StorePath finalStorePath) {
             /* Store the final path */
@@ -1996,6 +1996,7 @@ StorePath DerivationBuilderImpl::makeFallbackPath(const StorePath & path)
 #include "linux-derivation-builder.cc"
 #include "darwin-derivation-builder.cc"
 #include "external-derivation-builder.cc"
+#include "wasi-derivation-builder.cc"
 
 namespace nix {
 
@@ -2026,6 +2027,9 @@ std::unique_ptr<DerivationBuilder> makeDerivationBuilder(
             // FIXME: cache derivationType
             useSandbox = params.drv.type().isSandboxed() && !params.drvOptions.noChroot;
     }
+
+    if (params.drv.platform == "wasm32-wasip1")
+        return std::make_unique<WasiDerivationBuilder>(store, std::move(miscMethods), std::move(params));
 
     if (store.storeDir != store.config->realStoreDir.get()) {
 #ifdef __linux__

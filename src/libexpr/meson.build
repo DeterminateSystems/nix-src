@@ -239,7 +239,7 @@ this_library = library(
   soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
-  link_args : linker_export_flags,
+  link_args : linker_export_flags + [ '-lwasmtime' ],
   link_whole : [ parser_library ],
   prelink : true, # For C++ static initializers
   install : true,
