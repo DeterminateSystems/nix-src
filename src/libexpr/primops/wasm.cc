@@ -364,6 +364,26 @@ struct NixWasmInstance
 
         return valueId;
     }
+
+    ValueId make_app(ValueId funId, uint32_t ptr, uint32_t len)
+    {
+        if (!len)
+            return funId;
+
+        auto args = subspan<ValueId>(memory().subspan(ptr), len);
+
+        auto res = values.at(funId);
+
+        while (!args.empty()) {
+            auto arg = values.at(args[0]);
+            auto tmp = state.allocValue();
+            tmp->mkApp(res, {arg});
+            res = tmp;
+            args = args.subspan(1);
+        }
+
+        return addValue(res);
+    }
 };
 
 template<typename R, typename... Args>
@@ -399,6 +419,7 @@ void regFuns(Linker & linker)
     regFun(linker, "copy_attrset", &NixWasmInstance::copy_attrset);
     regFun(linker, "copy_attrname", &NixWasmInstance::copy_attrname);
     regFun(linker, "call_function", &NixWasmInstance::call_function);
+    regFun(linker, "make_app", &NixWasmInstance::make_app);
 }
 
 void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
