@@ -177,7 +177,7 @@ ReplExitStatus NixRepl::mainLoop()
         if (state->debugRepl) {
             debuggerNotice = " debugger";
         }
-        notice("Nix %1%%2%\nType :? for help.", nixVersion, debuggerNotice);
+        notice("Nix %s\nType :? for help.", version(), debuggerNotice);
     }
 
     isFirstRepl = false;
