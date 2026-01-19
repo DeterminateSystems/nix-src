@@ -23,7 +23,7 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
         LocalStore & store, std::unique_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
         : DerivationBuilderImpl(store, std::move(miscMethods), std::move(params))
     {
-        // experimentalFeatureSettings.require(Xp::WasiBuilders);
+        experimentalFeatureSettings.require(Xp::WasmDerivations);
     }
 
     void execBuilder(const Strings & args, const Strings & envStrs) override

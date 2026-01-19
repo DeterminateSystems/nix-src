@@ -40,6 +40,7 @@ enum struct ExperimentalFeature {
     BuildTimeFetchTree,
     ParallelEval,
     WasmBuiltin,
+    WasmDerivations,
 };
 
 extern std::set<std::string> stabilizedFeatures;
