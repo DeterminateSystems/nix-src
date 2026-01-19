@@ -412,6 +412,29 @@ struct NixWasmInstance
 
         return addValue(res);
     }
+
+    /**
+     * Read the contents of a file into WASM memory. This is like calling `builtins.readFile`, except that it can handle
+     * binary files that cannot be represented as Nix strings.
+     */
+    uint32_t read_file(ValueId pathId, uint32_t ptr, uint32_t len)
+    {
+        auto & pathValue = *values.at(pathId);
+        state.forceValue(pathValue, noPos);
+        if (pathValue.type() != nPath)
+            throw Error("read_file expects a path value");
+
+        auto path = pathValue.path();
+        auto contents = path.readFile();
+
+        // FIXME: this is an inefficient interface since it may cause the file to be read twice.
+        if (contents.size() <= len) {
+            auto buf = memory().subspan(ptr, len);
+            memcpy(buf.data(), contents.data(), contents.size());
+        }
+
+        return contents.size();
+    }
 };
 
 template<typename R, typename... Args>
@@ -450,6 +473,7 @@ void regFuns(Linker & linker)
     regFun(linker, "copy_attrname", &NixWasmInstance::copy_attrname);
     regFun(linker, "call_function", &NixWasmInstance::call_function);
     regFun(linker, "make_app", &NixWasmInstance::make_app);
+    regFun(linker, "read_file", &NixWasmInstance::read_file);
 }
 
 void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
