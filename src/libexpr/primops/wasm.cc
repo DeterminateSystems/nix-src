@@ -237,6 +237,34 @@ struct NixWasmInstance
         return s.size();
     }
 
+    ValueId make_path(ValueId baseId, uint32_t ptr, uint32_t len)
+    {
+        auto & baseValue = *values.at(baseId);
+        state.forceValue(baseValue, noPos);
+        if (baseValue.type() != nPath)
+            throw Error("make_path expects a path value");
+        auto base = baseValue.path();
+
+        auto [valueId, value] = allocValue();
+        value.mkPath({base.accessor, CanonPath(span2string(memory().subspan(ptr, len)), base.path)}, state.mem);
+        return valueId;
+    }
+
+    uint32_t copy_path(ValueId valueId, uint32_t ptr, uint32_t maxLen)
+    {
+        auto & v = *values.at(valueId);
+        state.forceValue(v, noPos);
+        if (v.type() != nPath)
+            throw Error("copy_path expects a path value");
+        auto path = v.path().path;
+        auto s = path.abs();
+        if (s.size() <= maxLen) {
+            auto buf = memory().subspan(ptr, maxLen);
+            memcpy(buf.data(), s.data(), s.size());
+        }
+        return s.size();
+    }
+
     ValueId make_bool(int32_t b)
     {
         return addValue(state.getBool(b));
@@ -410,6 +438,8 @@ void regFuns(Linker & linker)
     regFun(linker, "get_float", &NixWasmInstance::get_float);
     regFun(linker, "make_string", &NixWasmInstance::make_string);
     regFun(linker, "copy_string", &NixWasmInstance::copy_string);
+    regFun(linker, "make_path", &NixWasmInstance::make_path);
+    regFun(linker, "copy_path", &NixWasmInstance::copy_path);
     regFun(linker, "make_bool", &NixWasmInstance::make_bool);
     regFun(linker, "get_bool", &NixWasmInstance::get_bool);
     regFun(linker, "make_null", &NixWasmInstance::make_null);
