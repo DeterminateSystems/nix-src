@@ -1,31 +1,30 @@
+# Stripped-down version of https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/wa/wasmtime/package.nix,
+# license: https://github.com/NixOS/nixpkgs/blob/master/COPYING
 {
   lib,
   stdenv,
   rust_1_89,
   fetchFromGitHub,
-  buildPackages,
   cmake,
-  installShellFiles,
-  nix-update-script,
   enableShared ? !stdenv.hostPlatform.isStatic,
   enableStatic ? stdenv.hostPlatform.isStatic,
 }:
 rust_1_89.packages.stable.rustPlatform.buildRustPackage (finalAttrs: {
   pname = "wasmtime";
-  version = "40.0.0";
+  version = "40.0.2";
 
   src = fetchFromGitHub {
     owner = "bytecodealliance";
     repo = "wasmtime";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-d5j+QSEWIVwVRMT/QGc6x3cVBTFZBpoxiBagmpLV1e8=";
+    hash = "sha256-4y9WpCdyuF/Tp2k/1d5rZxwYunWNdeibEsFgHcBC52Q=";
     fetchSubmodules = true;
   };
 
   # Disable cargo-auditable until https://github.com/rust-secure-code/cargo-auditable/issues/124 is solved.
   auditable = false;
 
-  cargoHash = "sha256-PIUJHkeGi8gao7n+SLzcxNYTl2KxKiwJZPW+sFYf0AY=";
+  cargoHash = "sha256-aTPgnuBvOIqg1+Sa2ZLdMTLujm8dKGK5xpZ3qHpr3f8=";
   cargoBuildFlags = [
     "--package"
     "wasmtime-c-api"
@@ -40,7 +39,6 @@ rust_1_89.packages.stable.rustPlatform.buildRustPackage (finalAttrs: {
 
   nativeBuildInputs = [
     cmake
-    installShellFiles
   ];
 
   doCheck =
@@ -73,29 +71,4 @@ rust_1_89.packages.stable.rustPlatform.buildRustPackage (finalAttrs: {
         $lib/lib/libwasmtime.dylib \
         $lib/lib/libwasmtime.dylib
     '';
-
-  passthru = {
-    updateScript = nix-update-script {
-      extraArgs = [
-        "--version-regex"
-        "^v(\\d+\\.\\d+\\.\\d+)$"
-      ];
-    };
-  };
-
-  meta = {
-    description = "Standalone JIT-style runtime for WebAssembly, using Cranelift";
-    homepage = "https://wasmtime.dev/";
-    license = [
-      lib.licenses.asl20
-      lib.licenses.llvm-exception
-    ];
-    mainProgram = "wasmtime";
-    maintainers = with lib.maintainers; [
-      ereslibre
-      nekowinston
-    ];
-    platforms = lib.platforms.unix;
-    changelog = "https://github.com/bytecodealliance/wasmtime/blob/v${finalAttrs.version}/RELEASES.md";
-  };
 })
