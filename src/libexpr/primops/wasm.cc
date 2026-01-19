@@ -436,6 +436,7 @@ static RegisterPrimOp primop_fromTOML(
      .doc = R"(
       Call a WASM function with the specified argument.
      )",
-     .fun = prim_wasm});
+     .fun = prim_wasm,
+     .experimentalFeature = Xp::WasmBuiltin});
 
 } // namespace nix

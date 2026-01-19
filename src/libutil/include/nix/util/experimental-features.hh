@@ -39,6 +39,7 @@ enum struct ExperimentalFeature {
     BLAKE3Hashes,
     BuildTimeFetchTree,
     ParallelEval,
+    WasmBuiltin,
 };
 
 extern std::set<std::string> stabilizedFeatures;
