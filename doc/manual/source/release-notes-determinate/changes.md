@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.15.1.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.15.2.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -154,3 +154,22 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 * Bring back the free alpha by @grahamc in [DeterminateSystems/nix-src#305](https://github.com/DeterminateSystems/nix-src/pull/305)
 
 * Replace substitutable hashes with unlilkey to substitute hashes by @grahamc in [DeterminateSystems/nix-src#306](https://github.com/DeterminateSystems/nix-src/pull/306)
+
+<!-- Determinate Nix version 3.15.2 -->
+
+* Continuation of #306: Invalidate remaining hashes by @grahamc in [DeterminateSystems/nix-src#307](https://github.com/DeterminateSystems/nix-src/pull/307)
+
+* Make path inputs lazy by @edolstra in [DeterminateSystems/nix-src#312](https://github.com/DeterminateSystems/nix-src/pull/312)
+
+* Limit the number of active curl handles by @edolstra in [DeterminateSystems/nix-src#315](https://github.com/DeterminateSystems/nix-src/pull/315)
+
+* nix repl: Show Determinate version by @edolstra in [DeterminateSystems/nix-src#316](https://github.com/DeterminateSystems/nix-src/pull/316)
+
+* packaging: fix build with lowdown by @dliberalesso in [DeterminateSystems/nix-src#313](https://github.com/DeterminateSystems/nix-src/pull/313)
+
+* Path fetcher: Handle invalid paths by @edolstra in [DeterminateSystems/nix-src#317](https://github.com/DeterminateSystems/nix-src/pull/317)
+
+* Sync with upstream 2.33.1 by @edolstra in [DeterminateSystems/nix-src#318](https://github.com/DeterminateSystems/nix-src/pull/318)
+
+
+* @dliberalesso made their first contribution in [DeterminateSystems/nix-src#313](https://github.com/DeterminateSystems/nix-src/pull/313)
