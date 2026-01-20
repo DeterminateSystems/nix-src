@@ -126,6 +126,9 @@ struct NixWasmInstance
         , memory_(std::get<Memory>(*instance.get(wasmCtx, "memory")))
     {
         wasmCtx.set_data(this);
+
+        /* Reserve value ID 0 so it can be used in functions like get_attr() to denote a missing attribute. */
+        values.push_back(nullptr);
     }
 
     ValueId addValue(Value * v)
