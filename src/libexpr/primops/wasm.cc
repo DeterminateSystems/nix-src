@@ -377,6 +377,18 @@ struct NixWasmInstance
         return {};
     }
 
+    ValueId get_attr(ValueId valueId, uint32_t ptr, uint32_t len)
+    {
+        auto attrName = span2string(memory().subspan(ptr, len));
+
+        auto & value = *values.at(valueId);
+        state.forceAttrs(value, noPos, "while getting an attribute from WASM");
+
+        auto attr = value.attrs()->get(state.symbols.create(attrName));
+
+        return attr ? addValue(attr->value) : 0;
+    }
+
     ValueId call_function(ValueId funId, uint32_t ptr, uint32_t len)
     {
         auto & fun = *values.at(funId);
@@ -471,6 +483,7 @@ void regFuns(Linker & linker)
     regFun(linker, "make_attrset", &NixWasmInstance::make_attrset);
     regFun(linker, "copy_attrset", &NixWasmInstance::copy_attrset);
     regFun(linker, "copy_attrname", &NixWasmInstance::copy_attrname);
+    regFun(linker, "get_attr", &NixWasmInstance::get_attr);
     regFun(linker, "call_function", &NixWasmInstance::call_function);
     regFun(linker, "make_app", &NixWasmInstance::make_app);
     regFun(linker, "read_file", &NixWasmInstance::read_file);
