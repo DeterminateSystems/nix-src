@@ -146,10 +146,10 @@ struct NixWasmInstance
     {
         auto ext = instance.get(wasmCtx, name);
         if (!ext)
-            throw Error("WASM module '%s' does not export function '%s'", pre->wasmPath, name);
+            throw Error("Wasm module '%s' does not export function '%s'", pre->wasmPath, name);
         auto fun = std::get_if<Func>(&*ext);
         if (!fun)
-            throw Error("export '%s' of WASM module '%s' is not a function", name, pre->wasmPath);
+            throw Error("export '%s' of Wasm module '%s' is not a function", name, pre->wasmPath);
         return *fun;
     }
 
@@ -166,7 +166,7 @@ struct NixWasmInstance
 
     std::monostate panic(uint32_t ptr, uint32_t len)
     {
-        throw Error("WASM panic: %s", Uncolored(span2string(memory().subspan(ptr, len))));
+        throw Error("Wasm panic: %s", Uncolored(span2string(memory().subspan(ptr, len))));
     }
 
     std::monostate warn(uint32_t ptr, uint32_t len)
@@ -205,7 +205,7 @@ struct NixWasmInstance
 
     int64_t get_int(ValueId valueId)
     {
-        return state.forceInt(*values.at(valueId), noPos, "while evaluating a value from WASM").value;
+        return state.forceInt(*values.at(valueId), noPos, "while evaluating a value from Wasm").value;
     }
 
     ValueId make_float(double x)
@@ -217,7 +217,7 @@ struct NixWasmInstance
 
     double get_float(ValueId valueId)
     {
-        return state.forceFloat(*values.at(valueId), noPos, "while evaluating a value from WASM");
+        return state.forceFloat(*values.at(valueId), noPos, "while evaluating a value from Wasm");
     }
 
     ValueId make_string(uint32_t ptr, uint32_t len)
@@ -229,7 +229,7 @@ struct NixWasmInstance
 
     uint32_t copy_string(ValueId valueId, uint32_t ptr, uint32_t maxLen)
     {
-        auto s = state.forceString(*values.at(valueId), noPos, "while evaluating a value from WASM");
+        auto s = state.forceString(*values.at(valueId), noPos, "while evaluating a value from Wasm");
         if (s.size() <= maxLen) {
             auto buf = memory().subspan(ptr, maxLen);
             memcpy(buf.data(), s.data(), s.size());
@@ -272,7 +272,7 @@ struct NixWasmInstance
 
     int32_t get_bool(ValueId valueId)
     {
-        return state.forceBool(*values.at(valueId), noPos, "while evaluating a value from WASM");
+        return state.forceBool(*values.at(valueId), noPos, "while evaluating a value from Wasm");
     }
 
     ValueId make_null()
@@ -297,7 +297,7 @@ struct NixWasmInstance
     uint32_t copy_list(ValueId valueId, uint32_t ptr, uint32_t maxLen)
     {
         auto & value = *values.at(valueId);
-        state.forceList(value, noPos, "while getting a list from WASM");
+        state.forceList(value, noPos, "while getting a list from Wasm");
 
         if (value.listSize() <= maxLen) {
             auto out = subspan<ValueId>(memory().subspan(ptr), value.listSize());
@@ -337,7 +337,7 @@ struct NixWasmInstance
     uint32_t copy_attrset(ValueId valueId, uint32_t ptr, uint32_t maxLen)
     {
         auto & value = *values.at(valueId);
-        state.forceAttrs(value, noPos, "while copying an attrset into WASM");
+        state.forceAttrs(value, noPos, "while copying an attrset into Wasm");
 
         if (value.attrs()->size() <= maxLen) {
             // FIXME: endianness.
@@ -362,7 +362,7 @@ struct NixWasmInstance
     std::monostate copy_attrname(ValueId valueId, uint32_t attrIdx, uint32_t ptr, uint32_t len)
     {
         auto & value = *values.at(valueId);
-        state.forceAttrs(value, noPos, "while copying an attr name into WASM");
+        state.forceAttrs(value, noPos, "while copying an attr name into Wasm");
 
         auto & attrs = *value.attrs();
 
@@ -382,7 +382,7 @@ struct NixWasmInstance
         auto attrName = span2string(memory().subspan(ptr, len));
 
         auto & value = *values.at(valueId);
-        state.forceAttrs(value, noPos, "while getting an attribute from WASM");
+        state.forceAttrs(value, noPos, "while getting an attribute from Wasm");
 
         auto attr = value.attrs()->get(state.symbols.create(attrName));
 
@@ -392,7 +392,7 @@ struct NixWasmInstance
     ValueId call_function(ValueId funId, uint32_t ptr, uint32_t len)
     {
         auto & fun = *values.at(funId);
-        state.forceFunction(fun, noPos, "while calling a function from WASM");
+        state.forceFunction(fun, noPos, "while calling a function from Wasm");
 
         ValueVector args;
         for (auto argId : subspan<ValueId>(memory().subspan(ptr), len))
@@ -426,7 +426,7 @@ struct NixWasmInstance
     }
 
     /**
-     * Read the contents of a file into WASM memory. This is like calling `builtins.readFile`, except that it can handle
+     * Read the contents of a file into Wasm memory. This is like calling `builtins.readFile`, except that it can handle
      * binary files that cannot be represented as Nix strings.
      */
     uint32_t read_file(ValueId pathId, uint32_t ptr, uint32_t len)
@@ -516,7 +516,7 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
         state.forceValue(*vRes, pos);
         v = *vRes;
     } catch (Error & e) {
-        e.addTrace(state.positions[pos], "while executing the WASM function '%s' from '%s'", functionName, wasmPath);
+        e.addTrace(state.positions[pos], "while executing the Wasm function '%s' from '%s'", functionName, wasmPath);
         throw;
     }
 }
@@ -525,7 +525,7 @@ static RegisterPrimOp primop_fromTOML(
     {.name = "wasm",
      .args = {"wasm", "entry", "arg"},
      .doc = R"(
-      Call a WASM function with the specified argument.
+      Call a Wasm function with the specified argument.
      )",
      .fun = prim_wasm,
      .experimentalFeature = Xp::WasmBuiltin});

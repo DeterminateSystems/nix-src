@@ -61,10 +61,10 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
         auto startName = "_start";
         auto ext = instance.get(wasmStore, startName);
         if (!ext)
-            throw Error("WASM module '%s' does not export function '%s'", drv.builder, startName);
+            throw Error("Wasm module '%s' does not export function '%s'", drv.builder, startName);
         auto fun = std::get_if<Func>(&*ext);
         if (!fun)
-            throw Error("export '%s' of WASM module '%s' is not a function", startName, drv.builder);
+            throw Error("export '%s' of Wasm module '%s' is not a function", startName, drv.builder);
 
         unwrap(fun->call(wasmStore.context(), {}));
 
