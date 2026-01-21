@@ -520,8 +520,12 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
         // FIXME: use the "start" function if present.
         instance.runFunction("nix_wasm_init_v1", {});
 
-        auto vRes =
-            instance.values.at(instance.runFunction(functionName, {(int32_t) instance.addValue(args[2])}).at(0).i32());
+        auto res = instance.runFunction(functionName, {(int32_t) instance.addValue(args[2])});
+        if (res.size() != 1)
+            throw Error("Wasm function '%s' from '%s' did not return exactly one value", functionName, wasmPath);
+        if (res[0].kind() != ValKind::I32)
+            throw Error("Wasm function '%s' from '%s' did not return an i32 value", functionName, wasmPath);
+        auto vRes = instance.values.at(res[0].i32());
         state.forceValue(*vRes, pos);
         v = *vRes;
     } catch (Error & e) {
