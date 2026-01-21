@@ -48,7 +48,8 @@ static std::string_view span2string(std::span<uint8_t> s)
 template<typename T>
 static std::span<T> subspan(std::span<uint8_t> s, size_t len)
 {
-    assert(s.size() >= len * sizeof(T));
+    if (s.size() < len * sizeof(T))
+        throw Error("Wasm memory access out of bounds");
     return std::span((T *) s.data(), len);
 }
 
@@ -369,11 +370,13 @@ struct NixWasmInstance
 
         auto & attrs = *value.attrs();
 
-        assert((size_t) attrIdx < attrs.size());
+        if ((size_t) attrIdx >= attrs.size())
+            throw Error("copy_attrname: attribute index out of bounds");
 
         std::string_view name = state.symbols[attrs[attrIdx].name];
 
-        assert((size_t) len == name.size());
+        if ((size_t) len != name.size())
+            throw Error("copy_attrname: buffer length does not match attribute name length");
 
         memcpy(memory().subspan(ptr, len).data(), name.data(), name.size());
 
