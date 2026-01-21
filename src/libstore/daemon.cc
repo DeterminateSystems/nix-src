@@ -18,6 +18,7 @@
 #include "nix/util/logging.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/active-builds.hh"
+#include "nix/util/provenance.hh"
 
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
 #  include "nix/util/monitor-fd.hh"
@@ -433,6 +434,12 @@ static void performOp(
             bool repairBool;
             conn.from >> repairBool;
             auto repair = RepairFlag{repairBool};
+            std::shared_ptr<const Provenance> provenance;
+            if (conn.features.contains(WorkerProto::featureProvenance)) {
+                auto s = readString(conn.from);
+                if (!s.empty())
+                    provenance = Provenance::from_json_str(s);
+            }
 
             logger->startWork();
             auto pathInfo = [&]() {
@@ -458,8 +465,8 @@ static void performOp(
                     assert(false);
                 }
                 // TODO these two steps are essentially RemoteStore::addCAToStore. Move it up to Store.
-                auto path =
-                    store->addToStoreFromDump(source, name, dumpMethod, contentAddressMethod, hashAlgo, refs, repair);
+                auto path = store->addToStoreFromDump(
+                    source, name, dumpMethod, contentAddressMethod, hashAlgo, refs, repair, provenance);
                 return store->queryPathInfo(path);
             }();
             logger->stopWork();

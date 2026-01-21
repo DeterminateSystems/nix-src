@@ -18,6 +18,7 @@
 #include "nix/util/callback.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/provenance.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -314,9 +315,6 @@ ref<const ValidPathInfo> RemoteStore::addCAToStore(
     RepairFlag repair,
     std::shared_ptr<const Provenance> provenance)
 {
-    if (provenance)
-        throw UnimplementedError("RemoteStore::addToStore() with provenance");
-
     std::optional<ConnectionHandle> conn_(getConnection());
     auto & conn = *conn_;
 
@@ -325,6 +323,8 @@ ref<const ValidPathInfo> RemoteStore::addCAToStore(
         conn->to << WorkerProto::Op::AddToStore << name << caMethod.renderWithAlgo(hashAlgo);
         WorkerProto::write(*this, *conn, references);
         conn->to << repair;
+        if (conn->features.contains(WorkerProto::featureProvenance))
+            conn->to << (provenance ? provenance->to_json_str() : "");
 
         // The dump source may invoke the store, so we need to make some room.
         connections->incCapacity();
