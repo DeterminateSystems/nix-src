@@ -446,6 +446,9 @@ struct NixWasmInstance
         auto path = pathValue.path();
         auto contents = path.readFile();
 
+        if (contents.size() > std::numeric_limits<uint32_t>::max())
+            throw Error("file '%s' is too large to process in Wasm (size: %d)", path, contents.size());
+
         // FIXME: this is an inefficient interface since it may cause the file to be read twice.
         if (contents.size() <= len) {
             auto buf = memory().subspan(ptr, len);
