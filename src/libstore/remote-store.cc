@@ -72,8 +72,11 @@ void RemoteStore::initConnection(Connection & conn)
         StringSink saved;
         TeeSource tee(conn.from, saved);
         try {
+            auto myFeatures = WorkerProto::allFeatures;
+            if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
+                myFeatures.erase(std::string(WorkerProto::featureProvenance));
             auto [protoVersion, features] =
-                WorkerProto::BasicClientConnection::handshake(conn.to, tee, PROTOCOL_VERSION, WorkerProto::allFeatures);
+                WorkerProto::BasicClientConnection::handshake(conn.to, tee, PROTOCOL_VERSION, myFeatures);
             if (protoVersion < MINIMUM_PROTOCOL_VERSION)
                 throw Error("the Nix daemon version is too old");
             conn.protoVersion = protoVersion;

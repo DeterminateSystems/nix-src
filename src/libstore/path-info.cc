@@ -216,7 +216,8 @@ UnkeyedValidPathInfo::toJSON(const StoreDirConfig * store, bool includeImpureInf
         for (auto & sig : sigs)
             sigsObj.push_back(sig);
 
-        jsonObject["provenance"] = provenance ? provenance->to_json() : nullptr;
+        if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+            jsonObject["provenance"] = provenance ? provenance->to_json() : nullptr;
     }
 
     return jsonObject;
@@ -292,9 +293,11 @@ UnkeyedValidPathInfo UnkeyedValidPathInfo::fromJSON(const StoreDirConfig * store
     if (auto * rawSignatures = optionalValueAt(json, "signatures"))
         res.sigs = getStringSet(*rawSignatures);
 
-    auto prov = json.find("provenance");
-    if (prov != json.end() && !prov->second.is_null())
-        res.provenance = Provenance::from_json(prov->second);
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+        auto prov = json.find("provenance");
+        if (prov != json.end() && !prov->second.is_null())
+            res.provenance = Provenance::from_json(prov->second);
+    }
 
     return res;
 }

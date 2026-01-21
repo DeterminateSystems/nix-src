@@ -1047,8 +1047,12 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
 #endif
 
     /* Exchange the greeting. */
+    auto myFeatures = WorkerProto::allFeatures;
+    if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        myFeatures.erase(std::string(WorkerProto::featureProvenance));
+
     auto [protoVersion, features] =
-        WorkerProto::BasicServerConnection::handshake(to, from, PROTOCOL_VERSION, WorkerProto::allFeatures);
+        WorkerProto::BasicServerConnection::handshake(to, from, PROTOCOL_VERSION, myFeatures);
 
     if (protoVersion < MINIMUM_PROTOCOL_VERSION)
         throw Error("the Nix client version is too old");

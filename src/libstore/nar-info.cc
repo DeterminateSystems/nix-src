@@ -85,7 +85,7 @@ NarInfo::NarInfo(const StoreDirConfig & store, const std::string & s, const std:
                 throw corrupt("extra CA");
             // FIXME: allow blank ca or require skipping field?
             ca = ContentAddress::parseOpt(value);
-        } else if (name == "Provenance")
+        } else if (name == "Provenance" && experimentalFeatureSettings.isEnabled(Xp::Provenance))
             provenance = Provenance::from_json_str(value);
 
         pos = eol + 1;

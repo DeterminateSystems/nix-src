@@ -25,7 +25,7 @@ struct ExperimentalFeatureDetails
  * feature, we either have no issue at all if few features are not added
  * at the end of the list, or a proper merge conflict if they are.
  */
-constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::WasmDerivations);
+constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::Provenance);
 
 constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails = {{
     {
@@ -336,6 +336,14 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
             Allow derivations to target the WebAssembly system type (`wasm32-wasip1`).
             When enabled, derivations with `system = "wasm32-wasip1"` can be built locally
             using a WASI runtime environment.
+        )",
+        .trackingUrl = "",
+    },
+    {
+        .tag = Xp::Provenance,
+        .name = "provenance",
+        .description = R"(
+            Enable keeping track of the provenance of store paths.
         )",
         .trackingUrl = "",
     },
