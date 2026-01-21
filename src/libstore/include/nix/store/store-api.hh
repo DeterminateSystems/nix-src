@@ -946,9 +946,10 @@ protected:
 };
 
 /**
- * Copy a path from one store to another.
+ * Copy a path from one store to another. Return the path info of the newly added store path, or nullptr if the path was
+ * already valid.
  */
-void copyStorePath(
+std::shared_ptr<const ValidPathInfo> copyStorePath(
     Store & srcStore,
     Store & dstStore,
     const StorePath & storePath,

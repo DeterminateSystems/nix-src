@@ -1,5 +1,7 @@
 #include "nix/store/build-result.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/util/provenance.hh"
+
 #include <array>
 
 namespace nix {
@@ -105,12 +107,14 @@ void adl_serializer<BuildResult>::to_json(json & res, const BuildResult & br)
                 res["success"] = true;
                 res["status"] = BuildResult::Success::statusToString(success.status);
                 res["builtOutputs"] = success.builtOutputs;
+                res["provenance"] = success.provenance ? success.provenance->to_json() : nlohmann::json(nullptr);
             },
             [&](const BuildResult::Failure & failure) {
                 res["success"] = false;
                 res["status"] = BuildResult::Failure::statusToString(failure.status);
                 res["errorMsg"] = failure.errorMsg;
                 res["isNonDeterministic"] = failure.isNonDeterministic;
+                res["provenance"] = failure.provenance ? failure.provenance->to_json() : nlohmann::json(nullptr);
             },
         },
         br.inner);
@@ -138,16 +142,24 @@ BuildResult adl_serializer<BuildResult>::from_json(const json & _json)
     bool success = getBoolean(valueAt(json, "success"));
     std::string statusStr = getString(valueAt(json, "status"));
 
+    auto provenanceFromJson = [](const nlohmann::json * j) -> std::shared_ptr<const Provenance> {
+        if (j && !j->is_null())
+            return Provenance::from_json(*j);
+        return nullptr;
+    };
+
     if (success) {
         BuildResult::Success s;
         s.status = successStatusFromString(statusStr);
         s.builtOutputs = valueAt(json, "builtOutputs");
+        s.provenance = provenanceFromJson(optionalValueAt(json, "provenance"));
         br.inner = std::move(s);
     } else {
         BuildResult::Failure f;
         f.status = failureStatusFromString(statusStr);
         f.errorMsg = getString(valueAt(json, "errorMsg"));
         f.isNonDeterministic = getBoolean(valueAt(json, "isNonDeterministic"));
+        f.provenance = provenanceFromJson(optionalValueAt(json, "provenance"));
         br.inner = std::move(f);
     }
 

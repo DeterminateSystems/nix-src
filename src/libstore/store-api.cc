@@ -885,13 +885,13 @@ addCopiedProvenance(std::shared_ptr<const Provenance> provenance, Store & srcSto
     return std::make_shared<const CopiedProvenance>(srcStore.config.getHumanReadableURI(), provenance);
 }
 
-void copyStorePath(
+std::shared_ptr<const ValidPathInfo> copyStorePath(
     Store & srcStore, Store & dstStore, const StorePath & storePath, RepairFlag repair, CheckSigsFlag checkSigs)
 {
     /* Bail out early (before starting a download from srcStore) if
        dstStore already has this path. */
     if (!repair && dstStore.isValidPath(storePath))
-        return;
+        return nullptr;
 
     const auto & srcCfg = srcStore.config;
     const auto & dstCfg = dstStore.config;
@@ -905,7 +905,7 @@ void copyStorePath(
     PushActivity pact(act.id);
 
     auto srcInfo = srcStore.queryPathInfo(storePath);
-    auto info = make_ref<ValidPathInfo>(*srcInfo);
+    auto info = std::make_shared<ValidPathInfo>(*srcInfo);
 
     uint64_t total = 0;
 
@@ -938,6 +938,8 @@ void copyStorePath(
         });
 
     dstStore.addToStore(*info, *source, repair, checkSigs);
+
+    return info;
 }
 
 std::map<StorePath, StorePath> copyPaths(
