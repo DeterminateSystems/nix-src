@@ -124,7 +124,7 @@ struct NixWasmInstance
         , wasmStore(pre->engine)
         , wasmCtx(wasmStore)
         , instance(unwrap(pre->instancePre.instantiate(wasmCtx)))
-        , memory_(std::get<Memory>(*instance.get(wasmCtx, "memory")))
+        , memory_(getExport<Memory>("memory"))
     {
         wasmCtx.set_data(this);
 
@@ -146,21 +146,22 @@ struct NixWasmInstance
         return {id, *v};
     }
 
-    Func getFunction(std::string_view name)
+    template<typename T>
+    T getExport(std::string_view name)
     {
         auto ext = instance.get(wasmCtx, name);
         if (!ext)
-            throw Error("Wasm module '%s' does not export function '%s'", pre->wasmPath, name);
-        auto fun = std::get_if<Func>(&*ext);
-        if (!fun)
-            throw Error("export '%s' of Wasm module '%s' is not a function", name, pre->wasmPath);
-        return *fun;
+            throw Error("Wasm module '%s' does not export '%s'", pre->wasmPath, name);
+        auto res = std::get_if<T>(&*ext);
+        if (!res)
+            throw Error("export '%s' of Wasm module '%s' does not have the right type", name, pre->wasmPath);
+        return *res;
     }
 
     std::vector<Val> runFunction(std::string_view name, const std::vector<Val> & args)
     {
         functionName = name;
-        return unwrap(getFunction(name).call(wasmCtx, args));
+        return unwrap(getExport<Func>(name).call(wasmCtx, args));
     }
 
     auto memory()
