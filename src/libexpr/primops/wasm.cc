@@ -463,8 +463,10 @@ static void regFun(Linker & linker, std::string_view name, R (NixWasmInstance::*
         try {
             auto instance = std::any_cast<NixWasmInstance *>(caller.context().get_data());
             return (*instance.*f)(args...);
-        } catch (Error & e) {
+        } catch (std::exception & e) {
             return Trap(e.what());
+        } catch (...) {
+            return Trap("unknown exception");
         }
     }));
 }
