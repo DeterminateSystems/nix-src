@@ -7,13 +7,6 @@ using namespace wasmtime;
 
 namespace nix {
 
-// FIXME
-SourcePath realisePath(
-    EvalState & state,
-    const PosIdx pos,
-    Value & v,
-    std::optional<SymlinkResolution> resolveSymlinks = SymlinkResolution::Full);
-
 using ValueId = uint32_t;
 
 template<typename T, typename E = Error>
@@ -503,7 +496,7 @@ void regFuns(Linker & linker)
 
 void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
-    auto wasmPath = realisePath(state, pos, *args[0]);
+    auto wasmPath = state.realisePath(pos, *args[0]);
     std::string functionName =
         std::string(state.forceStringNoCtx(*args[1], pos, "while evaluating the second argument of `builtins.wasm`"));
 
