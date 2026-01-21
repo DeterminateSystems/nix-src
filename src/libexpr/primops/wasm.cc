@@ -524,7 +524,7 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
     }
 }
 
-static RegisterPrimOp primop_fromTOML(
+static RegisterPrimOp primop_wasm(
     {.name = "wasm",
      .args = {"wasm", "entry", "arg"},
      .doc = R"(
