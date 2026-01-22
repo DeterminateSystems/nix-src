@@ -470,6 +470,9 @@
                     "${pkgName}-${crossSystem}" = nixpkgsFor.${system}.cross.${crossSystem}.nixComponents2.${pkgName};
                   }
                 )
+                // {
+                  "${pkgName}-static" = nixpkgsFor.${system}.native.pkgsStatic.nixComponents2.${pkgName};
+                }
               )
               // flatMapAttrs (lib.genAttrs stdenvs (_: { })) (
                 stdenvName:
