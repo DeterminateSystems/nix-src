@@ -304,11 +304,8 @@ UnkeyedValidPathInfo WorkerProto::Serialise<UnkeyedValidPathInfo>::read(const St
         info.sigs = readStrings<StringSet>(conn.from);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
     }
-    if (conn.provenance) {
-        auto s = readString(conn.from);
-        if (!s.empty())
-            info.provenance = Provenance::from_json_str(s);
-    }
+    if (conn.provenance)
+        info.provenance = Provenance::from_json_str_optional(readString(conn.from));
     return info;
 }
 

@@ -434,12 +434,9 @@ static void performOp(
             bool repairBool;
             conn.from >> repairBool;
             auto repair = RepairFlag{repairBool};
-            std::shared_ptr<const Provenance> provenance;
-            if (conn.features.contains(WorkerProto::featureProvenance)) {
-                auto s = readString(conn.from);
-                if (!s.empty())
-                    provenance = Provenance::from_json_str(s);
-            }
+            auto provenance = conn.features.contains(WorkerProto::featureProvenance)
+                                  ? Provenance::from_json_str_optional(readString(conn.from))
+                                  : nullptr;
 
             logger->startWork();
             auto pathInfo = [&]() {
@@ -920,11 +917,9 @@ static void performOp(
         conn.from >> info.registrationTime >> info.narSize >> info.ultimate;
         info.sigs = readStrings<StringSet>(conn.from);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
-        if (conn.features.contains(WorkerProto::featureProvenance)) {
-            auto s = readString(conn.from);
-            if (!s.empty())
-                info.provenance = Provenance::from_json_str(s);
-        }
+        info.provenance = conn.features.contains(WorkerProto::featureProvenance)
+                              ? Provenance::from_json_str_optional(readString(conn.from))
+                              : nullptr;
         conn.from >> repair >> dontCheckSigs;
         if (!trusted && dontCheckSigs)
             dontCheckSigs = false;

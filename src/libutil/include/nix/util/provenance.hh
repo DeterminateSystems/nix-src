@@ -13,6 +13,8 @@ struct Provenance
 {
     static ref<const Provenance> from_json_str(std::string_view);
 
+    static std::shared_ptr<const Provenance> from_json_str_optional(std::string_view);
+
     static ref<const Provenance> from_json(const nlohmann::json & json);
 
     std::string to_json_str() const;

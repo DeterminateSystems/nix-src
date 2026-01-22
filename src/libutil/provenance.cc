@@ -29,6 +29,13 @@ ref<const Provenance> Provenance::from_json_str(std::string_view s)
     return from_json(nlohmann::json::parse(s));
 }
 
+std::shared_ptr<const Provenance> Provenance::from_json_str_optional(std::string_view s)
+{
+    if (s.empty())
+        return nullptr;
+    return Provenance::from_json_str(s);
+}
+
 ref<const Provenance> Provenance::from_json(const nlohmann::json & json)
 {
     auto & obj = getObject(json);
