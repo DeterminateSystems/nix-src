@@ -432,9 +432,6 @@ StorePath RemoteStore::addToStoreFromDump(
 
 void RemoteStore::addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs)
 {
-    if (info.provenance)
-        throw UnimplementedError("RemoteStore::addToStore() with provenance");
-
     auto conn(getConnection());
 
     conn->to << WorkerProto::Op::AddToStoreNar;
@@ -442,8 +439,10 @@ void RemoteStore::addToStore(const ValidPathInfo & info, Source & source, Repair
     WorkerProto::write(*this, *conn, info.deriver);
     conn->to << info.narHash.to_string(HashFormat::Base16, false);
     WorkerProto::write(*this, *conn, info.references);
-    conn->to << info.registrationTime << info.narSize << info.ultimate << info.sigs << renderContentAddress(info.ca)
-             << repair << !checkSigs;
+    conn->to << info.registrationTime << info.narSize << info.ultimate << info.sigs << renderContentAddress(info.ca);
+    if (conn->features.contains(WorkerProto::featureProvenance))
+        conn->to << (info.provenance ? info.provenance->to_json_str() : "");
+    conn->to << repair << !checkSigs;
 
     if (GET_PROTOCOL_MINOR(conn->protoVersion) >= 23) {
         conn.withFramedSink([&](Sink & sink) { copyNAR(source, sink); });

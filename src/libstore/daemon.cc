@@ -920,6 +920,11 @@ static void performOp(
         conn.from >> info.registrationTime >> info.narSize >> info.ultimate;
         info.sigs = readStrings<StringSet>(conn.from);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
+        if (conn.features.contains(WorkerProto::featureProvenance)) {
+            auto s = readString(conn.from);
+            if (!s.empty())
+                info.provenance = Provenance::from_json_str(s);
+        }
         conn.from >> repair >> dontCheckSigs;
         if (!trusted && dontCheckSigs)
             dontCheckSigs = false;
