@@ -107,14 +107,16 @@ void adl_serializer<BuildResult>::to_json(json & res, const BuildResult & br)
                 res["success"] = true;
                 res["status"] = BuildResult::Success::statusToString(success.status);
                 res["builtOutputs"] = success.builtOutputs;
-                res["provenance"] = success.provenance ? success.provenance->to_json() : nlohmann::json(nullptr);
+                if (success.provenance)
+                    res["provenance"] = success.provenance->to_json();
             },
             [&](const BuildResult::Failure & failure) {
                 res["success"] = false;
                 res["status"] = BuildResult::Failure::statusToString(failure.status);
                 res["errorMsg"] = failure.errorMsg;
                 res["isNonDeterministic"] = failure.isNonDeterministic;
-                res["provenance"] = failure.provenance ? failure.provenance->to_json() : nlohmann::json(nullptr);
+                if (failure.provenance)
+                    res["provenance"] = failure.provenance->to_json();
             },
         },
         br.inner);

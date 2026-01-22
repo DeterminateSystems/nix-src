@@ -131,7 +131,7 @@ std::string NarInfo::to_string(const StoreDirConfig & store) const
     if (ca)
         res += "CA: " + renderContentAddress(*ca) + "\n";
 
-    if (provenance)
+    if (provenance && experimentalFeatureSettings.isEnabled(Xp::Provenance))
         res += "Provenance: " + provenance->to_json_str() + "\n";
 
     return res;
