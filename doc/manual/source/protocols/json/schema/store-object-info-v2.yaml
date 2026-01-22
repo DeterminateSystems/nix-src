@@ -122,7 +122,6 @@ $defs:
       - registrationTime
       - ultimate
       - signatures
-      - provenance
     properties:
       version: { $ref: "#/$defs/base/properties/version" }
       path: { $ref: "#/$defs/base/properties/path" }
@@ -216,7 +215,6 @@ $defs:
       - compression
       - downloadHash
       - downloadSize
-      - provenance
     properties:
       version: { $ref: "#/$defs/base/properties/version" }
       path: { $ref: "#/$defs/base/properties/path" }
