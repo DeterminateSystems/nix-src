@@ -139,6 +139,13 @@ struct NixWasmInstance
         return {id, *v};
     }
 
+    Value & getValue(ValueId id)
+    {
+        if (id >= values.size())
+            throw Error("invalid ValueId %d", id);
+        return *values[id];
+    }
+
     template<typename T>
     T getExport(std::string_view name)
     {
@@ -179,7 +186,7 @@ struct NixWasmInstance
 
     uint32_t get_type(ValueId valueId)
     {
-        auto & value = *values.at(valueId);
+        auto & value = getValue(valueId);
         state.forceValue(value, noPos);
         auto t = value.type();
         return t == nInt        ? 1
@@ -203,7 +210,7 @@ struct NixWasmInstance
 
     int64_t get_int(ValueId valueId)
     {
-        return state.forceInt(*values.at(valueId), noPos, "while evaluating a value from Wasm").value;
+        return state.forceInt(getValue(valueId), noPos, "while evaluating a value from Wasm").value;
     }
 
     ValueId make_float(double x)
@@ -215,7 +222,7 @@ struct NixWasmInstance
 
     double get_float(ValueId valueId)
     {
-        return state.forceFloat(*values.at(valueId), noPos, "while evaluating a value from Wasm");
+        return state.forceFloat(getValue(valueId), noPos, "while evaluating a value from Wasm");
     }
 
     ValueId make_string(uint32_t ptr, uint32_t len)
@@ -227,7 +234,7 @@ struct NixWasmInstance
 
     uint32_t copy_string(ValueId valueId, uint32_t ptr, uint32_t maxLen)
     {
-        auto s = state.forceString(*values.at(valueId), noPos, "while evaluating a value from Wasm");
+        auto s = state.forceString(getValue(valueId), noPos, "while evaluating a value from Wasm");
         if (s.size() <= maxLen) {
             auto buf = memory().subspan(ptr, maxLen);
             memcpy(buf.data(), s.data(), s.size());
@@ -237,7 +244,7 @@ struct NixWasmInstance
 
     ValueId make_path(ValueId baseId, uint32_t ptr, uint32_t len)
     {
-        auto & baseValue = *values.at(baseId);
+        auto & baseValue = getValue(baseId);
         state.forceValue(baseValue, noPos);
         if (baseValue.type() != nPath)
             throw Error("make_path expects a path value");
@@ -250,7 +257,7 @@ struct NixWasmInstance
 
     uint32_t copy_path(ValueId valueId, uint32_t ptr, uint32_t maxLen)
     {
-        auto & v = *values.at(valueId);
+        auto & v = getValue(valueId);
         state.forceValue(v, noPos);
         if (v.type() != nPath)
             throw Error("copy_path expects a path value");
@@ -270,7 +277,7 @@ struct NixWasmInstance
 
     int32_t get_bool(ValueId valueId)
     {
-        return state.forceBool(*values.at(valueId), noPos, "while evaluating a value from Wasm");
+        return state.forceBool(getValue(valueId), noPos, "while evaluating a value from Wasm");
     }
 
     ValueId make_null()
@@ -286,7 +293,7 @@ struct NixWasmInstance
 
         auto list = state.buildList(len);
         for (const auto & [n, v] : enumerate(list))
-            v = values.at(vs[n]); // FIXME: endianness
+            v = &getValue(vs[n]); // FIXME: endianness
         value.mkList(list);
 
         return valueId;
@@ -294,7 +301,7 @@ struct NixWasmInstance
 
     uint32_t copy_list(ValueId valueId, uint32_t ptr, uint32_t maxLen)
     {
-        auto & value = *values.at(valueId);
+        auto & value = getValue(valueId);
         state.forceList(value, noPos, "while getting a list from Wasm");
 
         if (value.listSize() <= maxLen) {
@@ -326,7 +333,7 @@ struct NixWasmInstance
         for (auto & attr : attrs)
             builder.insert(
                 state.symbols.create(span2string(mem.subspan(attr.attrNamePtr, attr.attrNameLen))),
-                values.at(attr.value));
+                &getValue(attr.value));
         value.mkAttrs(builder);
 
         return valueId;
@@ -334,7 +341,7 @@ struct NixWasmInstance
 
     uint32_t copy_attrset(ValueId valueId, uint32_t ptr, uint32_t maxLen)
     {
-        auto & value = *values.at(valueId);
+        auto & value = getValue(valueId);
         state.forceAttrs(value, noPos, "while copying an attrset into Wasm");
 
         if (value.attrs()->size() <= maxLen) {
@@ -359,7 +366,7 @@ struct NixWasmInstance
 
     std::monostate copy_attrname(ValueId valueId, uint32_t attrIdx, uint32_t ptr, uint32_t len)
     {
-        auto & value = *values.at(valueId);
+        auto & value = getValue(valueId);
         state.forceAttrs(value, noPos, "while copying an attr name into Wasm");
 
         auto & attrs = *value.attrs();
@@ -381,7 +388,7 @@ struct NixWasmInstance
     {
         auto attrName = span2string(memory().subspan(ptr, len));
 
-        auto & value = *values.at(valueId);
+        auto & value = getValue(valueId);
         state.forceAttrs(value, noPos, "while getting an attribute from Wasm");
 
         auto attr = value.attrs()->get(state.symbols.create(attrName));
@@ -391,12 +398,12 @@ struct NixWasmInstance
 
     ValueId call_function(ValueId funId, uint32_t ptr, uint32_t len)
     {
-        auto & fun = *values.at(funId);
+        auto & fun = getValue(funId);
         state.forceFunction(fun, noPos, "while calling a function from Wasm");
 
         ValueVector args;
         for (auto argId : subspan<ValueId>(memory().subspan(ptr), len))
-            args.push_back(values.at(argId));
+            args.push_back(&getValue(argId));
 
         auto [valueId, value] = allocValue();
 
@@ -412,10 +419,10 @@ struct NixWasmInstance
 
         auto args = subspan<ValueId>(memory().subspan(ptr), len);
 
-        auto res = values.at(funId);
+        auto res = &getValue(funId);
 
         while (!args.empty()) {
-            auto arg = values.at(args[0]);
+            auto arg = &getValue(args[0]);
             auto tmp = state.allocValue();
             tmp->mkApp(res, {arg});
             res = tmp;
@@ -431,7 +438,7 @@ struct NixWasmInstance
      */
     uint32_t read_file(ValueId pathId, uint32_t ptr, uint32_t len)
     {
-        auto & pathValue = *values.at(pathId);
+        auto & pathValue = getValue(pathId);
         state.forceValue(pathValue, noPos);
         if (pathValue.type() != nPath)
             throw Error("read_file expects a path value");
@@ -521,9 +528,9 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
             throw Error("Wasm function '%s' from '%s' did not return exactly one value", functionName, wasmPath);
         if (res[0].kind() != ValKind::I32)
             throw Error("Wasm function '%s' from '%s' did not return an i32 value", functionName, wasmPath);
-        auto vRes = instance.values.at(res[0].i32());
-        state.forceValue(*vRes, pos);
-        v = *vRes;
+        auto & vRes = instance.getValue(res[0].i32());
+        state.forceValue(vRes, pos);
+        v = vRes;
     } catch (Error & e) {
         e.addTrace(state.positions[pos], "while executing the Wasm function '%s' from '%s'", functionName, wasmPath);
         throw;
