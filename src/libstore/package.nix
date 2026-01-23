@@ -21,7 +21,7 @@
 
   version,
 
-  embeddedSandboxShell ? stdenv.hostPlatform.isStatic,
+  embeddedSandboxShell ? stdenv.hostPlatform.isStatic && !stdenv.hostPlatform.isDarwin,
 
   withAWS ?
     # Default is this way because there have been issues building this dependency

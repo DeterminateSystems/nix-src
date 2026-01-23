@@ -229,6 +229,12 @@ parser_library = static_library(
   ],
 )
 
+if host_machine.system() == 'darwin' and get_option('default_library') == 'static'
+  prelink = false
+else
+  prelink = true
+endif
+
 this_library = library(
   'nixexpr',
   sources,
@@ -241,7 +247,7 @@ this_library = library(
   include_directories : include_dirs,
   link_args : linker_export_flags + [ '-lwasmtime' ],
   link_whole : [ parser_library ],
-  prelink : true, # For C++ static initializers
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )
