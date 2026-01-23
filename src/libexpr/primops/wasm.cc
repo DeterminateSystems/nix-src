@@ -3,6 +3,7 @@
 
 #include <wasmtime.hh>
 #include <endian.h>
+#include <boost/unordered/concurrent_flat_map.hpp>
 
 using namespace wasmtime;
 
@@ -507,17 +508,22 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
         std::string(state.forceStringNoCtx(*args[1], pos, "while evaluating the second argument of `builtins.wasm`"));
 
     try {
-        // FIXME: make thread-safe.
         // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
-        static std::unordered_map<SourcePath, ref<NixWasmInstancePre>> instancesPre;
+        // FIXME: move to EvalState?
+        // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
+        static boost::concurrent_flat_map<SourcePath, std::shared_ptr<NixWasmInstancePre>> instancesPre;
 
-        auto instancePre = instancesPre.find(wasmPath);
-        if (instancePre == instancesPre.end())
-            instancePre = instancesPre.emplace(wasmPath, make_ref<NixWasmInstancePre>(wasmPath)).first;
+        std::shared_ptr<NixWasmInstancePre> instancePre;
+
+        instancesPre.try_emplace_and_cvisit(
+            wasmPath,
+            nullptr,
+            [&](auto & i) { instancePre = i.second = std::make_shared<NixWasmInstancePre>(wasmPath); },
+            [&](auto & i) { instancePre = i.second; });
 
         debug("calling wasm module");
 
-        NixWasmInstance instance{state, instancePre->second};
+        NixWasmInstance instance{state, ref(instancePre)};
 
         // FIXME: use the "start" function if present.
         instance.runFunction("nix_wasm_init_v1", {});
