@@ -104,7 +104,13 @@ DownloadFileResult downloadFile(
             },
             hashString(HashAlgorithm::SHA256, sink.s));
         info.narSize = sink.s.size();
-        info.provenance = std::make_shared<FetchurlProvenance>(url);
+        if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+            auto sanitizedUrl = request.uri.parsed();
+            if (sanitizedUrl.authority)
+                sanitizedUrl.authority->password.reset();
+            sanitizedUrl.query.clear();
+            info.provenance = std::make_shared<FetchurlProvenance>(sanitizedUrl.to_string());
+        }
         auto source = StringSource{sink.s};
         store.addToStore(info, source, NoRepair, NoCheckSigs);
         storePath = std::move(info.path);
