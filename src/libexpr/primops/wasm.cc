@@ -142,7 +142,7 @@ struct NixWasmInstance
 
     Value & getValue(ValueId id)
     {
-        if (id >= values.size())
+        if (id >= values.size() || id == 0)
             throw Error("invalid ValueId %d", id);
         return *values[id];
     }
