@@ -30,6 +30,11 @@
   # Temporarily disabled on Windows because the `GC_throw_bad_alloc`
   # symbol is missing during linking.
   enableGC ? !stdenv.hostPlatform.isWindows,
+
+  # Whether to use wasmtime for wasm integration in the Nix language evaluator
+  #
+  # Temporarily disabled when static linking due to Rust not compiling
+  enableWasm ? !stdenv.hostPlatform.isStatic,
 }:
 
 let
@@ -65,8 +70,8 @@ mkMesonLibrary (finalAttrs: {
 
   buildInputs = [
     toml11
-    wasmtime
-  ];
+  ]
+  ++ lib.optional enableWasm wasmtime;
 
   propagatedBuildInputs = [
     nix-util
@@ -79,6 +84,7 @@ mkMesonLibrary (finalAttrs: {
 
   mesonFlags = [
     (lib.mesonEnable "gc" enableGC)
+    (lib.mesonEnable "wasm" enableWasm)
   ];
 
   meta = {
