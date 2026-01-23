@@ -2,6 +2,7 @@
 #include "nix/expr/eval-inline.hh"
 
 #include <wasmtime.hh>
+#include <endian.h>
 
 using namespace wasmtime;
 
@@ -293,7 +294,7 @@ struct NixWasmInstance
 
         auto list = state.buildList(len);
         for (const auto & [n, v] : enumerate(list))
-            v = &getValue(vs[n]); // FIXME: endianness
+            v = &getValue(le32toh(vs[n]));
         value.mkList(list);
 
         return valueId;
@@ -308,7 +309,7 @@ struct NixWasmInstance
             auto out = subspan<ValueId>(memory().subspan(ptr), value.listSize());
 
             for (const auto & [n, elem] : enumerate(value.listView()))
-                out[n] = addValue(elem);
+                out[n] = htole32(addValue(elem));
         }
 
         return value.listSize();
@@ -320,7 +321,6 @@ struct NixWasmInstance
 
         struct Attr
         {
-            // FIXME: endianness
             uint32_t attrNamePtr;
             uint32_t attrNameLen;
             ValueId value;
@@ -332,8 +332,8 @@ struct NixWasmInstance
         auto builder = state.buildBindings(len);
         for (auto & attr : attrs)
             builder.insert(
-                state.symbols.create(span2string(mem.subspan(attr.attrNamePtr, attr.attrNameLen))),
-                &getValue(attr.value));
+                state.symbols.create(span2string(mem.subspan(le32toh(attr.attrNamePtr), le32toh(attr.attrNameLen)))),
+                &getValue(le32toh(attr.value)));
         value.mkAttrs(builder);
 
         return valueId;
@@ -345,7 +345,6 @@ struct NixWasmInstance
         state.forceAttrs(value, noPos, "while copying an attrset into Wasm");
 
         if (value.attrs()->size() <= maxLen) {
-            // FIXME: endianness.
             struct Attr
             {
                 ValueId value;
@@ -356,8 +355,8 @@ struct NixWasmInstance
 
             // FIXME: for determinism, we should return attributes in lexicographically sorted order.
             for (const auto & [n, attr] : enumerate(*value.attrs())) {
-                buf[n].value = addValue(attr.value);
-                buf[n].nameLen = state.symbols[attr.name].size();
+                buf[n].value = htole32(addValue(attr.value));
+                buf[n].nameLen = htole32(state.symbols[attr.name].size());
             }
         }
 
@@ -403,7 +402,7 @@ struct NixWasmInstance
 
         ValueVector args;
         for (auto argId : subspan<ValueId>(memory().subspan(ptr), len))
-            args.push_back(&getValue(argId));
+            args.push_back(&getValue(le32toh(argId)));
 
         auto [valueId, value] = allocValue();
 
@@ -422,7 +421,7 @@ struct NixWasmInstance
         auto res = &getValue(funId);
 
         while (!args.empty()) {
-            auto arg = &getValue(args[0]);
+            auto arg = &getValue(le32toh(args[0]));
             auto tmp = state.allocValue();
             tmp->mkApp(res, {arg});
             res = tmp;
