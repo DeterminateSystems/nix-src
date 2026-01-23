@@ -9,5 +9,8 @@ sources += files(
   'fetchMercurial.cc',
   'fetchTree.cc',
   'fromTOML.cc',
-  'wasm.cc',
 )
+
+if wasmtime_required.enabled()
+  sources += files('wasm.cc')
+endif

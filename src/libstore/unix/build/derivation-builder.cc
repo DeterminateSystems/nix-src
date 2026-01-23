@@ -1996,7 +1996,10 @@ StorePath DerivationBuilderImpl::makeFallbackPath(const StorePath & path)
 #include "linux-derivation-builder.cc"
 #include "darwin-derivation-builder.cc"
 #include "external-derivation-builder.cc"
-#include "wasi-derivation-builder.cc"
+
+#if NIX_USE_WASMTIME
+#  include "wasi-derivation-builder.cc"
+#endif
 
 namespace nix {
 
@@ -2028,8 +2031,10 @@ std::unique_ptr<DerivationBuilder> makeDerivationBuilder(
             useSandbox = params.drv.type().isSandboxed() && !params.drvOptions.noChroot;
     }
 
+#if NIX_USE_WASMTIME
     if (params.drv.platform == "wasm32-wasip1")
         return std::make_unique<WasiDerivationBuilder>(store, std::move(miscMethods), std::move(params));
+#endif
 
     if (store.storeDir != store.config->realStoreDir.get()) {
 #ifdef __linux__
