@@ -3,10 +3,10 @@
 
 namespace nix {
 
-nlohmann::json DerivationProvenance::to_json() const
+nlohmann::json BuildProvenance::to_json() const
 {
     return nlohmann::json{
-        {"type", "derivation"},
+        {"type", "build"},
         {"drv", drvPath.to_string()},
         {"output", output},
         {"next", next ? next->to_json() : nlohmann::json(nullptr)},

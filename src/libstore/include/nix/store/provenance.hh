@@ -6,7 +6,7 @@
 
 namespace nix {
 
-struct DerivationProvenance : Provenance
+struct BuildProvenance : Provenance
 {
     /**
      * The derivation that built this path.
@@ -25,7 +25,7 @@ struct DerivationProvenance : Provenance
 
     // FIXME: do we need anything extra for CA derivations?
 
-    DerivationProvenance(const StorePath & drvPath, const OutputName & output, std::shared_ptr<const Provenance> next)
+    BuildProvenance(const StorePath & drvPath, const OutputName & output, std::shared_ptr<const Provenance> next)
         : drvPath(drvPath)
         , output(output)
         , next(std::move(next))

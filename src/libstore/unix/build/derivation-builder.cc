@@ -1865,7 +1865,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
             newInfo.deriver = drvPath;
             newInfo.ultimate = true;
             if (drvProvenance)
-                newInfo.provenance = std::make_shared<const DerivationProvenance>(drvPath, outputName, drvProvenance);
+                newInfo.provenance = std::make_shared<const BuildProvenance>(drvPath, outputName, drvProvenance);
             store.signPathInfo(newInfo);
 
             finish(newInfo.path);
@@ -1876,8 +1876,8 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
                This is also good so that if a fixed-output produces the
                wrong path, we still store the result (just don't consider
-               the derivation sucessful, so if someone fixes the problem by
-               just changing the wanted hash, the redownload (or whateer
+               the derivation successful, so if someone fixes the problem by
+               just changing the wanted hash, the redownload (or whatever
                possibly quite slow thing it was) doesn't have to be done
                again. */
             if (newInfo.ca)
