@@ -288,6 +288,7 @@ struct DummyStoreImpl : DummyStore
             std::move(narHash.first));
 
         info.narSize = narHash.second.value();
+        info.provenance = provenance;
 
         auto path = info.path;
         auto accessor = make_ref<MemorySourceAccessor>(std::move(*temp));
