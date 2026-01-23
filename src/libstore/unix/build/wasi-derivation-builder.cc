@@ -51,7 +51,12 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
                 WASMTIME_WASI_DIR_PERMS_READ | WASMTIME_WASI_DIR_PERMS_WRITE,
                 WASMTIME_WASI_FILE_PERMS_READ | WASMTIME_WASI_FILE_PERMS_WRITE))
             throw Error("cannot add store directory to WASI config");
-        // FIXME: add temp dir
+        if (!wasiConfig.preopen_dir(
+                tmpDir,
+                tmpDirInSandbox(),
+                WASMTIME_WASI_DIR_PERMS_READ | WASMTIME_WASI_DIR_PERMS_WRITE,
+                WASMTIME_WASI_FILE_PERMS_READ | WASMTIME_WASI_FILE_PERMS_WRITE))
+            throw Error("cannot add temporary directory to WASI config");
 
         auto module = unwrap(Module::compile(engine, string2span(readFile(realPathInHost(drv.builder)))));
         wasmtime::Store wasmStore(engine);
