@@ -923,7 +923,7 @@ public:
      * Whether, when copying *from* this store, a "copied" provenance
      * record should be added.
      */
-    virtual bool isUsefulProvenance()
+    virtual bool includeInProvenance()
     {
         return false;
     }

@@ -73,7 +73,7 @@ struct LegacySSHStore : public virtual Store
 
     ref<Connection> openConnection();
 
-    bool isUsefulProvenance() override
+    bool includeInProvenance() override
     {
         return true;
     }

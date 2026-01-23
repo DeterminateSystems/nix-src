@@ -54,7 +54,7 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
     {
     }
 
-    bool isUsefulProvenance() override
+    bool includeInProvenance() override
     {
         return true;
     }

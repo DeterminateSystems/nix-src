@@ -880,7 +880,7 @@ makeCopyPathMessage(const StoreConfig & srcCfg, const StoreConfig & dstCfg, std:
 static std::shared_ptr<const Provenance>
 addCopiedProvenance(std::shared_ptr<const Provenance> provenance, Store & srcStore)
 {
-    if (!srcStore.isUsefulProvenance())
+    if (!srcStore.includeInProvenance())
         return provenance;
     return std::make_shared<const CopiedProvenance>(srcStore.config.getHumanReadableURI(), provenance);
 }

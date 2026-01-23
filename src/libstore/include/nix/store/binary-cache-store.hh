@@ -100,7 +100,7 @@ protected:
 
 public:
 
-    bool isUsefulProvenance() override
+    bool includeInProvenance() override
     {
         return true;
     }
