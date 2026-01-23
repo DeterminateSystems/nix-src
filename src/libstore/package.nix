@@ -13,6 +13,7 @@
   libseccomp,
   nlohmann_json,
   sqlite,
+  wasmtime,
 
   busybox-sandbox-shell ? null,
 
@@ -64,6 +65,7 @@ mkMesonLibrary (finalAttrs: {
     boost
     curl
     sqlite
+    wasmtime
   ]
   ++ lib.optional stdenv.hostPlatform.isLinux libseccomp
   ++ lib.optional withAWS aws-crt-cpp;

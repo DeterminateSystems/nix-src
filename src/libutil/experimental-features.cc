@@ -25,7 +25,7 @@ struct ExperimentalFeatureDetails
  * feature, we either have no issue at all if few features are not added
  * at the end of the list, or a proper merge conflict if they are.
  */
-constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::ParallelEval);
+constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::WasmDerivations);
 
 constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails = {{
     {
@@ -317,6 +317,25 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
         .name = "parallel-eval",
         .description = R"(
             Enable built-in functions for parallel evaluation.
+        )",
+        .trackingUrl = "",
+    },
+    {
+        .tag = Xp::WasmBuiltin,
+        .name = "wasm-builtin",
+        .description = R"(
+            Enable the use of the [`builtins.wasm`](@docroot@/language/builtins.md) built-in function in the Nix language.
+            `builtins.wasm` allows calling WebAssembly functions from Nix expressions.
+        )",
+        .trackingUrl = "",
+    },
+    {
+        .tag = Xp::WasmDerivations,
+        .name = "wasm-derivations",
+        .description = R"(
+            Allow derivations to target the WebAssembly system type (`wasm32-wasip1`).
+            When enabled, derivations with `system = "wasm32-wasip1"` can be built locally
+            using a WASI runtime environment.
         )",
         .trackingUrl = "",
     },
