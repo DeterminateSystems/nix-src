@@ -1128,19 +1128,6 @@ private:
     friend struct Value;
     friend class ListBuilder;
 
-public:
-    /**
-     * Worker threads manager.
-     *
-     * Note: keep this last to ensure that it's destroyed first, so we
-     * don't have any background work items (e.g. from
-     * `builtins.parallel`) referring to a partially destroyed
-     * `EvalState`.
-     */
-    ref<Executor> executor;
-
-private:
-
     std::shared_ptr<const Provenance> rootProvenance;
 
 public:
@@ -1151,6 +1138,16 @@ public:
     void setRootProvenance(std::shared_ptr<const Provenance> provenance);
 
     std::shared_ptr<const Provenance> getRootProvenance();
+
+    /**
+     * Worker threads manager.
+     *
+     * Note: keep this last to ensure that it's destroyed first, so we
+     * don't have any background work items (e.g. from
+     * `builtins.parallel`) referring to a partially destroyed
+     * `EvalState`.
+     */
+    ref<Executor> executor;
 };
 
 struct DebugTraceStacker
