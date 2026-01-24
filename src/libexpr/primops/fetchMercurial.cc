@@ -6,6 +6,8 @@
 #include "nix/util/url.hh"
 #include "nix/util/url-parts.hh"
 
+#include "../primops.hh"
+
 namespace nix {
 
 static void prim_fetchMercurial(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -100,5 +102,10 @@ static void prim_fetchMercurial(EvalState & state, const PosIdx pos, Value ** ar
 }
 
 static RegisterPrimOp r_fetchMercurial({.name = "fetchMercurial", .arity = 1, .fun = prim_fetchMercurial});
+
+void registerFetchMercurialPrimOp()
+{
+    r_fetchMercurial.ensure();
+}
 
 } // namespace nix

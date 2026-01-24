@@ -339,6 +339,8 @@ EvalState::EvalState(
     , staticBaseEnv{std::make_shared<StaticEnv>(nullptr, nullptr)}
     , executor{make_ref<Executor>(settings)}
 {
+    initPrimOps();
+
     corepkgsFS->setPathDisplay("<nix", ">");
     internalFS->setPathDisplay("«nix-internal»", "");
 

@@ -1,6 +1,8 @@
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval-inline.hh"
 
+#include "../primops.hh"
+
 #include <wasmtime.hh>
 #include <boost/unordered/concurrent_flat_map.hpp>
 
@@ -551,5 +553,10 @@ static RegisterPrimOp primop_wasm(
      )",
      .fun = prim_wasm,
      .experimentalFeature = Xp::WasmBuiltin});
+
+void registerWasmPrimOp()
+{
+    primop_wasm.ensure();
+}
 
 } // namespace nix

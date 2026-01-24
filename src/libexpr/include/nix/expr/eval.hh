@@ -1152,6 +1152,8 @@ struct DebugTraceStacker
     DebugTrace trace;
 };
 
+void initPrimOps();
+
 /**
  * @return A string representing the type of the value `v`.
  *

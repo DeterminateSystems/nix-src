@@ -2,6 +2,8 @@
 #include "nix/expr/eval-inline.hh"
 #include "nix/expr/static-string-data.hh"
 
+#include "../primops.hh"
+
 #include "expr-config-private.hh"
 
 #include <sstream>
@@ -188,5 +190,10 @@ static RegisterPrimOp primop_fromTOML(
       returns the value `{ s = "a"; table = { y = 2; }; x = 1; }`.
     )",
      .fun = prim_fromTOML});
+
+void registerFromTomlPrimOp()
+{
+    primop_fromTOML.ensure();
+}
 
 } // namespace nix

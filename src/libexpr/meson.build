@@ -88,6 +88,8 @@ if wasmtime_required.enabled()
   link_args += '-lwasmtime'
 endif
 
+configdata_priv.set('NIX_USE_WASMTIME', wasmtime_required.enabled().to_int())
+
 toml11 = dependency(
   'toml11',
   version : '>=3.7.0',

@@ -5,6 +5,8 @@
 #include "nix/util/url.hh"
 #include "nix/util/environment-variables.hh"
 
+#include "../primops.hh"
+
 namespace nix {
 
 /**
@@ -288,5 +290,10 @@ static RegisterPrimOp primop_fetchClosure({
     .fun = prim_fetchClosure,
     .experimentalFeature = Xp::FetchClosure,
 });
+
+void registerFetchClosurePrimOp()
+{
+    primop_fetchClosure.ensure();
+}
 
 } // namespace nix

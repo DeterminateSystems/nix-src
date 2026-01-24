@@ -19,6 +19,8 @@
 #include "nix/util/sort.hh"
 #include "nix/util/mounted-source-accessor.hh"
 
+#include "primops.hh"
+
 #include <boost/container/small_vector.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
@@ -5201,8 +5203,19 @@ static RegisterPrimOp primop_splitVersion({
  *************************************************************/
 
 RegisterPrimOp::RegisterPrimOp(PrimOp && primOp)
+    : registered(false)
+    , primOp(std::move(primOp))
 {
-    primOps().push_back(std::move(primOp));
+    ensure();
+}
+
+void RegisterPrimOp::ensure()
+{
+    if (registered)
+        return;
+
+    primOps().push_back(primOp);
+    registered = true;
 }
 
 void EvalState::createBaseEnv(const EvalSettings & evalSettings)
@@ -5517,6 +5530,113 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
     /* Note: we have to initialize the 'derivation' constant *after*
        building baseEnv/staticBaseEnv because it uses 'builtins'. */
     evalFile(derivationInternal, *vDerivation);
+}
+
+void initPrimOps()
+{
+    primop_scopedImport.ensure();
+    primop_import.ensure();
+    primop_typeOf.ensure();
+    primop_isNull.ensure();
+    primop_isFunction.ensure();
+    primop_isInt.ensure();
+    primop_isFloat.ensure();
+    primop_isString.ensure();
+    primop_isBool.ensure();
+    primop_isPath.ensure();
+    primop_genericClosure.ensure();
+    primop_break.ensure();
+    primop_abort.ensure();
+    primop_throw.ensure();
+    primop_addErrorContext.ensure();
+    primop_ceil.ensure();
+    primop_floor.ensure();
+    primop_tryEval.ensure();
+    primop_getEnv.ensure();
+    primop_seq.ensure();
+    primop_deepSeq.ensure();
+    primop_trace.ensure();
+    primop_warn.ensure();
+    primop_derivationStrict.ensure();
+    primop_placeholder.ensure();
+    primop_toPath.ensure();
+    primop_storePath.ensure();
+    primop_pathExists.ensure();
+    primop_baseNameOf.ensure();
+    primop_dirOf.ensure();
+    primop_readFile.ensure();
+    primop_findFile.ensure();
+    primop_hashFile.ensure();
+    primop_readFileType.ensure();
+    primop_readDir.ensure();
+    primop_outputOf.ensure();
+    primop_toXML.ensure();
+    primop_toJSON.ensure();
+    primop_fromJSON.ensure();
+    primop_toFile.ensure();
+    primop_filterSource.ensure();
+    primop_path.ensure();
+    primop_attrNames.ensure();
+    primop_attrValues.ensure();
+    primop_getAttr.ensure();
+    primop_unsafeGetAttrPos.ensure();
+    primop_hasAttr.ensure();
+    primop_isAttrs.ensure();
+    primop_removeAttrs.ensure();
+    primop_listToAttrs.ensure();
+    primop_intersectAttrs.ensure();
+    primop_catAttrs.ensure();
+    primop_functionArgs.ensure();
+    primop_mapAttrs.ensure();
+    primop_filterAttrs.ensure();
+    primop_zipAttrsWith.ensure();
+    primop_isList.ensure();
+    primop_elemAt.ensure();
+    primop_head.ensure();
+    primop_tail.ensure();
+    primop_map.ensure();
+    primop_filter.ensure();
+    primop_elem.ensure();
+    primop_concatLists.ensure();
+    primop_length.ensure();
+    primop_foldlStrict.ensure();
+    primop_any.ensure();
+    primop_all.ensure();
+    primop_genList.ensure();
+    primop_sort.ensure();
+    primop_partition.ensure();
+    primop_groupBy.ensure();
+    primop_concatMap.ensure();
+    primop_add.ensure();
+    primop_sub.ensure();
+    primop_mul.ensure();
+    primop_div.ensure();
+    primop_bitAnd.ensure();
+    primop_bitOr.ensure();
+    primop_bitXor.ensure();
+    primop_lessThan.ensure();
+    primop_toString.ensure();
+    primop_substring.ensure();
+    primop_stringLength.ensure();
+    primop_hashString.ensure();
+    primop_convertHash.ensure();
+    primop_match.ensure();
+    primop_split.ensure();
+    primop_concatStringsSep.ensure();
+    primop_replaceStrings.ensure();
+    primop_parseDrvName.ensure();
+    primop_compareVersions.ensure();
+    primop_splitVersion.ensure();
+
+    registerContextPrimOps();
+    registerFetchClosurePrimOp();
+    registerFetchMercurialPrimOp();
+    registerFetchTreePrimOps();
+    registerFromTomlPrimOp();
+
+#if NIX_USE_WASMTIME
+    registerWasmPrimOp();
+#endif
 }
 
 } // namespace nix

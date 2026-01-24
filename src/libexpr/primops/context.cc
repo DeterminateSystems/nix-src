@@ -4,6 +4,8 @@
 #include "nix/store/store-api.hh"
 #include "nix/store/globals.hh"
 
+#include "../primops.hh"
+
 namespace nix {
 
 static void prim_unsafeDiscardStringContext(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -346,5 +348,15 @@ static void prim_appendContext(EvalState & state, const PosIdx pos, Value ** arg
 }
 
 static RegisterPrimOp primop_appendContext({.name = "__appendContext", .arity = 2, .fun = prim_appendContext});
+
+void registerContextPrimOps()
+{
+    primop_unsafeDiscardStringContext.ensure();
+    primop_hasContext.ensure();
+    primop_unsafeDiscardOutputDependency.ensure();
+    primop_addDrvOutputDependencies.ensure();
+    primop_getContext.ensure();
+    primop_appendContext.ensure();
+}
 
 } // namespace nix
