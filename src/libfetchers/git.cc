@@ -18,6 +18,8 @@
 #include "nix/util/mounted-source-accessor.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 
+#include "init.hh"
+
 #include <regex>
 #include <string.h>
 #include <sys/time.h>
@@ -1233,6 +1235,17 @@ struct GitInputScheme : InputScheme
     }
 };
 
-static auto rGitInputScheme = OnStartup([] { registerInputScheme(std::make_unique<GitInputScheme>()); });
+static auto rGitInputScheme = OnStartup([] { registerGitInputScheme(); });
+
+void registerGitInputScheme()
+{
+    static bool init;
+
+    if (init)
+        return;
+
+    registerInputScheme(std::make_unique<GitInputScheme>());
+    init = true;
+}
 
 } // namespace nix::fetchers

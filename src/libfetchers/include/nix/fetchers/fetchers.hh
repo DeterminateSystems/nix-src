@@ -17,6 +17,9 @@ namespace nix {
 class Store;
 class StorePath;
 struct SourceAccessor;
+
+void initFetchers();
+
 } // namespace nix
 
 namespace nix::fetchers {

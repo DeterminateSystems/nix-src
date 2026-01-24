@@ -387,6 +387,7 @@ void mainWrapped(int argc, char ** argv)
 #endif
 
     initNix();
+    initFetchers();
     initGC();
     flakeSettings.configureEvalSettings(evalSettings);
 

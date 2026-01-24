@@ -11,6 +11,8 @@
 #include "nix/util/tarfile.hh"
 #include "nix/fetchers/git-utils.hh"
 
+#include "init.hh"
+
 #include <optional>
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -657,8 +659,41 @@ struct SourceHutInputScheme : GitArchiveInputScheme
     }
 };
 
-static auto rGitHubInputScheme = OnStartup([] { registerInputScheme(std::make_unique<GitHubInputScheme>()); });
-static auto rGitLabInputScheme = OnStartup([] { registerInputScheme(std::make_unique<GitLabInputScheme>()); });
-static auto rSourceHutInputScheme = OnStartup([] { registerInputScheme(std::make_unique<SourceHutInputScheme>()); });
+static auto rGitHubInputScheme = OnStartup([] { registerGitHubInputScheme(); });
+static auto rGitLabInputScheme = OnStartup([] { registerGitLabInputScheme(); });
+static auto rSourceHutInputScheme = OnStartup([] { registerSourceHutInputScheme(); });
+
+void registerGitHubInputScheme()
+{
+    static bool init;
+
+    if (init)
+        return;
+
+    registerInputScheme(std::make_unique<GitHubInputScheme>());
+    init = true;
+}
+
+void registerGitLabInputScheme()
+{
+    static bool init;
+
+    if (init)
+        return;
+
+    registerInputScheme(std::make_unique<GitLabInputScheme>());
+    init = true;
+}
+
+void registerSourceHutInputScheme()
+{
+    static bool init;
+
+    if (init)
+        return;
+
+    registerInputScheme(std::make_unique<SourceHutInputScheme>());
+    init = true;
+}
 
 } // namespace nix::fetchers

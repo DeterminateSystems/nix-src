@@ -3,6 +3,8 @@
 #include "nix/util/url-parts.hh"
 #include "nix/store/path.hh"
 
+#include "init.hh"
+
 namespace nix::fetchers {
 
 std::regex flakeRegex("[a-zA-Z][a-zA-Z0-9_-]*", std::regex::ECMAScript);
@@ -137,6 +139,17 @@ struct IndirectInputScheme : InputScheme
     }
 };
 
-static auto rIndirectInputScheme = OnStartup([] { registerInputScheme(std::make_unique<IndirectInputScheme>()); });
+static auto rIndirectInputScheme = OnStartup([] { registerIndirectInputScheme(); });
+
+void registerIndirectInputScheme()
+{
+    static bool init;
+
+    if (init)
+        return;
+
+    registerInputScheme(std::make_unique<IndirectInputScheme>());
+    init = true;
+}
 
 } // namespace nix::fetchers

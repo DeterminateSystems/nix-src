@@ -7,6 +7,7 @@
   nix-expr,
   nix-main,
   nix-cmd,
+  nix-fetchers,
 
   # Configuration Options
 
@@ -69,6 +70,7 @@ mkMesonExecutable (finalAttrs: {
     nix-expr
     nix-main
     nix-cmd
+    nix-fetchers
   ];
 
   mesonFlags = [

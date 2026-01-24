@@ -8,6 +8,8 @@
 #include "nix/util/url-parts.hh"
 #include "nix/fetchers/fetch-settings.hh"
 
+#include "init.hh"
+
 #include <sys/time.h>
 
 using namespace std::string_literals;
@@ -373,6 +375,17 @@ struct MercurialInputScheme : InputScheme
     }
 };
 
-static auto rMercurialInputScheme = OnStartup([] { registerInputScheme(std::make_unique<MercurialInputScheme>()); });
+static auto rMercurialInputScheme = OnStartup([] { registerMercurialInputScheme(); });
+
+void registerMercurialInputScheme()
+{
+    static bool init;
+
+    if (init)
+        return;
+
+    registerInputScheme(std::make_unique<MercurialInputScheme>());
+    init = true;
+}
 
 } // namespace nix::fetchers
