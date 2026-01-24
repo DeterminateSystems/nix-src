@@ -45,12 +45,6 @@ headers += files('nix_api_store_internal.h')
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
 
-if host_machine.system() == 'darwin' and get_option('default_library') == 'static'
-  prelink = false
-else
-  prelink = true
-endif
-
 this_library = library(
   'nixstorec',
   sources,
