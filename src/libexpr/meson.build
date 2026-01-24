@@ -240,12 +240,6 @@ parser_library = static_library(
   ],
 )
 
-if host_machine.system() == 'darwin' and get_option('default_library') == 'static'
-  prelink = false
-else
-  prelink = true
-endif
-
 this_library = library(
   'nixexpr',
   sources,
