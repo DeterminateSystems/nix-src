@@ -71,7 +71,7 @@ std::pair<CanonPath, std::optional<std::string>> FilteringSourceAccessor::getFin
 std::shared_ptr<const Provenance> FilteringSourceAccessor::getProvenance(const CanonPath & path)
 {
     if (provenance)
-        return provenance;
+        return SourceAccessor::getProvenance(path);
     return next->getProvenance(prefix / path);
 }
 
