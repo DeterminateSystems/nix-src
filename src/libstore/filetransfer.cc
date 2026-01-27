@@ -731,7 +731,10 @@ struct curlFileTransfer : public FileTransfer
 
     std::thread workerThread;
 
-    const size_t maxQueueSize = fileTransferSettings.httpConnections.get() * 5;
+    const size_t maxQueueSize =
+        (fileTransferSettings.httpConnections.get() ? fileTransferSettings.httpConnections.get()
+                                                    : std::max(1U, std::thread::hardware_concurrency()))
+        * 5;
 
     curlFileTransfer()
         : mt19937(rd())
