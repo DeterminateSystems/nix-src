@@ -40,4 +40,9 @@ std::string getCurrentCgroup();
  */
 std::string getRootCgroup();
 
+/**
+ * Get the PIDs of all processes in the given cgroup.
+ */
+std::set<pid_t> getPidsInCgroup(const std::filesystem::path & cgroup);
+
 } // namespace nix

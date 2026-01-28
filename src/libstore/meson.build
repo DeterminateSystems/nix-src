@@ -13,6 +13,8 @@ project(
   license : 'LGPL-2.1-or-later',
 )
 
+fs = import('fs')
+
 cxx = meson.get_compiler('cpp')
 
 subdir('nix-meson-build-support/deps-lists')
@@ -22,6 +24,11 @@ configdata_priv = configuration_data()
 
 # TODO rename, because it will conflict with downstream projects
 configdata_priv.set_quoted('PACKAGE_VERSION', meson.project_version())
+
+configdata_priv.set_quoted(
+  'DETERMINATE_NIX_VERSION',
+  fs.read('../../.version-determinate').strip(),
+)
 
 subdir('nix-meson-build-support/default-system-cpu')
 
@@ -200,8 +207,6 @@ if get_option('embedded-sandbox-shell')
   generated_headers += embedded_sandbox_shell_gen
 endif
 
-fs = import('fs')
-
 prefix = get_option('prefix')
 # For each of these paths, assume that it is relative to the prefix unless
 # it is already an absolute path (which is the default for store-dir, localstatedir, and log-dir).
@@ -267,6 +272,8 @@ config_priv_h = configure_file(
 subdir('nix-meson-build-support/common')
 
 sources = files(
+  'active-builds.cc',
+  'async-path-writer.cc',
   'binary-cache-store.cc',
   'build-result.cc',
   'build/derivation-builder.cc',
@@ -305,6 +312,7 @@ sources = files(
   'local-binary-cache-store.cc',
   'local-fs-store.cc',
   'local-overlay-store.cc',
+  'local-store-active-builds.cc',
   'local-store.cc',
   'log-store.cc',
   'machines.cc',
@@ -372,7 +380,7 @@ this_library = library(
   soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
-  link_args : linker_export_flags,
+  link_args : linker_export_flags + [ '-lwasmtime' ],
   prelink : true, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],

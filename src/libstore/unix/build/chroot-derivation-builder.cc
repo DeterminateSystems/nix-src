@@ -153,7 +153,7 @@ struct ChrootDerivationBuilder : virtual DerivationBuilderImpl
         return Strings({store.printStorePath(drvPath), chrootRootDir});
     }
 
-    Path realPathInSandbox(const Path & p) override
+    Path realPathInHost(const Path & p) override
     {
         // FIXME: why the needsHashRewrite() conditional?
         return !needsHashRewrite() ? chrootRootDir + p : store.toRealPath(p);

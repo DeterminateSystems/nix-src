@@ -12,7 +12,8 @@ void checkOutputs(
     const StorePath & drvPath,
     const decltype(Derivation::outputs) & drvOutputs,
     const decltype(DerivationOptions<StorePath>::outputChecks) & outputChecks,
-    const std::map<std::string, ValidPathInfo> & outputs)
+    const std::map<std::string, ValidPathInfo> & outputs,
+    Activity & act)
 {
     std::map<Path, const ValidPathInfo &> outputsByPath;
     for (auto & output : outputs)
@@ -36,6 +37,13 @@ void checkOutputs(
             if (wanted != got) {
                 /* Throw an error after registering the path as
                    valid. */
+                act.result(
+                    resHashMismatch,
+                    {
+                        {"storePath", store.printStorePath(drvPath)},
+                        {"wanted", wanted},
+                        {"got", got},
+                    });
                 throw BuildError(
                     BuildResult::Failure::HashMismatch,
                     "hash mismatch in fixed-output derivation '%s':\n  specified: %s\n     got:    %s",

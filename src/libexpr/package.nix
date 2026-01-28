@@ -14,6 +14,7 @@
   boehmgc,
   nlohmann_json,
   toml11,
+  wasmtime,
 
   # Configuration Options
 
@@ -36,7 +37,7 @@ let
 in
 
 mkMesonLibrary (finalAttrs: {
-  pname = "nix-expr";
+  pname = "determinate-nix-expr";
   inherit version;
 
   workDir = ./.;
@@ -64,6 +65,7 @@ mkMesonLibrary (finalAttrs: {
 
   buildInputs = [
     toml11
+    wasmtime
   ];
 
   propagatedBuildInputs = [

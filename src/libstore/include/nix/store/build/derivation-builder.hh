@@ -79,7 +79,7 @@ struct DerivationBuilderParams
      */
     const StorePathSet & inputPaths;
 
-    const std::map<std::string, InitialOutput> & initialOutputs;
+    const std::map<std::string, InitialOutput> initialOutputs;
 
     const BuildMode & buildMode;
 
@@ -98,6 +98,11 @@ struct DerivationBuilderParams
     StringSet systemFeatures;
 
     DesugaredEnv desugaredEnv;
+
+    /**
+     * The activity corresponding to the build.
+     */
+    std::unique_ptr<Activity> & act;
 };
 
 /**

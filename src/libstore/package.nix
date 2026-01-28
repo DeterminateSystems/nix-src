@@ -4,7 +4,7 @@
   mkMesonLibrary,
 
   unixtools,
-  darwin,
+  apple-sdk,
 
   nix-util,
   boost,
@@ -13,6 +13,7 @@
   libseccomp,
   nlohmann_json,
   sqlite,
+  wasmtime,
 
   busybox-sandbox-shell ? null,
 
@@ -32,15 +33,17 @@ let
 in
 
 mkMesonLibrary (finalAttrs: {
-  pname = "nix-store";
+  pname = "determinate-nix-store";
   inherit version;
 
   workDir = ./.;
   fileset = fileset.unions [
     ../../nix-meson-build-support
     ./nix-meson-build-support
+    # FIXME: get rid of these symlinks.
     ../../.version
     ./.version
+    ../../.version-determinate
     ./meson.build
     ./meson.options
     ./include/nix/store/meson.build
@@ -62,6 +65,7 @@ mkMesonLibrary (finalAttrs: {
     boost
     curl
     sqlite
+    wasmtime
   ]
   ++ lib.optional stdenv.hostPlatform.isLinux libseccomp
   ++ lib.optional withAWS aws-crt-cpp;

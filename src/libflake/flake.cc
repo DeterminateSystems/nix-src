@@ -36,6 +36,7 @@
 #include "nix/expr/value-to-json.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/memory-source-accessor.hh"
+#include "nix/util/mounted-source-accessor.hh"
 #include "nix/fetchers/input-cache.hh"
 #include "nix/expr/attr-set.hh"
 #include "nix/expr/eval-error.hh"
@@ -66,20 +67,22 @@ namespace nix {
 struct SourceAccessor;
 
 using namespace flake;
+using namespace fetchers;
 
 namespace flake {
 
 static void forceTrivialValue(EvalState & state, Value & value, const PosIdx pos)
 {
-    if (value.isThunk() && value.isTrivial())
+    if (value.isTrivial())
         state.forceValue(value, pos);
 }
 
 static void expectType(EvalState & state, ValueType type, Value & value, const PosIdx pos)
 {
     forceTrivialValue(state, value, pos);
-    if (value.type() != type)
-        throw Error("expected %s but got %s at %s", showType(type), showType(value.type()), state.positions[pos]);
+    auto t = value.type();
+    if (t != type)
+        throw Error("expected %s but got %s at %s", showType(type), showType(t), state.positions[pos]);
 }
 
 static std::pair<std::map<FlakeId, FlakeInput>, fetchers::Attrs> parseFlakeInputs(
@@ -90,7 +93,7 @@ static std::pair<std::map<FlakeId, FlakeInput>, fetchers::Attrs> parseFlakeInput
     const SourcePath & flakeDir,
     bool allowSelf);
 
-static void parseFlakeInputAttr(EvalState & state, const Attr & attr, fetchers::Attrs & attrs)
+static void parseFlakeInputAttr(EvalState & state, const nix::Attr & attr, fetchers::Attrs & attrs)
 {
 // Allow selecting a subset of enum values
 #pragma GCC diagnostic push
@@ -144,6 +147,7 @@ static FlakeInput parseFlakeInput(
     auto sUrl = state.symbols.create("url");
     auto sFlake = state.symbols.create("flake");
     auto sFollows = state.symbols.create("follows");
+    auto sBuildTime = state.symbols.create("buildTime");
 
     fetchers::Attrs attrs;
     std::optional<std::string> url;
@@ -172,6 +176,11 @@ static FlakeInput parseFlakeInput(
             } else if (attr.name == sFlake) {
                 expectType(state, nBool, *attr.value, attr.pos);
                 input.isFlake = attr.value->boolean();
+            } else if (attr.name == sBuildTime) {
+                expectType(state, nBool, *attr.value, attr.pos);
+                input.buildTime = attr.value->boolean();
+                if (input.buildTime)
+                    experimentalFeatureSettings.require(Xp::BuildTimeFetchTree);
             } else if (attr.name == sInputs) {
                 input.overrides =
                     parseFlakeInputs(state, attr.value, attr.pos, lockRootAttrPath, flakeDir, false).first;
@@ -369,7 +378,8 @@ static Flake getFlake(
     EvalState & state,
     const FlakeRef & originalRef,
     fetchers::UseRegistries useRegistries,
-    const InputAttrPath & lockRootAttrPath)
+    const InputAttrPath & lockRootAttrPath,
+    bool requireLockable)
 {
     // Fetch a lazy tree first.
     auto cachedInput =
@@ -401,13 +411,14 @@ static Flake getFlake(
         originalRef,
         resolvedRef,
         lockedRef,
-        state.storePath(state.mountInput(lockedRef.input, originalRef.input, cachedInput.accessor)),
+        state.storePath(state.mountInput(lockedRef.input, originalRef.input, cachedInput.accessor, requireLockable)),
         lockRootAttrPath);
 }
 
-Flake getFlake(EvalState & state, const FlakeRef & originalRef, fetchers::UseRegistries useRegistries)
+Flake getFlake(
+    EvalState & state, const FlakeRef & originalRef, fetchers::UseRegistries useRegistries, bool requireLockable)
 {
-    return getFlake(state, originalRef, useRegistries, {});
+    return getFlake(state, originalRef, useRegistries, {}, requireLockable);
 }
 
 static LockFile readLockFile(const fetchers::Settings & fetchSettings, const SourcePath & lockFilePath)
@@ -421,13 +432,11 @@ static LockFile readLockFile(const fetchers::Settings & fetchSettings, const Sou
 LockedFlake
 lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags)
 {
-    experimentalFeatureSettings.require(Xp::Flakes);
-
     auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
     auto useRegistriesTop = useRegistries ? fetchers::UseRegistries::All : fetchers::UseRegistries::No;
     auto useRegistriesInputs = useRegistries ? fetchers::UseRegistries::Limited : fetchers::UseRegistries::No;
 
-    auto flake = getFlake(state, topRef, useRegistriesTop, {});
+    auto flake = getFlake(state, topRef, useRegistriesTop, {}, false);
 
     if (lockFlags.applyNixConfig) {
         flake.config.apply(settings);
@@ -608,7 +617,7 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
                         if (auto resolvedPath = resolveRelativePath()) {
                             return readFlake(state, ref, ref, ref, *resolvedPath, inputAttrPath);
                         } else {
-                            return getFlake(state, ref, useRegistries, inputAttrPath);
+                            return getFlake(state, ref, useRegistriesInputs, inputAttrPath, true);
                         }
                     };
 
@@ -631,7 +640,11 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
                            didn't change and there is no override from a
                            higher level flake. */
                         auto childNode = make_ref<LockedNode>(
-                            oldLock->lockedRef, oldLock->originalRef, oldLock->isFlake, oldLock->parentInputAttrPath);
+                            oldLock->lockedRef,
+                            oldLock->originalRef,
+                            oldLock->isFlake,
+                            oldLock->buildTime,
+                            oldLock->parentInputAttrPath);
 
                         node->inputs.insert_or_assign(id, childNode);
 
@@ -720,12 +733,34 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
                         auto inputIsOverride = explicitCliOverrides.contains(inputAttrPath);
                         auto ref = (input2.ref && inputIsOverride) ? *input2.ref : *input.ref;
 
+                        /* Warn against the use of indirect flakerefs
+                           (but only at top-level since we don't want
+                           to annoy users about flakes that are not
+                           under their control). */
+                        auto warnRegistry = [&](const FlakeRef & resolvedRef) {
+                            if (inputAttrPath.size() == 1 && !input.ref->input.isDirect()) {
+                                std::ostringstream s;
+                                printLiteralString(s, resolvedRef.to_string());
+                                warn(
+                                    "Flake input '%1%' uses the flake registry. "
+                                    "Using the registry in flake inputs is deprecated in Determinate Nix. "
+                                    "To make your flake future-proof, add the following to '%2%':\n"
+                                    "\n"
+                                    "  inputs.%1%.url = %3%;\n"
+                                    "\n"
+                                    "For more information, see: https://github.com/DeterminateSystems/nix-src/issues/37",
+                                    inputAttrPathS,
+                                    flake.path,
+                                    s.str());
+                            }
+                        };
+
                         if (input.isFlake) {
                             auto inputFlake = getInputFlake(
                                 *input.ref, inputIsOverride ? fetchers::UseRegistries::All : useRegistriesInputs);
 
-                            auto childNode =
-                                make_ref<LockedNode>(inputFlake.lockedRef, ref, true, overriddenParentPath);
+                            auto childNode = make_ref<LockedNode>(
+                                inputFlake.lockedRef, ref, true, input.buildTime, overriddenParentPath);
 
                             node->inputs.insert_or_assign(id, childNode);
 
@@ -747,6 +782,8 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
                                 inputAttrPath,
                                 inputFlake.path,
                                 false);
+
+                            warnRegistry(inputFlake.resolvedRef);
                         }
 
                         else {
@@ -758,16 +795,21 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
                                     auto cachedInput = state.inputCache->getAccessor(
                                         state.fetchSettings, *state.store, input.ref->input, useRegistriesInputs);
 
+                                    auto resolvedRef =
+                                        FlakeRef(std::move(cachedInput.resolvedInput), input.ref->subdir);
                                     auto lockedRef = FlakeRef(std::move(cachedInput.lockedInput), input.ref->subdir);
 
+                                    warnRegistry(resolvedRef);
+
                                     return {
-                                        state.storePath(
-                                            state.mountInput(lockedRef.input, input.ref->input, cachedInput.accessor)),
+                                        state.storePath(state.mountInput(
+                                            lockedRef.input, input.ref->input, cachedInput.accessor, true, true)),
                                         lockedRef};
                                 }
                             }();
 
-                            auto childNode = make_ref<LockedNode>(lockedRef, ref, false, overriddenParentPath);
+                            auto childNode =
+                                make_ref<LockedNode>(lockedRef, ref, false, input.buildTime, overriddenParentPath);
 
                             nodePaths.emplace(childNode, path);
 
@@ -877,13 +919,15 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
                                 CanonPath((topRef.subdir == "" ? "" : topRef.subdir + "/") + "flake.lock"),
                                 newLockFileS,
                                 commitMessage);
+
+                            flake.lockFilePath().invalidateCache();
                         }
 
                         /* Rewriting the lockfile changed the top-level
                            repo, so we should re-read it. FIXME: we could
                            also just clear the 'rev' field... */
                         auto prevLockedRef = flake.lockedRef;
-                        flake = getFlake(state, topRef, useRegistriesTop);
+                        flake = getFlake(state, topRef, useRegistriesTop, lockFlags.requireLockable);
 
                         if (lockFlags.commitLockFile && flake.lockedRef.input.getRev()
                             && prevLockedRef.input.getRev() != flake.lockedRef.input.getRev())
@@ -930,8 +974,6 @@ static Value * requireInternalFile(EvalState & state, CanonPath path)
 
 void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & vRes)
 {
-    experimentalFeatureSettings.require(Xp::Flakes);
-
     auto [lockFileStr, keyMap] = lockedFlake.lockFile.to_string();
 
     auto overrides = state.buildBindings(lockedFlake.nodePaths.size());
@@ -968,10 +1010,7 @@ void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & vRes)
     auto vLocks = state.allocValue();
     vLocks->mkString(lockFileStr, state.mem);
 
-    auto vFetchFinalTree = get(state.internalPrimOps, "fetchFinalTree");
-    assert(vFetchFinalTree);
-
-    Value * args[] = {vLocks, &vOverrides, *vFetchFinalTree};
+    Value * args[] = {vLocks, &vOverrides};
     state.callFunction(*vCallFlake, args, vRes, noPos);
 }
 
