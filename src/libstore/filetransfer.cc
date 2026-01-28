@@ -731,7 +731,10 @@ struct curlFileTransfer : public FileTransfer
 
     std::thread workerThread;
 
-    const size_t maxQueueSize = fileTransferSettings.httpConnections.get() * 5;
+    const size_t maxQueueSize =
+        (fileTransferSettings.httpConnections.get() ? fileTransferSettings.httpConnections.get()
+                                                    : std::max(1U, std::thread::hardware_concurrency()))
+        * 5;
 
     curlFileTransfer()
         : mt19937(rd())
@@ -780,6 +783,9 @@ struct curlFileTransfer : public FileTransfer
 
     void workerThreadMain()
     {
+        /* NOTE(cole-h): the maxQueueSize needs to be >0 or else things will hang */
+        assert(maxQueueSize > 0);
+
 /* Cause this thread to be notified on SIGINT. */
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
         auto callback = createInterruptCallback([&]() { stopWorkerThread(); });
