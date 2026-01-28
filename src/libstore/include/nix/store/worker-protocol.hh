@@ -68,6 +68,7 @@ struct WorkerProto
         Source & from;
         Version version;
         bool shortStorePaths = false;
+        bool provenance = false;
     };
 
     /**
@@ -79,6 +80,7 @@ struct WorkerProto
         Sink & to;
         Version version;
         bool shortStorePaths = false;
+        bool provenance = false;
     };
 
     /**
@@ -140,6 +142,7 @@ struct WorkerProto
     using FeatureSet = std::set<Feature, std::less<>>;
 
     static constexpr std::string_view featureQueryActiveBuilds{"queryActiveBuilds"};
+    static constexpr std::string_view featureProvenance{"provenance"};
 
     static const FeatureSet allFeatures;
 };

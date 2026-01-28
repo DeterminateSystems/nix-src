@@ -41,6 +41,7 @@ enum struct ExperimentalFeature {
     ParallelEval,
     WasmBuiltin,
     WasmDerivations,
+    Provenance,
 };
 
 extern std::set<std::string> stabilizedFeatures;

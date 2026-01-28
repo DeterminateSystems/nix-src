@@ -11,6 +11,8 @@
 
 namespace nix {
 
+struct Provenance;
+
 struct BuildResult
 {
     struct Success
@@ -37,6 +39,12 @@ struct BuildResult
          * to actual paths.
          */
         SingleDrvOutputs builtOutputs;
+
+        /**
+         * The provenance of the derivation, if any. Note that this is the provenance of the current build, not
+         * necessarily of previously existing outputs.
+         */
+        std::shared_ptr<const Provenance> provenance;
 
         bool operator==(const BuildResult::Success &) const noexcept;
         std::strong_ordering operator<=>(const BuildResult::Success &) const noexcept;
@@ -96,6 +104,11 @@ struct BuildResult
          * non-determinism.)
          */
         bool isNonDeterministic = false;
+
+        /**
+         * The provenance of the derivation, if any.
+         */
+        std::shared_ptr<const Provenance> provenance;
 
         bool operator==(const BuildResult::Failure &) const noexcept;
         std::strong_ordering operator<=>(const BuildResult::Failure &) const noexcept;

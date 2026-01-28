@@ -37,6 +37,7 @@ suites += {
     'build-time-flake-inputs.sh',
     'substitution.sh',
     'shallow.sh',
+    'provenance.sh',
   ],
   'workdir' : meson.current_source_dir(),
 }

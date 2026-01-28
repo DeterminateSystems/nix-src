@@ -18,6 +18,7 @@
 #include "nix/util/logging.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/active-builds.hh"
+#include "nix/util/provenance.hh"
 
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
 #  include "nix/util/monitor-fd.hh"
@@ -433,6 +434,9 @@ static void performOp(
             bool repairBool;
             conn.from >> repairBool;
             auto repair = RepairFlag{repairBool};
+            auto provenance = conn.features.contains(WorkerProto::featureProvenance)
+                                  ? Provenance::from_json_str_optional(readString(conn.from))
+                                  : nullptr;
 
             logger->startWork();
             auto pathInfo = [&]() {
@@ -458,8 +462,8 @@ static void performOp(
                     assert(false);
                 }
                 // TODO these two steps are essentially RemoteStore::addCAToStore. Move it up to Store.
-                auto path =
-                    store->addToStoreFromDump(source, name, dumpMethod, contentAddressMethod, hashAlgo, refs, repair);
+                auto path = store->addToStoreFromDump(
+                    source, name, dumpMethod, contentAddressMethod, hashAlgo, refs, repair, provenance);
                 return store->queryPathInfo(path);
             }();
             logger->stopWork();
@@ -913,6 +917,9 @@ static void performOp(
         conn.from >> info.registrationTime >> info.narSize >> info.ultimate;
         info.sigs = readStrings<StringSet>(conn.from);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
+        info.provenance = conn.features.contains(WorkerProto::featureProvenance)
+                              ? Provenance::from_json_str_optional(readString(conn.from))
+                              : nullptr;
         conn.from >> repair >> dontCheckSigs;
         if (!trusted && dontCheckSigs)
             dontCheckSigs = false;
@@ -1040,8 +1047,12 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
 #endif
 
     /* Exchange the greeting. */
+    auto myFeatures = WorkerProto::allFeatures;
+    if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        myFeatures.erase(std::string(WorkerProto::featureProvenance));
+
     auto [protoVersion, features] =
-        WorkerProto::BasicServerConnection::handshake(to, from, PROTOCOL_VERSION, WorkerProto::allFeatures);
+        WorkerProto::BasicServerConnection::handshake(to, from, PROTOCOL_VERSION, myFeatures);
 
     if (protoVersion < MINIMUM_PROTOCOL_VERSION)
         throw Error("the Nix client version is too old");

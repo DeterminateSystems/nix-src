@@ -3369,4 +3369,14 @@ void EvalState::waitForAllPaths()
     asyncPathWriter->waitForAllPaths();
 }
 
+std::shared_ptr<const Provenance> EvalState::getRootProvenance()
+{
+    return rootProvenance;
+}
+
+void EvalState::setRootProvenance(std::shared_ptr<const Provenance> provenance)
+{
+    rootProvenance = provenance;
+}
+
 } // namespace nix

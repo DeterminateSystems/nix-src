@@ -43,6 +43,8 @@ struct SourceAccessor;
 class NarInfoDiskCache;
 class Store;
 
+struct Provenance;
+
 typedef std::map<std::string, StorePath> OutputPathMap;
 
 enum CheckSigsFlag : bool { NoCheckSigs = false, CheckSigs = true };
@@ -597,7 +599,8 @@ public:
         ContentAddressMethod hashMethod = ContentAddressMethod::Raw::NixArchive,
         HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
         const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) = 0;
+        RepairFlag repair = NoRepair,
+        std::shared_ptr<const Provenance> provenance = nullptr) = 0;
 
     /**
      * Add a mapping indicating that `deriver!outputName` maps to the output path
@@ -790,7 +793,8 @@ public:
     /**
      * Write a derivation to the Nix store, and return its path.
      */
-    virtual StorePath writeDerivation(const Derivation & drv, RepairFlag repair = NoRepair);
+    virtual StorePath writeDerivation(
+        const Derivation & drv, RepairFlag repair = NoRepair, std::shared_ptr<const Provenance> provenance = nullptr);
 
     /**
      * Read a derivation (which must already be valid).
@@ -915,6 +919,15 @@ public:
         return {};
     }
 
+    /**
+     * Whether, when copying *from* this store, a "copied" provenance
+     * record should be added.
+     */
+    virtual bool includeInProvenance()
+    {
+        return false;
+    }
+
 protected:
 
     Stats stats;
@@ -933,9 +946,10 @@ protected:
 };
 
 /**
- * Copy a path from one store to another.
+ * Copy a path from one store to another. Return the path info of the newly added store path, or nullptr if the path was
+ * already valid.
  */
-void copyStorePath(
+std::shared_ptr<const ValidPathInfo> copyStorePath(
     Store & srcStore,
     Store & dstStore,
     const StorePath & storePath,
