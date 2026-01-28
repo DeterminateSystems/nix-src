@@ -9,6 +9,8 @@
 #include "nix/util/forwarding-source-accessor.hh"
 #include "nix/util/archive.hh"
 
+#include "init.hh"
+
 #include <nlohmann/json.hpp>
 
 namespace nix::fetchers {
@@ -49,6 +51,8 @@ static void fixupInput(Input & input)
 
 Input Input::fromURL(const Settings & settings, const ParsedURL & url, bool requireTree)
 {
+    nix::initFetchers();
+
     for (auto & [_, inputScheme] : inputSchemes()) {
         auto res = inputScheme->inputFromURL(settings, url, requireTree);
         if (res) {
@@ -70,6 +74,8 @@ Input Input::fromURL(const Settings & settings, const ParsedURL & url, bool requ
 
 Input Input::fromAttrs(const Settings & settings, Attrs && attrs)
 {
+    nix::initFetchers();
+
     auto schemeName = ({
         auto schemeNameOpt = maybeGetStrAttr(attrs, "type");
         if (!schemeNameOpt)
@@ -536,6 +542,31 @@ std::string publicKeys_to_string(const std::vector<PublicKey> & publicKeys)
 }
 
 } // namespace nix::fetchers
+
+namespace nix {
+
+using namespace nix::fetchers;
+
+void initFetchers()
+{
+    static bool init;
+    if (init)
+        return;
+
+    init = true;
+
+    registerTarballInputScheme();
+    registerFileInputScheme();
+    registerGitInputScheme();
+    registerGitHubInputScheme();
+    registerGitLabInputScheme();
+    registerSourceHutInputScheme();
+    registerPathInputScheme();
+    registerIndirectInputScheme();
+    registerMercurialInputScheme();
+}
+
+} // namespace nix
 
 namespace nlohmann {
 

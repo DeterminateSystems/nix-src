@@ -12,6 +12,8 @@
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/fetchers/input-cache.hh"
 
+#include "../primops.hh"
+
 #include <nlohmann/json.hpp>
 
 #include <ctime>
@@ -769,5 +771,13 @@ static RegisterPrimOp primop_fetchGit({
     )",
     .fun = prim_fetchGit,
 });
+
+void registerFetchTreePrimOps()
+{
+    primop_fetchTree.ensure();
+    primop_fetchurl.ensure();
+    primop_fetchTarball.ensure();
+    primop_fetchGit.ensure();
+}
 
 } // namespace nix

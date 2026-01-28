@@ -10,6 +10,8 @@
 #include "nix/fetchers/git-utils.hh"
 #include "nix/fetchers/fetch-settings.hh"
 
+#include "init.hh"
+
 namespace nix::fetchers {
 
 DownloadFileResult downloadFile(
@@ -516,7 +518,29 @@ struct TarballInputScheme : CurlInputScheme
     }
 };
 
-static auto rTarballInputScheme = OnStartup([] { registerInputScheme(std::make_unique<TarballInputScheme>()); });
-static auto rFileInputScheme = OnStartup([] { registerInputScheme(std::make_unique<FileInputScheme>()); });
+static auto rTarballInputScheme = OnStartup([] { registerTarballInputScheme(); });
+static auto rFileInputScheme = OnStartup([] { registerFileInputScheme(); });
+
+void registerTarballInputScheme()
+{
+    static bool init;
+
+    if (init)
+        return;
+
+    registerInputScheme(std::make_unique<TarballInputScheme>());
+    init = true;
+}
+
+void registerFileInputScheme()
+{
+    static bool init;
+
+    if (init)
+        return;
+
+    registerInputScheme(std::make_unique<FileInputScheme>());
+    init = true;
+}
 
 } // namespace nix::fetchers

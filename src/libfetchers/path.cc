@@ -5,6 +5,8 @@
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/fetchers/fetch-settings.hh"
 
+#include "init.hh"
+
 namespace nix::fetchers {
 
 struct PathInputScheme : InputScheme
@@ -169,6 +171,17 @@ struct PathInputScheme : InputScheme
     }
 };
 
-static auto rPathInputScheme = OnStartup([] { registerInputScheme(std::make_unique<PathInputScheme>()); });
+static auto rPathInputScheme = OnStartup([] { registerPathInputScheme(); });
+
+void registerPathInputScheme()
+{
+    static bool init;
+
+    if (init)
+        return;
+
+    registerInputScheme(std::make_unique<PathInputScheme>());
+    init = true;
+}
 
 } // namespace nix::fetchers

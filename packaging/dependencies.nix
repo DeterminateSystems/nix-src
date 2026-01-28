@@ -82,4 +82,10 @@ scope: {
       });
 
   wasmtime = pkgs.callPackage ./wasmtime.nix { };
+
+  curl = pkgs.curl.override {
+    # libpsl uses a data file needed at runtime, not useful for nix.
+    pslSupport = !stdenv.hostPlatform.isStatic;
+    idnSupport = !stdenv.hostPlatform.isStatic;
+  };
 }

@@ -20,6 +20,11 @@ struct RegisterPrimOp
      * may be primops not yet added and builtins is not yet sorted.
      */
     RegisterPrimOp(PrimOp && primOp);
+
+    void ensure();
+private:
+    bool registered;
+    PrimOp && primOp;
 };
 
 /* These primops are disabled without enableNativeCode, but plugins
