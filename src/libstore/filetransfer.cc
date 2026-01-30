@@ -802,7 +802,9 @@ struct curlFileTransfer : public FileTransfer
 
 /* Cause this thread to be notified on SIGINT. */
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
-        auto callback = createInterruptCallback([&]() { stopWorkerThread(); });
+               // FIXME(RossComputerGuy): this causes issues on static builds.
+               // In particular, it causes a segfault to happen at the end of the program running.
+               // auto callback = createInterruptCallback([&]() { stopWorkerThread(); });
 #endif
 
 #ifdef __linux__
