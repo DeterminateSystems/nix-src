@@ -241,7 +241,14 @@
                 otherSplices = renameSplicesTo "self" nixDependenciesSplices;
                 f = import ./packaging/dependencies.nix {
                   inherit inputs pkgs;
-                  stdenv = getStdenv pkgs;
+                  stdenv =
+                    let
+                      stdenv = getStdenv pkgs;
+                    in
+                    if stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isStatic then
+                      pkgs.llvmPackages.libcxxStdenv
+                    else
+                      stdenv;
                 };
               };
 
