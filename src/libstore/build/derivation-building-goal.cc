@@ -563,8 +563,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
             {
                 DerivationBuildingGoal & goal;
 
-                DerivationBuildingGoalCallbacks(
-                    DerivationBuildingGoal & goal, std::unique_ptr<DerivationBuilder> & builder)
+                DerivationBuildingGoalCallbacks(DerivationBuildingGoal & goal)
                     : goal{goal}
                 {
                 }
@@ -633,15 +632,15 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
 
             /* If we have to wait and retry (see below), then `builder` will
                already be created, so we don't need to create it again. */
-            builder = externalBuilder ? makeExternalDerivationBuilder(
-                                            *localStoreP,
-                                            std::make_unique<DerivationBuildingGoalCallbacks>(*this, builder),
-                                            std::move(params),
-                                            *externalBuilder)
-                                      : makeDerivationBuilder(
-                                            *localStoreP,
-                                            std::make_unique<DerivationBuildingGoalCallbacks>(*this, builder),
-                                            std::move(params));
+            builder =
+                externalBuilder
+                    ? makeExternalDerivationBuilder(
+                          *localStoreP,
+                          std::make_unique<DerivationBuildingGoalCallbacks>(*this),
+                          std::move(params),
+                          *externalBuilder)
+                    : makeDerivationBuilder(
+                          *localStoreP, std::make_unique<DerivationBuildingGoalCallbacks>(*this), std::move(params));
         }
 
         if (auto builderOutOpt = builder->startBuild()) {
@@ -1177,18 +1176,6 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
 
 Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status status, SingleDrvOutputs builtOutputs)
 {
-    buildResult.inner = BuildResult::Success{
-        .status = status,
-        .builtOutputs = std::move(builtOutputs),
-    };
-
-    logger->result(
-        act ? act->id : getCurActivity(),
-        resBuildResult,
-        nlohmann::json(KeyedBuildResult(
-            buildResult,
-            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
-
     mcRunningBuilds.reset();
 
     if (status == BuildResult::Success::Built)
@@ -1196,15 +1183,11 @@ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status stat
 
     worker.updateProgress();
 
-    return amDone(ecSuccess, std::nullopt);
-}
-
-Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
-{
-    buildResult.inner = BuildResult::Failure{
-        .status = ex.status,
-        .errorMsg = fmt("%s", Uncolored(ex.info().msg)),
-    };
+    auto res = Goal::doneSuccess(
+        BuildResult::Success{
+            .status = status,
+            .builtOutputs = std::move(builtOutputs),
+        });
 
     logger->result(
         act ? act->id : getCurActivity(),
@@ -1213,6 +1196,11 @@ Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
             buildResult,
             DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
+    return res;
+}
+
+Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
+{
     mcRunningBuilds.reset();
 
     if (ex.status == BuildResult::Failure::TimedOut)
@@ -1224,7 +1212,22 @@ Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
 
     worker.updateProgress();
 
-    return amDone(ecFailed, {std::move(ex)});
+    auto res = Goal::doneFailure(
+        ecFailed,
+        BuildResult::Failure{
+            .status = ex.status,
+            .errorMsg = fmt("%s", Uncolored(ex.info().msg)),
+        },
+        std::move(ex));
+
+    logger->result(
+        act ? act->id : getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
+    return res;
 }
 
 } // namespace nix
