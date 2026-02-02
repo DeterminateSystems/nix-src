@@ -415,7 +415,6 @@ typedef void (*cxa_throw_type)(void *, void *, void (*) (void *));
 void __cxa_throw(void * exc, void * tinfo_, void (*dest)(void *))
 {
     auto * tinfo = (std::type_info *) tinfo_;
-    std::cerr << nix::fmt("THROW %s\n", tinfo->name());
 
     if (*tinfo == typeid(std::logic_error))
         abort();
