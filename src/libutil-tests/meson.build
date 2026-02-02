@@ -82,7 +82,9 @@ sources = files(
   'xml-writer.cc',
 )
 
+if have_cxa_throw
   sources += files('cxa-throw.cc')
+endif
 
 include_dirs = [ include_directories('.') ]
 

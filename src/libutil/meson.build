@@ -119,6 +119,10 @@ config_priv_h = configure_file(
 
 subdir('nix-meson-build-support/common')
 
+if have_cxa_throw
+  deps_other += cxa_throw_dep
+endif
+
 sources = [ config_priv_h ] + files(
   'archive.cc',
   'args.cc',

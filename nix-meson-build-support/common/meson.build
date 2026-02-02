@@ -76,3 +76,4 @@ endif
 
 subdir('assert-fail')
 subdir('asan-options')
+subdir('cxa-throw')
