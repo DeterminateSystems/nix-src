@@ -5,8 +5,7 @@
 #include "nix/util/types.hh"
 #include "nix/util/serialise.hh"
 #include "nix/util/file-system.hh"
-
-#include <nlohmann/json_fwd.hpp>
+#include "nix/util/json-impls.hh"
 
 namespace nix {
 
@@ -81,6 +80,12 @@ struct Hash
     static Hash parseAny(std::string_view s, std::optional<HashAlgorithm> optAlgo);
 
     /**
+     * Like `parseAny`, but also returns the format the hash was parsed from.
+     */
+    static std::pair<Hash, HashFormat>
+    parseAnyReturningFormat(std::string_view s, std::optional<HashAlgorithm> optAlgo);
+
+    /**
      * Parse a hash from a string representation like the above, except the
      * type prefix is mandatory is there is no separate argument.
      */
@@ -99,9 +104,14 @@ struct Hash
      * @param explicitFormat cannot be SRI, but must be one of the
      * "bases".
      */
-    static Hash parseExplicitFormatUnprefixed(std::string_view s, HashAlgorithm algo, HashFormat explicitFormat);
+    static Hash parseExplicitFormatUnprefixed(
+        std::string_view s,
+        HashAlgorithm algo,
+        HashFormat explicitFormat,
+        const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
 
-    static Hash parseSRI(std::string_view original);
+    static Hash
+    parseSRI(std::string_view original, const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
 
 public:
     /**
@@ -190,22 +200,19 @@ std::string_view printHashFormat(HashFormat hashFormat);
 /**
  * Parse a string representing a hash algorithm.
  */
-HashAlgorithm parseHashAlgo(std::string_view s);
+HashAlgorithm
+parseHashAlgo(std::string_view s, const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
 
 /**
  * Will return nothing on parse error
  */
-std::optional<HashAlgorithm> parseHashAlgoOpt(std::string_view s);
+std::optional<HashAlgorithm>
+parseHashAlgoOpt(std::string_view s, const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
 
 /**
  * And the reverse.
  */
 std::string_view printHashAlgo(HashAlgorithm ha);
-
-/**
- * Write a JSON serialisation of the format `{"algo":"<sha1|...>","base16":"<hex>"}`.
- */
-void to_json(nlohmann::json & json, const Hash & hash);
 
 struct AbstractHashSink : virtual Sink
 {
@@ -228,4 +235,29 @@ public:
     HashResult currentHash();
 };
 
+template<>
+struct json_avoids_null<Hash> : std::true_type
+{};
+
 } // namespace nix
+
+template<>
+struct std::hash<nix::Hash>
+{
+    std::size_t operator()(const nix::Hash & hash) const noexcept
+    {
+        assert(hash.hashSize > sizeof(size_t));
+        return *reinterpret_cast<const std::size_t *>(&hash.hash);
+    }
+};
+
+namespace nix {
+
+inline std::size_t hash_value(const Hash & hash)
+{
+    return std::hash<Hash>{}(hash);
+}
+
+} // namespace nix
+
+JSON_IMPL_WITH_XP_FEATURES(Hash)

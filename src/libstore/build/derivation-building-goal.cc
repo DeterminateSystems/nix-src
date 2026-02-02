@@ -1,6 +1,5 @@
 #include "nix/store/build/derivation-building-goal.hh"
 #include "nix/store/build/derivation-env-desugar.hh"
-#include "nix/store/build/derivation-trampoline-goal.hh"
 #ifndef _WIN32 // TODO enable build hook on Windows
 #  include "nix/store/build/hook-instance.hh"
 #  include "nix/store/build/derivation-builder.hh"
@@ -27,22 +26,13 @@
 namespace nix {
 
 DerivationBuildingGoal::DerivationBuildingGoal(
-    const StorePath & drvPath, const Derivation & drv_, Worker & worker, BuildMode buildMode)
-    : Goal(worker, gaveUpOnSubstitution())
+    const StorePath & drvPath, const Derivation & drv, Worker & worker, BuildMode buildMode, bool storeDerivation)
+    : Goal(worker, gaveUpOnSubstitution(storeDerivation))
     , drvPath(drvPath)
+    , drv{std::make_unique<Derivation>(drv)}
     , buildMode(buildMode)
 {
-    drv = std::make_unique<Derivation>(drv_);
-
-    try {
-        drvOptions =
-            std::make_unique<DerivationOptions>(DerivationOptions::fromStructuredAttrs(drv->env, drv->structuredAttrs));
-    } catch (Error & e) {
-        e.addTrace({}, "while parsing derivation '%s'", worker.store.printStorePath(drvPath));
-        throw;
-    }
-
-    name = fmt("building of '%s' from in-memory derivation", worker.store.printStorePath(drvPath));
+    name = fmt("building derivation '%s'", worker.store.printStorePath(drvPath));
     trace("created");
 
     /* Prevent the .chroot directory from being
@@ -67,11 +57,7 @@ DerivationBuildingGoal::~DerivationBuildingGoal()
 
 std::string DerivationBuildingGoal::key()
 {
-    /* Ensure that derivations get built in order of their name,
-       i.e. a derivation named "aardvark" always comes before
-       "baboon". And substitution goals always happen before
-       derivation goals (due to "bd$"). */
-    return "bd$" + std::string(drvPath.name()) + "$" + worker.store.printStorePath(drvPath);
+    return "dd$" + std::string(drvPath.name()) + "$" + worker.store.printStorePath(drvPath);
 }
 
 void DerivationBuildingGoal::killChild()
@@ -93,18 +79,6 @@ void DerivationBuildingGoal::timedOut(Error && ex)
     [[maybe_unused]] Done _ = doneFailure({BuildResult::Failure::TimedOut, std::move(ex)});
 }
 
-/**
- * Used for `inputGoals` local variable below
- */
-struct value_comparison
-{
-    template<typename T>
-    bool operator()(const ref<T> & lhs, const ref<T> & rhs) const
-    {
-        return *lhs < *rhs;
-    }
-};
-
 std::string showKnownOutputs(const StoreDirConfig & store, const Derivation & drv)
 {
     std::string msg;
@@ -125,49 +99,9 @@ static void runPostBuildHook(
 
 /* At least one of the output paths could not be
    produced using a substitute.  So we have to build instead. */
-Goal::Co DerivationBuildingGoal::gaveUpOnSubstitution()
+Goal::Co DerivationBuildingGoal::gaveUpOnSubstitution(bool storeDerivation)
 {
     Goals waitees;
-
-    std::map<ref<const SingleDerivedPath>, GoalPtr, value_comparison> inputGoals;
-
-    {
-        std::function<void(ref<const SingleDerivedPath>, const DerivedPathMap<StringSet>::ChildNode &)>
-            addWaiteeDerivedPath;
-
-        addWaiteeDerivedPath = [&](ref<const SingleDerivedPath> inputDrv,
-                                   const DerivedPathMap<StringSet>::ChildNode & inputNode) {
-            if (!inputNode.value.empty()) {
-                auto g = worker.makeGoal(
-                    DerivedPath::Built{
-                        .drvPath = inputDrv,
-                        .outputs = inputNode.value,
-                    },
-                    buildMode == bmRepair ? bmRepair : bmNormal);
-                inputGoals.insert_or_assign(inputDrv, g);
-                waitees.insert(std::move(g));
-            }
-            for (const auto & [outputName, childNode] : inputNode.childMap)
-                addWaiteeDerivedPath(
-                    make_ref<SingleDerivedPath>(SingleDerivedPath::Built{inputDrv, outputName}), childNode);
-        };
-
-        for (const auto & [inputDrvPath, inputNode] : drv->inputDrvs.map) {
-            /* Ensure that pure, non-fixed-output derivations don't
-               depend on impure derivations. */
-            if (experimentalFeatureSettings.isEnabled(Xp::ImpureDerivations) && !drv->type().isImpure()
-                && !drv->type().isFixed()) {
-                auto inputDrv = worker.evalStore.readDerivation(inputDrvPath);
-                if (inputDrv.type().isImpure())
-                    throw Error(
-                        "pure derivation '%s' depends on impure derivation '%s'",
-                        worker.store.printStorePath(drvPath),
-                        worker.store.printStorePath(inputDrvPath));
-            }
-
-            addWaiteeDerivedPath(makeConstantStorePathRef(inputDrvPath), inputNode);
-        }
-    }
 
     /* Copy the input sources from the eval store to the build
        store.
@@ -213,177 +147,17 @@ Goal::Co DerivationBuildingGoal::gaveUpOnSubstitution()
 
     /* Determine the full set of input paths. */
 
-    /* First, the input derivations. */
+    if (storeDerivation) {
+        assert(drv->inputDrvs.map.empty());
+        /* Store the resolved derivation, as part of the record of
+           what we're actually building */
+        writeDerivation(worker.store, *drv);
+    }
+
     {
-        auto & fullDrv = *drv;
-
-        auto drvType = fullDrv.type();
-        bool resolveDrv =
-            std::visit(
-                overloaded{
-                    [&](const DerivationType::InputAddressed & ia) {
-                        /* must resolve if deferred. */
-                        return ia.deferred;
-                    },
-                    [&](const DerivationType::ContentAddressed & ca) {
-                        return !fullDrv.inputDrvs.map.empty()
-                               && (ca.fixed
-                                       /* Can optionally resolve if fixed, which is good
-                                          for avoiding unnecessary rebuilds. */
-                                       ? experimentalFeatureSettings.isEnabled(Xp::CaDerivations)
-                                       /* Must resolve if floating and there are any inputs
-                                          drvs. */
-                                       : true);
-                    },
-                    [&](const DerivationType::Impure &) { return true; }},
-                drvType.raw)
-            /* no inputs are outputs of dynamic derivations */
-            || std::ranges::any_of(fullDrv.inputDrvs.map.begin(), fullDrv.inputDrvs.map.end(), [](auto & pair) {
-                   return !pair.second.childMap.empty();
-               });
-
-        if (resolveDrv && !fullDrv.inputDrvs.map.empty()) {
-            experimentalFeatureSettings.require(Xp::CaDerivations);
-
-            /* We are be able to resolve this derivation based on the
-               now-known results of dependencies. If so, we become a
-               stub goal aliasing that resolved derivation goal. */
-            std::optional attempt = fullDrv.tryResolve(
-                worker.store,
-                [&](ref<const SingleDerivedPath> drvPath, const std::string & outputName) -> std::optional<StorePath> {
-                    auto mEntry = get(inputGoals, drvPath);
-                    if (!mEntry)
-                        return std::nullopt;
-
-                    auto & buildResult = (*mEntry)->buildResult;
-                    return std::visit(
-                        overloaded{
-                            [](const BuildResult::Failure &) -> std::optional<StorePath> { return std::nullopt; },
-                            [&](const BuildResult::Success & success) -> std::optional<StorePath> {
-                                auto i = get(success.builtOutputs, outputName);
-                                if (!i)
-                                    return std::nullopt;
-
-                                return i->outPath;
-                            },
-                        },
-                        buildResult.inner);
-                });
-            if (!attempt) {
-                /* TODO (impure derivations-induced tech debt) (see below):
-                   The above attempt should have found it, but because we manage
-                   inputDrvOutputs statefully, sometimes it gets out of sync with
-                   the real source of truth (store). So we query the store
-                   directly if there's a problem. */
-                attempt = fullDrv.tryResolve(worker.store, &worker.evalStore);
-            }
-            assert(attempt);
-            Derivation drvResolved{std::move(*attempt)};
-
-            auto pathResolved = writeDerivation(worker.store, drvResolved);
-
-            auto msg =
-                fmt("resolved derivation: '%s' -> '%s'",
-                    worker.store.printStorePath(drvPath),
-                    worker.store.printStorePath(pathResolved));
-            act = std::make_unique<Activity>(
-                *logger,
-                lvlInfo,
-                actBuildWaiting,
-                msg,
-                Logger::Fields{
-                    worker.store.printStorePath(drvPath),
-                    worker.store.printStorePath(pathResolved),
-                });
-
-            /* TODO https://github.com/NixOS/nix/issues/13247 we should
-               let the calling goal do this, so it has a change to pass
-               just the output(s) it cares about. */
-            auto resolvedDrvGoal =
-                worker.makeDerivationTrampolineGoal(pathResolved, OutputsSpec::All{}, drvResolved, buildMode);
-            {
-                Goals waitees{resolvedDrvGoal};
-                co_await await(std::move(waitees));
-            }
-
-            trace("resolved derivation finished");
-
-            auto resolvedResult = resolvedDrvGoal->buildResult;
-
-            // No `std::visit` for coroutines yet
-            if (auto * successP = resolvedResult.tryGetSuccess()) {
-                auto & success = *successP;
-                SingleDrvOutputs builtOutputs;
-
-                auto outputHashes = staticOutputHashes(worker.evalStore, *drv);
-                auto resolvedHashes = staticOutputHashes(worker.store, drvResolved);
-
-                StorePathSet outputPaths;
-
-                for (auto & outputName : drvResolved.outputNames()) {
-                    auto outputHash = get(outputHashes, outputName);
-                    auto resolvedHash = get(resolvedHashes, outputName);
-                    if ((!outputHash) || (!resolvedHash))
-                        throw Error(
-                            "derivation '%s' doesn't have expected output '%s' (derivation-goal.cc/resolve)",
-                            worker.store.printStorePath(drvPath),
-                            outputName);
-
-                    auto realisation = [&] {
-                        auto take1 = get(success.builtOutputs, outputName);
-                        if (take1)
-                            return *take1;
-
-                        /* The above `get` should work. But stateful tracking of
-                           outputs in resolvedResult, this can get out of sync with the
-                           store, which is our actual source of truth. For now we just
-                           check the store directly if it fails. */
-                        auto take2 = worker.evalStore.queryRealisation(DrvOutput{*resolvedHash, outputName});
-                        if (take2)
-                            return *take2;
-
-                        throw Error(
-                            "derivation '%s' doesn't have expected output '%s' (derivation-goal.cc/realisation)",
-                            worker.store.printStorePath(pathResolved),
-                            outputName);
-                    }();
-
-                    if (!drv->type().isImpure()) {
-                        auto newRealisation = realisation;
-                        newRealisation.id = DrvOutput{*outputHash, outputName};
-                        newRealisation.signatures.clear();
-                        if (!drv->type().isFixed()) {
-                            auto & drvStore = worker.evalStore.isValidPath(drvPath) ? worker.evalStore : worker.store;
-                            newRealisation.dependentRealisations =
-                                drvOutputReferences(worker.store, *drv, realisation.outPath, &drvStore);
-                        }
-                        worker.store.signRealisation(newRealisation);
-                        worker.store.registerDrvOutput(newRealisation);
-                    }
-                    outputPaths.insert(realisation.outPath);
-                    builtOutputs.emplace(outputName, realisation);
-                }
-
-                runPostBuildHook(worker.store, *logger, drvPath, outputPaths);
-
-                auto status = success.status;
-                if (status == BuildResult::Success::AlreadyValid)
-                    status = BuildResult::Success::ResolvesToAlreadyValid;
-
-                co_return doneSuccess(success.status, std::move(builtOutputs));
-            } else if (resolvedResult.tryGetFailure()) {
-                co_return doneFailure({
-                    BuildResult::Failure::DependencyFailed,
-                    "build of resolved derivation '%s' failed",
-                    worker.store.printStorePath(pathResolved),
-                });
-            } else
-                assert(false);
-        }
-
         /* If we get this far, we know no dynamic drvs inputs */
 
-        for (auto & [depDrvPath, depNode] : fullDrv.inputDrvs.map) {
+        for (auto & [depDrvPath, depNode] : drv->inputDrvs.map) {
             for (auto & outputName : depNode.value) {
                 /* Don't need to worry about `inputGoals`, because
                    impure derivations are always resolved above. Can
@@ -424,6 +198,38 @@ Goal::Co DerivationBuildingGoal::gaveUpOnSubstitution()
 
 Goal::Co DerivationBuildingGoal::tryToBuild()
 {
+    auto drvOptions = [&] {
+        DerivationOptions<SingleDerivedPath> temp;
+        try {
+            temp =
+                derivationOptionsFromStructuredAttrs(worker.store, drv->inputDrvs, drv->env, get(drv->structuredAttrs));
+        } catch (Error & e) {
+            e.addTrace({}, "while parsing derivation '%s'", worker.store.printStorePath(drvPath));
+            throw;
+        }
+
+        auto res = tryResolve(
+            temp,
+            [&](ref<const SingleDerivedPath> drvPath, const std::string & outputName) -> std::optional<StorePath> {
+                try {
+                    return resolveDerivedPath(
+                        worker.store, SingleDerivedPath::Built{drvPath, outputName}, &worker.evalStore);
+                } catch (Error &) {
+                    return std::nullopt;
+                }
+            });
+
+        /* The derivation must have all of its inputs gotten this point,
+           so the resolution will surely succeed.
+
+           (Actually, we shouldn't even enter this goal until we have a
+           resolved derivation, or derivation with only input addressed
+           transitive inputs, so this should be a no-opt anyways.)
+         */
+        assert(res);
+        return *res;
+    }();
+
     std::map<std::string, InitialOutput> initialOutputs;
 
     /* Recheck at this point. In particular, whereas before we were
@@ -457,7 +263,6 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
                 : buildMode == bmCheck ? "checking outputs of '%s'"
                                        : "building '%s'",
                 worker.store.printStorePath(drvPath));
-        fmt("building '%s'", worker.store.printStorePath(drvPath));
 #ifndef _WIN32 // TODO enable build hook on Windows
         if (hook)
             msg += fmt(" on '%s'", hook->machineName);
@@ -491,6 +296,8 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
 
     bool useHook;
 
+    const ExternalBuilder * externalBuilder = nullptr;
+
     while (true) {
         trace("trying to build");
 
@@ -500,10 +307,10 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
            crashes.  If we can't acquire the lock, then continue; hopefully some
            other goal can start a build, and if not, the main loop will sleep a few
            seconds and then retry this goal. */
-        PathSet lockFiles;
+        std::set<std::filesystem::path> lockFiles;
         /* FIXME: Should lock something like the drv itself so we don't build same
            CA drv concurrently */
-        if (dynamic_cast<LocalStore *>(&worker.store)) {
+        if (auto * localStore = dynamic_cast<LocalStore *>(&worker.store)) {
             /* If we aren't a local store, we might need to use the local store as
                a build remote, but that would cause a deadlock. */
             /* FIXME: Make it so we can use ourselves as a build remote even if we
@@ -513,9 +320,9 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
                */
             for (auto & i : drv->outputsAndOptPaths(worker.store)) {
                 if (i.second.second)
-                    lockFiles.insert(worker.store.Store::toRealPath(*i.second.second));
+                    lockFiles.insert(localStore->toRealPath(*i.second.second));
                 else
-                    lockFiles.insert(worker.store.Store::toRealPath(drvPath) + "." + i.first);
+                    lockFiles.insert(localStore->toRealPath(drvPath) + "." + i.first);
             }
         }
 
@@ -548,24 +355,26 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
 
         /* If any of the outputs already exist but are not valid, delete
            them. */
-        for (auto & [_, status] : initialOutputs) {
-            if (!status.known || status.known->isValid())
-                continue;
-            auto storePath = status.known->path;
-            debug("removing invalid path '%s'", worker.store.printStorePath(status.known->path));
-            deletePath(worker.store.Store::toRealPath(storePath));
+        if (auto * localStore = dynamic_cast<LocalFSStore *>(&worker.store)) {
+            for (auto & [_, status] : initialOutputs) {
+                if (!status.known || status.known->isValid())
+                    continue;
+                auto storePath = status.known->path;
+                debug("removing invalid path '%s'", worker.store.printStorePath(status.known->path));
+                deletePath(localStore->toRealPath(storePath));
+            }
         }
 
         /* Don't do a remote build if the derivation has the attribute
            `preferLocalBuild' set.  Also, check and repair modes are only
            supported for local builds. */
-        bool buildLocally = (buildMode != bmNormal || drvOptions->willBuildLocally(worker.store, *drv))
+        bool buildLocally = (buildMode != bmNormal || drvOptions.willBuildLocally(worker.store, *drv))
                             && settings.maxBuildJobs.get() != 0;
 
         if (buildLocally) {
             useHook = false;
         } else {
-            switch (tryBuildHook(initialOutputs)) {
+            switch (tryBuildHook(initialOutputs, drvOptions)) {
             case rpAccept:
                 /* Yes, it has started doing so.  Wait until we get
                    EOF from the hook. */
@@ -584,7 +393,44 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
                 co_await waitForAWhile();
                 continue;
             case rpDecline:
-                /* We should do it ourselves. */
+                /* We should do it ourselves.
+
+                   Now that we've decided we can't / won't do a remote build, check
+                   that we can in fact build locally. First see if there is an
+                   external builder for a "semi-local build". If there is, prefer to
+                   use that. If there is not, then check if we can do a "true" local
+                   build. */
+
+                externalBuilder = settings.findExternalDerivationBuilderIfSupported(*drv);
+
+                if (!externalBuilder && !drvOptions.canBuildLocally(worker.store, *drv)) {
+                    auto msg =
+                        fmt("Cannot build '%s'.\n"
+                            "Reason: " ANSI_RED "required system or feature not available" ANSI_NORMAL
+                            "\n"
+                            "Required system: '%s' with features {%s}\n"
+                            "Current system: '%s' with features {%s}",
+                            Magenta(worker.store.printStorePath(drvPath)),
+                            Magenta(drv->platform),
+                            concatStringsSep(", ", drvOptions.getRequiredSystemFeatures(*drv)),
+                            Magenta(settings.thisSystem),
+                            concatStringsSep<StringSet>(", ", worker.store.Store::config.systemFeatures));
+
+                    // since aarch64-darwin has Rosetta 2, this user can actually run x86_64-darwin on their hardware -
+                    // we should tell them to run the command to install Darwin 2
+                    if (drv->platform == "x86_64-darwin" && settings.thisSystem == "aarch64-darwin")
+                        msg += fmt(
+                            "\nNote: run `%s` to run programs for x86_64-darwin",
+                            Magenta(
+                                "/usr/sbin/softwareupdate --install-rosetta && launchctl stop org.nixos.nix-daemon"));
+
+#ifndef _WIN32 // TODO enable `DerivationBuilder` on Windows
+                    builder.reset();
+#endif
+                    outputLocks.unlock();
+                    worker.permanentFailure = true;
+                    co_return doneFailure({BuildResult::Failure::InputRejected, std::move(msg)});
+                }
                 useHook = false;
                 break;
             }
@@ -764,44 +610,43 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
             }
 
             try {
-                desugaredEnv = DesugaredEnv::create(worker.store, *drv, *drvOptions, inputPaths);
+                desugaredEnv = DesugaredEnv::create(worker.store, *drv, drvOptions, inputPaths);
             } catch (BuildError & e) {
                 outputLocks.unlock();
                 worker.permanentFailure = true;
                 co_return doneFailure(std::move(e));
             }
 
+            DerivationBuilderParams params{
+                .drvPath = drvPath,
+                .buildResult = buildResult,
+                .drv = *drv,
+                .drvOptions = drvOptions,
+                .inputPaths = inputPaths,
+                .initialOutputs = initialOutputs,
+                .buildMode = buildMode,
+                .defaultPathsInChroot = std::move(defaultPathsInChroot),
+                .systemFeatures = worker.store.config.systemFeatures.get(),
+                .desugaredEnv = std::move(desugaredEnv),
+                .act = act,
+            };
+
             /* If we have to wait and retry (see below), then `builder` will
                already be created, so we don't need to create it again. */
-            builder = makeDerivationBuilder(
-                *localStoreP,
-                std::make_unique<DerivationBuildingGoalCallbacks>(*this, builder),
-                DerivationBuilderParams{
-                    .drvPath = drvPath,
-                    .buildResult = buildResult,
-                    .drv = *drv,
-                    .drvOptions = *drvOptions,
-                    .inputPaths = inputPaths,
-                    .initialOutputs = initialOutputs,
-                    .buildMode = buildMode,
-                    .defaultPathsInChroot = std::move(defaultPathsInChroot),
-                    .systemFeatures = worker.store.config.systemFeatures.get(),
-                    .desugaredEnv = std::move(desugaredEnv),
-                    .act = act,
-                });
+            builder = externalBuilder ? makeExternalDerivationBuilder(
+                                            *localStoreP,
+                                            std::make_unique<DerivationBuildingGoalCallbacks>(*this, builder),
+                                            std::move(params),
+                                            *externalBuilder)
+                                      : makeDerivationBuilder(
+                                            *localStoreP,
+                                            std::make_unique<DerivationBuildingGoalCallbacks>(*this, builder),
+                                            std::move(params));
         }
 
-        std::optional<Descriptor> builderOutOpt;
-        try {
-            /* Okay, we have to build. */
-            builderOutOpt = builder->startBuild();
-        } catch (BuildError & e) {
-            builder.reset();
-            outputLocks.unlock();
-            worker.permanentFailure = true;
-            co_return doneFailure(std::move(e)); // InputRejected
-        }
-        if (!builderOutOpt) {
+        if (auto builderOutOpt = builder->startBuild()) {
+            builderOut = *std::move(builderOutOpt);
+        } else {
             if (!actLock)
                 actLock = std::make_unique<Activity>(
                     *logger,
@@ -810,9 +655,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
                     fmt("waiting for a free build user ID for '%s'", Magenta(worker.store.printStorePath(drvPath))));
             co_await waitForAWhile();
             continue;
-        } else {
-            builderOut = *std::move(builderOutOpt);
-        };
+        }
 
         break;
     }
@@ -985,7 +828,8 @@ BuildError DerivationBuildingGoal::fixupBuilderFailureErrorMessage(BuilderFailur
     return BuildError{e.status, msg};
 }
 
-HookReply DerivationBuildingGoal::tryBuildHook(const std::map<std::string, InitialOutput> & initialOutputs)
+HookReply DerivationBuildingGoal::tryBuildHook(
+    const std::map<std::string, InitialOutput> & initialOutputs, const DerivationOptions<StorePath> & drvOptions)
 {
 #ifdef _WIN32 // TODO enable build hook on Windows
     return rpDecline;
@@ -1002,7 +846,7 @@ HookReply DerivationBuildingGoal::tryBuildHook(const std::map<std::string, Initi
 
         /* Send the request to the hook. */
         worker.hook->sink << "try" << (worker.getNrLocalBuilds() < settings.maxBuildJobs ? 1 : 0) << drv->platform
-                          << worker.store.printStorePath(drvPath) << drvOptions->getRequiredSystemFeatures(*drv);
+                          << worker.store.printStorePath(drvPath) << drvOptions.getRequiredSystemFeatures(*drv);
         worker.hook->sink.flush();
 
         /* Read the first line of input, which should be a word indicating
@@ -1302,13 +1146,22 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
                 // without the `ca-derivations` experimental flag).
                 worker.store.registerDrvOutput(
                     Realisation{
+                        {
+                            .outPath = info.known->path,
+                        },
                         drvOutput,
-                        info.known->path,
                     });
             }
         }
         if (info.known && info.known->isValid())
-            validOutputs.emplace(i.first, Realisation{drvOutput, info.known->path});
+            validOutputs.emplace(
+                i.first,
+                Realisation{
+                    {
+                        .outPath = info.known->path,
+                    },
+                    drvOutput,
+                });
     }
 
     bool allValid = true;

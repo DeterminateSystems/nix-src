@@ -9,7 +9,7 @@ For more in-depth information you are kindly referred to subsequent chapters.
 
    ```console
    $ curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | \
-     sh -s -- install --determinate
+     sh -s -- install
    ```
 
    The install script will use `sudo`, so make sure you have sufficient rights.

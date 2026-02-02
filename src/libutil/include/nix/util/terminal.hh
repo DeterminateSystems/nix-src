@@ -4,7 +4,15 @@
 #include <limits>
 #include <string>
 
+#include "nix/util/file-descriptor.hh"
+
 namespace nix {
+
+/**
+ * Determine whether \param fd is a terminal.
+ */
+bool isTTY(Descriptor fd);
+
 /**
  * Determine whether ANSI escape sequences are appropriate for the
  * present output.
@@ -35,6 +43,11 @@ void updateWindowSize();
  * by `updateWindowSize()`.
  */
 std::pair<unsigned short, unsigned short> getWindowSize();
+
+/**
+ * @return The number of columns of the terminal, or std::numeric_limits<unsigned int>::max() if unknown.
+ */
+unsigned int getWindowWidth();
 
 /**
  * Get the slave name of a pseudoterminal in a thread-safe manner.

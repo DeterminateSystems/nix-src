@@ -57,17 +57,17 @@ struct OutputInfo
 {
     ref<AttrCursor> schemaInfo;
     ref<AttrCursor> nodeInfo;
-    eval_cache::AttrPath leafAttrPath;
+    AttrPath leafAttrPath;
 };
 
-std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, eval_cache::AttrPath attrPath);
+std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, AttrPath attrPath);
 
 struct SchemaInfo
 {
     std::string doc;
     StringSet roles;
     bool appendSystem = false;
-    std::optional<eval_cache::AttrPath> defaultAttrPath;
+    std::optional<AttrPath> defaultAttrPath;
 };
 
 using Schemas = std::map<std::string, SchemaInfo>;

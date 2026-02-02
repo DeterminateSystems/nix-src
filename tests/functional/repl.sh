@@ -25,6 +25,13 @@ import $testDir/undefined-variable.nix
 
 TODO_NixOS
 
+# FIXME: repl tests fail on systems with stack limits
+stack_ulimit="$(ulimit -Hs)"
+stack_required="$((64 * 1024 * 1024))"
+if [[ "$stack_ulimit" != "unlimited" ]]; then
+    ((stack_ulimit < stack_required)) && skipTest "repl tests cannot run on systems with stack size <$stack_required ($stack_ulimit)"
+fi
+
 testRepl () {
     local nixArgs
     nixArgs=("$@")
@@ -314,7 +321,7 @@ import $testDir/lang/parse-fail-eof-pos.nix
 badDiff=0
 badExitCode=0
 
-nixVersion="$(nix eval --impure --raw --expr 'builtins.nixVersion')"
+nixVersion="$(nix --version | sed 's/nix //')"
 
 # TODO: write a repl interacter for testing. Papering over the differences between readline / editline and between platforms is a pain.
 
@@ -343,10 +350,9 @@ runRepl () {
   local testDirNoUnderscores
   testDirNoUnderscores="${testDir//_/}"
 
-  # TODO: pass arguments to nix repl; see lang.sh
   _NIX_TEST_RAW_MARKDOWN=1 \
   _NIX_TEST_REPL_ECHO=1 \
-  nix repl 2>&1 \
+  nix repl "$@" 2>&1 \
     | stripColors \
     | tr -d '\0' \
     | stripEmptyLinesBeforePrompt \
@@ -366,7 +372,12 @@ for test in $(cd "$testDir/repl"; echo *.in); do
     in="$testDir/repl/$test.in"
     actual="$TEST_ROOT/$test.actual"
     expected="$testDir/repl/$test.expected"
-    (cd "$testDir/repl"; set +x; runRepl 2>&1) < "$in" > "$actual" || {
+    declare -a flags=()
+    if test -e "$testDir/repl/$test.flags"; then
+      read -r -a flags < "$testDir/repl/$test.flags"
+    fi
+
+    (cd "$testDir/repl"; set +x; runRepl "${flags[@]}" 2>&1) < "$in" > "$actual" || {
         echo "FAIL: $test (exit code $?)" >&2
         badExitCode=1
     }

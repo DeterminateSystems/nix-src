@@ -32,7 +32,6 @@ libgit2 = dependency('libgit2', version : '>= 1.9')
 deps_private += libgit2
 
 subdir('nix-meson-build-support/common')
-subdir('nix-meson-build-support/asan-options')
 
 sources = files(
   'attrs.cc',
@@ -55,6 +54,13 @@ sources = files(
 )
 
 subdir('include/nix/fetchers')
+
+# Generate builtin-flake-registry.json.gen.hh
+subdir('nix-meson-build-support/generate-header')
+
+sources += gen_header.process(
+  'builtin-flake-registry.json',
+)
 
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')

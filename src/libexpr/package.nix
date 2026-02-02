@@ -14,6 +14,7 @@
   boehmgc,
   nlohmann_json,
   toml11,
+  wasmtime,
 
   # Configuration Options
 
@@ -64,17 +65,13 @@ mkMesonLibrary (finalAttrs: {
 
   buildInputs = [
     toml11
+    wasmtime
   ];
 
   propagatedBuildInputs = [
     nix-util
     nix-store
     nix-fetchers
-  ]
-  ++ finalAttrs.passthru.externalPropagatedBuildInputs;
-
-  # Hack for sake of the dev shell
-  passthru.externalPropagatedBuildInputs = [
     boost
     nlohmann_json
   ]

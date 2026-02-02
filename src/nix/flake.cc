@@ -18,8 +18,8 @@
 #include "nix/store/local-fs-store.hh"
 #include "nix/store/globals.hh"
 #include "nix/expr/parallel-eval.hh"
-#include "nix/cmd/flake-schemas.hh"
 #include "nix/util/exit.hh"
+#include "nix/cmd/flake-schemas.hh"
 
 #include <filesystem>
 #include <nlohmann/json.hpp>
@@ -225,12 +225,12 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
             if (storePath)
                 j["path"] = store->printStorePath(*storePath);
             j["locks"] = lockedFlake.lockFile.toJSON().first;
-            if (auto fingerprint = lockedFlake.getFingerprint(store, fetchSettings))
+            if (auto fingerprint = lockedFlake.getFingerprint(*store, fetchSettings))
                 j["fingerprint"] = fingerprint->to_string(HashFormat::Base16, false);
             printJSON(j);
         } else {
             logger->cout(ANSI_BOLD "Resolved URL:" ANSI_NORMAL "  %s", flake.resolvedRef.to_string());
-            if (flake.lockedRef.input.isLocked())
+            if (flake.lockedRef.input.isLocked(fetchSettings))
                 logger->cout(ANSI_BOLD "Locked URL:" ANSI_NORMAL "    %s", flake.lockedRef.to_string());
             if (flake.description)
                 logger->cout(ANSI_BOLD "Description:" ANSI_NORMAL "   %s", *flake.description);
@@ -246,18 +246,16 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                 logger->cout(
                     ANSI_BOLD "Last modified:" ANSI_NORMAL " %s",
                     std::put_time(std::localtime(&*lastModified), "%F %T"));
-            if (auto fingerprint = lockedFlake.getFingerprint(store, fetchSettings))
+            if (auto fingerprint = lockedFlake.getFingerprint(*store, fetchSettings))
                 logger->cout(
                     ANSI_BOLD "Fingerprint:" ANSI_NORMAL "   %s", fingerprint->to_string(HashFormat::Base16, false));
 
             if (!lockedFlake.lockFile.root->inputs.empty())
                 logger->cout(ANSI_BOLD "Inputs:" ANSI_NORMAL);
 
-            std::set<ref<Node>> visited;
+            std::set<ref<Node>> visited{lockedFlake.lockFile.root};
 
-            std::function<void(const Node & node, const std::string & prefix)> recurse;
-
-            recurse = [&](const Node & node, const std::string & prefix) {
+            [&](this const auto & recurse, const Node & node, const std::string & prefix) -> void {
                 for (const auto & [i, input] : enumerate(node.inputs)) {
                     bool last = i + 1 == node.inputs.size();
 
@@ -269,7 +267,7 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                             "%s" ANSI_BOLD "%s" ANSI_NORMAL ": %s%s",
                             prefix + (last ? treeLast : treeConn),
                             input.first,
-                            (*lockedNode)->lockedRef,
+                            (*lockedNode)->lockedRef.to_string(true),
                             lastModifiedStr);
 
                         bool firstVisit = visited.insert(*lockedNode).second;
@@ -284,10 +282,7 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                             printInputAttrPath(*follows));
                     }
                 }
-            };
-
-            visited.insert(lockedFlake.lockFile.root);
-            recurse(*lockedFlake.lockFile.root, "");
+            }(*lockedFlake.lockFile.root, "");
         }
     }
 };
@@ -376,7 +371,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
         Sync<std::vector<DerivedPath>> drvPaths_;
         Sync<std::set<std::string>> uncheckedOutputs;
         Sync<std::set<std::string>> omittedSystems;
-        Sync<std::map<DerivedPath, std::vector<eval_cache::AttrPath>>> derivedPathToAttrPaths_;
+        Sync<std::map<DerivedPath, std::vector<AttrPath>>> derivedPathToAttrPaths_;
 
         std::function<void(ref<eval_cache::AttrCursor> node)> visit;
 
@@ -468,8 +463,6 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
         auto derivedPathToAttrPaths(derivedPathToAttrPaths_.lock());
 
         if (build && !drvPaths->empty()) {
-            // FIXME: should start building while evaluating.
-
             // TODO: This filtering of substitutable paths is a temporary workaround until
             // https://github.com/NixOS/nix/issues/5025 (union stores) is implemented.
             //
@@ -500,7 +493,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                     for (auto & attrPath : attrPaths)
                         notice(
                             "✅ " ANSI_BOLD "%s" ANSI_NORMAL ANSI_ITALIC ANSI_FAINT " (previously built)" ANSI_NORMAL,
-                            eval_cache::toAttrPathStr(*state, attrPath));
+                            attrPath.to_string(*state));
 
             // FIXME: should start building while evaluating.
             Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", toBuild.size()));
@@ -516,10 +509,9 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                             if (failure->status == BuildResult::Failure::Cancelled)
                                 notice(
                                     "❓ " ANSI_BOLD "%s" ANSI_NORMAL ANSI_FAINT " (cancelled)",
-                                    eval_cache::toAttrPathStr(*state, attrPath));
+                                    attrPath.to_string(*state));
                             else
-                                printError(
-                                    "❌ " ANSI_RED "%s" ANSI_NORMAL, eval_cache::toAttrPathStr(*state, attrPath));
+                                printError("❌ " ANSI_RED "%s" ANSI_NORMAL, attrPath.to_string(*state));
                         if (failure->status != BuildResult::Failure::Cancelled)
                             failure->rethrow();
                     } catch (Error & e) {
@@ -527,7 +519,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                     }
                 else
                     for (auto & attrPath : (*derivedPathToAttrPaths)[buildResult.path])
-                        notice("✅ " ANSI_BOLD "%s" ANSI_NORMAL, eval_cache::toAttrPathStr(*state, attrPath));
+                        notice("✅ " ANSI_BOLD "%s" ANSI_NORMAL, attrPath.to_string(*state));
             }
         }
 
@@ -593,8 +585,7 @@ struct CmdFlakeInitCommon : virtual Args, EvalCommand, MixFlakeSchemas
         std::vector<std::filesystem::path> changedFiles;
         std::vector<std::filesystem::path> conflictedFiles;
 
-        std::function<void(const SourcePath & from, const std::filesystem::path & to)> copyDir;
-        copyDir = [&](const SourcePath & from, const std::filesystem::path & to) {
+        [&](this const auto & copyDir, const SourcePath & from, const std::filesystem::path & to) -> void {
             createDirs(to);
 
             for (auto & [name, entry] : from.readDirectory()) {
@@ -644,9 +635,7 @@ struct CmdFlakeInitCommon : virtual Args, EvalCommand, MixFlakeSchemas
                 changedFiles.push_back(to2);
                 notice("wrote: %s", to2);
             }
-        };
-
-        copyDir(templateDir, flakeDir);
+        }(templateDir, flakeDir);
 
         if (!changedFiles.empty() && std::filesystem::exists(std::filesystem::path{flakeDir} / ".git")) {
             Strings args = {"-C", flakeDir, "add", "--intent-to-add", "--force", "--"};
@@ -737,7 +726,7 @@ struct CmdFlakeClone : FlakeCommand
         if (destDir.empty())
             throw Error("missing flag '--dest'");
 
-        getFlakeRef().resolve(store).input.clone(store, destDir);
+        getFlakeRef().resolve(fetchSettings, *store).input.clone(fetchSettings, *store, destDir);
     }
 };
 
@@ -776,7 +765,7 @@ struct CmdFlakeArchive : FlakeCommand, MixJSON, MixDryRun, MixNoCheckSigs
         StorePathSet sources;
 
         auto storePath = dryRun ? flake.flake.lockedRef.input.computeStorePath(*store)
-                                : std::get<StorePath>(flake.flake.lockedRef.input.fetchToStore(store));
+                                : std::get<StorePath>(flake.flake.lockedRef.input.fetchToStore(fetchSettings, *store));
 
         sources.insert(storePath);
 
@@ -789,7 +778,8 @@ struct CmdFlakeArchive : FlakeCommand, MixJSON, MixDryRun, MixNoCheckSigs
                     std::optional<StorePath> storePath;
                     if (!(*inputNode)->lockedRef.input.isRelative()) {
                         storePath = dryRun ? (*inputNode)->lockedRef.input.computeStorePath(*store)
-                                           : std::get<StorePath>((*inputNode)->lockedRef.input.fetchToStore(store));
+                                           : std::get<StorePath>(
+                                                 (*inputNode)->lockedRef.input.fetchToStore(fetchSettings, *store));
                         sources.insert(*storePath);
                     }
                     if (json) {
@@ -868,7 +858,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
     void run(nix::ref<nix::Store> store) override
     {
         auto state = getEvalState();
-        auto flake = std::make_shared<LockedFlake>(lockFlake());
+        auto flake = make_ref<LockedFlake>(lockFlake());
         auto localSystem = std::string(settings.thisSystem.get());
 
         auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas());
@@ -1062,8 +1052,8 @@ struct CmdFlakePrefetch : FlakeCommand, MixJSON
     void run(ref<Store> store) override
     {
         auto originalRef = getFlakeRef();
-        auto resolvedRef = originalRef.resolve(store);
-        auto [accessor, lockedRef] = resolvedRef.lazyFetch(store);
+        auto resolvedRef = originalRef.resolve(fetchSettings, *store);
+        auto [accessor, lockedRef] = resolvedRef.lazyFetch(getEvalState()->fetchSettings, *store);
         auto storePath =
             fetchToStore(getEvalState()->fetchSettings, *store, accessor, FetchMode::Copy, lockedRef.input.getName());
         auto hash = store->queryPathInfo(storePath)->narHash;

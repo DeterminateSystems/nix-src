@@ -4,6 +4,7 @@
 #include "nix/util/sync.hh"
 #include "nix/util/hash.hh"
 #include "nix/expr/eval.hh"
+#include "nix/expr/attr-path.hh"
 
 #include <functional>
 #include <variant>
@@ -12,10 +13,6 @@ namespace nix::eval_cache {
 
 struct AttrDb;
 class AttrCursor;
-
-using AttrPath = std::vector<Symbol>;
-
-std::string toAttrPathStr(EvalState & state, const AttrPath & attrPath);
 
 struct CachedEvalError : EvalError
 {
@@ -91,9 +88,17 @@ typedef uint64_t AttrId;
 typedef std::pair<AttrId, Symbol> AttrKey;
 typedef std::pair<std::string, NixStringContext> string_t;
 
-typedef std::
-    variant<AttrPath, string_t, placeholder_t, missing_t, misc_t, failed_t, bool, int_t, std::vector<std::string>>
-        AttrValue;
+typedef std::variant<
+    std::vector<Symbol>,
+    string_t,
+    placeholder_t,
+    missing_t,
+    misc_t,
+    failed_t,
+    bool,
+    int_t,
+    std::vector<std::string>>
+    AttrValue;
 
 class AttrCursor : public std::enable_shared_from_this<AttrCursor>
 {
@@ -167,7 +172,7 @@ public:
 
     std::vector<std::string> getListOfStrings();
 
-    AttrPath getAttrs();
+    std::vector<Symbol> getAttrs();
 
     bool isDerivation();
 

@@ -1,6 +1,7 @@
 #include "nix/store/build/derivation-builder.hh"
 #include "nix/util/file-system.hh"
 #include "nix/store/local-store.hh"
+#include "nix/store/active-builds.hh"
 #include "nix/util/processes.hh"
 #include "nix/store/builtins.hh"
 #include "nix/store/path-references.hh"
@@ -46,6 +47,12 @@
 #include "store-config-private.hh"
 #include "build/derivation-check.hh"
 
+#if NIX_WITH_AWS_AUTH
+#  include "nix/store/aws-creds.hh"
+#  include "nix/store/s3-url.hh"
+#  include "nix/util/url.hh"
+#endif
+
 namespace nix {
 
 struct NotDeterministic : BuildError
@@ -76,6 +83,11 @@ protected:
      * The process ID of the builder.
      */
     Pid pid;
+
+    /**
+     * Handles to track active builds for `nix ps`.
+     */
+    std::optional<TrackActiveBuildsStore::BuildHandle> activeBuildHandle;
 
     LocalStore & store;
 
@@ -230,10 +242,9 @@ protected:
     }
 
     /**
-     * Throw an exception if we can't do this derivation because of
-     * missing system features.
+     * Construct the `ActiveBuild` object for `ActiveBuildsTracker`.
      */
-    virtual void checkSystem();
+    virtual ActiveBuild getActiveBuild();
 
     /**
      * Return the paths that should be made available in the sandbox.
@@ -280,7 +291,7 @@ protected:
         return Strings({store.printStorePath(drvPath)});
     }
 
-    virtual Path realPathInSandbox(const Path & p)
+    virtual Path realPathInHost(const Path & p)
     {
         return store.toRealPath(p);
     }
@@ -295,6 +306,15 @@ protected:
      * build. Must set `pid`. The child must call runChild().
      */
     virtual void startChild();
+
+#if NIX_WITH_AWS_AUTH
+    /**
+     * Pre-resolve AWS credentials for S3 URLs in builtin:fetchurl.
+     * This should be called before forking to ensure credentials are available in child.
+     * Returns the credentials if successfully resolved, or std::nullopt otherwise.
+     */
+    std::optional<AwsCredentials> preResolveAwsCredentials();
+#endif
 
 private:
 
@@ -325,7 +345,7 @@ private:
 
 protected:
 
-    void addDependency(const StorePath & path) override;
+    void addDependencyImpl(const StorePath & path) override;
 
     /**
      * Make a file owned by the builder.
@@ -346,9 +366,19 @@ protected:
     void writeBuilderFile(const std::string & name, std::string_view contents);
 
     /**
+     * Arguments passed to runChild().
+     */
+    struct RunChildArgs
+    {
+#if NIX_WITH_AWS_AUTH
+        std::optional<AwsCredentials> awsCredentials;
+#endif
+    };
+
+    /**
      * Run the builder's process.
      */
-    void runChild();
+    void runChild(RunChildArgs args);
 
     /**
      * Move the current process into the chroot, if any. Called early
@@ -471,6 +501,8 @@ bool DerivationBuilderImpl::killChild()
         killSandbox(true);
 
         pid.wait();
+
+        activeBuildHandle.reset();
     }
     return ret;
 }
@@ -503,6 +535,8 @@ SingleDrvOutputs DerivationBuilderImpl::unprepareBuild()
        open and modifies them after they have been chown'ed to
        root. */
     killSandbox(true);
+
+    activeBuildHandle.reset();
 
     /* Terminate the recursive Nix daemon. */
     stopDaemon();
@@ -659,44 +693,17 @@ static void handleChildException(bool sendException)
     }
 }
 
-static bool checkNotWorldWritable(std::filesystem::path path)
+static void checkNotWorldWritable(std::filesystem::path path)
 {
     while (true) {
         auto st = lstat(path);
         if (st.st_mode & S_IWOTH)
-            return false;
+            throw Error("Path %s is world-writable or a symlink. That's not allowed for security.", path);
         if (path == path.parent_path())
             break;
         path = path.parent_path();
     }
-    return true;
-}
-
-void DerivationBuilderImpl::checkSystem()
-{
-    /* Right platform? */
-    if (!drvOptions.canBuildLocally(store, drv)) {
-        auto msg =
-            fmt("Cannot build '%s'.\n"
-                "Reason: " ANSI_RED "required system or feature not available" ANSI_NORMAL
-                "\n"
-                "Required system: '%s' with features {%s}\n"
-                "Current system: '%s' with features {%s}",
-                Magenta(store.printStorePath(drvPath)),
-                Magenta(drv.platform),
-                concatStringsSep(", ", drvOptions.getRequiredSystemFeatures(drv)),
-                Magenta(settings.thisSystem),
-                concatStringsSep<StringSet>(", ", store.Store::config.systemFeatures));
-
-        // since aarch64-darwin has Rosetta 2, this user can actually run x86_64-darwin on their hardware - we should
-        // tell them to run the command to install Darwin 2
-        if (drv.platform == "x86_64-darwin" && settings.thisSystem == "aarch64-darwin")
-            msg +=
-                fmt("\nNote: run `%s` to run programs for x86_64-darwin",
-                    Magenta("/usr/sbin/softwareupdate --install-rosetta && launchctl stop org.nixos.nix-daemon"));
-
-        throw BuildError(BuildResult::Failure::InputRejected, msg);
-    }
+    return;
 }
 
 std::optional<Descriptor> DerivationBuilderImpl::startBuild()
@@ -709,8 +716,6 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
             return std::nullopt;
     }
 
-    checkSystem();
-
     /* Make sure that no other processes are executing under the
        sandbox uids. This must be done before any chownToBuilder()
        calls. */
@@ -720,9 +725,8 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
 
     createDirs(buildDir);
 
-    if (buildUser && !checkNotWorldWritable(buildDir))
-        throw Error(
-            "Path %s or a parent directory is world-writable or a symlink. That's not allowed for security.", buildDir);
+    if (buildUser)
+        checkNotWorldWritable(buildDir);
 
     /* Create a temporary directory where the build will take
        place. */
@@ -847,9 +851,26 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
 
     pid.setSeparatePG(true);
 
+    /* Make the build visible to `nix ps`. */
+    if (auto tracker = dynamic_cast<TrackActiveBuildsStore *>(&store))
+        activeBuildHandle.emplace(tracker->buildStarted(getActiveBuild()));
+
     processSandboxSetupMessages();
 
     return builderOut.get();
+}
+
+ActiveBuild DerivationBuilderImpl::getActiveBuild()
+{
+    return {
+        .nixPid = getpid(),
+        .clientPid = std::nullopt, // FIXME
+        .clientUid = std::nullopt, // FIXME
+        .mainPid = pid,
+        .mainUser = UserInfo::fromUid(buildUser ? buildUser->getUID() : getuid()),
+        .startTime = buildResult.startTime,
+        .derivation = drvPath,
+    };
 }
 
 PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
@@ -960,11 +981,43 @@ void DerivationBuilderImpl::openSlave()
         throw SysError("cannot pipe standard error into log file");
 }
 
+#if NIX_WITH_AWS_AUTH
+std::optional<AwsCredentials> DerivationBuilderImpl::preResolveAwsCredentials()
+{
+    if (drv.isBuiltin() && drv.builder == "builtin:fetchurl") {
+        auto url = drv.env.find("url");
+        if (url != drv.env.end()) {
+            try {
+                auto parsedUrl = parseURL(url->second);
+                if (parsedUrl.scheme == "s3") {
+                    debug("Pre-resolving AWS credentials for S3 URL in builtin:fetchurl");
+                    auto s3Url = ParsedS3URL::parse(parsedUrl);
+
+                    // Use the preResolveAwsCredentials from aws-creds
+                    auto credentials = getAwsCredentialsProvider()->getCredentials(s3Url);
+                    debug("Successfully pre-resolved AWS credentials in parent process");
+                    return credentials;
+                }
+            } catch (const std::exception & e) {
+                debug("Error pre-resolving S3 credentials: %s", e.what());
+            }
+        }
+    }
+    return std::nullopt;
+}
+#endif
+
 void DerivationBuilderImpl::startChild()
 {
-    pid = startProcess([&]() {
+    RunChildArgs args{
+#if NIX_WITH_AWS_AUTH
+        .awsCredentials = preResolveAwsCredentials(),
+#endif
+    };
+
+    pid = startProcess([this, args = std::move(args)]() {
         openSlave();
-        runChild();
+        runChild(std::move(args));
     });
 }
 
@@ -1186,11 +1239,8 @@ void DerivationBuilderImpl::stopDaemon()
     daemonSocket.close();
 }
 
-void DerivationBuilderImpl::addDependency(const StorePath & path)
+void DerivationBuilderImpl::addDependencyImpl(const StorePath & path)
 {
-    if (isAllowed(path))
-        return;
-
     addedPaths.insert(path);
 }
 
@@ -1221,7 +1271,7 @@ void DerivationBuilderImpl::writeBuilderFile(const std::string & name, std::stri
     chownToBuilder(fd.get(), path);
 }
 
-void DerivationBuilderImpl::runChild()
+void DerivationBuilderImpl::runChild(RunChildArgs args)
 {
     /* Warning: in the child we should absolutely not make any SQLite
        calls! */
@@ -1238,6 +1288,9 @@ void DerivationBuilderImpl::runChild()
         BuiltinBuilderContext ctx{
             .drv = drv,
             .tmpDirInSandbox = tmpDirInSandbox(),
+#if NIX_WITH_AWS_AUTH
+            .awsCredentials = args.awsCredentials,
+#endif
         };
 
         if (drv.isBuiltin() && drv.builder == "builtin:fetchurl") {
@@ -1379,14 +1432,24 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
     struct PerhapsNeedToRegister
     {
         StorePathSet refs;
+        /**
+         * References to other outputs. Built by looking up in
+         * `scratchOutputsInverse`.
+         */
+        StringSet otherOutputs;
     };
+
+    /* inverse map of scratchOutputs for efficient lookup */
+    std::map<StorePath, std::string> scratchOutputsInverse;
+    for (auto & [outputName, path] : scratchOutputs)
+        scratchOutputsInverse.insert_or_assign(path, outputName);
 
     std::map<std::string, std::variant<AlreadyRegistered, PerhapsNeedToRegister>> outputReferencesIfUnregistered;
     std::map<std::string, struct stat> outputStats;
     for (auto & [outputName, _] : drv.outputs) {
         auto scratchOutput = get(scratchOutputs, outputName);
         assert(scratchOutput);
-        auto actualPath = realPathInSandbox(store.printStorePath(*scratchOutput));
+        auto actualPath = realPathInHost(store.printStorePath(*scratchOutput));
 
         outputsToSort.insert(outputName);
 
@@ -1449,47 +1512,54 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
             references = scanForReferences(blank, actualPath, referenceablePaths);
         }
 
-        outputReferencesIfUnregistered.insert_or_assign(outputName, PerhapsNeedToRegister{.refs = references});
+        StringSet referencedOutputs;
+        for (auto & r : references)
+            if (auto * o = get(scratchOutputsInverse, r))
+                referencedOutputs.insert(*o);
+
+        outputReferencesIfUnregistered.insert_or_assign(
+            outputName,
+            PerhapsNeedToRegister{
+                .refs = references,
+                .otherOutputs = referencedOutputs,
+            });
         outputStats.insert_or_assign(outputName, std::move(st));
     }
 
-    auto sortedOutputNames = topoSort(
-        outputsToSort,
-        {[&](const std::string & name) {
-            auto orifu = get(outputReferencesIfUnregistered, name);
-            if (!orifu)
+    StringSet emptySet;
+
+    auto topoSortResult = topoSort(outputsToSort, [&](const std::string & name) -> const StringSet & {
+        auto * orifu = get(outputReferencesIfUnregistered, name);
+        if (!orifu)
+            throw BuildError(
+                BuildResult::Failure::OutputRejected,
+                "no output reference for '%s' in build of '%s'",
+                name,
+                store.printStorePath(drvPath));
+        return std::visit(
+            overloaded{
+                /* Since we'll use the already installed versions of these, we
+                   can treat them as leaves and ignore any references they
+                   have. */
+                [&](const AlreadyRegistered &) -> const StringSet & { return emptySet; },
+                [&](const PerhapsNeedToRegister & refs) -> const StringSet & { return refs.otherOutputs; },
+            },
+            *orifu);
+    });
+
+    auto sortedOutputNames = std::visit(
+        overloaded{
+            [&](Cycle<std::string> & cycle) -> std::vector<std::string> {
+                // TODO with more -vvvv also show the temporary paths for manual inspection.
                 throw BuildError(
                     BuildResult::Failure::OutputRejected,
-                    "no output reference for '%s' in build of '%s'",
-                    name,
-                    store.printStorePath(drvPath));
-            return std::visit(
-                overloaded{
-                    /* Since we'll use the already installed versions of these, we
-                       can treat them as leaves and ignore any references they
-                       have. */
-                    [&](const AlreadyRegistered &) { return StringSet{}; },
-                    [&](const PerhapsNeedToRegister & refs) {
-                        StringSet referencedOutputs;
-                        /* FIXME build inverted map up front so no quadratic waste here */
-                        for (auto & r : refs.refs)
-                            for (auto & [o, p] : scratchOutputs)
-                                if (r == p)
-                                    referencedOutputs.insert(o);
-                        return referencedOutputs;
-                    },
-                },
-                *orifu);
-        }},
-        {[&](const std::string & path, const std::string & parent) {
-            // TODO with more -vvvv also show the temporary paths for manual inspection.
-            return BuildError(
-                BuildResult::Failure::OutputRejected,
-                "cycle detected in build of '%s' in the references of output '%s' from output '%s'",
-                store.printStorePath(drvPath),
-                path,
-                parent);
-        }});
+                    "cycle detected in build of '%s' in the references of output '%s' from output '%s'",
+                    store.printStorePath(drvPath),
+                    cycle.path,
+                    cycle.parent);
+            },
+            [](auto & sorted) { return sorted; }},
+        topoSortResult);
 
     std::reverse(sortedOutputNames.begin(), sortedOutputNames.end());
 
@@ -1499,7 +1569,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
         auto output = get(drv.outputs, outputName);
         auto scratchPath = get(scratchOutputs, outputName);
         assert(output && scratchPath);
-        auto actualPath = realPathInSandbox(store.printStorePath(*scratchPath));
+        auto actualPath = realPathInHost(store.printStorePath(*scratchPath));
 
         auto finish = [&](StorePath finalStorePath) {
             /* Store the final path */
@@ -1652,7 +1722,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
                         {getFSSourceAccessor(), CanonPath(actualPath)},
                         FileSerialisationMethod::NixArchive,
                         HashAlgorithm::SHA256);
-                    ValidPathInfo newInfo0{requiredFinalPath, narHashAndSize.hash};
+                    ValidPathInfo newInfo0{requiredFinalPath, {store, narHashAndSize.hash}};
                     newInfo0.narSize = narHashAndSize.numBytesDigested;
                     auto refs = rewriteRefs();
                     newInfo0.references = std::move(refs.others);
@@ -1846,7 +1916,12 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
     for (auto & [outputName, newInfo] : infos) {
         auto oldinfo = get(initialOutputs, outputName);
         assert(oldinfo);
-        auto thisRealisation = Realisation{.id = DrvOutput{oldinfo->outputHash, outputName}, .outPath = newInfo.path};
+        auto thisRealisation = Realisation{
+            {
+                .outPath = newInfo.path,
+            },
+            DrvOutput{oldinfo->outputHash, outputName},
+        };
         if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations) && !drv.type().isImpure()) {
             store.signRealisation(thisRealisation);
             store.registerDrvOutput(thisRealisation);
@@ -1862,7 +1937,7 @@ void DerivationBuilderImpl::cleanupBuild(bool force)
     if (force) {
         /* Delete unused redirected outputs (when doing hash rewriting). */
         for (auto & i : redirectedOutputs)
-            deletePath(store.Store::toRealPath(i.second));
+            deletePath(store.toRealPath(i.second));
     }
 
     if (topTmpDir != "") {
@@ -1921,15 +1996,13 @@ StorePath DerivationBuilderImpl::makeFallbackPath(const StorePath & path)
 #include "linux-derivation-builder.cc"
 #include "darwin-derivation-builder.cc"
 #include "external-derivation-builder.cc"
+#include "wasi-derivation-builder.cc"
 
 namespace nix {
 
 std::unique_ptr<DerivationBuilder> makeDerivationBuilder(
     LocalStore & store, std::unique_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
 {
-    if (auto builder = ExternalDerivationBuilder::newIfSupported(store, miscMethods, params))
-        return builder;
-
     bool useSandbox = false;
 
     /* Are we doing a sandboxed build? */
@@ -1954,6 +2027,9 @@ std::unique_ptr<DerivationBuilder> makeDerivationBuilder(
             // FIXME: cache derivationType
             useSandbox = params.drv.type().isSandboxed() && !params.drvOptions.noChroot;
     }
+
+    if (params.drv.platform == "wasm32-wasip1")
+        return std::make_unique<WasiDerivationBuilder>(store, std::move(miscMethods), std::move(params));
 
     if (store.storeDir != store.config->realStoreDir.get()) {
 #ifdef __linux__

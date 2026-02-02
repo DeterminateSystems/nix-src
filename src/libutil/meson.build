@@ -118,7 +118,6 @@ config_priv_h = configure_file(
 )
 
 subdir('nix-meson-build-support/common')
-subdir('nix-meson-build-support/asan-options')
 
 sources = [ config_priv_h ] + files(
   'archive.cc',
@@ -147,7 +146,9 @@ sources = [ config_priv_h ] + files(
   'json-utils.cc',
   'logging.cc',
   'memory-source-accessor.cc',
+  'memory-source-accessor/json.cc',
   'mounted-source-accessor.cc',
+  'nar-accessor.cc',
   'pos-table.cc',
   'position.cc',
   'posix-source-accessor.cc',
@@ -157,8 +158,8 @@ sources = [ config_priv_h ] + files(
   'source-accessor.cc',
   'source-path.cc',
   'strings.cc',
-  'subdir-source-accessor.cc',
   'suggestions.cc',
+  'table.cc',
   'tarfile.cc',
   'tee-logger.cc',
   'terminal.cc',

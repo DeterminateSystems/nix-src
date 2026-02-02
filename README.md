@@ -9,18 +9,31 @@
   &nbsp;<a href="https://www.linkedin.com/company/determinate-systems" target="_blank"><img alt="LinkedIn" src="https://img.shields.io/badge/LinkedIn-1667be?style=for-the-badge&logo=linkedin&logoColor=%23ffffff"></a>&nbsp;
 </p>
 
-# Determinate Nix
+# The Determinate Nix CLI
 
 [![CI](https://github.com/DeterminateSystems/nix-src/workflows/CI/badge.svg)](https://github.com/DeterminateSystems/nix-src/actions/workflows/ci.yml)
 
-This repository houses the source for [**Determinate Nix**][det-nix], a downstream distribution of [Nix][upstream] created and maintained by [Determinate Systems][detsys].
-Nix is a powerful [language], [package manager][package-management], and [CLI] for [macOS](#macos), [Linux](linux), and other Unix systems that enables you to create fully reproducible [development environments][envs], to build [packages] in sandboxed environments, to build entire Linux systems using [NixOS], and much more.
+**Nix** is a powerful [language], [package manager][package-management], and [build tool][cli] for [macOS](#macos), [Linux](#linux), and other Unix systems.
+It enables you to create fully reproducible [development environments][envs], to build [packages] in sandboxed environments, to build entire Linux systems using [NixOS], and much more.
+
+[**Determinate Nix**][det-nix] is a downstream distribution of [Nix][upstream] created and maintained by [Determinate Systems][detsys].
+It has two components:
+
+- The Determinate Nix CLI, a distribution of the Nix CLI built from this repository.
+    It's based on the [upstream Nix CLI][upstream] and continuously rebased against it, but adds a wide variety of [features] and [improvements][changelog].
+- [Determinate Nixd][dnixd] is a useful daemon for Linux and macOS that handles vital tasks like configuration and enterprise certificate management.
+
+Determinate Nix is built on SOC-2-Type-II-compliant infrastructure using [Determinate Secure Packages][secure-packages], released via a carefully orchestrated process, and, for Determinate Systems customers, backed by formal security response SLAs that meet stringent compliance standards.
+
+> [!NOTE]
+> Determinate Nix, by definition, consists of _both_ the components listed above.
+> While it's possible to use the code in this repository to run just our downstream Nix CLI, we do _not_ officially support this experience and provide none of the guarantees or SLAs that we provide for Determinate Nix proper.
 
 Determinate Nix is part of the [Determinate platform][determinate], which also includes [FlakeHub], a secure flake repository with features like [FlakeHub Cache][cache], [private flakes][private-flakes], and [semantic versioning][semver] (SemVer) for [flakes].
 
-## Installing Determinate
+## Installing Determinate Nix
 
-You can install Determinate on [macOS](#macos), non-NixOS [Linux](#linux) and WSL, and [NixOS](#nixos).
+You can install Determinate Nix on [macOS](#macos), non-NixOS [Linux](#linux) and WSL, and [NixOS](#nixos).
 
 ### macOS
 
@@ -32,12 +45,13 @@ Click [here][gui] to download and run it.
 On Linux, including Windows Subsystem for Linux (WSL), we recommend installing Determinate Nix using [Determinate Nix Installer][installer]:
 
 ```shell
-curl -fsSL https://install.determinate.systems/nix | sh -s -- install --determinate
+curl -fsSL https://install.determinate.systems/nix | sh -s -- install
 ```
 
 ### NixOS
 
 On [NixOS], we recommend following our [dedicated installation guide][nixos-install].
+We also provide both [Amazon Machine Images][amis] (AMIs) and [ISOs] for using Determinate on NixOS.
 
 ## Other resources
 
@@ -63,7 +77,9 @@ For deeply technical reference material, see the [Determinate Nix manual][manual
 
 Check the [contributing guide][contributing] if you want to get involved with developing Nix.
 
+[amis]: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html
 [cache]: https://docs.determinate.systems/flakehub/cache
+[changelog]: https://determinate.systems/blog/categories/changelog
 [cli]: https://manual.determinate.systems/command-ref/new-cli/nix.html
 [contributing]: ./CONTRIBUTING.md
 [det-nix]: https://docs.determinate.systems/determinate-nix
@@ -72,10 +88,12 @@ Check the [contributing guide][contributing] if you want to get involved with de
 [dnixd]: https://docs.determinate.systems/determinate-nix#determinate-nixd
 [eelco]: https://determinate.systems/people/eelco-dolstra
 [envs]: https://zero-to-nix.com/concepts/dev-env
+[features]: https://docs.determinate.systems/determinate-nix/#special-features
 [flakehub]: https://flakehub.com
 [flakes]: https://zero-to-nix.com/concepts/flakes
 [gui]: https://install.determinate.systems/determinate-pkg/stable/Universal
 [installer]: https://github.com/DeterminateSystems/nix-installer
+[isos]: https://github.com/DeterminateSystems/nixos-iso
 [language]: https://zero-to-nix.com/concepts/nix-language
 [license]: ./COPYING
 [manual]: https://manual.determinate.systems
@@ -85,6 +103,7 @@ Check the [contributing guide][contributing] if you want to get involved with de
 [packages]: https://zero-to-nix.com/concepts/packages
 [package-management]: https://zero-to-nix.com/concepts/package-management
 [private-flakes]: https://docs.determinate.systems/flakehub/private-flakes
+[secure-packages]: https://determinate.systems/secure-packages
 [semver]: https://docs.determinate.systems/flakehub/concepts/semver
 [thesis]: https://edolstra.github.io/pubs/phd-thesis.pdf
 [upstream]: https://github.com/NixOS/nix

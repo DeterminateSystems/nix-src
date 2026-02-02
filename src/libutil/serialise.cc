@@ -1,5 +1,7 @@
 #include "nix/util/serialise.hh"
+#include "nix/util/compression.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/socket.hh"
 #include "nix/util/util.hh"
 
 #include <cstring>
@@ -10,7 +12,6 @@
 
 #ifdef _WIN32
 #  include <fileapi.h>
-#  include <winsock2.h>
 #  include "nix/util/windows-error.hh"
 #else
 #  include <poll.h>
@@ -183,21 +184,32 @@ bool FdSource::hasData()
     while (true) {
         fd_set fds;
         FD_ZERO(&fds);
-        int fd_ = fromDescriptorReadOnly(fd);
-        FD_SET(fd_, &fds);
+        Socket sock = toSocket(fd);
+        FD_SET(sock, &fds);
 
         struct timeval timeout;
         timeout.tv_sec = 0;
         timeout.tv_usec = 0;
 
-        auto n = select(fd_ + 1, &fds, nullptr, nullptr, &timeout);
+        auto n = select(sock + 1, &fds, nullptr, nullptr, &timeout);
         if (n < 0) {
             if (errno == EINTR)
                 continue;
             throw SysError("polling file descriptor");
         }
-        return FD_ISSET(fd, &fds);
+        return FD_ISSET(sock, &fds);
     }
+}
+
+void FdSource::restart()
+{
+    if (!isSeekable)
+        throw Error("can't seek to the start of a file");
+    buffer.reset();
+    read = bufPosIn = bufPosOut = 0;
+    int fd_ = fromDescriptorReadOnly(fd);
+    if (lseek(fd_, 0, SEEK_SET) == -1)
+        throw SysError("seeking to the start of a file");
 }
 
 void FdSource::skip(size_t len)
@@ -250,6 +262,19 @@ void StringSource::skip(size_t len)
         throw EndOfFile("end of string reached");
     }
     pos += len;
+}
+
+CompressedSource::CompressedSource(RestartableSource & source, const std::string & compressionMethod)
+    : compressedData([&]() {
+        StringSink sink;
+        auto compressionSink = makeCompressionSink(compressionMethod, sink);
+        source.drainInto(*compressionSink);
+        compressionSink->finish();
+        return std::move(sink.s);
+    }())
+    , compressionMethod(compressionMethod)
+    , stringSource(compressedData)
+{
 }
 
 std::unique_ptr<FinishSink> sourceToSink(std::function<void(Source &)> fun)

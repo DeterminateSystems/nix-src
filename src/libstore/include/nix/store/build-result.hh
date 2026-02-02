@@ -7,8 +7,7 @@
 
 #include "nix/store/derived-path.hh"
 #include "nix/store/realisation.hh"
-
-#include <nlohmann/json_fwd.hpp>
+#include "nix/util/json-impls.hh"
 
 namespace nix {
 
@@ -147,6 +146,13 @@ struct BuildResult
 
     bool operator==(const BuildResult &) const noexcept;
     std::strong_ordering operator<=>(const BuildResult &) const noexcept;
+
+    bool isCancelled() const
+    {
+        auto failure = tryGetFailure();
+        // FIXME: remove MiscFailure eventually.
+        return failure && (failure->status == Failure::Cancelled || failure->status == Failure::MiscFailure);
+    }
 };
 
 /**
@@ -181,7 +187,7 @@ struct KeyedBuildResult : BuildResult
     }
 };
 
-void to_json(nlohmann::json & json, const BuildResult & buildResult);
-void to_json(nlohmann::json & json, const KeyedBuildResult & buildResult);
-
 } // namespace nix
+
+JSON_IMPL(nix::BuildResult)
+JSON_IMPL(nix::KeyedBuildResult)

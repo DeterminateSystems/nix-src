@@ -7,6 +7,7 @@
 #include "nix/store/store-api.hh"
 #include "nix/store/gc-store.hh"
 #include "nix/store/log-store.hh"
+#include "nix/store/active-builds.hh"
 
 namespace nix {
 
@@ -36,7 +37,10 @@ struct RemoteStoreConfig : virtual StoreConfig
  * \todo RemoteStore is a misnomer - should be something like
  * DaemonStore.
  */
-struct RemoteStore : public virtual Store, public virtual GcStore, public virtual LogStore
+struct RemoteStore : public virtual Store,
+                     public virtual GcStore,
+                     public virtual LogStore,
+                     public virtual QueryActiveBuildsStore
 {
     using Config = RemoteStoreConfig;
 
@@ -102,7 +106,7 @@ struct RemoteStore : public virtual Store, public virtual GcStore, public virtua
     void registerDrvOutput(const Realisation & info) override;
 
     void queryRealisationUncached(
-        const DrvOutput &, Callback<std::shared_ptr<const Realisation>> callback) noexcept override;
+        const DrvOutput &, Callback<std::shared_ptr<const UnkeyedRealisation>> callback) noexcept override;
 
     void
     buildPaths(const std::vector<DerivedPath> & paths, BuildMode buildMode, std::shared_ptr<Store> evalStore) override;
@@ -142,6 +146,8 @@ struct RemoteStore : public virtual Store, public virtual GcStore, public virtua
     MissingPaths queryMissing(const std::vector<DerivedPath> & targets) override;
 
     void addBuildLog(const StorePath & drvPath, std::string_view log) override;
+
+    std::vector<ActiveBuildInfo> queryActiveBuilds() override;
 
     std::optional<std::string> getVersion() override;
 

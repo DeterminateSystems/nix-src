@@ -603,7 +603,7 @@ static void registerValidity(bool reregister, bool hashGiven, bool canonicalise)
 #endif
             if (!hashGiven) {
                 HashResult hash = hashPath(
-                    {ref{store->getFSAccessor(info->path, false)}},
+                    {store->requireStoreObjectAccessor(info->path, /*requireValidPath=*/false)},
                     FileSerialisationMethod::NixArchive,
                     HashAlgorithm::SHA256);
                 info->narHash = hash.hash;
@@ -1057,7 +1057,10 @@ static void opServe(Strings opFlags, Strings opArgs)
             auto deriver = readString(in);
             ValidPathInfo info{
                 store->parseStorePath(path),
-                Hash::parseAny(readString(in), HashAlgorithm::SHA256),
+                {
+                    *store,
+                    Hash::parseAny(readString(in), HashAlgorithm::SHA256),
+                },
             };
             if (deriver != "")
                 info.deriver = store->parseStorePath(deriver);

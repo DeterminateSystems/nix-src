@@ -247,13 +247,13 @@ struct ProfileManifest
             }
         }
 
-        buildProfile(tempDir, std::move(pkgs));
+        buildProfile(tempDir.string(), std::move(pkgs));
 
-        writeFile(tempDir + "/manifest.json", toJSON(*store).dump());
+        writeFile(tempDir / "manifest.json", toJSON(*store).dump());
 
         /* Add the symlink tree to the store. */
         StringSink sink;
-        dumpPath(tempDir, sink);
+        dumpPath(tempDir.string(), sink);
 
         auto narHash = hashString(HashAlgorithm::SHA256, sink.s);
 
@@ -313,11 +313,11 @@ struct ProfileManifest
 };
 
 static std::map<Installable *, std::pair<BuiltPaths, ref<ExtraPathInfo>>>
-builtPathsPerInstallable(const std::vector<std::pair<ref<Installable>, BuiltPathWithResult>> & builtPaths)
+builtPathsPerInstallable(const std::vector<InstallableWithBuildResult> & builtPaths)
 {
     std::map<Installable *, std::pair<BuiltPaths, ref<ExtraPathInfo>>> res;
-    for (auto & [installable, builtPath] : builtPaths) {
-        auto & r = res.insert({&*installable,
+    for (auto & b : builtPaths) {
+        auto & r = res.insert({&*b.installable,
                                {
                                    {},
                                    make_ref<ExtraPathInfo>(),
@@ -327,6 +327,7 @@ builtPathsPerInstallable(const std::vector<std::pair<ref<Installable>, BuiltPath
            (e.g. meta.priority fields) if the installable returned
            multiple derivations. So pick one arbitrarily. FIXME:
            print a warning? */
+        auto builtPath = b.getSuccess();
         r.first.push_back(builtPath.path);
         r.second = builtPath.info;
     }
@@ -363,8 +364,10 @@ struct CmdProfileAdd : InstallablesCommand, MixDefaultProfile
     {
         ProfileManifest manifest(*getEvalState(), *profile);
 
-        auto builtPaths = builtPathsPerInstallable(
-            Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal));
+        auto buildResults = Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal);
+        Installable::throwBuildErrors(buildResults, *store);
+
+        auto builtPaths = builtPathsPerInstallable(buildResults);
 
         for (auto & installable : installables) {
             ProfileElement element;
@@ -711,7 +714,7 @@ struct CmdProfileUpgrade : virtual SourceExprCommand, MixDefaultProfile, MixProf
                     element.identifier());
                 continue;
             }
-            if (element.source->originalRef.input.isLocked()) {
+            if (element.source->originalRef.input.isLocked(getEvalState()->fetchSettings)) {
                 warn(
                     "Found package '%s', but it was added from a locked flake reference so it can't be upgraded!",
                     element.identifier());
@@ -740,7 +743,8 @@ struct CmdProfileUpgrade : virtual SourceExprCommand, MixDefaultProfile, MixProf
             assert(infop);
             auto & info = *infop;
 
-            if (info.flake.lockedRef.input.isLocked() && element.source->lockedRef == info.flake.lockedRef)
+            if (info.flake.lockedRef.input.isLocked(getEvalState()->fetchSettings)
+                && element.source->lockedRef == info.flake.lockedRef)
                 continue;
 
             printInfo(
@@ -765,8 +769,10 @@ struct CmdProfileUpgrade : virtual SourceExprCommand, MixDefaultProfile, MixProf
             return;
         }
 
-        auto builtPaths = builtPathsPerInstallable(
-            Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal));
+        auto buildResults = Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal);
+        Installable::throwBuildErrors(buildResults, *store);
+
+        auto builtPaths = builtPathsPerInstallable(buildResults);
 
         for (size_t i = 0; i < installables.size(); ++i) {
             auto & installable = installables.at(i);
@@ -848,7 +854,10 @@ struct CmdProfileDiffClosures : virtual StoreCommand, MixDefaultProfile
                 first = false;
                 logger->cout("Version %d -> %d:", prevGen->number, gen.number);
                 printClosureDiff(
-                    store, store->followLinksToStorePath(prevGen->path), store->followLinksToStorePath(gen.path), "  ");
+                    store,
+                    store->followLinksToStorePath(prevGen->path.string()),
+                    store->followLinksToStorePath(gen.path.string()),
+                    "  ");
             }
 
             prevGen = gen;

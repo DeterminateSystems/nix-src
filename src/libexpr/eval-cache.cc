@@ -119,7 +119,7 @@ struct AttrDb
         }
     }
 
-    AttrId setAttrs(AttrKey key, const AttrPath & attrs)
+    AttrId setAttrs(AttrKey key, const std::vector<Symbol> & attrs)
     {
         return doSQLite([&]() {
             auto state(_state->lock());
@@ -136,17 +136,19 @@ struct AttrDb
         });
     }
 
-    AttrId setString(AttrKey key, std::string_view s, const char ** context = nullptr)
+    AttrId setString(AttrKey key, std::string_view s, const Value::StringWithContext::Context * context = nullptr)
     {
         return doSQLite([&]() {
             auto state(_state->lock());
 
             if (context) {
                 std::string ctx;
-                for (const char ** p = context; *p; ++p) {
-                    if (p != context)
+                bool first = true;
+                for (auto * elem : *context) {
+                    if (!first)
                         ctx.push_back(' ');
-                    ctx.append(*p);
+                    ctx.append(elem->view());
+                    first = false;
                 }
                 state->insertAttributeWithContext.use()(key.first)(symbols[key.second])(AttrType::String) (s) (ctx)
                     .exec();
@@ -254,7 +256,7 @@ struct AttrDb
             return {{rowId, placeholder_t()}};
         case AttrType::FullAttrs: {
             // FIXME: expensive, should separate this out.
-            AttrPath attrs;
+            std::vector<Symbol> attrs;
             auto queryAttributes(state->queryAttributes.use()(rowId));
             while (queryAttributes.next())
                 attrs.emplace_back(symbols.create(queryAttributes.getStr(0)));
@@ -395,19 +397,14 @@ AttrPath AttrCursor::getAttrPath(Symbol name) const
     return root->cleanupAttrPath(getAttrPathRaw(name));
 }
 
-std::string toAttrPathStr(EvalState & state, const AttrPath & attrPath)
-{
-    return dropEmptyInitThenConcatStringsSep(".", state.symbols.resolve(attrPath));
-}
-
 std::string AttrCursor::getAttrPathStr() const
 {
-    return toAttrPathStr(root->state, getAttrPath());
+    return getAttrPath().to_string(root->state);
 }
 
 std::string AttrCursor::getAttrPathStr(Symbol name) const
 {
-    return toAttrPathStr(root->state, getAttrPath(name));
+    return getAttrPath(name).to_string(root->state);
 }
 
 Value & AttrCursor::forceValue()
@@ -427,7 +424,7 @@ Value & AttrCursor::forceValue()
 
     if (root->db && (!cachedValue || std::get_if<placeholder_t>(&cachedValue->second))) {
         if (v.type() == nString)
-            cachedValue = {root->db->setString(getKey(), v.c_str(), v.context()), string_t{v.c_str(), {}}};
+            cachedValue = {root->db->setString(getKey(), v.string_view(), v.context()), string_t{v.string_view(), {}}};
         else if (v.type() == nPath) {
             auto path = v.path().path;
             cachedValue = {root->db->setString(getKey(), path.abs()), string_t{path.abs(), {}}};
@@ -460,7 +457,7 @@ std::shared_ptr<AttrCursor> AttrCursor::maybeGetAttr(Symbol name)
         fetchCachedValue();
 
         if (cachedValue) {
-            if (auto attrs = std::get_if<AttrPath>(&cachedValue->second)) {
+            if (auto attrs = std::get_if<std::vector<Symbol>>(&cachedValue->second)) {
                 for (auto & attr : *attrs)
                     if (attr == name)
                         return std::make_shared<AttrCursor>(root, std::make_pair(ref(shared_from_this()), attr));
@@ -562,7 +559,7 @@ std::string AttrCursor::getString()
     if (v.type() != nString && v.type() != nPath)
         root->state.error<TypeError>("'%s' is not a string but %s", getAttrPathStr(), showType(v)).debugThrow();
 
-    return v.type() == nString ? v.c_str() : v.path().to_string();
+    return v.type() == nString ? std::string(v.string_view()) : v.path().to_string();
 }
 
 string_t AttrCursor::getStringWithContext()
@@ -602,7 +599,7 @@ string_t AttrCursor::getStringWithContext()
     if (v.type() == nString) {
         NixStringContext context;
         copyContext(v, context);
-        return {v.c_str(), std::move(context)};
+        return {std::string{v.string_view()}, std::move(context)};
     } else if (v.type() == nPath)
         return {v.path().to_string(), {}};
     else
@@ -684,12 +681,12 @@ std::vector<std::string> AttrCursor::getListOfStrings()
     return res;
 }
 
-AttrPath AttrCursor::getAttrs()
+std::vector<Symbol> AttrCursor::getAttrs()
 {
     if (root->db) {
         fetchCachedValue();
         if (cachedValue && !std::get_if<placeholder_t>(&cachedValue->second)) {
-            if (auto attrs = std::get_if<AttrPath>(&cachedValue->second)) {
+            if (auto attrs = std::get_if<std::vector<Symbol>>(&cachedValue->second)) {
                 debug("using cached attrset attribute '%s'", getAttrPathStr());
                 return *attrs;
             } else
@@ -702,7 +699,7 @@ AttrPath AttrCursor::getAttrs()
     if (v.type() != nAttrs)
         root->state.error<TypeError>("'%s' is not an attribute set", getAttrPathStr()).debugThrow();
 
-    AttrPath attrs;
+    std::vector<Symbol> attrs;
     for (auto & attr : *getValue().attrs())
         attrs.push_back(attr.name);
     std::sort(attrs.begin(), attrs.end(), [&](Symbol a, Symbol b) {

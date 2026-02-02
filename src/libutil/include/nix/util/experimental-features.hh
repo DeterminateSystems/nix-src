@@ -39,6 +39,8 @@ enum struct ExperimentalFeature {
     BLAKE3Hashes,
     BuildTimeFetchTree,
     ParallelEval,
+    WasmBuiltin,
+    WasmDerivations,
 };
 
 extern std::set<std::string> stabilizedFeatures;
@@ -90,7 +92,9 @@ public:
      */
     ExperimentalFeature missingFeature;
 
-    MissingExperimentalFeature(ExperimentalFeature missingFeature);
+    std::string reason;
+
+    MissingExperimentalFeature(ExperimentalFeature missingFeature, std::string reason = "");
 };
 
 /**

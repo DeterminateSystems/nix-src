@@ -68,7 +68,7 @@ struct InstallableFlake : InstallableValue
      */
     std::vector<ref<eval_cache::AttrCursor>> getCursors(EvalState & state) override;
 
-    std::shared_ptr<flake::LockedFlake> getLockedFlake() const;
+    ref<flake::LockedFlake> getLockedFlake() const;
 
     FlakeRef nixpkgsFlakeRef() const;
 
@@ -91,7 +91,5 @@ static inline FlakeRef defaultNixpkgsFlakeRef()
 {
     return FlakeRef::fromAttrs(fetchSettings, {{"type", "indirect"}, {"id", "nixpkgs"}});
 }
-
-ref<eval_cache::EvalCache> openEvalCache(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake);
 
 } // namespace nix

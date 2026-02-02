@@ -209,6 +209,11 @@ struct SourceAccessor : std::enable_shared_from_this<SourceAccessor>
     {
         return std::nullopt;
     }
+
+    /**
+     * Invalidate any cached value the accessor may have for the specified path.
+     */
+    virtual void invalidateCache(const CanonPath & path) {}
 };
 
 /**
@@ -240,11 +245,5 @@ ref<SourceAccessor> makeFSSourceAccessor(std::filesystem::path root);
  * underlying accessors. Earlier accessors take precedence over later.
  */
 ref<SourceAccessor> makeUnionSourceAccessor(std::vector<ref<SourceAccessor>> && accessors);
-
-/**
- * Creates a new source accessor which is confined to the subdirectory
- * of the given source accessor.
- */
-ref<SourceAccessor> projectSubdirSourceAccessor(ref<SourceAccessor>, CanonPath subdirectory);
 
 } // namespace nix

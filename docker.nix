@@ -8,9 +8,10 @@
   # Image configuration
   name ? "nix",
   tag ? "latest",
+  fromImage ? null,
   bundleNixpkgs ? true,
   channelName ? "nixpkgs",
-  channelURL ? "https://nixos.org/channels/nixpkgs-unstable",
+  channelURL ? "https://channels.nixos.org/nixpkgs-unstable",
   extraPkgs ? [ ],
   maxLayers ? 70,
   nixConf ? { },
@@ -27,6 +28,8 @@
     "org.opencontainers.image.description" = "Nix container image";
   },
   Cmd ? [ (lib.getExe bashInteractive) ],
+  extraPrePaths ? [ ],
+  extraPostPaths ? [ ],
   # Default Packages
   nix ? pkgs.nix,
   bashInteractive ? pkgs.bashInteractive,
@@ -352,6 +355,7 @@ dockerTools.buildLayeredImageWithNixDb {
     gid
     uname
     gname
+    fromImage
     ;
 
   contents = [ baseSystem ];
@@ -373,11 +377,15 @@ dockerTools.buildLayeredImageWithNixDb {
     Env = [
       "USER=${uname}"
       "PATH=${
-        lib.concatStringsSep ":" [
-          "${userHome}/.nix-profile/bin"
-          "/nix/var/nix/profiles/default/bin"
-          "/nix/var/nix/profiles/default/sbin"
-        ]
+        lib.concatStringsSep ":" (
+          extraPrePaths
+          ++ [
+            "${userHome}/.nix-profile/bin"
+            "/nix/var/nix/profiles/default/bin"
+            "/nix/var/nix/profiles/default/sbin"
+          ]
+          ++ extraPostPaths
+        )
       }"
       "MANPATH=${
         lib.concatStringsSep ":" [

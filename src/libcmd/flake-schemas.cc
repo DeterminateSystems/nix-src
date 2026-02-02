@@ -39,7 +39,7 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
 ref<EvalCache>
 call(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake, std::optional<FlakeRef> defaultSchemasFlake)
 {
-    auto fingerprint = lockedFlake->getFingerprint(state.store, state.fetchSettings);
+    auto fingerprint = lockedFlake->getFingerprint(*state.store, state.fetchSettings);
 
     std::string callFlakeSchemasNix =
 #include "call-flake-schemas.nix.gen.hh"
@@ -49,7 +49,7 @@ call(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake, std::op
                                          ? flake::lockFlake(flakeSettings, state, *defaultSchemasFlake, {})
                                          : getBuiltinDefaultSchemasFlake(state);
     auto lockedDefaultSchemasFlakeFingerprint =
-        lockedDefaultSchemasFlake.getFingerprint(state.store, state.fetchSettings);
+        lockedDefaultSchemasFlake.getFingerprint(*state.store, state.fetchSettings);
 
     std::optional<Fingerprint> fingerprint2;
     if (fingerprint && lockedDefaultSchemasFlakeFingerprint)
@@ -88,8 +88,8 @@ call(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake, std::op
     /* Derive the flake output attribute path from the cursor used to
        traverse the inventory. We do this so we don't have to maintain
        a separate attrpath for that. */
-    cache->cleanupAttrPath = [&](eval_cache::AttrPath && attrPath) {
-        eval_cache::AttrPath res;
+    cache->cleanupAttrPath = [&](AttrPath && attrPath) {
+        AttrPath res;
         auto i = attrPath.begin();
         if (i == attrPath.end())
             return attrPath;
@@ -220,7 +220,7 @@ bool Leaf::isFlakeCheck() const
     return isFlakeCheck && isFlakeCheck->getBool();
 }
 
-std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, eval_cache::AttrPath attrPath)
+std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, AttrPath attrPath)
 {
     if (attrPath.empty())
         return std::nullopt;
@@ -251,7 +251,7 @@ std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, eval_cache::AttrP
     return OutputInfo{
         .schemaInfo = ref(schemaInfo),
         .nodeInfo = ref(node),
-        .leafAttrPath = std::vector(pathLeft.begin(), pathLeft.end()),
+        .leafAttrPath = AttrPath(pathLeft.begin(), pathLeft.end()),
     };
 }
 
@@ -276,7 +276,7 @@ Schemas getSchema(ref<AttrCursor> inventory)
             schemaInfo.appendSystem = appendSystem->getBool();
 
         if (auto defaultAttrPath = schema->maybeGetAttr("defaultAttrPath")) {
-            eval_cache::AttrPath attrPath;
+            AttrPath attrPath;
             for (auto & s : defaultAttrPath->getListOfStrings())
                 attrPath.push_back(state.symbols.create(s));
             schemaInfo.defaultAttrPath = std::move(attrPath);

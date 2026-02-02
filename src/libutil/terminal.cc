@@ -64,6 +64,16 @@ inline std::pair<int, size_t> charWidthUTF8Helper(std::string_view s)
 
 namespace nix {
 
+bool isTTY(Descriptor fd)
+{
+#ifndef _WIN32
+    return isatty(fd);
+#else
+    DWORD mode;
+    return GetConsoleMode(fd, &mode);
+#endif
+}
+
 bool isTTY()
 {
     static const bool tty = isatty(STDERR_FILENO) && getEnv("TERM").value_or("dumb") != "dumb"
@@ -177,6 +187,14 @@ void updateWindowSize()
 std::pair<unsigned short, unsigned short> getWindowSize()
 {
     return *windowSize.lock();
+}
+
+unsigned int getWindowWidth()
+{
+    unsigned int width = getWindowSize().second;
+    if (width <= 0)
+        width = std::numeric_limits<unsigned int>::max();
+    return width;
 }
 
 #ifndef _WIN32

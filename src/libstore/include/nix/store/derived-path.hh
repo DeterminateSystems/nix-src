@@ -234,10 +234,6 @@ struct DerivedPath : _DerivedPathRaw
         return static_cast<const Raw &>(*this);
     }
 
-    bool operator==(const DerivedPath &) const = default;
-    // TODO libc++ 16 (used by darwin) missing `std::set::operator <=>`, can't do yet.
-    // auto operator <=> (const DerivedPath &) const = default;
-
     /**
      * Get the store path this is ultimately derived from (by realising
      * and projecting outputs).
@@ -299,7 +295,7 @@ void drvRequireExperiment(
 } // namespace nix
 
 JSON_IMPL(nix::SingleDerivedPath::Opaque)
-JSON_IMPL(nix::SingleDerivedPath::Built)
-JSON_IMPL(nix::SingleDerivedPath)
-JSON_IMPL(nix::DerivedPath::Built)
-JSON_IMPL(nix::DerivedPath)
+JSON_IMPL_WITH_XP_FEATURES(nix::SingleDerivedPath::Built)
+JSON_IMPL_WITH_XP_FEATURES(nix::SingleDerivedPath)
+JSON_IMPL_WITH_XP_FEATURES(nix::DerivedPath::Built)
+JSON_IMPL_WITH_XP_FEATURES(nix::DerivedPath)

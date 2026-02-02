@@ -26,14 +26,14 @@
 
 namespace nix {
 
-static std::string showAttrPaths(EvalState & state, const std::vector<eval_cache::AttrPath> & paths)
+static std::string showAttrPaths(EvalState & state, const std::vector<AttrPath> & paths)
 {
     std::string s;
     for (const auto & [n, i] : enumerate(paths)) {
         if (n > 0)
             s += n + 1 == paths.size() ? " or " : ", ";
         s += '\'';
-        s += eval_cache::toAttrPathStr(state, i);
+        s += i.to_string(state);
         s += '\'';
     }
     return s;
@@ -153,10 +153,10 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
 
     Suggestions suggestions;
 
-    std::vector<eval_cache::AttrPath> attrPaths;
+    std::vector<AttrPath> attrPaths;
 
     if (fragment.starts_with("."))
-        attrPaths.push_back(parseAttrPath(state, fragment.substr(1)));
+        attrPaths.push_back(AttrPath::parse(state, fragment.substr(1)));
     else {
         auto schemas = flake_schemas::getSchema(inventory);
 
@@ -179,13 +179,13 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
             if (!schemasSeen.contains(schema.first))
                 schemasSorted.push_back(schema.first);
 
-        auto parsedFragment = parseAttrPath(state, fragment);
+        auto parsedFragment = AttrPath::parse(state, fragment);
 
         for (auto & role : roles) {
             for (auto & schemaName : schemasSorted) {
                 auto & schema = schemas.find(schemaName)->second;
                 if (schema.roles.contains(role)) {
-                    eval_cache::AttrPath attrPath{state.symbols.create(schemaName)};
+                    AttrPath attrPath{state.symbols.create(schemaName)};
                     if (schema.appendSystem)
                         attrPath.push_back(state.symbols.create(settings.thisSystem.get()));
 
@@ -219,7 +219,7 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
         throw Error("flake '%s' does not provide a default output", flakeRef);
 
     for (auto & attrPath : attrPaths) {
-        debug("trying flake output attribute '%s'", eval_cache::toAttrPathStr(state, attrPath));
+        debug("trying flake output attribute '%s'", attrPath.to_string(state));
 
         auto outputInfo = flake_schemas::getOutput(inventory, attrPath);
 
@@ -243,16 +243,16 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
     return res;
 }
 
-std::shared_ptr<flake::LockedFlake> InstallableFlake::getLockedFlake() const
+ref<flake::LockedFlake> InstallableFlake::getLockedFlake() const
 {
     if (!_lockedFlake) {
         flake::LockFlags lockFlagsApplyConfig = lockFlags;
         // FIXME why this side effect?
         lockFlagsApplyConfig.applyNixConfig = true;
-        _lockedFlake =
-            std::make_shared<flake::LockedFlake>(lockFlake(flakeSettings, *state, flakeRef, lockFlagsApplyConfig));
+        _lockedFlake = make_ref<flake::LockedFlake>(lockFlake(flakeSettings, *state, flakeRef, lockFlagsApplyConfig));
     }
-    return _lockedFlake;
+    // _lockedFlake is now non-null but still just a shared_ptr
+    return ref<flake::LockedFlake>(_lockedFlake);
 }
 
 ref<eval_cache::EvalCache> InstallableFlake::openEvalCache() const

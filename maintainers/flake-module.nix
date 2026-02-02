@@ -79,6 +79,8 @@
               # Not supported by nixfmt
               ''^tests/functional/lang/eval-okay-deprecate-cursed-or\.nix$''
               ''^tests/functional/lang/eval-okay-attrs5\.nix$''
+              ''^tests/functional/lang/eval-fail-dynamic-attrs-inherit\.nix$''
+              ''^tests/functional/lang/eval-fail-dynamic-attrs-inherit-2\.nix$''
 
               # More syntax tests
               # These tests, or parts of them, should have been parse-* test cases.
@@ -100,6 +102,7 @@
               # Don't format vendored code
               ''^doc/manual/redirects\.js$''
               ''^doc/manual/theme/highlight\.js$''
+              ''^src/libfetchers/builtin-flake-registry\.json$''
             ];
           };
           shellcheck = {

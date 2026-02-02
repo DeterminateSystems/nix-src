@@ -115,12 +115,22 @@ struct Settings : public Config
 
     Setting<std::string> flakeRegistry{
         this,
-        "https://channels.nixos.org/flake-registry.json",
+        "https://install.determinate.systems/flake-registry/stable/flake-registry.json",
         "flake-registry",
         R"(
           Path or URI of the global flake registry.
 
           When empty, disables the global flake registry.
+        )"};
+
+    Setting<bool> nix219Compat{
+        this,
+        false,
+        "nix-219-compat",
+        R"(
+          If enabled, Nix will generate lock files that are compatible with Nix 2.19.
+          In particular, Nix will use `git archive` rather than `libgit2` to copy Git inputs.
+          The resulting locks may not be compatible with Nix >= 2.20.
         )"};
 
     ref<Cache> getCache() const;

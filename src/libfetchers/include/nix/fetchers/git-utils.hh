@@ -22,11 +22,27 @@ struct GitFileSystemObjectSink : ExtendedFileSystemObjectSink
     virtual Hash flush() = 0;
 };
 
+struct GitAccessorOptions
+{
+    bool exportIgnore = false;
+    bool smudgeLfs = false;
+    bool submodules = false; // Currently implemented in GitInputScheme rather than GitAccessor
+
+    std::string makeFingerprint(const Hash & rev) const;
+};
+
 struct GitRepo
 {
     virtual ~GitRepo() {}
 
-    static ref<GitRepo> openRepo(const std::filesystem::path & path, bool create = false, bool bare = false);
+    struct Options
+    {
+        bool create = false;
+        bool bare = false;
+        bool packfilesOnly = false;
+    };
+
+    static ref<GitRepo> openRepo(const std::filesystem::path & path, Options options);
 
     virtual uint64_t getRevCount(const Hash & rev) = 0;
 
@@ -89,10 +105,10 @@ struct GitRepo
     virtual bool hasObject(const Hash & oid) = 0;
 
     virtual ref<SourceAccessor>
-    getAccessor(const Hash & rev, bool exportIgnore, std::string displayPrefix, bool smudgeLfs = false) = 0;
+    getAccessor(const Hash & rev, const GitAccessorOptions & options, std::string displayPrefix) = 0;
 
-    virtual ref<SourceAccessor>
-    getAccessor(const WorkdirInfo & wd, bool exportIgnore, MakeNotAllowedError makeNotAllowedError) = 0;
+    virtual ref<SourceAccessor> getAccessor(
+        const WorkdirInfo & wd, const GitAccessorOptions & options, MakeNotAllowedError makeNotAllowedError) = 0;
 
     virtual ref<GitFileSystemObjectSink> getFileSystemObjectSink() = 0;
 

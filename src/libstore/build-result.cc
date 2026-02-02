@@ -1,6 +1,6 @@
 #include "nix/store/build-result.hh"
-
-#include <nlohmann/json.hpp>
+#include "nix/util/json-utils.hh"
+#include <array>
 
 namespace nix {
 
@@ -13,100 +13,161 @@ std::strong_ordering BuildResult::Success::operator<=>(const BuildResult::Succes
 bool BuildResult::Failure::operator==(const BuildResult::Failure &) const noexcept = default;
 std::strong_ordering BuildResult::Failure::operator<=>(const BuildResult::Failure &) const noexcept = default;
 
+static constexpr std::array<std::pair<BuildResult::Success::Status, std::string_view>, 4> successStatusStrings{{
+#define ENUM_ENTRY(e) {BuildResult::Success::e, #e}
+    ENUM_ENTRY(Built),
+    ENUM_ENTRY(Substituted),
+    ENUM_ENTRY(AlreadyValid),
+    ENUM_ENTRY(ResolvesToAlreadyValid),
+#undef ENUM_ENTRY
+}};
+
 std::string_view BuildResult::Success::statusToString(BuildResult::Success::Status status)
 {
-    switch (status) {
-    case BuildResult::Success::Built:
-        return "Built";
-    case BuildResult::Success::Substituted:
-        return "Substituted";
-    case BuildResult::Success::AlreadyValid:
-        return "AlreadyValid";
-    case BuildResult::Success::ResolvesToAlreadyValid:
-        return "ResolvesToAlreadyValid";
-    default:
-        unreachable();
+    for (const auto & [enumVal, str] : successStatusStrings) {
+        if (enumVal == status)
+            return str;
     }
+    throw Error("unknown success status: %d", static_cast<int>(status));
 }
+
+static BuildResult::Success::Status successStatusFromString(std::string_view str)
+{
+    for (const auto & [enumVal, enumStr] : successStatusStrings) {
+        if (enumStr == str)
+            return enumVal;
+    }
+    throw Error("unknown built result success status '%s'", str);
+}
+
+static constexpr std::array<std::pair<BuildResult::Failure::Status, std::string_view>, 13> failureStatusStrings{{
+#define ENUM_ENTRY(e) {BuildResult::Failure::e, #e}
+    ENUM_ENTRY(PermanentFailure),
+    ENUM_ENTRY(InputRejected),
+    ENUM_ENTRY(OutputRejected),
+    ENUM_ENTRY(TransientFailure),
+    ENUM_ENTRY(CachedFailure),
+    ENUM_ENTRY(TimedOut),
+    ENUM_ENTRY(MiscFailure),
+    ENUM_ENTRY(DependencyFailed),
+    ENUM_ENTRY(LogLimitExceeded),
+    ENUM_ENTRY(NotDeterministic),
+    ENUM_ENTRY(NoSubstituters),
+    ENUM_ENTRY(HashMismatch),
+    ENUM_ENTRY(Cancelled),
+#undef ENUM_ENTRY
+}};
 
 std::string_view BuildResult::Failure::statusToString(BuildResult::Failure::Status status)
 {
-    switch (status) {
-    case BuildResult::Failure::PermanentFailure:
-        return "PermanentFailure";
-    case BuildResult::Failure::InputRejected:
-        return "InputRejected";
-    case BuildResult::Failure::OutputRejected:
-        return "OutputRejected";
-    case BuildResult::Failure::TransientFailure:
-        return "TransientFailure";
-    case BuildResult::Failure::CachedFailure:
-        return "CachedFailure";
-    case BuildResult::Failure::TimedOut:
-        return "TimedOut";
-    case BuildResult::Failure::MiscFailure:
-        return "MiscFailure";
-    case BuildResult::Failure::DependencyFailed:
-        return "DependencyFailed";
-    case BuildResult::Failure::LogLimitExceeded:
-        return "LogLimitExceeded";
-    case BuildResult::Failure::NotDeterministic:
-        return "NotDeterministic";
-    case BuildResult::Failure::NoSubstituters:
-        return "NoSubstituters";
-    case BuildResult::Failure::HashMismatch:
-        return "HashMismatch";
-    case BuildResult::Failure::Cancelled:
-        return "Cancelled";
-    default:
-        unreachable();
+    for (const auto & [enumVal, str] : failureStatusStrings) {
+        if (enumVal == status)
+            return str;
     }
+    throw Error("unknown failure status: %d", static_cast<int>(status));
 }
 
-void to_json(nlohmann::json & json, const BuildResult & buildResult)
+static BuildResult::Failure::Status failureStatusFromString(std::string_view str)
 {
-    json = nlohmann::json::object();
-    // FIXME: change this to have `success` and `failure` objects.
-    if (auto success = buildResult.tryGetSuccess()) {
-        json["status"] = BuildResult::Success::statusToString(success->status);
-    } else if (auto failure = buildResult.tryGetFailure()) {
-        json["status"] = BuildResult::Failure::statusToString(failure->status);
-        if (failure->errorMsg != "")
-            json["errorMsg"] = failure->errorMsg;
-        if (failure->isNonDeterministic)
-            json["isNonDeterministic"] = failure->isNonDeterministic;
+    for (const auto & [enumVal, enumStr] : failureStatusStrings) {
+        if (enumStr == str)
+            return enumVal;
     }
-    if (buildResult.timesBuilt)
-        json["timesBuilt"] = buildResult.timesBuilt;
-    if (buildResult.startTime)
-        json["startTime"] = buildResult.startTime;
-    if (buildResult.stopTime)
-        json["stopTime"] = buildResult.stopTime;
-}
-
-void to_json(nlohmann::json & json, const KeyedBuildResult & buildResult)
-{
-    to_json(json, (const BuildResult &) buildResult);
-    auto path = nlohmann::json::object();
-    std::visit(
-        overloaded{
-            [&](const DerivedPathOpaque & opaque) { path["opaque"] = opaque.path.to_string(); },
-            [&](const DerivedPathBuilt & drv) {
-                path["drvPath"] = drv.drvPath->getBaseStorePath().to_string();
-                path["outputs"] = drv.outputs;
-                auto outputs = nlohmann::json::object();
-                if (auto success = buildResult.tryGetSuccess()) {
-                    for (auto & [name, output] : success->builtOutputs)
-                        outputs[name] = {
-                            {"path", output.outPath.to_string()},
-                            {"signatures", output.signatures},
-                        };
-                    json["builtOutputs"] = std::move(outputs);
-                }
-            },
-        },
-        buildResult.path.raw());
-    json["path"] = std::move(path);
+    throw Error("unknown built result failure status '%s'", str);
 }
 
 } // namespace nix
+
+namespace nlohmann {
+
+using namespace nix;
+
+void adl_serializer<BuildResult>::to_json(json & res, const BuildResult & br)
+{
+    res = json::object();
+
+    // Common fields
+    res["timesBuilt"] = br.timesBuilt;
+    res["startTime"] = br.startTime;
+    res["stopTime"] = br.stopTime;
+
+    if (br.cpuUser.has_value()) {
+        res["cpuUser"] = br.cpuUser->count();
+    }
+    if (br.cpuSystem.has_value()) {
+        res["cpuSystem"] = br.cpuSystem->count();
+    }
+
+    // Handle success or failure variant
+    std::visit(
+        overloaded{
+            [&](const BuildResult::Success & success) {
+                res["success"] = true;
+                res["status"] = BuildResult::Success::statusToString(success.status);
+                res["builtOutputs"] = success.builtOutputs;
+            },
+            [&](const BuildResult::Failure & failure) {
+                res["success"] = false;
+                res["status"] = BuildResult::Failure::statusToString(failure.status);
+                res["errorMsg"] = failure.errorMsg;
+                res["isNonDeterministic"] = failure.isNonDeterministic;
+            },
+        },
+        br.inner);
+}
+
+BuildResult adl_serializer<BuildResult>::from_json(const json & _json)
+{
+    auto & json = getObject(_json);
+
+    BuildResult br;
+
+    // Common fields
+    br.timesBuilt = getUnsigned(valueAt(json, "timesBuilt"));
+    br.startTime = getUnsigned(valueAt(json, "startTime"));
+    br.stopTime = getUnsigned(valueAt(json, "stopTime"));
+
+    if (auto cpuUser = optionalValueAt(json, "cpuUser")) {
+        br.cpuUser = std::chrono::microseconds(getUnsigned(*cpuUser));
+    }
+    if (auto cpuSystem = optionalValueAt(json, "cpuSystem")) {
+        br.cpuSystem = std::chrono::microseconds(getUnsigned(*cpuSystem));
+    }
+
+    // Determine success or failure based on success field
+    bool success = getBoolean(valueAt(json, "success"));
+    std::string statusStr = getString(valueAt(json, "status"));
+
+    if (success) {
+        BuildResult::Success s;
+        s.status = successStatusFromString(statusStr);
+        s.builtOutputs = valueAt(json, "builtOutputs");
+        br.inner = std::move(s);
+    } else {
+        BuildResult::Failure f;
+        f.status = failureStatusFromString(statusStr);
+        f.errorMsg = getString(valueAt(json, "errorMsg"));
+        f.isNonDeterministic = getBoolean(valueAt(json, "isNonDeterministic"));
+        br.inner = std::move(f);
+    }
+
+    return br;
+}
+
+KeyedBuildResult adl_serializer<KeyedBuildResult>::from_json(const json & json0)
+{
+    auto json = getObject(json0);
+
+    return KeyedBuildResult{
+        adl_serializer<BuildResult>::from_json(json0),
+        valueAt(json, "path"),
+    };
+}
+
+void adl_serializer<KeyedBuildResult>::to_json(json & json, const KeyedBuildResult & kbr)
+{
+    adl_serializer<BuildResult>::to_json(json, kbr);
+    json["path"] = kbr.path;
+}
+
+} // namespace nlohmann

@@ -1,6 +1,6 @@
 #include <nlohmann/json.hpp>
 #include "nix/store/remote-fs-accessor.hh"
-#include "nix/store/nar-accessor.hh"
+#include "nix/util/nar-accessor.hh"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -39,7 +39,7 @@ ref<SourceAccessor> RemoteFSAccessor::addToCache(std::string_view hashPart, std:
 
     if (cacheDir != "") {
         try {
-            nlohmann::json j = listNar(narAccessor, CanonPath::root, true);
+            nlohmann::json j = listNarDeep(*narAccessor, CanonPath::root);
             writeFile(makeCacheFile(hashPart, "ls"), j.dump());
         } catch (...) {
             ignoreExceptionExceptInterrupt();
@@ -70,26 +70,8 @@ std::shared_ptr<SourceAccessor> RemoteFSAccessor::accessObject(const StorePath &
 
         try {
             listing = nix::readFile(makeCacheFile(storePath.hashPart(), "ls"));
-
-            auto narAccessor = makeLazyNarAccessor(listing, [cacheFile](uint64_t offset, uint64_t length) {
-                AutoCloseFD fd = toDescriptor(open(
-                    cacheFile.c_str(),
-                    O_RDONLY
-#ifndef _WIN32
-                        | O_CLOEXEC
-#endif
-                    ));
-                if (!fd)
-                    throw SysError("opening NAR cache file '%s'", cacheFile);
-
-                if (lseek(fromDescriptorReadOnly(fd.get()), offset, SEEK_SET) != (off_t) offset)
-                    throw SysError("seeking in '%s'", cacheFile);
-
-                std::string buf(length, 0);
-                readFull(fd.get(), buf.data(), length);
-
-                return buf;
-            });
+            auto listingJson = nlohmann::json::parse(listing);
+            auto narAccessor = makeLazyNarAccessor(listingJson, seekableGetNarBytes(cacheFile));
 
             nars.emplace(storePath.hashPart(), narAccessor);
             return narAccessor;

@@ -276,6 +276,12 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
 
     void startChild() override
     {
+        RunChildArgs args{
+#  if NIX_WITH_AWS_AUTH
+            .awsCredentials = preResolveAwsCredentials(),
+#  endif
+        };
+
         /* Set up private namespaces for the build:
 
            - The PID namespace causes the build to start as PID 1.
@@ -343,7 +349,7 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
                 if (usingUserNamespace)
                     options.cloneFlags |= CLONE_NEWUSER;
 
-                pid_t child = startProcess([&]() { runChild(); }, options);
+                pid_t child = startProcess([this, args = std::move(args)]() { runChild(std::move(args)); }, options);
 
                 writeFull(sendPid.writeSide.get(), fmt("%d\n", child));
                 _exit(0);
@@ -703,8 +709,11 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
         DerivationBuilderImpl::killSandbox(getStats);
     }
 
-    void addDependency(const StorePath & path) override
+    void addDependencyImpl(const StorePath & path) override
     {
+        if (isAllowed(path))
+            return;
+
         auto [source, target] = ChrootDerivationBuilder::addDependencyPrep(path);
 
         /* Bind-mount the path into the sandbox. This requires
@@ -726,6 +735,13 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
         int status = child.wait();
         if (status != 0)
             throw Error("could not add path '%s' to sandbox", store.printStorePath(path));
+    }
+
+    ActiveBuild getActiveBuild() override
+    {
+        auto build = DerivationBuilderImpl::getActiveBuild();
+        build.cgroup = cgroup;
+        return build;
     }
 };
 

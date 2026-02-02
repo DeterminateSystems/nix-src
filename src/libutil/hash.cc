@@ -13,12 +13,11 @@
 #include "nix/util/split.hh"
 #include "nix/util/base-n.hh"
 #include "nix/util/base-nix-32.hh"
+#include "nix/util/json-utils.hh"
 
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-
-#include <nlohmann/json.hpp>
 
 #include <sodium.h>
 
@@ -143,9 +142,13 @@ static HashFormat baseFromSize(std::string_view rest, HashAlgorithm algo)
  *
  * @param rest the string view to parse. Must not include any `<algo>(:|-)` prefix.
  */
-static Hash parseLowLevel(std::string_view rest, HashAlgorithm algo, DecodeNamePair pair)
+static Hash parseLowLevel(
+    std::string_view rest,
+    HashAlgorithm algo,
+    DecodeNamePair pair,
+    const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings)
 {
-    Hash res{algo};
+    Hash res{algo, xpSettings};
     std::string d;
     try {
         d = pair.decode(rest);
@@ -161,7 +164,7 @@ static Hash parseLowLevel(std::string_view rest, HashAlgorithm algo, DecodeNameP
     return res;
 }
 
-Hash Hash::parseSRI(std::string_view original)
+Hash Hash::parseSRI(std::string_view original, const ExperimentalFeatureSettings & xpSettings)
 {
     auto rest = original;
 
@@ -169,9 +172,9 @@ Hash Hash::parseSRI(std::string_view original)
     auto hashRaw = splitPrefixTo(rest, '-');
     if (!hashRaw)
         throw BadHash("hash '%s' is not SRI", original);
-    HashAlgorithm parsedType = parseHashAlgo(*hashRaw);
+    HashAlgorithm parsedType = parseHashAlgo(*hashRaw, xpSettings);
 
-    return parseLowLevel(rest, parsedType, {base64::decode, "SRI"});
+    return parseLowLevel(rest, parsedType, {base64::decode, "SRI"}, xpSettings);
 }
 
 /**
@@ -179,8 +182,10 @@ Hash Hash::parseSRI(std::string_view original)
  *
  * @param resolveAlgo resolves the parsed type (or throws an error when it is not
  * possible.)
+ *
+ * @return the parsed hash and the format it was parsed from
  */
-static Hash parseAnyHelper(std::string_view rest, auto resolveAlgo)
+static std::pair<Hash, HashFormat> parseAnyHelper(std::string_view rest, auto resolveAlgo)
 {
     bool isSRI = false;
 
@@ -200,34 +205,45 @@ static Hash parseAnyHelper(std::string_view rest, auto resolveAlgo)
 
     HashAlgorithm algo = resolveAlgo(std::move(optParsedAlgo));
 
-    auto [decode, formatName] = [&]() -> DecodeNamePair {
+    auto [decode, formatName, format] = [&]() -> std::tuple<decltype(base16::decode) *, std::string_view, HashFormat> {
         if (isSRI) {
             /* In the SRI case, we always are using Base64. If the
                length is wrong, get an error later. */
-            return {base64::decode, "SRI"};
+            return {base64::decode, "SRI", HashFormat::SRI};
         } else {
             /* Otherwise, decide via the length of the hash (for the
                given algorithm) what base encoding it is. */
-            return baseExplicit(baseFromSize(rest, algo));
+            auto format = baseFromSize(rest, algo);
+            auto [decode, formatName] = baseExplicit(format);
+            return {decode, formatName, format};
         }
     }();
 
-    return parseLowLevel(rest, algo, {decode, formatName});
+    return {parseLowLevel(rest, algo, {decode, formatName}), format};
 }
 
 Hash Hash::parseAnyPrefixed(std::string_view original)
 {
-    return parseAnyHelper(original, [&](std::optional<HashAlgorithm> optParsedAlgo) {
-        // Either the string or user must provide the type, if they both do they
-        // must agree.
-        if (!optParsedAlgo)
-            throw BadHash("hash '%s' does not include a type", original);
+    return parseAnyHelper(
+               original,
+               [&](std::optional<HashAlgorithm> optParsedAlgo) {
+                   // Either the string or user must provide the type, if they both do they
+                   // must agree.
+                   if (!optParsedAlgo)
+                       throw BadHash("hash '%s' does not include a type", original);
 
-        return *optParsedAlgo;
-    });
+                   return *optParsedAlgo;
+               })
+        .first;
 }
 
 Hash Hash::parseAny(std::string_view original, std::optional<HashAlgorithm> optAlgo)
+{
+    return parseAnyReturningFormat(original, optAlgo).first;
+}
+
+std::pair<Hash, HashFormat>
+Hash::parseAnyReturningFormat(std::string_view original, std::optional<HashAlgorithm> optAlgo)
 {
     return parseAnyHelper(original, [&](std::optional<HashAlgorithm> optParsedAlgo) {
         // Either the string or user must provide the type, if they both do they
@@ -246,9 +262,10 @@ Hash Hash::parseNonSRIUnprefixed(std::string_view s, HashAlgorithm algo)
     return parseExplicitFormatUnprefixed(s, algo, baseFromSize(s, algo));
 }
 
-Hash Hash::parseExplicitFormatUnprefixed(std::string_view s, HashAlgorithm algo, HashFormat format)
+Hash Hash::parseExplicitFormatUnprefixed(
+    std::string_view s, HashAlgorithm algo, HashFormat format, const ExperimentalFeatureSettings & xpSettings)
 {
-    return parseLowLevel(s, algo, baseExplicit(format));
+    return parseLowLevel(s, algo, baseExplicit(format), xpSettings);
 }
 
 Hash Hash::random(HashAlgorithm algo)
@@ -448,10 +465,12 @@ std::string_view printHashFormat(HashFormat HashFormat)
     }
 }
 
-std::optional<HashAlgorithm> parseHashAlgoOpt(std::string_view s)
+std::optional<HashAlgorithm> parseHashAlgoOpt(std::string_view s, const ExperimentalFeatureSettings & xpSettings)
 {
-    if (s == "blake3")
+    if (s == "blake3") {
+        xpSettings.require(Xp::BLAKE3Hashes);
         return HashAlgorithm::BLAKE3;
+    }
     if (s == "md5")
         return HashAlgorithm::MD5;
     if (s == "sha1")
@@ -463,9 +482,9 @@ std::optional<HashAlgorithm> parseHashAlgoOpt(std::string_view s)
     return std::nullopt;
 }
 
-HashAlgorithm parseHashAlgo(std::string_view s)
+HashAlgorithm parseHashAlgo(std::string_view s, const ExperimentalFeatureSettings & xpSettings)
 {
-    auto opt_h = parseHashAlgoOpt(s);
+    auto opt_h = parseHashAlgoOpt(s, xpSettings);
     if (opt_h)
         return *opt_h;
     else
@@ -492,12 +511,21 @@ std::string_view printHashAlgo(HashAlgorithm ha)
     }
 }
 
-void to_json(nlohmann::json & json, const Hash & hash)
+} // namespace nix
+
+namespace nlohmann {
+
+using namespace nix;
+
+Hash adl_serializer<Hash>::from_json(const json & json, const ExperimentalFeatureSettings & xpSettings)
 {
-    json = nlohmann::json::object({
-        {"algo", printHashAlgo(hash.algo)},
-        {"base16", hash.to_string(HashFormat::Base16, false)},
-    });
+    auto & s = getString(json);
+    return Hash::parseSRI(s, xpSettings);
 }
 
-} // namespace nix
+void adl_serializer<Hash>::to_json(json & json, const Hash & hash)
+{
+    json = hash.to_string(HashFormat::SRI, true);
+}
+
+} // namespace nlohmann
