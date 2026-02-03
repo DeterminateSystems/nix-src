@@ -7,6 +7,8 @@ project(
     # TODO(Qyriad): increase the warning level
     'warning_level=1',
     'errorlogs=true', # Please print logs for tests that fail
+    'unity=on',
+    'unity_size=1024',
   ],
   meson_version : '>= 1.1',
   license : 'LGPL-2.1-or-later',
@@ -174,11 +176,9 @@ sources = files(
   'function-trace.cc',
   'get-drvs.cc',
   'json-to-value.cc',
-  'lexer-helpers.cc',
   'nixexpr.cc',
   'parallel-eval.cc',
   'paths.cc',
-  'primops.cc',
   'print-ambiguous.cc',
   'print.cc',
   'search-path.cc',
@@ -187,6 +187,10 @@ sources = files(
   'value-to-xml.cc',
   'value.cc',
   'value/context.cc',
+)
+
+primops_sources = files(
+  'primops.cc',
 )
 
 subdir('include/nix/expr')
@@ -227,6 +231,7 @@ parser_library = static_library(
   'nixexpr-parser',
   parser_tab,
   lexer_tab,
+  files('lexer-helpers.cc'),
   cpp_args : parser_library_cpp_args,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
@@ -234,6 +239,19 @@ parser_library = static_library(
   # them for this one library when building in a release configuration.
   # 2. Disable LTO for GCC because then inlining flags won't apply, since LTO in GCC is done
   # by plonking down GIMPLE in the archive.
+  override_options : [
+    'b_ndebug=@0@'.format(not get_option('debug')),
+    'b_lto=@0@'.format(get_option('b_lto') and cxx.get_id() != 'gcc'),
+    'unity=off',
+  ],
+)
+
+primops_library = static_library(
+  'nixexpr-primops',
+  primops_sources,
+  generated_headers,
+  dependencies : deps_public + deps_private + deps_other,
+  include_directories : include_dirs,
   override_options : [
     'b_ndebug=@0@'.format(not get_option('debug')),
     'b_lto=@0@'.format(get_option('b_lto') and cxx.get_id() != 'gcc'),
@@ -251,10 +269,13 @@ this_library = library(
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags + link_args,
-  link_whole : [ parser_library ],
+  link_whole : [ parser_library, primops_library ],
   prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
+  override_options : [
+    'unity=off',
+  ],
 )
 
 install_headers(headers, subdir : 'nix/expr', preserve_path : true)
