@@ -452,27 +452,6 @@ UnkeyedRealisation DerivationGoal::assertPathValidity()
 
 Goal::Done DerivationGoal::doneSuccess(BuildResult::Success::Status status, UnkeyedRealisation builtOutput)
 {
-    buildResult.inner = BuildResult::Success{
-        .status = status,
-        .builtOutputs = {{
-            wantedOutput,
-            {
-                std::move(builtOutput),
-                DrvOutput{
-                    .drvHash = outputHash,
-                    .outputName = wantedOutput,
-                },
-            },
-        }},
-    };
-
-    logger->result(
-        getCurActivity(),
-        resBuildResult,
-        nlohmann::json(KeyedBuildResult(
-            buildResult,
-            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
-
     mcExpectedBuilds.reset();
 
     if (status == BuildResult::Success::Built)
@@ -480,15 +459,20 @@ Goal::Done DerivationGoal::doneSuccess(BuildResult::Success::Status status, Unke
 
     worker.updateProgress();
 
-    return amDone(ecSuccess, std::nullopt);
-}
-
-Goal::Done DerivationGoal::doneFailure(BuildError ex)
-{
-    buildResult.inner = BuildResult::Failure{
-        .status = ex.status,
-        .errorMsg = fmt("%s", Uncolored(ex.info().msg)),
-    };
+    auto res = Goal::doneSuccess(
+        BuildResult::Success{
+            .status = status,
+            .builtOutputs = {{
+                wantedOutput,
+                {
+                    std::move(builtOutput),
+                    DrvOutput{
+                        .drvHash = outputHash,
+                        .outputName = wantedOutput,
+                    },
+                },
+            }},
+        });
 
     logger->result(
         getCurActivity(),
@@ -497,6 +481,11 @@ Goal::Done DerivationGoal::doneFailure(BuildError ex)
             buildResult,
             DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
+    return res;
+}
+
+Goal::Done DerivationGoal::doneFailure(BuildError ex)
+{
     mcExpectedBuilds.reset();
 
     if (ex.status == BuildResult::Failure::TimedOut)
@@ -508,7 +497,22 @@ Goal::Done DerivationGoal::doneFailure(BuildError ex)
 
     worker.updateProgress();
 
-    return amDone(ecFailed, {std::move(ex)});
+    auto res = Goal::doneFailure(
+        ecFailed,
+        BuildResult::Failure{
+            .status = ex.status,
+            .errorMsg = fmt("%s", Uncolored(ex.info().msg)),
+        },
+        std::move(ex));
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
+    return res;
 }
 
 } // namespace nix
