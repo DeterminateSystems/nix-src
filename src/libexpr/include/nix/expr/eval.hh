@@ -516,18 +516,20 @@ private:
 public:
 
     /**
-     * @param lookupPath     Only used during construction.
-     * @param store          The store to use for instantiation
-     * @param fetchSettings  Must outlive the lifetime of this EvalState!
-     * @param settings       Must outlive the lifetime of this EvalState!
-     * @param buildStore     The store to use for builds ("import from derivation", C API `nix_string_realise`)
+     * @param lookupPath      Only used during construction.
+     * @param store           The store to use for instantiation
+     * @param fetchSettings   Must outlive the lifetime of this EvalState!
+     * @param settings        Must outlive the lifetime of this EvalState!
+     * @param buildStore      The store to use for builds ("import from derivation", C API `nix_string_realise`)
+     * @param asyncPathWriter The async path writer to use
      */
     EvalState(
         const LookupPath & lookupPath,
         ref<Store> store,
         const fetchers::Settings & fetchSettings,
         const EvalSettings & settings,
-        std::shared_ptr<Store> buildStore = nullptr);
+        std::shared_ptr<Store> buildStore = nullptr,
+        std::shared_ptr<AsyncPathWriter> asyncPathWriter = nullptr);
     ~EvalState();
 
     /**

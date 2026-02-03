@@ -262,7 +262,8 @@ EvalState::EvalState(
     ref<Store> store,
     const fetchers::Settings & fetchSettings,
     const EvalSettings & settings,
-    std::shared_ptr<Store> buildStore)
+    std::shared_ptr<Store> buildStore,
+    std::shared_ptr<AsyncPathWriter> asyncPathWriter)
     : fetchSettings{fetchSettings}
     , settings{settings}
     , symbols(StaticEvalSymbols::staticSymbolTable())
@@ -325,7 +326,7 @@ EvalState::EvalState(
     , debugRepl(nullptr)
     , debugStop(false)
     , trylevel(0)
-    , asyncPathWriter(AsyncPathWriter::make(store))
+    , asyncPathWriter(asyncPathWriter ? asyncPathWriter : AsyncPathWriter::make(store))
     , srcToStore(make_ref<decltype(srcToStore)::element_type>())
     , importResolutionCache(make_ref<decltype(importResolutionCache)::element_type>())
     , fileEvalCache(make_ref<decltype(fileEvalCache)::element_type>())
