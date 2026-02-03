@@ -3,7 +3,7 @@ generated_headers += gen_header.process(
   preserve_path_from : meson.project_source_root(),
 )
 
-primops_sources += files(
+sources += files(
   'context.cc',
   'fetchClosure.cc',
   'fetchMercurial.cc',
@@ -12,5 +12,5 @@ primops_sources += files(
 )
 
 if wasmtime_required.enabled()
-  primops_sources += files('wasm.cc')
+  sources += files('wasm.cc')
 endif
