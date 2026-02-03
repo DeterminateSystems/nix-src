@@ -419,6 +419,6 @@ void __cxa_throw(void * exc, void * tinfo_, void (*dest)(void *))
     if (*tinfo == typeid(std::logic_error))
         abort();
 
-    auto orig_cxa_throw = (cxa_throw_type) dlsym(RTLD_NEXT, "__cxa_throw");
+    static auto orig_cxa_throw = (cxa_throw_type) dlsym(RTLD_NEXT, "__cxa_throw");
     orig_cxa_throw(exc, tinfo_, dest);
 }
