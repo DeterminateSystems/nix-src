@@ -997,7 +997,7 @@ struct GitInputScheme : InputScheme
 
         auto accessor = repo->getAccessor(rev, options, "«" + input.to_string(true) + "»");
 
-        if (settings.nix219Compat && !options.smudgeLfs && accessor->pathExists(CanonPath(".gitattributes"))) {
+        if (settings.nix219Compat && !options.smudgeLfs) {
             /* Use Nix 2.19 semantics to generate locks, but if a NAR hash is specified, support Nix >= 2.20 semantics
              * as well. */
             warn("Using Nix 2.19 semantics to export Git repository '%s'.", input.to_string());
@@ -1017,8 +1017,8 @@ struct GitInputScheme : InputScheme
             /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Nix applying Git filters,
              * `export-ignore` or `export-subst`. Nix >= 2.20 doesn't do those, so we may get a NAR hash mismatch. If
              * that happens, try again using `git archive`. */
-            auto narHashNew = fetchToStore2(settings, store, {accessor}, FetchMode::DryRun, input.getName()).second;
-            if (expectedNarHash && accessor->pathExists(CanonPath(".gitattributes"))) {
+            if (expectedNarHash) {
+                auto narHashNew = fetchToStore2(settings, store, {accessor}, FetchMode::DryRun, input.getName()).second;
                 if (expectedNarHash != narHashNew) {
                     auto accessorLegacy = getLegacyGitAccessor(store, repoInfo, repoDir, rev, options);
                     auto narHashLegacy =

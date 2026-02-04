@@ -313,28 +313,29 @@ nix eval --impure --expr "let attrs = builtins.fetchGit $empty; in assert attrs.
 # Test backward compatibility hack for Nix < 2.20 locks / fetchTree calls that expect Git filters to be applied.
 eol="$TEST_ROOT/git-eol"
 createGitRepo "$eol"
-printf "Hello\nWorld\n" > "$eol/crlf"
-printf "ignore me" > "$eol/ignored"
-git -C "$eol" add crlf ignored
+mkdir -p "$eol/dir"
+printf "Hello\nWorld\n" > "$eol/dir/crlf"
+printf "ignore me" > "$eol/dir/ignored"
+git -C "$eol" add dir/crlf dir/ignored
 git -C "$eol" commit -a -m Initial
-echo "Version: \$Format:%s\$" > "$eol/version"
-printf "crlf text eol=crlf\nignored export-ignore\nversion export-subst\n" > "$eol/.gitattributes"
-git -C "$eol" add .gitattributes version
+echo "Version: \$Format:%s\$" > "$eol/dir/version"
+printf "crlf text eol=crlf\nignored export-ignore\nversion export-subst\n" > "$eol/dir/.gitattributes"
+git -C "$eol" add dir/.gitattributes dir/version
 git -C "$eol" commit -a -m 'Apply gitattributes'
 
 rev="$(git -C "$eol" rev-parse HEAD)"
 
 export _NIX_TEST_BARF_ON_UNCACHEABLE=1
 
-oldHash="sha256-cOuYSqDjvOBmKCuH5nXEfHRIAUVJZlictW0raF+3ynk="
-newHash="sha256-WZ5VePvmUcbRbkWLlNtCywWrAcr7EvVeJP8xKdZR7pc="
+oldHash="sha256-fccLx4BSC7e/PzQM4JnixstJQnd4dzgm73BqKhV3KRs="
+newHash="sha256-Ns7sLZOvpacagAPNun1+jBovMpo+zM7PUJ9x+lW3cIU="
 
 expectStderr 0 nix eval --expr \
-    "let tree = builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"$oldHash\"; }; in assert builtins.readFile \"\${tree}/crlf\" == \"Hello\r\nWorld\r\n\"; assert !builtins.pathExists \"\${tree}/ignored\"; assert builtins.readFile \"\${tree}/version\" == \"Version: Apply gitattributes\n\"; true" \
+    "let tree = builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"$oldHash\"; }; in assert builtins.readFile \"\${tree}/dir/crlf\" == \"Hello\r\nWorld\r\n\"; assert !builtins.pathExists \"\${tree}/dir/ignored\"; assert builtins.readFile \"\${tree}/dir/version\" == \"Version: Apply gitattributes\n\"; true" \
     | grepQuiet "Please update the NAR hash to '$newHash'"
 
 nix eval --expr \
-    "let tree = builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"$newHash\"; }; in assert builtins.readFile \"\${tree}/crlf\" == \"Hello\nWorld\n\"; assert builtins.pathExists \"\${tree}/ignored\"; assert builtins.readFile \"\${tree}/version\" == \"Version: \$Format:%s\$\n\"; true"
+    "let tree = builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"$newHash\"; }; in assert builtins.readFile \"\${tree}/dir/crlf\" == \"Hello\nWorld\n\"; assert builtins.pathExists \"\${tree}/dir/ignored\"; assert builtins.readFile \"\${tree}/dir/version\" == \"Version: \$Format:%s\$\n\"; true"
 
 expectStderr 102 nix eval --expr \
     "builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-DLDvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA=\"; }" \
@@ -345,7 +346,7 @@ cat > "$TEST_ROOT"/flake/flake.nix << EOF
 {
   inputs.eol = { type = "git"; url = "file://$eol"; rev = "$rev"; flake = false; };
   outputs = { self, eol }: rec {
-    crlf = builtins.readFile "\${eol}/crlf";
+    crlf = builtins.readFile "\${eol}/dir/crlf";
     isLegacy = assert crlf == "Hello\r\nWorld\r\n"; true;
     isModern = assert crlf == "Hello\nWorld\n"; true;
   };
