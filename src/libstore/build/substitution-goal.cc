@@ -32,33 +32,37 @@ PathSubstitutionGoal::~PathSubstitutionGoal()
 Goal::Done
 PathSubstitutionGoal::doneSuccess(BuildResult::Success::Status status, std::shared_ptr<const Provenance> provenance)
 {
-    buildResult.inner = BuildResult::Success{
-        .status = status,
-        .provenance = provenance,
-    };
+    auto res = Goal::doneSuccess(
+        BuildResult::Success{
+            .status = status,
+            .provenance = provenance,
+        });
 
     logger->result(
         getCurActivity(),
         resBuildResult,
         nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
 
-    return amDone(ecSuccess);
+    return res;
 }
 
 Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failure::Status status, std::string errorMsg)
 {
     debug(errorMsg);
-    buildResult.inner = BuildResult::Failure{
-        .status = status,
-        .errorMsg = std::move(errorMsg),
-    };
+
+    auto res = Goal::doneFailure(
+        result,
+        BuildResult::Failure{
+            .status = status,
+            .errorMsg = std::move(errorMsg),
+        });
 
     logger->result(
         getCurActivity(),
         resBuildResult,
         nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
 
-    return amDone(result);
+    return res;
 }
 
 Goal::Co PathSubstitutionGoal::init()

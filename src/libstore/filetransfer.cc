@@ -125,7 +125,16 @@ struct curlFileTransfer : public FileTransfer
         {
             result.urls.push_back(request.uri.to_string());
 
-            requestHeaders = curl_slist_append(requestHeaders, "Accept-Encoding: zstd, br, gzip, deflate, bzip2, xz");
+            /* Don't set Accept-Encoding for S3 requests that use AWS SigV4 signing.
+               curl's SigV4 implementation signs all headers including Accept-Encoding,
+               but some S3-compatible services (like GCS) modify this header in transit,
+               causing signature verification to fail.
+               See https://github.com/NixOS/nix/issues/15019 */
+#if NIX_WITH_AWS_AUTH
+            if (!request.awsSigV4Provider)
+#endif
+                requestHeaders =
+                    curl_slist_append(requestHeaders, "Accept-Encoding: zstd, br, gzip, deflate, bzip2, xz");
             if (!request.expectedETag.empty())
                 requestHeaders = curl_slist_append(requestHeaders, ("If-None-Match: " + request.expectedETag).c_str());
             if (!request.mimeType.empty())
@@ -464,6 +473,11 @@ struct curlFileTransfer : public FileTransfer
                 curl_easy_setopt(req, CURLOPT_CUSTOMREQUEST, "DELETE");
 
             if (request.data) {
+                // Restart the source to ensure it's at the beginning.
+                // This is necessary for retries, where the source was
+                // already consumed by a previous attempt.
+                request.data->source->restart();
+
                 if (request.method == HttpMethod::Post) {
                     curl_easy_setopt(req, CURLOPT_POST, 1L);
                     curl_easy_setopt(req, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t) request.data->sizeHint);
@@ -731,7 +745,10 @@ struct curlFileTransfer : public FileTransfer
 
     std::thread workerThread;
 
-    const size_t maxQueueSize = fileTransferSettings.httpConnections.get() * 5;
+    const size_t maxQueueSize =
+        (fileTransferSettings.httpConnections.get() ? fileTransferSettings.httpConnections.get()
+                                                    : std::max(1U, std::thread::hardware_concurrency()))
+        * 5;
 
     curlFileTransfer()
         : mt19937(rd())
@@ -780,6 +797,9 @@ struct curlFileTransfer : public FileTransfer
 
     void workerThreadMain()
     {
+        /* NOTE(cole-h): the maxQueueSize needs to be >0 or else things will hang */
+        assert(maxQueueSize > 0);
+
 /* Cause this thread to be notified on SIGINT. */
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
         auto callback = createInterruptCallback([&]() { stopWorkerThread(); });
