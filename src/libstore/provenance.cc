@@ -25,8 +25,8 @@ nlohmann::json CopiedProvenance::to_json() const
 Provenance::Register registerCopiedProvenance("copied", [](nlohmann::json json) {
     auto & obj = getObject(json);
     std::shared_ptr<const Provenance> next;
-    if (auto prov = optionalValueAt(obj, "next"))
-        next = Provenance::from_json(*prov);
+    if (auto p = optionalValueAt(obj, "next"); p && !p->is_null())
+        next = Provenance::from_json(*p);
     return make_ref<CopiedProvenance>(getString(valueAt(obj, "from")), next);
 });
 
