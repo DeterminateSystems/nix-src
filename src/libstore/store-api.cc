@@ -882,7 +882,7 @@ addCopiedProvenance(std::shared_ptr<const Provenance> provenance, Store & srcSto
 {
     if (!srcStore.includeInProvenance())
         return provenance;
-    return std::make_shared<const CopiedProvenance>(srcStore.config.getHumanReadableURI(), provenance);
+    return std::make_shared<const CopiedProvenance>(srcStore.config.getReference().render(false), provenance);
 }
 
 std::shared_ptr<const ValidPathInfo> copyStorePath(
