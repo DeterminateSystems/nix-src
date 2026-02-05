@@ -5,7 +5,7 @@ namespace nix {
 
 nlohmann::json BuildProvenance::to_json() const
 {
-    return nlohmann::json{
+    return {
         {"type", "build"},
         {"drv", drvPath.to_string()},
         {"output", output},
@@ -15,13 +15,11 @@ nlohmann::json BuildProvenance::to_json() const
 
 nlohmann::json CopiedProvenance::to_json() const
 {
-    nlohmann::json j{
+    return {
         {"type", "copied"},
         {"from", from},
+        {"next", next ? next->to_json() : nlohmann::json(nullptr)},
     };
-    if (next)
-        j["next"] = next->to_json();
-    return j;
 }
 
 Provenance::Register registerCopiedProvenance("copied", [](nlohmann::json json) {

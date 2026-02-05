@@ -56,13 +56,11 @@ std::string Provenance::to_json_str() const
 
 nlohmann::json SubpathProvenance::to_json() const
 {
-    nlohmann::json j{
+    return {
         {"type", "subpath"},
         {"subpath", subpath.abs()},
+        {"next", next ? next->to_json() : nlohmann::json(nullptr)},
     };
-    if (next)
-        j["next"] = next->to_json();
-    return j;
 }
 
 } // namespace nix
