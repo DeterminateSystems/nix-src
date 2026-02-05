@@ -57,7 +57,9 @@ struct Executor
 
     void worker();
 
-    std::vector<std::future<void>> spawn(std::vector<std::pair<work_t, uint8_t>> && items);
+    using WorkItems = std::vector<std::pair<Executor::work_t, uint8_t>>;
+
+    std::vector<std::future<void>> spawn(WorkItems && items);
 
     static thread_local bool amWorkerThread;
 };
@@ -77,7 +79,7 @@ struct FutureVector
 
     // FIXME: add a destructor that cancels/waits for all futures.
 
-    void spawn(std::vector<std::pair<Executor::work_t, uint8_t>> && work);
+    void spawn(Executor::WorkItems && work);
 
     void spawn(uint8_t prioPrefix, Executor::work_t && work)
     {
