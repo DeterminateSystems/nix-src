@@ -801,10 +801,10 @@ struct curlFileTransfer : public FileTransfer
         assert(maxQueueSize > 0);
 
 /* Cause this thread to be notified on SIGINT. */
-#ifndef _WIN32 // TODO need graceful async exit support on Windows?
-               // FIXME(RossComputerGuy): this causes issues on static builds.
-               // In particular, it causes a segfault to happen at the end of the program running.
-               // auto callback = createInterruptCallback([&]() { stopWorkerThread(); });
+#if !defined(_WIN32) && !defined(IS_STATIC) // TODO need graceful async exit support on Windows?
+        // FIXME(RossComputerGuy): this causes issues on static builds.
+        // In particular, it causes a segfault to happen at the end of the program running.
+        auto callback = createInterruptCallback([&]() { stopWorkerThread(); });
 #endif
 
 #ifdef __linux__

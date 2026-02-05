@@ -24,6 +24,7 @@ configdata_priv = configuration_data()
 
 # TODO rename, because it will conflict with downstream projects
 configdata_priv.set_quoted('PACKAGE_VERSION', meson.project_version())
+configdata_priv.set('IS_STATIC', get_option('default_library') == 'static')
 
 configdata_priv.set_quoted(
   'DETERMINATE_NIX_VERSION',
