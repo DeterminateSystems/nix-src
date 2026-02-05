@@ -16,9 +16,41 @@ in
 scope: {
   inherit stdenv;
 
+  libblake3 =
+    (pkgs.libblake3.override {
+      inherit stdenv;
+      # Nixpkgs disables tbb on static
+      useTBB = !stdenv.hostPlatform.isStatic;
+    })
+    # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
+    # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
+    # Issue: https://github.com/NixOS/nixpkgs/issues/177129
+    .overrideAttrs
+      (
+        attrs:
+        lib.optionalAttrs
+          (
+            stdenv.cc.isClang
+            && stdenv.hostPlatform.isStatic
+            && stdenv.cc.libcxx != null
+            && stdenv.cc.libcxx.isLLVM
+          )
+          {
+            NIX_CFLAGS_COMPILE = [
+              "-rtlib=compiler-rt"
+              "-unwindlib=libunwind"
+            ];
+
+            buildInputs = [
+              pkgs.llvmPackages.libunwind
+            ];
+          }
+      );
+
   boehmgc =
     (pkgs.boehmgc.override {
       enableLargeConfig = true;
+      inherit stdenv;
     }).overrideAttrs
       (attrs: {
         # Increase the initial mark stack size to avoid stack
@@ -27,7 +59,33 @@ scope: {
         # small, run Nix with GC_PRINT_STATS=1 and look for messages
         # such as `Mark stack overflow`, `No room to copy back mark
         # stack`, and `Grew mark stack to ... frames`.
-        NIX_CFLAGS_COMPILE = "-DINITIAL_MARK_STACK_SIZE=1048576";
+        NIX_CFLAGS_COMPILE = [
+          "-DINITIAL_MARK_STACK_SIZE=1048576"
+        ]
+        # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
+        # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
+        # Issue: https://github.com/NixOS/nixpkgs/issues/177129
+        ++
+          lib.optionals
+            (
+              stdenv.cc.isClang
+              && stdenv.hostPlatform.isStatic
+              && stdenv.cc.libcxx != null
+              && stdenv.cc.libcxx.isLLVM
+            )
+            [
+              "-rtlib=compiler-rt"
+              "-unwindlib=libunwind"
+            ];
+
+        buildInputs =
+          (attrs.buildInputs or [ ])
+          ++ lib.optional (
+            stdenv.cc.isClang
+            && stdenv.hostPlatform.isStatic
+            && stdenv.cc.libcxx != null
+            && stdenv.cc.libcxx.isLLVM
+          ) pkgs.llvmPackages.libunwind;
       });
 
   lowdown =
@@ -74,6 +132,7 @@ scope: {
         "--with-thread"
       ];
       enableIcu = false;
+      inherit stdenv;
     }).overrideAttrs
       (old: {
         # Need to remove `--with-*` to use `--with-libraries=...`

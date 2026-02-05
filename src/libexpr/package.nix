@@ -87,6 +87,17 @@ mkMesonLibrary (finalAttrs: {
     (lib.mesonEnable "wasm" enableWasm)
   ];
 
+  # Fixes a problem with the "nix-expr-libcxxStdenv-static" package output.
+  # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
+  # Force this to be built with compiler-rt over libgcc_eh works.
+  # Issue: https://github.com/NixOS/nixpkgs/issues/177129
+  NIX_CFLAGS_COMPILE = lib.optional (
+    stdenv.cc.isClang
+    && stdenv.hostPlatform.isStatic
+    && stdenv.cc.libcxx != null
+    && stdenv.cc.libcxx.isLLVM
+  ) "-rtlib=compiler-rt";
+
   meta = {
     platforms = lib.platforms.unix ++ lib.platforms.windows;
   };

@@ -241,14 +241,7 @@
                 otherSplices = renameSplicesTo "self" nixDependenciesSplices;
                 f = import ./packaging/dependencies.nix {
                   inherit inputs pkgs;
-                  stdenv =
-                    let
-                      stdenv = getStdenv pkgs;
-                    in
-                    if stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isStatic then
-                      pkgs.llvmPackages.libcxxStdenv
-                    else
-                      stdenv;
+                  stdenv = getStdenv pkgs;
                 };
               };
 
@@ -488,6 +481,10 @@
                   # These attributes go right into `packages.<system>`.
                   "${pkgName}-${stdenvName}" =
                     nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.nixComponents2.${pkgName};
+                }
+                // lib.optionalAttrs supportsCross {
+                  "${pkgName}-${stdenvName}-static" =
+                    nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.pkgsStatic.nixComponents2.${pkgName};
                 }
               )
             )
