@@ -1848,7 +1848,7 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
 
     /* Write the resulting term into the Nix store directory. */
     auto drvPath =
-        writeDerivation(*state.store, *state.asyncPathWriter, drv, state.repair, false, state.getRootProvenance());
+        writeDerivation(*state.store, *state.asyncPathWriter, drv, state.repair, false, state.evalContext.provenance);
     auto drvPathS = state.store->printStorePath(drvPath);
 
     printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
@@ -2735,7 +2735,7 @@ static void prim_toFile(EvalState & state, const PosIdx pos, Value ** args, Valu
                                                      HashAlgorithm::SHA256,
                                                      refs,
                                                      state.repair,
-                                                     state.getRootProvenance());
+                                                     state.evalContext.provenance);
                                              });
 
     /* Note: we don't need to add `context' to the context of the

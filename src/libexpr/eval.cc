@@ -257,6 +257,8 @@ EvalMemory::EvalMemory()
     assertGCInitialized();
 }
 
+thread_local EvalState::EvalContext EvalState::evalContext;
+
 EvalState::EvalState(
     const LookupPath & lookupPathFromArguments,
     ref<Store> store,
@@ -3367,16 +3369,6 @@ void EvalState::waitForPath(const SingleDerivedPath & path)
 void EvalState::waitForAllPaths()
 {
     asyncPathWriter->waitForAllPaths();
-}
-
-std::shared_ptr<const Provenance> EvalState::getRootProvenance()
-{
-    return rootProvenance;
-}
-
-void EvalState::setRootProvenance(std::shared_ptr<const Provenance> provenance)
-{
-    rootProvenance = provenance;
 }
 
 } // namespace nix

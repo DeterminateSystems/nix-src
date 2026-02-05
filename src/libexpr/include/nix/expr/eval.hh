@@ -1128,16 +1128,20 @@ private:
     friend struct Value;
     friend class ListBuilder;
 
-    std::shared_ptr<const Provenance> rootProvenance;
-
 public:
 
     /**
-     * Set the provenance of derivations instantiated by the evaluator.
+     * Per-thread evaluation context. This context is propagated to worker threads when a value is evaluated
+     * asynchronously.
      */
-    void setRootProvenance(std::shared_ptr<const Provenance> provenance);
+    struct EvalContext
+    {
+        std::shared_ptr<const Provenance> provenance;
 
-    std::shared_ptr<const Provenance> getRootProvenance();
+        // FIXME: move callDepth here.
+    };
+
+    thread_local static EvalContext evalContext;
 
     /**
      * Worker threads manager.
@@ -1183,6 +1187,24 @@ SourcePath resolveExprPath(SourcePath path, bool addDefaultNix = true);
  * Whether a URI is allowed, assuming restrictEval is enabled
  */
 bool isAllowedURI(std::string_view uri, const Strings & allowedPaths);
+
+struct PushProvenance
+{
+    EvalState & state;
+    std::shared_ptr<const Provenance> prev;
+
+    PushProvenance(EvalState & state, std::shared_ptr<const Provenance> prov)
+        : state(state)
+    {
+        state.evalContext.provenance.swap(prev);
+        state.evalContext.provenance.swap(prov);
+    }
+
+    ~PushProvenance()
+    {
+        state.evalContext.provenance.swap(prev);
+    }
+};
 
 } // namespace nix
 

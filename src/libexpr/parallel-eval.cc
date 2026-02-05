@@ -276,7 +276,12 @@ static void prim_parallel(EvalState & state, const PosIdx pos, Value ** args, Va
         std::vector<std::pair<Executor::work_t, uint8_t>> work;
         for (auto value : args[0]->listView())
             if (!value->isFinished())
-                work.emplace_back([value(allocRootValue(value)), &state, pos]() { state.forceValue(**value, pos); }, 0);
+                work.emplace_back(
+                    [value(allocRootValue(value)), &state, pos, evalContext(state.evalContext)]() {
+                        state.evalContext = evalContext;
+                        state.forceValue(**value, pos);
+                    },
+                    0);
         state.executor->spawn(std::move(work));
     }
 

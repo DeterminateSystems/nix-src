@@ -110,7 +110,10 @@ struct CmdSearch : InstallableValueCommand, MixJSON
                         auto attrPath2(attrPath);
                         attrPath2.push_back(attr);
                         work.emplace_back(
-                            [cursor2, attrPath2, visit]() { visit(*cursor2, attrPath2, false); },
+                            [cursor2, attrPath2, visit, state, evalContext(state->evalContext)]() {
+                                state->evalContext = evalContext;
+                                visit(*cursor2, attrPath2, false);
+                            },
                             std::string_view(state->symbols[attr]).find("Packages") != std::string_view::npos ? 0 : 2);
                     }
                     futures.spawn(std::move(work));
@@ -197,7 +200,12 @@ struct CmdSearch : InstallableValueCommand, MixJSON
 
         std::vector<std::pair<Executor::work_t, uint8_t>> work;
         for (auto & cursor : installable->getCursors(*state)) {
-            work.emplace_back([cursor, visit]() { visit(*cursor, cursor->getAttrPath(), true); }, 1);
+            work.emplace_back(
+                [cursor, visit, state, evalContext(state->evalContext)]() {
+                    state->evalContext = evalContext;
+                    visit(*cursor, cursor->getAttrPath(), true);
+                },
+                1);
         }
 
         futures.spawn(std::move(work));
