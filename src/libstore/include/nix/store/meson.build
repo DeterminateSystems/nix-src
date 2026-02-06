@@ -69,6 +69,7 @@ headers = [ config_pub_h ] + files(
   'pathlocks.hh',
   'posix-fs-canonicalise.hh',
   'profiles.hh',
+  'provenance.hh',
   'realisation.hh',
   'references.hh',
   'remote-fs-accessor.hh',

@@ -59,6 +59,7 @@ headers = files(
   'position.hh',
   'posix-source-accessor.hh',
   'processes.hh',
+  'provenance.hh',
   'ref.hh',
   'regex-combinators.hh',
   'repair-flag.hh',

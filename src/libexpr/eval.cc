@@ -257,6 +257,8 @@ EvalMemory::EvalMemory()
     assertGCInitialized();
 }
 
+thread_local EvalState::EvalContext EvalState::evalContext;
+
 EvalState::EvalState(
     const LookupPath & lookupPathFromArguments,
     ref<Store> store,

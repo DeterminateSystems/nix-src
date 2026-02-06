@@ -347,6 +347,7 @@ sources = files(
   'pathlocks.cc',
   'posix-fs-canonicalise.cc',
   'profiles.cc',
+  'provenance.cc',
   'realisation.cc',
   'references.cc',
   'remote-fs-accessor.cc',

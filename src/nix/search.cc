@@ -104,14 +104,15 @@ struct CmdSearch : InstallableValueCommand, MixJSON
             */
             try {
                 auto recurse = [&]() {
-                    std::vector<std::pair<Executor::work_t, uint8_t>> work;
+                    Executor::WorkItems work;
                     for (const auto & attr : cursor.getAttrs()) {
                         auto cursor2 = cursor.getAttr(state->symbols[attr]);
                         auto attrPath2(attrPath);
                         attrPath2.push_back(attr);
-                        work.emplace_back(
-                            [cursor2, attrPath2, visit]() { visit(*cursor2, attrPath2, false); },
-                            std::string_view(state->symbols[attr]).find("Packages") != std::string_view::npos ? 0 : 2);
+                        state->addWork(
+                            work,
+                            std::string_view(state->symbols[attr]).find("Packages") != std::string_view::npos ? 0 : 2,
+                            [cursor2, attrPath2, visit]() { visit(*cursor2, attrPath2, false); });
                     }
                     futures.spawn(std::move(work));
                 };
@@ -195,10 +196,9 @@ struct CmdSearch : InstallableValueCommand, MixJSON
             }
         };
 
-        std::vector<std::pair<Executor::work_t, uint8_t>> work;
-        for (auto & cursor : installable->getCursors(*state)) {
-            work.emplace_back([cursor, visit]() { visit(*cursor, cursor->getAttrPath(), true); }, 1);
-        }
+        Executor::WorkItems work;
+        for (auto & cursor : installable->getCursors(*state))
+            state->addWork(work, 1, [cursor, visit]() { visit(*cursor, cursor->getAttrPath(), true); });
 
         futures.spawn(std::move(work));
         futures.finishAll();

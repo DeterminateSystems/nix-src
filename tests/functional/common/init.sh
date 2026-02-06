@@ -12,7 +12,7 @@ if isTestOnNixOS; then
   ! test -e "$test_nix_conf"
   cat > "$test_nix_conf" <<EOF
 # TODO: this is not needed for all tests and prevents stable commands from be tested in isolation
-experimental-features =
+experimental-features = ${experimental_features:-}
 flake-registry = $TEST_ROOT/registry.json
 show-trace = true
 EOF
@@ -47,7 +47,7 @@ cat > "$NIX_CONF_DIR"/nix.conf <<EOF
 build-users-group =
 keep-derivations = false
 sandbox = false
-experimental-features =
+experimental-features = ${experimental_features:-}
 gc-reserved-space = 0
 substituters =
 flake-registry = $TEST_ROOT/registry.json

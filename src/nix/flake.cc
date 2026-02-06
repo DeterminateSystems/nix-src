@@ -513,7 +513,7 @@ struct CmdFlakeCheck : FlakeCommand
                     throw Error("jobset should not be a derivation at top-level");
 
                 for (auto & attr : *v.attrs())
-                    futures.spawn(1, [&, attrPath]() {
+                    state->spawn(futures, 1, [&, attrPath]() {
                         state->forceAttrs(*attr.value, attr.pos, "");
                         auto attrPath2 = concatStrings(attrPath, ".", state->symbols[attr.name]);
                         if (state->isDerivation(*attr.value)) {
@@ -596,7 +596,7 @@ struct CmdFlakeCheck : FlakeCommand
             flake::callFlake(*state, flake, *vFlake);
 
             enumerateOutputs(*state, *vFlake, [&](std::string_view name, Value & vOutput, const PosIdx pos) {
-                futures.spawn(2, [&, name, pos]() {
+                state->spawn(futures, 2, [&, name, pos]() {
                     Activity act(*logger, lvlInfo, actUnknown, fmt("checking flake output '%s'", name));
 
                     try {
@@ -618,7 +618,7 @@ struct CmdFlakeCheck : FlakeCommand
                         if (name == "checks") {
                             state->forceAttrs(vOutput, pos, "");
                             for (auto & attr : *vOutput.attrs())
-                                futures.spawn(3, [&, name]() {
+                                state->spawn(futures, 3, [&, name]() {
                                     const auto & attr_name = state->symbols[attr.name];
                                     checkSystemName(attr_name, attr.pos);
                                     if (checkSystemType(attr_name, attr.pos)) {
@@ -656,7 +656,7 @@ struct CmdFlakeCheck : FlakeCommand
                         else if (name == "packages" || name == "devShells") {
                             state->forceAttrs(vOutput, pos, "");
                             for (auto & attr : *vOutput.attrs())
-                                futures.spawn(3, [&, name]() {
+                                state->spawn(futures, 3, [&, name]() {
                                     const auto & attr_name = state->symbols[attr.name];
                                     checkSystemName(attr_name, attr.pos);
                                     if (checkSystemType(attr_name, attr.pos)) {
@@ -801,7 +801,7 @@ struct CmdFlakeCheck : FlakeCommand
             });
         };
 
-        futures.spawn(1, checkFlake);
+        state->spawn(futures, 1, checkFlake);
         futures.finishAll();
 
         auto drvPaths(drvPaths_.lock());
@@ -1227,7 +1227,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON
                         const auto & attrName = state->symbols[attr];
                         auto visitor2 = visitor.getAttr(attrName);
                         auto & j2 = *j.emplace(attrName, nlohmann::json::object()).first;
-                        futures.spawn(1, [&, visitor2]() { visit(*visitor2, j2); });
+                        state->spawn(futures, 1, [&, visitor2]() { visit(*visitor2, j2); });
                     }
                 };
 
@@ -1371,7 +1371,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON
             }
         };
 
-        futures.spawn(1, [&]() { visit(*cache->getRoot(), j); });
+        state->spawn(futures, 1, [&]() { visit(*cache->getRoot(), j); });
         futures.finishAll();
 
         if (json)
@@ -1476,9 +1476,7 @@ struct CmdFlakePrefetch : FlakeCommand, MixJSON
     {
         auto originalRef = getFlakeRef();
         auto resolvedRef = originalRef.resolve(fetchSettings, *store);
-        auto [accessor, lockedRef] = resolvedRef.lazyFetch(getEvalState()->fetchSettings, *store);
-        auto storePath =
-            fetchToStore(getEvalState()->fetchSettings, *store, accessor, FetchMode::Copy, lockedRef.input.getName());
+        auto [storePath, accessor, lockedRef] = resolvedRef.input.fetchToStore(fetchSettings, *store);
         auto hash = store->queryPathInfo(storePath)->narHash;
 
         if (json) {
@@ -1487,7 +1485,6 @@ struct CmdFlakePrefetch : FlakeCommand, MixJSON
             res["hash"] = hash.to_string(HashFormat::SRI, true);
             res["original"] = fetchers::attrsToJSON(resolvedRef.toAttrs());
             res["locked"] = fetchers::attrsToJSON(lockedRef.toAttrs());
-            res["locked"].erase("__final"); // internal for now
             printJSON(res);
         } else {
             notice(
