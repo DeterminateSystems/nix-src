@@ -135,6 +135,7 @@ static void prim_flakeRefToString(EvalState & state, const PosIdx pos, Value ** 
     fetchers::Attrs attrs;
     NixStringContext context;
     for (const auto & attr : *args[0]->attrs()) {
+        state.forceValue(*attr.value, attr.pos);
         auto t = attr.value->type();
         if (t == nInt) {
             auto intValue = attr.value->integer().value;
