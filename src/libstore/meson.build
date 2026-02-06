@@ -24,6 +24,7 @@ configdata_priv = configuration_data()
 
 # TODO rename, because it will conflict with downstream projects
 configdata_priv.set_quoted('PACKAGE_VERSION', meson.project_version())
+configdata_priv.set('IS_STATIC', get_option('default_library') == 'static')
 
 configdata_priv.set_quoted(
   'DETERMINATE_NIX_VERSION',
@@ -266,6 +267,19 @@ configdata_priv.set_quoted(
 : 'lsof',
 )
 
+link_args = []
+
+wasmtime_required = get_option('wasm').disable_if(
+  get_option('default_library') == 'static',
+  error_message : 'Building with wasmtime and static linking is not supported',
+)
+
+if wasmtime_required.enabled()
+  link_args += '-lwasmtime'
+endif
+
+configdata_priv.set('NIX_USE_WASMTIME', wasmtime_required.enabled().to_int())
+
 config_priv_h = configure_file(
   configuration : configdata_priv,
   output : 'store-config-private.hh',
@@ -382,8 +396,8 @@ this_library = library(
   soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
-  link_args : linker_export_flags + [ '-lwasmtime' ],
-  prelink : true, # For C++ static initializers
+  link_args : linker_export_flags + link_args,
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )

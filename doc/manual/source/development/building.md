@@ -143,6 +143,7 @@ For historic reasons and backward-compatibility, some CPU and OS identifiers are
 |-----------------------------|-------------------------|---------------------|
 | `x86`                       |                         | `i686`              |
 | `arm`                       |                         | `host_machine.cpu()`|
+| `arm64`                     |                         | `host_machine.cpu()`|
 | `ppc`                       | `little`                | `powerpcle`         |
 | `ppc64`                     | `little`                | `powerpc64le`       |
 | `ppc`                       | `big`                   | `powerpc`           |
