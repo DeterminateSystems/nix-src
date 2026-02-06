@@ -219,6 +219,8 @@ FlakeRef InstallableFlake::nixpkgsFlakeRef() const
 
 std::shared_ptr<const Provenance> InstallableFlake::makeProvenance(std::string_view attrPath) const
 {
+    if (!evalSettings.pureEval)
+        return nullptr;
     auto provenance = getLockedFlake()->flake.provenance;
     if (!provenance)
         return nullptr;

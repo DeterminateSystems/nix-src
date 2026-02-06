@@ -119,3 +119,15 @@ nix copy --from "file://$binaryCache" "$outPath" --no-check-sigs
 }
 EOF
 ) ]]
+
+# Check that --impure does not add provenance.
+clearStore
+nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.default"
+[[ $(nix path-info --json --json-format 1 "$drvPath" | jq ".\"$drvPath\".provenance") = null ]]
+
+clearStore
+echo foo > "$flake1Dir/somefile"
+git -C "$flake1Dir" add somefile
+nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.default"
+builder=$(nix eval --raw "$flake1Dir#packages.$system.default._builder")
+[[ $(nix path-info --json --json-format 1 "$builder" | jq ".\"$builder\".provenance") = null ]]
