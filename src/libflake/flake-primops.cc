@@ -35,8 +35,16 @@ namespace nix::flake::primops {
 PrimOp getFlake(const Settings & settings)
 {
     auto prim_getFlake = [&settings](EvalState & state, const PosIdx pos, Value ** args, Value & v) {
+        NixStringContext context;
         std::string flakeRefS(
-            state.forceStringNoCtx(*args[0], pos, "while evaluating the argument passed to builtins.getFlake"));
+            state.forceString(*args[0], context, pos, "while evaluating the argument passed to builtins.getFlake"));
+        auto rewrites = state.realiseContext(context);
+        flakeRefS = state.devirtualize(rewriteStrings(flakeRefS, rewrites), context);
+        if (hasContext(context))
+            // FIXME: this should really be an error.
+            warn(
+                "In 'builtins.getFlake', the flakeref '%s' has string context, but that's not allowed. This may become a fatal error in the future.",
+                flakeRefS);
         auto flakeRef = nix::parseFlakeRef(state.fetchSettings, flakeRefS, {}, true);
         if (state.settings.pureEval && !flakeRef.input.isLocked(state.fetchSettings))
             throw Error(
@@ -125,6 +133,7 @@ static void prim_flakeRefToString(EvalState & state, const PosIdx pos, Value ** 
 {
     state.forceAttrs(*args[0], noPos, "while evaluating the argument passed to builtins.flakeRefToString");
     fetchers::Attrs attrs;
+    NixStringContext context;
     for (const auto & attr : *args[0]->attrs()) {
         auto t = attr.value->type();
         if (t == nInt) {
@@ -142,7 +151,9 @@ static void prim_flakeRefToString(EvalState & state, const PosIdx pos, Value ** 
         } else if (t == nBool) {
             attrs.emplace(state.symbols[attr.name], Explicit<bool>{attr.value->boolean()});
         } else if (t == nString) {
-            attrs.emplace(state.symbols[attr.name], std::string(attr.value->string_view()));
+            auto s = state.forceString(
+                *attr.value, context, attr.pos, "while evaluating an attribute in 'builtins.flakeRefToString'");
+            attrs.emplace(state.symbols[attr.name], std::string(s));
         } else {
             state
                 .error<EvalError>(
@@ -154,7 +165,7 @@ static void prim_flakeRefToString(EvalState & state, const PosIdx pos, Value ** 
         }
     }
     auto flakeRef = FlakeRef::fromAttrs(state.fetchSettings, attrs);
-    v.mkString(flakeRef.to_string(), state.mem);
+    v.mkString(flakeRef.to_string(), context, state.mem);
 }
 
 nix::PrimOp flakeRefToString({
