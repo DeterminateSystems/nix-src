@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+source ./common.sh
+
+createFlake1
+
+mkdir -p "$flake1Dir/subflake"
+cat > "$flake1Dir/subflake/flake.nix" <<EOF
+{
+  outputs = { self }:
+    let
+      parentFlake = builtins.getFlake (builtins.flakeRefToString { type = "path"; path = self.sourceInfo.outPath; narHash = self.narHash; });
+    in {
+      x = parentFlake.number;
+    };
+}
+EOF
+git -C "$flake1Dir" add subflake/flake.nix
+
+expectStderr 0 nix eval "$flake1Dir/subflake#x" | grepQuiet "This may become a fatal error in the future"
+[[ $(nix eval "$flake1Dir/subflake#x") = 123 ]]
