@@ -470,6 +470,9 @@
                     "${pkgName}-${crossSystem}" = nixpkgsFor.${system}.cross.${crossSystem}.nixComponents2.${pkgName};
                   }
                 )
+                // {
+                  "${pkgName}-static" = nixpkgsFor.${system}.native.pkgsStatic.nixComponents2.${pkgName};
+                }
               )
               // flatMapAttrs (lib.genAttrs stdenvs (_: { })) (
                 stdenvName:
@@ -478,6 +481,10 @@
                   # These attributes go right into `packages.<system>`.
                   "${pkgName}-${stdenvName}" =
                     nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.nixComponents2.${pkgName};
+                }
+                // lib.optionalAttrs supportsCross {
+                  "${pkgName}-${stdenvName}-static" =
+                    nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.pkgsStatic.nixComponents2.${pkgName};
                 }
               )
             )
