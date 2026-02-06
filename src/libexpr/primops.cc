@@ -2360,6 +2360,23 @@ static RegisterPrimOp primop_hashFile({
     .fun = prim_hashFile,
 });
 
+static RegisterPrimOp primop_narHash({
+    .name = "__narHash",
+    .args = {"p"},
+    .doc = R"(
+      Return an SRI representation of the SHA-256 hash of the NAR serialisation of the path *p*.
+    )",
+    .fun =
+        [](EvalState & state, const PosIdx pos, Value ** args, Value & v) {
+            auto path = state.realisePath(pos, *args[0]);
+            auto hash =
+                fetchToStore2(state.fetchSettings, *state.store, path.resolveSymlinks(), FetchMode::DryRun).second;
+            v.mkString(hash.to_string(HashFormat::SRI, true), state.mem);
+        },
+    // FIXME: may be useful to expose to the user.
+    .internal = true,
+});
+
 static const Value & fileTypeToString(EvalState & state, SourceAccessor::Type type)
 {
     struct Constants

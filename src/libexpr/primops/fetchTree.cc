@@ -30,12 +30,16 @@ void emitTreeAttrs(
 {
     auto attrs = state.buildBindings(100);
 
-    state.mkStorePathString(storePath, attrs.alloc(state.s.outPath));
+    auto & vStorePath = attrs.alloc(state.s.outPath);
+    state.mkStorePathString(storePath, vStorePath);
 
     // FIXME: support arbitrary input attributes.
 
     if (auto narHash = input.getNarHash())
         attrs.alloc("narHash").mkString(narHash->to_string(HashFormat::SRI, true), state.mem);
+    else
+        // Lazily compute the NAR hash for backward compatibility.
+        attrs.alloc("narHash").mkApp(*get(state.internalPrimOps, "narHash"), &vStorePath);
 
     if (input.getType() == "git")
         attrs.alloc("submodules").mkBool(fetchers::maybeGetBoolAttr(input.attrs, "submodules").value_or(false));
