@@ -10,6 +10,8 @@ config_pub_h = configure_file(
 )
 
 headers = [ config_pub_h ] + files(
+  'active-builds.hh',
+  'async-path-writer.hh',
   'aws-creds.hh',
   'binary-cache-store.hh',
   'build-result.hh',
@@ -67,6 +69,7 @@ headers = [ config_pub_h ] + files(
   'pathlocks.hh',
   'posix-fs-canonicalise.hh',
   'profiles.hh',
+  'provenance.hh',
   'realisation.hh',
   'references.hh',
   'remote-fs-accessor.hh',

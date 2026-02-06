@@ -2,13 +2,14 @@
 ///@file
 
 #include <memory_resource>
+
 #include "nix/expr/value.hh"
-#include "nix/expr/static-string-data.hh"
-#include "nix/util/chunked-vector.hh"
 #include "nix/util/error.hh"
+#include "nix/util/sync.hh"
+#include "nix/util/alignment.hh"
 
 #include <boost/version.hpp>
-#include <boost/unordered/unordered_flat_set.hpp>
+#include <boost/unordered/concurrent_flat_set.hpp>
 
 namespace nix {
 
@@ -17,15 +18,25 @@ class SymbolValue : protected Value
     friend class SymbolStr;
     friend class SymbolTable;
 
-    uint32_t idx;
-
-    SymbolValue() = default;
-
-public:
     operator std::string_view() const noexcept
     {
         return string_view();
     }
+};
+
+struct ContiguousArena
+{
+    const char * data;
+    const size_t maxSize;
+
+    // Put this in a separate cache line to ensure that a thread
+    // adding a symbol doesn't slow down threads dereferencing symbols
+    // by invalidating the read-only `data` field.
+    alignas(64) std::atomic<size_t> size{0};
+
+    ContiguousArena(size_t maxSize);
+
+    size_t allocate(size_t bytes);
 };
 
 class StaticSymbolTable;
@@ -42,6 +53,7 @@ class Symbol
     friend class StaticSymbolTable;
 
 private:
+    /// The offset of the symbol in `SymbolTable::arena`.
     uint32_t id;
 
     explicit constexpr Symbol(uint32_t id) noexcept
@@ -73,6 +85,8 @@ public:
     constexpr auto operator<=>(const Symbol & other) const noexcept = default;
 
     friend class std::hash<Symbol>;
+
+    constexpr static size_t alignment = alignof(SymbolValue);
 };
 
 /**
@@ -84,25 +98,20 @@ class SymbolStr
 {
     friend class SymbolTable;
 
-    constexpr static size_t chunkSize{8192};
-    using SymbolValueStore = ChunkedVector<SymbolValue, chunkSize>;
-
     const SymbolValue * s;
 
     struct Key
     {
         using HashType = boost::hash<std::string_view>;
 
-        SymbolValueStore & store;
         std::string_view s;
         std::size_t hash;
-        std::pmr::memory_resource & resource;
+        ContiguousArena & arena;
 
-        Key(SymbolValueStore & store, std::string_view s, std::pmr::memory_resource & stringMemory)
-            : store(store)
-            , s(s)
+        Key(std::string_view s, ContiguousArena & arena)
+            : s(s)
             , hash(HashType{}(s))
-            , resource(stringMemory)
+            , arena(arena)
         {
         }
     };
@@ -113,22 +122,7 @@ public:
     {
     }
 
-    SymbolStr(const Key & key)
-    {
-        auto size = key.s.size();
-        if (size >= std::numeric_limits<uint32_t>::max()) {
-            throw Error("Size of symbol exceeds 4GiB and cannot be stored");
-        }
-        // for multi-threaded implementations: lock store and allocator here
-        const auto & [v, idx] = key.store.add(SymbolValue{});
-        if (size == 0) {
-            v.mkStringNoCopy(""_sds, nullptr);
-        } else {
-            v.mkStringNoCopy(StringData::make(key.resource, key.s));
-        }
-        v.idx = idx;
-        this->s = &v;
-    }
+    SymbolStr(const Key & key);
 
     bool operator==(std::string_view s2) const noexcept
     {
@@ -157,11 +151,7 @@ public:
     [[gnu::always_inline]]
     bool empty() const noexcept
     {
-        auto * p = &s->string_data();
-        // Save a dereference in the sentinel value case
-        if (p == &""_sds)
-            return true;
-        return p->size() == 0;
+        return !s->string_data().size();
     }
 
     [[gnu::always_inline]]
@@ -174,11 +164,6 @@ public:
     const Value * valuePtr() const noexcept
     {
         return s;
-    }
-
-    explicit operator Symbol() const noexcept
-    {
-        return Symbol{s->idx + 1};
     }
 
     struct Hash
@@ -218,6 +203,11 @@ public:
             return operator()(b, a);
         }
     };
+
+    constexpr static size_t computeSize(std::string_view s)
+    {
+        return alignUp(sizeof(Value) + sizeof(StringData) + s.size() + 1, Symbol::alignment);
+    }
 };
 
 class SymbolTable;
@@ -237,6 +227,7 @@ class StaticSymbolTable
 
     std::array<StaticSymbolInfo, maxSize> symbols;
     std::size_t size = 0;
+    std::size_t nextId = alignof(SymbolValue);
 
 public:
     constexpr StaticSymbolTable() = default;
@@ -245,8 +236,9 @@ public:
     {
         /* No need to check bounds because out of bounds access is
            a compilation error. */
-        auto sym = Symbol(size + 1); //< +1 because Symbol with id = 0 is reserved
+        auto sym = Symbol(nextId);
         symbols[size++] = {str, sym};
+        nextId += SymbolStr::computeSize(str);
         return sym;
     }
 
@@ -264,61 +256,67 @@ private:
      * SymbolTable is an append only data structure.
      * During its lifetime the monotonic buffer holds all strings and nodes, if the symbol set is node based.
      */
-    std::pmr::monotonic_buffer_resource buffer;
-    SymbolStr::SymbolValueStore store{16};
+    ContiguousArena arena;
 
     /**
-     * Transparent lookup of string view for a pointer to a ChunkedVector entry -> return offset into the store.
-     * ChunkedVector references are never invalidated.
+     * Transparent lookup of string view for a pointer to a
+     * SymbolValue in the arena.
      */
-    boost::unordered_flat_set<SymbolStr, SymbolStr::Hash, SymbolStr::Equal> symbols{SymbolStr::chunkSize};
+    boost::concurrent_flat_set<SymbolStr, SymbolStr::Hash, SymbolStr::Equal> symbols;
 
 public:
     SymbolTable(const StaticSymbolTable & staticSymtab)
+        : arena(1 << 30)
     {
+        // Reserve symbol ID 0 and ensure alignment of the first allocation.
+        arena.allocate(Symbol::alignment);
+
         staticSymtab.copyIntoSymbolTable(*this);
     }
 
     /**
      * Converts a string into a symbol.
      */
-    Symbol create(std::string_view s)
-    {
-        // Most symbols are looked up more than once, so we trade off insertion performance
-        // for lookup performance.
-        // FIXME: make this thread-safe.
-        return Symbol(*symbols.insert(SymbolStr::Key{store, s, buffer}).first);
-    }
+    Symbol create(std::string_view s);
 
     std::vector<SymbolStr> resolve(const std::span<const Symbol> & symbols) const
     {
         std::vector<SymbolStr> result;
         result.reserve(symbols.size());
-        for (auto sym : symbols)
+        for (auto & sym : symbols)
             result.push_back((*this)[sym]);
         return result;
     }
 
     SymbolStr operator[](Symbol s) const
     {
-        uint32_t idx = s.id - uint32_t(1);
-        if (idx >= store.size())
-            unreachable();
-        return store[idx];
+        assert(s.id);
+        // Note: we don't check arena.size here to avoid a dependency
+        // on other threads creating new symbols.
+        return SymbolStr(*reinterpret_cast<const SymbolValue *>(arena.data + s.id));
     }
 
-    [[gnu::always_inline]]
     size_t size() const noexcept
     {
-        return store.size();
+        return symbols.size();
     }
 
-    size_t totalSize() const;
+    size_t totalSize() const
+    {
+        return arena.size;
+    }
 
     template<typename T>
     void dump(T callback) const
     {
-        store.forEach(callback);
+        std::string_view left{arena.data, arena.size};
+        left = left.substr(Symbol::alignment);
+        while (!left.empty()) {
+            auto v = reinterpret_cast<const SymbolValue *>(left.data());
+            callback(v->string_view());
+            left = left.substr(
+                alignUp(sizeof(SymbolValue) + sizeof(StringData) + v->string_view().size() + 1, Symbol::alignment));
+        }
     }
 };
 

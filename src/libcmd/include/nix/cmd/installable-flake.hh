@@ -72,6 +72,8 @@ struct InstallableFlake : InstallableValue
     ref<flake::LockedFlake> getLockedFlake() const;
 
     FlakeRef nixpkgsFlakeRef() const;
+
+    std::shared_ptr<const Provenance> makeProvenance(std::string_view attrPath) const;
 };
 
 /**

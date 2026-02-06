@@ -225,12 +225,8 @@ public:
           The following system types are widely used, as Nix is actively supported on these platforms:
 
           - `x86_64-linux`
-          - `x86_64-darwin`
-          - `i686-linux`
           - `aarch64-linux`
           - `aarch64-darwin`
-          - `armv6l-linux`
-          - `armv7l-linux`
 
           In general, you do not have to modify this setting.
           While you can force Nix to run a Darwin-specific `builder` executable on a Linux machine, the result would obviously be wrong.
@@ -1125,11 +1121,11 @@ public:
               character.
 
               Example:
-              `/nix/store/zf5lbh336mnzf1nlswdn11g4n2m8zh3g-bash-4.4-p23-dev
-              /nix/store/rjxwxwv1fpn9wa2x5ssk5phzwlcv4mna-bash-4.4-p23-doc
-              /nix/store/6bqvbzjkcp9695dq0dpl5y43nvy37pq1-bash-4.4-p23-info
-              /nix/store/r7fng3kk3vlpdlh2idnrbn37vh4imlj2-bash-4.4-p23-man
-              /nix/store/xfghy8ixrhz3kyy6p724iv3cxji088dx-bash-4.4-p23`.
+              `/nix/store/l88brggg9hpy96ijds34dlq4n8fan63g-bash-4.4-p23-dev
+              /nix/store/vch71bhyi5akr5zs40k8h2wqxx69j80l-bash-4.4-p23-doc
+              /nix/store/c5cxjywi66iwn9dcx5yvwjkvl559ay6p-bash-4.4-p23-info
+              /nix/store/scz72lskj03ihkcn42ias5mlp4i4gr1k-bash-4.4-p23-man
+              /nix/store/a724znygmd1cac856j3gfsyvih3lw07j-bash-4.4-p23`.
         )"};
 
     Setting<unsigned int> downloadSpeed{
@@ -1357,11 +1353,12 @@ public:
 
     Setting<std::string> upgradeNixStorePathUrl{
         this,
-        "https://github.com/NixOS/nixpkgs/raw/master/nixos/modules/installer/tools/nix-fallback-paths.nix",
+        "",
         "upgrade-nix-store-path-url",
         R"(
-          Used by `nix upgrade-nix`, the URL of the file that contains the
-          store paths of the latest Nix release.
+          Deprecated. This option was used to configure how `nix upgrade-nix` operated.
+
+          Using this setting has no effect. It will be removed in a future release of Determinate Nix.
         )"};
 
     Setting<uint64_t> warnLargePathThreshold{
@@ -1469,6 +1466,8 @@ std::vector<Path> getUserConfigFiles();
  * not affected by the change.
  */
 extern std::string nixVersion;
+
+extern const std::string determinateNixVersion;
 
 /**
  * @param loadConfig Whether to load configuration from `nix.conf`, `NIX_CONFIG`, etc. May be disabled for unit tests.

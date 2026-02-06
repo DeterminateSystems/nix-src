@@ -39,7 +39,6 @@ in
         environment.systemPackages = [ pkgs.minio-client ];
         nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
         nix.extraOptions = ''
-          experimental-features = nix-command
           substituters =
         '';
         services.minio = {
@@ -59,7 +58,6 @@ in
         virtualisation.writableStore = true;
         virtualisation.cores = 2;
         nix.extraOptions = ''
-          experimental-features = nix-command
           substituters =
         '';
       };
