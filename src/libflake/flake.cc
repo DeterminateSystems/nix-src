@@ -249,7 +249,7 @@ static std::pair<std::map<FlakeId, FlakeInput>, fetchers::Attrs> parseFlakeInput
     return {inputs, selfAttrs};
 }
 
-static Flake readFlake(
+Flake readFlake(
     EvalState & state,
     const FlakeRef & originalRef,
     const FlakeRef & resolvedRef,
@@ -427,16 +427,12 @@ static LockFile readLockFile(const fetchers::Settings & fetchSettings, const Sou
                                      : LockFile();
 }
 
-/* Compute an in-memory lock file for the specified top-level flake,
-   and optionally write it to file, if the flake is writable. */
-LockedFlake
-lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags)
+LockedFlake lockFlake(
+    const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags, Flake flake)
 {
     auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
     auto useRegistriesTop = useRegistries ? fetchers::UseRegistries::All : fetchers::UseRegistries::No;
     auto useRegistriesInputs = useRegistries ? fetchers::UseRegistries::Limited : fetchers::UseRegistries::No;
-
-    auto flake = getFlake(state, topRef, useRegistriesTop, {}, false);
 
     if (lockFlags.applyNixConfig) {
         flake.config.apply(settings);
@@ -951,6 +947,15 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
     }
 }
 
+LockedFlake
+lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags)
+{
+    auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
+    auto useRegistriesTop = useRegistries ? fetchers::UseRegistries::All : fetchers::UseRegistries::No;
+
+    return lockFlake(settings, state, topRef, lockFlags, getFlake(state, topRef, useRegistriesTop, {}, false));
+}
+
 static ref<SourceAccessor> makeInternalFS()
 {
     auto internalFS = make_ref<MemorySourceAccessor>(MemorySourceAccessor{});
@@ -1047,11 +1052,6 @@ ref<eval_cache::EvalCache> openEvalCache(EvalState & state, ref<const LockedFlak
                            ? lockedFlake->getFingerprint(*state.store, state.fetchSettings)
                            : std::nullopt;
     auto rootLoader = [&state, lockedFlake]() {
-        /* For testing whether the evaluation cache is
-           complete. */
-        if (getEnv("NIX_ALLOW_EVAL").value_or("1") == "0")
-            throw Error("not everything is cached, but evaluation is not allowed");
-
         auto vFlake = state.allocValue();
         callFlake(state, *lockedFlake, *vFlake);
 

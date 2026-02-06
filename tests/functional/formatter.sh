@@ -85,4 +85,7 @@ rm ./my-result
 
 # Flake outputs check.
 nix flake check
-nix flake show | grep -P "package 'formatter'"
+
+clearStore
+nix flake show
+nix flake show | grep -P ": formatter"
