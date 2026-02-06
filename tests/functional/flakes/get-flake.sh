@@ -9,9 +9,13 @@ cat > "$flake1Dir/subflake/flake.nix" <<EOF
 {
   outputs = { self }:
     let
+      # Bad, legacy way of getting a flake from an input.
       parentFlake = builtins.getFlake (builtins.flakeRefToString { type = "path"; path = self.sourceInfo.outPath; narHash = self.narHash; });
+      # Better way using a path value.
+      parentFlake2 = builtins.getFlake ./..;
     in {
       x = parentFlake.number;
+      y = parentFlake2.number;
     };
 }
 EOF
@@ -19,3 +23,5 @@ git -C "$flake1Dir" add subflake/flake.nix
 
 expectStderr 0 nix eval "$flake1Dir/subflake#x" | grepQuiet "This may become a fatal error in the future"
 [[ $(nix eval "$flake1Dir/subflake#x") = 123 ]]
+
+[[ $(nix eval "$flake1Dir/subflake#y") = 123 ]]
