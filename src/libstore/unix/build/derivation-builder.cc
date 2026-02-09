@@ -1868,7 +1868,8 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
             newInfo.deriver = drvPath;
             newInfo.ultimate = true;
             if (drvProvenance)
-                newInfo.provenance = std::make_shared<const BuildProvenance>(drvPath, outputName, drvProvenance);
+                newInfo.provenance =
+                    std::make_shared<const BuildProvenance>(drvPath, outputName, settings.getHostName(), drvProvenance);
             store.signPathInfo(newInfo);
 
             finish(newInfo.path);

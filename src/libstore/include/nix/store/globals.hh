@@ -1441,6 +1441,16 @@ public:
      * derivation, or else returns a null pointer.
      */
     const ExternalBuilder * findExternalDerivationBuilderIfSupported(const Derivation & drv);
+
+    Setting<std::string> hostName{
+        this,
+        "",
+        "host-name",
+        R"(
+          The name of this host for recording build provenance. If unset, the Unix host name is used.
+        )"};
+
+    std::optional<std::string> getHostName();
 };
 
 // FIXME: don't use a global variable.

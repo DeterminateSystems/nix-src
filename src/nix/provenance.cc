@@ -57,9 +57,11 @@ struct CmdProvenanceShow : StorePathsCommand
                 provenance = copied->next;
             } else if (auto build = std::dynamic_pointer_cast<const BuildProvenance>(provenance)) {
                 logger->cout(
-                    "← built from derivation " ANSI_BOLD "%s" ANSI_NORMAL " (output " ANSI_BOLD "%s" ANSI_NORMAL ")",
+                    "← built from derivation " ANSI_BOLD "%s" ANSI_NORMAL " (output " ANSI_BOLD "%s" ANSI_NORMAL
+                    ") on " ANSI_BOLD "%s" ANSI_NORMAL,
                     store.printStorePath(build->drvPath),
-                    build->output);
+                    build->output,
+                    build->buildHost.value_or("unknown host").c_str());
                 provenance = build->next;
             } else if (auto flake = std::dynamic_pointer_cast<const FlakeProvenance>(provenance)) {
                 // Collapse subpath/tree provenance into the flake provenance for legibility.

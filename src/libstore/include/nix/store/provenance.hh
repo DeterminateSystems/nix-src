@@ -19,15 +19,25 @@ struct BuildProvenance : Provenance
     OutputName output;
 
     /**
+     * The hostname of the machine on which the derivation was built, if known.
+     */
+    std::optional<std::string> buildHost;
+
+    /**
      * The provenance of the derivation, if known.
      */
     std::shared_ptr<const Provenance> next;
 
     // FIXME: do we need anything extra for CA derivations?
 
-    BuildProvenance(const StorePath & drvPath, const OutputName & output, std::shared_ptr<const Provenance> next)
+    BuildProvenance(
+        const StorePath & drvPath,
+        const OutputName & output,
+        std::optional<std::string> buildHost,
+        std::shared_ptr<const Provenance> next)
         : drvPath(drvPath)
         , output(output)
+        , buildHost(std::move(buildHost))
         , next(std::move(next))
     {
     }

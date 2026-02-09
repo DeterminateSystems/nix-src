@@ -18,6 +18,7 @@ builder=$(nix eval --raw "$flake1Dir#packages.$system.default._builder")
 # Building a derivation should have tree+subpath+flake+build provenance.
 [[ $(nix path-info --json --json-format 1 "$outPath" | jq ".\"$outPath\".provenance") = $(cat <<EOF
 {
+  "buildHost": "test-host",
   "drv": "$(basename "$drvPath")",
   "next": {
     "flakeOutput": "packages.$system.default",
@@ -92,6 +93,7 @@ nix copy --from "file://$binaryCache" "$outPath" --no-check-sigs
 {
   "from": "file://$binaryCache",
   "next": {
+    "buildHost": "test-host",
     "drv": "$(basename "$drvPath")",
     "next": {
       "flakeOutput": "packages.$system.default",
@@ -124,7 +126,7 @@ EOF
 [[ $(nix provenance show "$outPath") = $(cat <<EOF
 [1m$outPath[0m
 ← copied from [1mfile://$binaryCache[0m
-← built from derivation [1m$drvPath[0m (output [1mout[0m)
+← built from derivation [1m$drvPath[0m (output [1mout[0m) on [1mtest-host[0m
 ← instantiated from flake output [1mgit+file://$flake1Dir?ref=refs/heads/master&rev=$rev#packages.$system.default[0m
 EOF
 ) ]]
