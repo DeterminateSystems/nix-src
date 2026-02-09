@@ -63,4 +63,12 @@ nlohmann::json SubpathProvenance::to_json() const
     };
 }
 
+Provenance::Register registerSubpathProvenance("subpath", [](nlohmann::json json) {
+    auto & obj = getObject(json);
+    std::shared_ptr<const Provenance> next;
+    if (auto p = optionalValueAt(obj, "next"); p && !p->is_null())
+        next = Provenance::from_json(*p);
+    return make_ref<SubpathProvenance>(next, CanonPath(getString(valueAt(obj, "subpath"))));
+});
+
 } // namespace nix
