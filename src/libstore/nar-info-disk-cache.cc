@@ -3,6 +3,7 @@
 #include "nix/util/sync.hh"
 #include "nix/store/sqlite.hh"
 #include "nix/store/globals.hh"
+#include "nix/store/provenance.hh"
 
 #include <sqlite3.h>
 #include <nlohmann/json.hpp>
@@ -36,6 +37,7 @@ create table if not exists NARs (
     deriver          text,
     sigs             text,
     ca               text,
+    provenance       text,
     timestamp        integer not null,
     present          integer not null,
     primary key (cache, hashPart),
@@ -86,7 +88,7 @@ public:
 
     Sync<State> _state;
 
-    NarInfoDiskCacheImpl(Path dbPath = (getCacheDir() / "binary-cache-v7.sqlite").string())
+    NarInfoDiskCacheImpl(Path dbPath = (getCacheDir() / "binary-cache-v8.sqlite").string())
     {
         auto state(_state.lock());
 
@@ -109,14 +111,14 @@ public:
         state->insertNAR.create(
             state->db,
             "insert or replace into NARs(cache, hashPart, namePart, url, compression, fileHash, fileSize, narHash, "
-            "narSize, refs, deriver, sigs, ca, timestamp, present) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)");
+            "narSize, refs, deriver, sigs, ca, provenance, timestamp, present) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)");
 
         state->insertMissingNAR.create(
             state->db, "insert or replace into NARs(cache, hashPart, timestamp, present) values (?, ?, ?, 0)");
 
         state->queryNAR.create(
             state->db,
-            "select present, namePart, url, compression, fileHash, fileSize, narHash, narSize, refs, deriver, sigs, ca from NARs where cache = ? and hashPart = ? and ((present = 0 and timestamp > ?) or (present = 1 and timestamp > ?))");
+            "select present, namePart, url, compression, fileHash, fileSize, narHash, narSize, refs, deriver, sigs, ca, provenance from NARs where cache = ? and hashPart = ? and ((present = 0 and timestamp > ?) or (present = 1 and timestamp > ?))");
 
         state->insertRealisation.create(
             state->db,
@@ -279,6 +281,8 @@ public:
                 for (auto & sig : tokenizeString<Strings>(queryNAR.getStr(10), " "))
                     narInfo->sigs.insert(sig);
                 narInfo->ca = ContentAddress::parseOpt(queryNAR.getStr(11));
+                if (experimentalFeatureSettings.isEnabled(Xp::Provenance) && !queryNAR.isNull(12))
+                    narInfo->provenance = Provenance::from_json_str_optional(queryNAR.getStr(12));
 
                 return {oValid, narInfo};
             });
@@ -337,8 +341,10 @@ public:
                         narInfo && narInfo->fileHash)(
                         narInfo ? narInfo->fileSize : 0, narInfo != 0 && narInfo->fileSize)(info->narHash.to_string(
                         HashFormat::Nix32, true))(info->narSize)(concatStringsSep(" ", info->shortRefs()))(
-                        info->deriver ? std::string(info->deriver->to_string()) : "", (bool) info->deriver)(
-                        concatStringsSep(" ", info->sigs))(renderContentAddress(info->ca))(time(0))
+                        info->deriver ? std::string(info->deriver->to_string()) : "",
+                        (bool) info->deriver)(concatStringsSep(" ", info->sigs))(renderContentAddress(info->ca))(
+                        info->provenance ? info->provenance->to_json_str() : "",
+                        experimentalFeatureSettings.isEnabled(Xp::Provenance) && info->provenance)(time(0))
                     .exec();
 
             } else {
