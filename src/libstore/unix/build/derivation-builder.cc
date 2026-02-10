@@ -1867,7 +1867,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
             newInfo.deriver = drvPath;
             newInfo.ultimate = true;
-            if (drvProvenance)
+            if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
                 newInfo.provenance =
                     std::make_shared<const BuildProvenance>(drvPath, outputName, settings.getHostName(), drvProvenance);
             store.signPathInfo(newInfo);
