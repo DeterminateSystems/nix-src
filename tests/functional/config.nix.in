@@ -5,6 +5,9 @@ let
     outputHashMode = "recursive";
     outputHashAlgo = "sha256";
   } else {};
+
+  optional = cond: elem: if cond then [ elem ] else [];
+  optionalAttrs = cond: attrs: if cond then attrs else {};
 in
 
 rec {
@@ -25,6 +28,6 @@ rec {
         eval "$buildCommand"
       '')];
       PATH = path;
-    } // caArgs // removeAttrs args ["builder" "meta"])
-    // { meta = args.meta or {}; };
+    } // caArgs // removeAttrs args (["builder"] ++ optional (builtins.langVersion < 7) "meta"))
+    // optionalAttrs (builtins.langVersion < 7) { meta = args.meta or {}; };
 }

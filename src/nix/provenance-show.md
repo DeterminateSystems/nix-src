@@ -22,6 +22,7 @@ The provenance chain shows the history of how the store path came to exist, incl
 - **Built**: The path was built from a derivation.
 - **Flake evaluation**: The derivation was instantiated during the evaluation of a flake output.
 - **Fetched**: The path was obtained by fetching a source tree.
+- **Meta**: Metadata associated with the derivation.
 
 Note: if you want provenance in JSON format, use the `provenance` field returned by `nix path-info --json`.
 

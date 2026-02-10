@@ -1,5 +1,6 @@
 #include "nix/cmd/command.hh"
 #include "nix/store/store-api.hh"
+#include "nix/expr/provenance.hh"
 #include "nix/store/provenance.hh"
 #include "nix/flake/provenance.hh"
 #include "nix/fetchers/provenance.hh"
@@ -92,6 +93,9 @@ struct CmdProvenanceShow : StorePathsCommand
             } else if (auto subpath = std::dynamic_pointer_cast<const SubpathProvenance>(provenance)) {
                 logger->cout("← from file " ANSI_BOLD "%s" ANSI_NORMAL, subpath->subpath.abs());
                 provenance = subpath->next;
+            } else if (auto meta = std::dynamic_pointer_cast<const MetaProvenance>(provenance)) {
+                logger->cout("← with metadata");
+                provenance = meta->next;
             } else {
                 // Unknown or unhandled provenance type
                 auto json = provenance->to_json();
