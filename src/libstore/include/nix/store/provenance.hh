@@ -24,6 +24,11 @@ struct BuildProvenance : Provenance
     std::optional<std::string> buildHost;
 
     /**
+     * The system type of the derivation.
+     */
+    std::string system;
+
+    /**
      * The provenance of the derivation, if known.
      */
     std::shared_ptr<const Provenance> next;
@@ -34,10 +39,12 @@ struct BuildProvenance : Provenance
         const StorePath & drvPath,
         const OutputName & output,
         std::optional<std::string> buildHost,
+        std::string system,
         std::shared_ptr<const Provenance> next)
         : drvPath(drvPath)
         , output(output)
         , buildHost(std::move(buildHost))
+        , system(std::move(system))
         , next(std::move(next))
     {
     }
