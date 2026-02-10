@@ -15,6 +15,8 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
+#include <limits.h>
+
 #ifndef _WIN32
 #  include <sys/utsname.h>
 #endif
@@ -265,6 +267,20 @@ const ExternalBuilder * Settings::findExternalDerivationBuilderIfSupported(const
         it != externalBuilders.get().end())
         return &*it;
     return nullptr;
+}
+
+std::optional<std::string> Settings::getHostName()
+{
+    if (hostName != "")
+        return hostName;
+
+#ifndef _WIN32
+    char hostname[_POSIX_HOST_NAME_MAX + 1];
+    if (gethostname(hostname, sizeof(hostname)) == 0)
+        return std::string(hostname);
+#endif
+
+    return std::nullopt;
 }
 
 std::string nixVersion = PACKAGE_VERSION;

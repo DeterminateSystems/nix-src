@@ -8,7 +8,7 @@ R""(
   # nix provenance show /run/current-system
   /nix/store/k145bdxhdb89i4fkvgdisdz1yh2wiymm-nixos-system-machine-25.05.20251210.d2b1213
   ← copied from cache.flakehub.com
-  ← built from derivation /nix/store/w3p3xkminq61hs00kihd34w1dglpj5s9-nixos-system-machine-25.05.20251210.d2b1213.drv (output out)
+  ← built from derivation /nix/store/w3p3xkminq61hs00kihd34w1dglpj5s9-nixos-system-machine-25.05.20251210.d2b1213.drv (output out) on build-machine
   ← instantiated from flake output github:my-org/my-repo/6b03eb949597fe96d536e956a2c14da9901dbd21?dir=machine#nixosConfigurations.machine.config.system.build.toplevel
   ```
 
