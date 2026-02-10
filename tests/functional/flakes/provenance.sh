@@ -120,6 +120,15 @@ nix copy --from "file://$binaryCache" "$outPath" --no-check-sigs
 EOF
 ) ]]
 
+# Test `nix provenance show`.
+[[ $(nix provenance show "$outPath") = $(cat <<EOF
+[1m$outPath[0m
+← copied from [1mfile://$binaryCache[0m
+← built from derivation [1m$drvPath[0m (output [1mout[0m)
+← instantiated from flake output [1mgit+file://$flake1Dir?ref=refs/heads/master&rev=$rev#packages.$system.default[0m
+EOF
+) ]]
+
 # Check that --impure does not add provenance.
 clearStore
 nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.default"

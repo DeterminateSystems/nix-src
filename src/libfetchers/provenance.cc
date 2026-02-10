@@ -1,5 +1,6 @@
 #include "nix/fetchers/provenance.hh"
 #include "nix/fetchers/attrs.hh"
+#include "nix/util/json-utils.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -23,5 +24,11 @@ nlohmann::json TreeProvenance::to_json() const
         {"attrs", *attrs},
     };
 }
+
+Provenance::Register registerTreeProvenance("tree", [](nlohmann::json json) {
+    auto & obj = getObject(json);
+    auto & attrsJson = valueAt(obj, "attrs");
+    return make_ref<TreeProvenance>(make_ref<nlohmann::json>(attrsJson));
+});
 
 } // namespace nix
