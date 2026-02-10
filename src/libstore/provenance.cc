@@ -10,6 +10,7 @@ nlohmann::json BuildProvenance::to_json() const
         {"drv", drvPath.to_string()},
         {"output", output},
         {"buildHost", buildHost},
+        {"system", system},
         {"next", next ? next->to_json() : nlohmann::json(nullptr)},
     };
 }
@@ -23,7 +24,11 @@ Provenance::Register registerBuildProvenance("build", [](nlohmann::json json) {
     if (auto p = optionalValueAt(obj, "buildHost"))
         buildHost = p->get<std::optional<std::string>>();
     auto buildProv = make_ref<BuildProvenance>(
-        StorePath(getString(valueAt(obj, "drv"))), getString(valueAt(obj, "output")), buildHost, next);
+        StorePath(getString(valueAt(obj, "drv"))),
+        getString(valueAt(obj, "output")),
+        buildHost,
+        getString(valueAt(obj, "system")),
+        next);
     return buildProv;
 });
 
