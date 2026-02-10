@@ -166,7 +166,7 @@ EOF
 EOF
 ) ]]
 
-# Check that --impure does not add provenance.
+# Check that --impure does not add additional provenance.
 clearStore
 nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.default"
 [[ "$(nix path-info --json --json-format 1 "$drvPath" | jq ".\"$drvPath\".provenance")" = "$(cat << EOF
