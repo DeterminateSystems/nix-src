@@ -161,6 +161,19 @@ git -C "$repo" commit -m 'Bla4'
 rev3=$(git -C "$repo" rev-parse HEAD)
 nix eval --tarball-ttl 3600 --expr "builtins.fetchGit { url = $repo; rev = \"$rev3\"; }" >/dev/null
 
+# Fetching a rev that is already cached should not hit the network,
+# even when the cached HEAD ref has expired (NixOS/nix#10773).
+export _NIX_FORCE_HTTP=1
+nix eval --expr "builtins.fetchGit { url = file://$repo; rev = \"$rev3\"; }" >/dev/null
+# Make the repo unavailable so any network access triggers a warning.
+mv "$repo" "${repo}"-tmp
+path6=$(nix eval --tarball-ttl 0 --raw --expr "(builtins.fetchGit { url = file://$repo; rev = \"$rev3\"; }).outPath" 2>"$TEST_ROOT/stderr-10773")
+[[ $(cat "$path6"/hello) = delft ]]
+# The old code would try to resolve HEAD here and emit this warning.
+(! grep -q "could not get HEAD ref" < "$TEST_ROOT/stderr-10773")
+mv "${repo}"-tmp "$repo"
+unset _NIX_FORCE_HTTP
+
 # Update 'path' to reflect latest master
 path=$(nix eval --impure --raw --expr "(builtins.fetchGit file://$repo).outPath")
 
