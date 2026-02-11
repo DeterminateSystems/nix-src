@@ -28,6 +28,8 @@ rec {
         eval "$buildCommand"
       '')];
       PATH = path;
-    } // caArgs // removeAttrs args (["builder"] ++ optional (builtins.langVersion < 7) "meta"))
-    // optionalAttrs (builtins.langVersion < 7) { meta = args.meta or {}; };
+    } // caArgs // optionalAttrs (builtins.langVersion >= 7) {
+      __meta = args.meta or {};
+    } // removeAttrs args ["builder" "meta"])
+    // { meta = args.meta or {}; };
 }

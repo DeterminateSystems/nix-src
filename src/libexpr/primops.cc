@@ -1574,10 +1574,8 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
                     experimentalFeatureSettings.require(Xp::ImpureDerivations);
                 }
                 break;
-            case EvalState::s.meta.getId():
-                experimentalFeatureSettings.require(Xp::Provenance);
-
-                {
+            case EvalState::s.__meta.getId():
+                if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
                     auto meta = printValueAsJSON(state, true, *i->value, pos, context);
 
                     for (auto it = meta.begin(); it != meta.end();) {
@@ -1589,7 +1587,8 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
                         it = meta.erase(it);
                     }
 
-                    provenance = std::make_shared<const MetaProvenance>(provenance, make_ref<nlohmann::json>(meta));
+                    provenance =
+                        std::make_shared<const DerivationProvenance>(provenance, make_ref<nlohmann::json>(meta));
                 }
                 break;
             /* The `args' attribute is special: it supplies the

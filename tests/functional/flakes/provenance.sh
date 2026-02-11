@@ -53,7 +53,7 @@ builder=$(nix eval --raw "$flake1Dir#packages.$system.default._builder")
       },
       "type": "flake"
     },
-    "type": "meta"
+    "type": "derivation"
   },
   "output": "out",
   "system": "$system",
@@ -145,7 +145,7 @@ nix copy --from "file://$binaryCache" "$outPath" --no-check-sigs
         },
         "type": "flake"
       },
-      "type": "meta"
+      "type": "derivation"
     },
     "output": "out",
     "system": "$system",
@@ -161,7 +161,9 @@ EOF
 [1m$outPath[0m
 ← copied from [1mfile://$binaryCache[0m
 ← built from derivation [1m$drvPath[0m (output [1mout[0m) on [1mtest-host[0m for [1m$system[0m
-← with metadata
+← with derivation metadata
+    [1mLicenses:[0m
+        - lgpl21
 ← instantiated from flake output [1mgit+file://$flake1Dir?ref=refs/heads/master&rev=$rev#packages.$system.default[0m
 EOF
 ) ]]
@@ -185,7 +187,7 @@ nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.defa
     ]
   },
   "next": null,
-  "type": "meta"
+  "type": "derivation"
 }
 EOF
 )" ]]
