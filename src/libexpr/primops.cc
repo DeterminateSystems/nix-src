@@ -1847,7 +1847,8 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
     }
 
     /* Write the resulting term into the Nix store directory. */
-    auto drvPath = writeDerivation(*state.store, *state.asyncPathWriter, drv, state.repair);
+    auto drvPath =
+        writeDerivation(*state.store, *state.asyncPathWriter, drv, state.repair, false, state.evalContext.provenance);
     auto drvPathS = state.store->printStorePath(drvPath);
 
     printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
@@ -2360,6 +2361,23 @@ static RegisterPrimOp primop_hashFile({
     .fun = prim_hashFile,
 });
 
+static RegisterPrimOp primop_narHash({
+    .name = "__narHash",
+    .args = {"p"},
+    .doc = R"(
+      Return an SRI representation of the SHA-256 hash of the NAR serialisation of the path *p*.
+    )",
+    .fun =
+        [](EvalState & state, const PosIdx pos, Value ** args, Value & v) {
+            auto path = state.realisePath(pos, *args[0]);
+            auto hash =
+                fetchToStore2(state.fetchSettings, *state.store, path.resolveSymlinks(), FetchMode::DryRun).second;
+            v.mkString(hash.to_string(HashFormat::SRI, true), state.mem);
+        },
+    // FIXME: may be useful to expose to the user.
+    .internal = true,
+});
+
 static const Value & fileTypeToString(EvalState & state, SourceAccessor::Type type)
 {
     struct Constants
@@ -2733,7 +2751,8 @@ static void prim_toFile(EvalState & state, const PosIdx pos, Value ** args, Valu
                                                      ContentAddressMethod::Raw::Text,
                                                      HashAlgorithm::SHA256,
                                                      refs,
-                                                     state.repair);
+                                                     state.repair,
+                                                     state.evalContext.provenance);
                                              });
 
     /* Note: we don't need to add `context' to the context of the

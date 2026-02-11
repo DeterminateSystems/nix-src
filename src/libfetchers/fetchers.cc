@@ -4,7 +4,7 @@
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/fetchers/fetch-settings.hh"
-#include "nix/fetchers/fetch-to-store.hh"
+#include "nix/fetchers/provenance.hh"
 #include "nix/util/url.hh"
 #include "nix/util/forwarding-source-accessor.hh"
 #include "nix/util/archive.hh"
@@ -196,7 +196,6 @@ bool Input::contains(const Input & other) const
     return false;
 }
 
-// FIXME: remove
 std::tuple<StorePath, ref<SourceAccessor>, Input> Input::fetchToStore(const Settings & settings, Store & store) const
 {
     if (!scheme)
@@ -325,11 +324,9 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
     auto makeStoreAccessor = [&]() -> std::pair<ref<SourceAccessor>, Input> {
         auto accessor = make_ref<SubstitutedSourceAccessor>(store.requireStoreObjectAccessor(*storePath));
 
-        // FIXME: use the NAR hash for fingerprinting Git trees that have a .gitattributes file, since we don't know if
-        // we used `git archive` or libgit2 to fetch it.
-        accessor->fingerprint = getType() == "git" && accessor->pathExists(CanonPath(".gitattributes"))
-                                    ? std::optional(storePath->hashPart())
-                                    : getFingerprint(store);
+        // FIXME: use the NAR hash for fingerprinting Git trees since it may have a .gitattributes file and we don't
+        // know if we used `git archive` or libgit2 to fetch it.
+        accessor->fingerprint = getType() == "git" ? std::optional(storePath->hashPart()) : getFingerprint(store);
         cachedFingerprint = accessor->fingerprint;
 
         // Store a cache entry for the substituted tree so later fetches
@@ -340,6 +337,9 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
                 makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
                 {{"hash", store.queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
         }
+
+        if (isLocked(settings))
+            accessor->provenance = std::make_shared<TreeProvenance>(*this);
 
         // FIXME: ideally we would use the `showPath()` of the
         // "real" accessor for this fetcher type.
@@ -364,6 +364,9 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
             result.cachedFingerprint = *fp;
         else
             accessor->fingerprint = result.getFingerprint(store);
+
+        if (result.isLocked(settings))
+            accessor->provenance = std::make_shared<TreeProvenance>(result);
 
         return {accessor, std::move(result)};
     } catch (Error & e) {

@@ -17,6 +17,7 @@
 #include "nix/util/url.hh"
 #include "nix/fetchers/registry.hh"
 #include "nix/store/build-result.hh"
+#include "nix/flake/provenance.hh"
 #include "nix/cmd/flake-schemas.hh"
 
 #include <regex>
@@ -67,6 +68,8 @@ DerivedPathsWithInfo InstallableFlake::toDerivedPaths()
     auto attr = getCursor(*state);
 
     auto attrPath = attr->getAttrPathStr();
+
+    PushProvenance pushedProvenance(*state, makeProvenance(attrPath));
 
     if (!attr->isDerivation()) {
 
@@ -221,6 +224,8 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
     for (auto & attrPath : attrPaths) {
         debug("trying flake output attribute '%s'", attrPath.to_string(state));
 
+        PushProvenance pushedProvenance(state, makeProvenance(attrPath.to_string(state)));
+
         auto outputInfo = flake_schemas::getOutput(inventory, attrPath);
 
         if (outputInfo && outputInfo->leafAttrPath.empty()) {
@@ -275,6 +280,16 @@ FlakeRef InstallableFlake::nixpkgsFlakeRef() const
     }
 
     return defaultNixpkgsFlakeRef();
+}
+
+std::shared_ptr<const Provenance> InstallableFlake::makeProvenance(std::string_view attrPath) const
+{
+    if (!evalSettings.pureEval)
+        return nullptr;
+    auto provenance = getLockedFlake()->flake.provenance;
+    if (!provenance)
+        return nullptr;
+    return std::make_shared<const FlakeProvenance>(provenance, std::string(attrPath));
 }
 
 } // namespace nix

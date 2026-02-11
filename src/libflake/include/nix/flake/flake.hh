@@ -10,6 +10,7 @@
 namespace nix {
 
 class EvalState;
+struct Provenance;
 
 namespace flake {
 
@@ -93,6 +94,11 @@ struct Flake
      * The path of `flake.nix`.
      */
     SourcePath path;
+
+    /**
+     * Cached provenance of `flake.nix` (equivalent to `path.getProvenance()`).
+     */
+    std::shared_ptr<const Provenance> provenance;
 
     /**
      * Pretend that `lockedRef` is dirty.
@@ -238,15 +244,18 @@ Flake readFlake(
     const SourcePath & rootDir,
     const InputAttrPath & lockRootPath);
 
-/**
- * Compute an in-memory lock file for the specified top-level flake,
- * and optionally write it to file, if the flake is writable.
+/*
+ * Compute an in-memory lock file for the specified top-level flake, and optionally write it to file, if the flake is
+ * writable.
  */
 LockedFlake
 lockFlake(const Settings & settings, EvalState & state, const FlakeRef & flakeRef, const LockFlags & lockFlags);
 
 LockedFlake lockFlake(
     const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags, Flake flake);
+
+LockedFlake
+lockFlake(const Settings & settings, EvalState & state, const SourcePath & flakeDir, const LockFlags & lockFlags);
 
 void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & v);
 

@@ -72,6 +72,8 @@ struct InstallableFlake : InstallableValue
 
     FlakeRef nixpkgsFlakeRef() const;
 
+    std::shared_ptr<const Provenance> makeProvenance(std::string_view attrPath) const;
+
     ref<eval_cache::EvalCache> openEvalCache() const;
 
 private:

@@ -440,6 +440,11 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
 
     actLock.reset();
 
+    /* Get the provenance of the derivation, if available. */
+    std::shared_ptr<const Provenance> provenance;
+    if (auto info = worker.evalStore.maybeQueryPathInfo(drvPath))
+        provenance = info->provenance;
+
     if (useHook) {
         buildResult.startTime = time(0); // inexact
         started();
@@ -522,7 +527,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
         outputLocks.setDeletion(true);
         outputLocks.unlock();
 
-        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs));
+        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs), provenance);
     }
 
     co_await yield();
@@ -618,6 +623,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
 
             DerivationBuilderParams params{
                 .drvPath = drvPath,
+                .drvProvenance = provenance,
                 .buildResult = buildResult,
                 .drv = *drv,
                 .drvOptions = drvOptions,
@@ -724,7 +730,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
            (unlinked) lock files. */
         outputLocks.setDeletion(true);
         outputLocks.unlock();
-        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs));
+        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs), provenance);
     }
 #endif
 }
@@ -1174,7 +1180,8 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
     return {allValid, validOutputs};
 }
 
-Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status status, SingleDrvOutputs builtOutputs)
+Goal::Done DerivationBuildingGoal::doneSuccess(
+    BuildResult::Success::Status status, SingleDrvOutputs builtOutputs, std::shared_ptr<const Provenance> provenance)
 {
     mcRunningBuilds.reset();
 
@@ -1187,6 +1194,7 @@ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status stat
         BuildResult::Success{
             .status = status,
             .builtOutputs = std::move(builtOutputs),
+            .provenance = provenance,
         });
 
     logger->result(

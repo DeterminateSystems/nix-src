@@ -432,7 +432,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
 
                 [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
                     forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
-                        futures.spawn(2, [&visit, node]() { visit(node); });
+                        state->spawn(futures, 2, [&visit, node]() { visit(node); });
                     });
                 },
 
@@ -449,7 +449,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                 const std::string & doc,
                 bool isLast) {
                 if (output)
-                    futures.spawn(1, [&visit, output(ref(output))]() { visit(output); });
+                    state->spawn(futures, 1, [&visit, output(ref(output))]() { visit(output); });
                 else
                     uncheckedOutputs.lock()->insert(std::string(state->symbols[outputName]));
             });
@@ -917,7 +917,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                     auto children = nlohmann::json::object();
                     forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
                         auto & j = children.emplace(state->symbols[attrName], nlohmann::json::object()).first.value();
-                        futures.spawn(1, [&visit, &j, node]() {
+                        state->spawn(futures, 1, [&visit, &j, node]() {
                             try {
                                 visit(node, j);
                             } catch (EvalError & e) {
@@ -952,7 +952,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 } else if (output) {
                     j.emplace("doc", doc);
                     auto & j2 = j.emplace("output", nlohmann::json::object()).first.value();
-                    futures.spawn(1, [&visit, output, &j2]() { visit(ref(output), j2); });
+                    state->spawn(futures, 1, [&visit, output, &j2]() { visit(ref(output), j2); });
                 } else
                     j.emplace("unknown", true);
             });
@@ -1053,9 +1053,7 @@ struct CmdFlakePrefetch : FlakeCommand, MixJSON
     {
         auto originalRef = getFlakeRef();
         auto resolvedRef = originalRef.resolve(fetchSettings, *store);
-        auto [accessor, lockedRef] = resolvedRef.lazyFetch(getEvalState()->fetchSettings, *store);
-        auto storePath =
-            fetchToStore(getEvalState()->fetchSettings, *store, accessor, FetchMode::Copy, lockedRef.input.getName());
+        auto [storePath, accessor, lockedRef] = resolvedRef.input.fetchToStore(fetchSettings, *store);
         auto hash = store->queryPathInfo(storePath)->narHash;
 
         if (json) {
@@ -1064,7 +1062,6 @@ struct CmdFlakePrefetch : FlakeCommand, MixJSON
             res["hash"] = hash.to_string(HashFormat::SRI, true);
             res["original"] = fetchers::attrsToJSON(resolvedRef.toAttrs());
             res["locked"] = fetchers::attrsToJSON(lockedRef.toAttrs());
-            res["locked"].erase("__final"); // internal for now
             printJSON(res);
         } else {
             notice(

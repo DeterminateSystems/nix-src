@@ -109,8 +109,8 @@ StorePath EvalState::mountInput(
             (unsigned int) 102,
             "NAR hash mismatch in input '%s', expected '%s' but got '%s'",
             originalInput.to_string(),
-            getNarHash()->to_string(HashFormat::SRI, true),
-            originalInput.getNarHash()->to_string(HashFormat::SRI, true));
+            originalInput.getNarHash()->to_string(HashFormat::SRI, true),
+            getNarHash()->to_string(HashFormat::SRI, true));
 
     return storePath;
 }

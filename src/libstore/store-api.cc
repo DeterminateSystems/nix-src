@@ -18,13 +18,12 @@
 // `addMultipleToStore`.
 #include "nix/store/worker-protocol.hh"
 #include "nix/util/signals.hh"
+#include "nix/store/provenance.hh"
 
 #include <filesystem>
 #include <nlohmann/json.hpp>
 
 #include "nix/util/strings.hh"
-
-using json = nlohmann::json;
 
 namespace nix {
 
@@ -109,7 +108,8 @@ StorePath Store::addToStore(
     std::optional<StorePath> storePath;
     auto sink = sourceToSink([&](Source & source) {
         LengthSource lengthSource(source);
-        storePath = addToStoreFromDump(lengthSource, name, fsm, method, hashAlgo, references, repair);
+        storePath =
+            addToStoreFromDump(lengthSource, name, fsm, method, hashAlgo, references, repair, path.getProvenance());
         if (settings.warnLargePathThreshold && lengthSource.total >= settings.warnLargePathThreshold) {
             static bool failOnLargePath = getEnv("_NIX_TEST_FAIL_ON_LARGE_PATH").value_or("") == "1";
             if (failOnLargePath)
@@ -295,6 +295,7 @@ ValidPathInfo Store::addToStoreSlow(
             }),
         narHash);
     info.narSize = narSize;
+    info.provenance = srcPath.getProvenance();
 
     if (!isValidPath(info.path)) {
         auto source = sinkToSource([&](Sink & scratchpadSink) { srcPath.dumpPath(scratchpadSink); });
@@ -871,13 +872,26 @@ makeCopyPathMessage(const StoreConfig & srcCfg, const StoreConfig & dstCfg, std:
         "copying path '%s' from '%s' to '%s'", storePath, srcCfg.getHumanReadableURI(), dstCfg.getHumanReadableURI());
 }
 
-void copyStorePath(
+/**
+ * Wrap upstream provenance in a "copied" provenance record to record
+ * where the path was copied from. But uninformative origins like
+ * LocalStore are omitted.
+ */
+static std::shared_ptr<const Provenance>
+addCopiedProvenance(std::shared_ptr<const Provenance> provenance, Store & srcStore)
+{
+    if (!srcStore.includeInProvenance())
+        return provenance;
+    return std::make_shared<const CopiedProvenance>(srcStore.config.getReference().render(false), provenance);
+}
+
+std::shared_ptr<const ValidPathInfo> copyStorePath(
     Store & srcStore, Store & dstStore, const StorePath & storePath, RepairFlag repair, CheckSigsFlag checkSigs)
 {
     /* Bail out early (before starting a download from srcStore) if
        dstStore already has this path. */
     if (!repair && dstStore.isValidPath(storePath))
-        return;
+        return nullptr;
 
     const auto & srcCfg = srcStore.config;
     const auto & dstCfg = dstStore.config;
@@ -890,25 +904,22 @@ void copyStorePath(
         {storePathS, srcCfg.getHumanReadableURI(), dstCfg.getHumanReadableURI()});
     PushActivity pact(act.id);
 
-    auto info = srcStore.queryPathInfo(storePath);
+    auto srcInfo = srcStore.queryPathInfo(storePath);
+    auto info = std::make_shared<ValidPathInfo>(*srcInfo);
 
     uint64_t total = 0;
 
     // recompute store path on the chance dstStore does it differently
     if (info->ca && info->references.empty()) {
-        auto info2 = make_ref<ValidPathInfo>(*info);
-        info2->path =
+        info->path =
             dstStore.makeFixedOutputPathFromCA(info->path.name(), info->contentAddressWithReferences().value());
         if (dstStore.storeDir == srcStore.storeDir)
-            assert(info->path == info2->path);
-        info = info2;
+            assert(info->path == srcInfo->path);
     }
 
-    if (info->ultimate) {
-        auto info2 = make_ref<ValidPathInfo>(*info);
-        info2->ultimate = false;
-        info = info2;
-    }
+    info->ultimate = false;
+
+    info->provenance = addCopiedProvenance(info->provenance, srcStore);
 
     auto source = sinkToSource(
         [&](Sink & sink) {
@@ -927,6 +938,8 @@ void copyStorePath(
         });
 
     dstStore.addToStore(*info, *source, repair, checkSigs);
+
+    return info;
 }
 
 std::map<StorePath, StorePath> copyPaths(
@@ -1035,6 +1048,7 @@ std::map<StorePath, StorePath> copyPaths(
 
         ValidPathInfo infoForDst = *info;
         infoForDst.path = storePathForDst;
+        infoForDst.provenance = addCopiedProvenance(info->provenance, srcStore);
 
         auto source = sinkToSource([&, narSize = info->narSize](Sink & sink) {
             // We can reasonably assume that the copy will happen whenever we

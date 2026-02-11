@@ -110,7 +110,7 @@ void Executor::worker()
     }
 }
 
-std::vector<std::future<void>> Executor::spawn(std::vector<std::pair<work_t, uint8_t>> && items)
+std::vector<std::future<void>> Executor::spawn(WorkItems && items)
 {
     if (items.empty())
         return {};
@@ -146,7 +146,7 @@ FutureVector::~FutureVector()
     }
 }
 
-void FutureVector::spawn(std::vector<std::pair<Executor::work_t, uint8_t>> && work)
+void FutureVector::spawn(Executor::WorkItems && work)
 {
     auto futures = executor.spawn(std::move(work));
     auto state(state_.lock());
@@ -273,10 +273,11 @@ static void prim_parallel(EvalState & state, const PosIdx pos, Value ** args, Va
     state.forceList(*args[0], pos, "while evaluating the first argument passed to builtins.parallel");
 
     if (state.executor->evalCores > 1) {
-        std::vector<std::pair<Executor::work_t, uint8_t>> work;
+        Executor::WorkItems work;
         for (auto value : args[0]->listView())
             if (!value->isFinished())
-                work.emplace_back([value(allocRootValue(value)), &state, pos]() { state.forceValue(**value, pos); }, 0);
+                state.addWork(
+                    work, 0, [value(allocRootValue(value)), &state, pos]() { state.forceValue(**value, pos); });
         state.executor->spawn(std::move(work));
     }
 

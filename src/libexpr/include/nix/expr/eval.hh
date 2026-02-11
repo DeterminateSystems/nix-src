@@ -52,11 +52,12 @@ enum RepairFlag : bool;
 struct MemorySourceAccessor;
 struct MountedSourceAccessor;
 struct AsyncPathWriter;
+struct Provenance;
+struct Executor;
 
 namespace eval_cache {
 class EvalCache;
 }
-struct Executor;
 
 /**
  * Increments a count on construction and decrements on destruction.
@@ -1128,6 +1129,45 @@ private:
     friend class ListBuilder;
 
 public:
+
+    /**
+     * Per-thread evaluation context. This context is propagated to worker threads when a value is evaluated
+     * asynchronously.
+     */
+    struct EvalContext
+    {
+        std::shared_ptr<const Provenance> provenance;
+    };
+
+    thread_local static EvalContext evalContext;
+
+    /**
+     * Create a work item that propagates the current evaluation context.
+     */
+    template<typename T>
+    auto makeWork(T && t)
+    {
+        return [this, t{std::move(t)}, evalContext(evalContext)]() {
+            this->evalContext = evalContext;
+            t();
+        };
+    }
+
+    /**
+     * Add a work item to the given work vector that propagates the current evaluation context.
+     */
+    template<typename WorkItems, typename T>
+    void addWork(WorkItems & work, uint8_t priority, T && t)
+    {
+        work.emplace_back(makeWork(std::move(t)), priority);
+    }
+
+    template<typename FuturesVector, typename T>
+    void spawn(FuturesVector & futures, uint8_t priority, T && t)
+    {
+        futures.spawn(priority, makeWork(std::move(t)));
+    }
+
     /**
      * Worker threads manager.
      *
@@ -1172,6 +1212,24 @@ SourcePath resolveExprPath(SourcePath path, bool addDefaultNix = true);
  * Whether a URI is allowed, assuming restrictEval is enabled
  */
 bool isAllowedURI(std::string_view uri, const Strings & allowedPaths);
+
+struct PushProvenance
+{
+    EvalState & state;
+    std::shared_ptr<const Provenance> prev;
+
+    PushProvenance(EvalState & state, std::shared_ptr<const Provenance> prov)
+        : state(state)
+    {
+        state.evalContext.provenance.swap(prev);
+        state.evalContext.provenance.swap(prov);
+    }
+
+    ~PushProvenance()
+    {
+        state.evalContext.provenance.swap(prev);
+    }
+};
 
 } // namespace nix
 

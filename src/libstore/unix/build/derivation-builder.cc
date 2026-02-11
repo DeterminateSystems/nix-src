@@ -20,6 +20,7 @@
 #include "nix/store/globals.hh"
 #include "nix/store/build/derivation-env-desugar.hh"
 #include "nix/util/terminal.hh"
+#include "nix/store/provenance.hh"
 
 #include <queue>
 
@@ -1866,6 +1867,9 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
             newInfo.deriver = drvPath;
             newInfo.ultimate = true;
+            if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+                newInfo.provenance = std::make_shared<const BuildProvenance>(
+                    drvPath, outputName, settings.getHostName(), drv.platform, drvProvenance);
             store.signPathInfo(newInfo);
 
             finish(newInfo.path);
@@ -1876,8 +1880,8 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
                This is also good so that if a fixed-output produces the
                wrong path, we still store the result (just don't consider
-               the derivation sucessful, so if someone fixes the problem by
-               just changing the wanted hash, the redownload (or whateer
+               the derivation successful, so if someone fixes the problem by
+               just changing the wanted hash, the redownload (or whatever
                possibly quite slow thing it was) doesn't have to be done
                again. */
             if (newInfo.ca)
@@ -1999,7 +2003,10 @@ StorePath DerivationBuilderImpl::makeFallbackPath(const StorePath & path)
 #include "linux-derivation-builder.cc"
 #include "darwin-derivation-builder.cc"
 #include "external-derivation-builder.cc"
-#include "wasi-derivation-builder.cc"
+
+#if NIX_USE_WASMTIME
+#  include "wasi-derivation-builder.cc"
+#endif
 
 namespace nix {
 
@@ -2044,8 +2051,10 @@ std::unique_ptr<DerivationBuilder, DerivationBuilderDeleter> makeDerivationBuild
             useSandbox = params.drv.type().isSandboxed() && !params.drvOptions.noChroot;
     }
 
+#if NIX_USE_WASMTIME
     if (params.drv.platform == "wasm32-wasip1")
         return DerivationBuilderUnique(new WasiDerivationBuilder(store, std::move(miscMethods), std::move(params)));
+#endif
 
     if (store.storeDir != store.config->realStoreDir.get()) {
 #ifdef __linux__

@@ -269,6 +269,7 @@ Flake readFlake(
         .resolvedRef = resolvedRef,
         .lockedRef = lockedRef,
         .path = flakePath,
+        .provenance = flakePath.getProvenance(),
     };
 
     if (auto description = vInfo.attrs()->get(state.s.description)) {
@@ -954,6 +955,14 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
     auto useRegistriesTop = useRegistries ? fetchers::UseRegistries::All : fetchers::UseRegistries::No;
 
     return lockFlake(settings, state, topRef, lockFlags, getFlake(state, topRef, useRegistriesTop, {}, false));
+}
+
+LockedFlake
+lockFlake(const Settings & settings, EvalState & state, const SourcePath & flakeDir, const LockFlags & lockFlags)
+{
+    /* We need a fake flakeref to put in the `Flake` struct, but it's not used for anything. */
+    auto fakeRef = parseFlakeRef(state.fetchSettings, "flake:get-flake");
+    return lockFlake(settings, state, fakeRef, lockFlags, readFlake(state, fakeRef, fakeRef, fakeRef, flakeDir, {}));
 }
 
 static ref<SourceAccessor> makeInternalFS()
