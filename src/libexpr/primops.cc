@@ -1576,19 +1576,25 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
                 break;
             case EvalState::s.__meta.getId():
                 if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
-                    auto meta = printValueAsJSON(state, true, *i->value, pos, context);
+                    state.forceAttrs(*i->value, pos, "");
+                    auto meta = i->value->attrs();
+                    auto obj = nlohmann::json();
 
-                    for (auto it = meta.begin(); it != meta.end();) {
-                        if (it.key() == "identifiers" || it.key() == "license" || it.key() == "licenses") {
-                            it++;
+                    for (auto & i : meta->lexicographicOrder(state.symbols)) {
+                        auto key = state.symbols[i->name];
+                        switch (i->name.getId()) {
+                        case EvalState::s.identifiers.getId():
+                        case EvalState::s.license.getId():
+                        case EvalState::s.licenses.getId():
+                            obj.emplace(key, printValueAsJSON(state, true, *i->value, pos, context));
+                            break;
+                        default:
                             continue;
                         }
-
-                        it = meta.erase(it);
                     }
 
                     provenance =
-                        std::make_shared<const DerivationProvenance>(provenance, make_ref<nlohmann::json>(meta));
+                        std::make_shared<const DerivationProvenance>(provenance, make_ref<nlohmann::json>(obj));
                 }
                 break;
             /* The `args' attribute is special: it supplies the
