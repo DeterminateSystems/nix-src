@@ -972,10 +972,22 @@ struct curlFileTransfer : public FileTransfer
         if (request.uri.scheme() == "s3") {
             auto modifiedRequest = request;
             modifiedRequest.setupForS3();
-            return enqueueItem(make_ref<TransferItem>(*this, std::move(modifiedRequest), std::move(callback)));
+            auto item = make_ref<TransferItem>(*this, std::move(modifiedRequest), std::move(callback));
+            try {
+                return enqueueItem(item);
+            } catch (const nix::Error & e) {
+                item->fail(e);
+                return ItemHandle(static_cast<Item &>(*item));
+            }
         }
 
-        return enqueueItem(make_ref<TransferItem>(*this, request, std::move(callback)));
+        auto item = make_ref<TransferItem>(*this, request, std::move(callback));
+        try {
+            return enqueueItem(item);
+        } catch (const nix::Error & e) {
+            item->fail(e);
+            return ItemHandle(static_cast<Item &>(*item));
+        }
     }
 
     void unpauseTransfer(ref<TransferItem> item)
