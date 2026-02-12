@@ -965,7 +965,8 @@ struct curlFileTransfer : public FileTransfer
         return ItemHandle(static_cast<Item &>(*item));
     }
 
-    ItemHandle enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) override
+    ItemHandle
+    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) noexcept override
     {
         /* Handle s3:// URIs by converting to HTTPS and optionally adding auth */
         if (request.uri.scheme() == "s3") {
@@ -1047,7 +1048,7 @@ void FileTransferRequest::setupForS3()
 #endif
 }
 
-std::future<FileTransferResult> FileTransfer::enqueueFileTransfer(const FileTransferRequest & request)
+std::future<FileTransferResult> FileTransfer::enqueueFileTransfer(const FileTransferRequest & request) noexcept
 {
     auto promise = std::make_shared<std::promise<FileTransferResult>>();
     enqueueFileTransfer(request, {[promise](std::future<FileTransferResult> fut) {
