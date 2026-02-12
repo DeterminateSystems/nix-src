@@ -88,6 +88,12 @@ nix copy --to "file://$binaryCache" "$outPath"
 
 clearStore
 
+export _NIX_FORCE_HTTP=1 # force use of the NAR info disk cache
+
+# Check that provenance is cached correctly.
+[[ $(nix path-info --json --json-format 1 --store "file://$binaryCache" "$outPath" | jq ".\"$outPath\".provenance") != null ]]
+[[ $(nix path-info --json --json-format 1 --store "file://$binaryCache" "$outPath" | jq ".\"$outPath\".provenance") != null ]]
+
 nix copy --from "file://$binaryCache" "$outPath" --no-check-sigs
 
 [[ $(nix path-info --json --json-format 1 "$outPath" | jq ".\"$outPath\".provenance") = $(cat <<EOF
@@ -123,6 +129,8 @@ nix copy --from "file://$binaryCache" "$outPath" --no-check-sigs
 }
 EOF
 ) ]]
+
+unset _NIX_FORCE_HTTP
 
 # Test `nix provenance show`.
 [[ $(nix provenance show "$outPath") = $(cat <<EOF
