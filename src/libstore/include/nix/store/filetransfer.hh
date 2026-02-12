@@ -279,14 +279,14 @@ public:
      * exception.
      */
     virtual ItemHandle
-    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) = 0;
+    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) noexcept = 0;
 
     /**
      * Unpause a transfer that has been previously paused by a dataCallback.
      */
     virtual void unpauseTransfer(ItemHandle handle) = 0;
 
-    std::future<FileTransferResult> enqueueFileTransfer(const FileTransferRequest & request);
+    std::future<FileTransferResult> enqueueFileTransfer(const FileTransferRequest & request) noexcept;
 
     /**
      * Synchronously download a file.
