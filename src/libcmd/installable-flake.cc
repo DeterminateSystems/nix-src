@@ -145,7 +145,7 @@ std::pair<Value *, PosIdx> InstallableFlake::toValue(EvalState & state)
     return {&getCursor(state)->forceValue(), noPos};
 }
 
-std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState & state)
+std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState & state, bool useDefaultAttrPath)
 {
     auto cache = flake_schemas::call(state, getLockedFlake(), defaultFlakeSchemas);
 
@@ -192,7 +192,7 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
                     if (schema.appendSystem)
                         attrPath.push_back(state.symbols.create(settings.thisSystem.get()));
 
-                    if (parsedFragment.empty()) {
+                    if (useDefaultAttrPath && parsedFragment.empty()) {
                         if (schema.defaultAttrPath) {
                             auto attrPath2{attrPath};
                             for (auto & x : *schema.defaultAttrPath)

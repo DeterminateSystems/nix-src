@@ -57,6 +57,11 @@ struct CmdSearch : InstallableValueCommand, MixJSON
             ;
     }
 
+    StringSet getRoles() override
+    {
+        return {"nix-search"};
+    }
+
     void run(ref<Store> store, ref<InstallableValue> installable) override
     {
         settings.readOnlyMode = true;
@@ -192,7 +197,7 @@ struct CmdSearch : InstallableValueCommand, MixJSON
         };
 
         Executor::WorkItems work;
-        for (auto & cursor : installable->getCursors(*state))
+        for (auto & cursor : installable->getCursors(*state, false))
             state->addWork(work, 1, [cursor, visit]() { visit(*cursor, cursor->getAttrPath(), true); });
 
         futures.spawn(std::move(work));
