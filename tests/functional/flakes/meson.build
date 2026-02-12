@@ -39,6 +39,7 @@ suites += {
     'shallow.sh',
     'get-flake.sh',
     'provenance.sh',
+    'search.sh',
   ],
   'workdir' : meson.current_source_dir(),
 }
