@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.15.2.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.16.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -156,3 +156,35 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 * Path inputs are now lazy [DeterminateSystems/nix-src#312](https://github.com/DeterminateSystems/nix-src/pull/312)
 
 * Improved performance when fetching a lot of dependencies with curl [DeterminateSystems/nix-src#315](https://github.com/DeterminateSystems/nix-src/pull/315)
+
+<!-- Determinate Nix version 3.16.0 -->
+
+* Wasm support by @edolstra in [DeterminateSystems/nix-src#309](https://github.com/DeterminateSystems/nix-src/pull/309)
+
+* builtins.wasm: Check against values with ID 0 by @edolstra in [DeterminateSystems/nix-src#324](https://github.com/DeterminateSystems/nix-src/pull/324)
+
+* filetransfer: don't allow the queue size to be 0  by @cole-h in [DeterminateSystems/nix-src#327](https://github.com/DeterminateSystems/nix-src/pull/327)
+
+* Sync with upstream 2.33.2 by @edolstra in [DeterminateSystems/nix-src#332](https://github.com/DeterminateSystems/nix-src/pull/332)
+
+* Support .gitattributes in subdirectories by @edolstra in [DeterminateSystems/nix-src#335](https://github.com/DeterminateSystems/nix-src/pull/335)
+
+* BinaryCacheStore::queryPathInfoUncached(): Ensure noexcept by @edolstra in [DeterminateSystems/nix-src#336](https://github.com/DeterminateSystems/nix-src/pull/336)
+
+* Enable static builds by @RossComputerGuy in [DeterminateSystems/nix-src#323](https://github.com/DeterminateSystems/nix-src/pull/323)
+
+* builtins.getFlake fixes by @edolstra in [DeterminateSystems/nix-src#337](https://github.com/DeterminateSystems/nix-src/pull/337)
+
+* Provenance by @edolstra in [DeterminateSystems/nix-src#321](https://github.com/DeterminateSystems/nix-src/pull/321)
+
+* builtins.getFlake: Support path values by @edolstra in [DeterminateSystems/nix-src#338](https://github.com/DeterminateSystems/nix-src/pull/338)
+
+* Add subcommand 'nix provenance show' by @edolstra in [DeterminateSystems/nix-src#340](https://github.com/DeterminateSystems/nix-src/pull/340)
+
+* Record builder host name in build provenance by @edolstra in [DeterminateSystems/nix-src#341](https://github.com/DeterminateSystems/nix-src/pull/341)
+
+* Build provenance improvements by @edolstra in [DeterminateSystems/nix-src#343](https://github.com/DeterminateSystems/nix-src/pull/343)
+
+* Store provenance info in the NAR info disk cache by @edolstra in [DeterminateSystems/nix-src#344](https://github.com/DeterminateSystems/nix-src/pull/344)
+
+* Increase the open file soft limit to the hard limit by @edolstra in [DeterminateSystems/nix-src#347](https://github.com/DeterminateSystems/nix-src/pull/347)
