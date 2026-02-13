@@ -44,4 +44,4 @@ expectStderr 0 nix search flake1 ^ | grepQuiet "legacyPackages.$system.xyzzy"
 expectStderr 0 nix search flake1#foo ^ | grepQuiet "Found 1 matching packages."
 expectStderr 1 nix search flake1#bar ^
 expectStderr 0 nix search flake1#packages.other-system ^ | grepQuiet "packages.other-system.bar"
-expectStderr 0 nix search "flake1#otherSchema.$system" ^ | grepQuiet "otherSchema.x86_64-linux.aap"
+expectStderr 0 nix search "flake1#otherSchema.$system" ^ | grepQuiet "otherSchema.$system.aap"
