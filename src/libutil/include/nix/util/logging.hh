@@ -39,6 +39,8 @@ typedef enum {
     resSetExpected = 106,
     resPostBuildLogLine = 107,
     resFetchStatus = 108,
+    resHashMismatch = 109,
+    resBuildResult = 110,
 } ResultType;
 
 typedef uint64_t ActivityId;
@@ -59,7 +61,7 @@ struct LoggerSettings : Config
         {},
         "json-log-path",
         R"(
-          A file or unix socket to which JSON records of Nix's log output are
+          A file or Unix domain socket to which JSON records of Nix's log output are
           written, in the same format as `--log-format internal-json`
           (without the `@nix ` prefixes on each line).
           Concurrent writes to the same file by multiple Nix processes are not supported and
@@ -158,6 +160,8 @@ public:
 
     virtual void result(ActivityId act, ResultType type, const Fields & fields) {};
 
+    virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) {};
+
     virtual void writeToStdout(std::string_view s);
 
     template<typename... Args>
@@ -220,6 +224,11 @@ struct Activity
     void setExpected(ActivityType type2, uint64_t expected) const
     {
         result(resSetExpected, type2, expected);
+    }
+
+    void result(ResultType type, const nlohmann::json & json) const
+    {
+        logger.result(id, type, json);
     }
 
     template<typename... Args>

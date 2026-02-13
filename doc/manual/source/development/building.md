@@ -1,73 +1,5 @@
 # Building Nix
 
-This section provides some notes on how to start hacking on Nix.
-To get the latest version of Nix from GitHub:
-
-```console
-$ git clone https://github.com/NixOS/nix.git
-$ cd nix
-```
-
-> **Note**
->
-> The following instructions assume you already have some version of Nix installed locally, so that you can use it to set up the development environment.
-> If you don't have it installed, follow the [installation instructions](../installation/index.md).
-
-
-To build all dependencies and start a shell in which all environment variables are set up so that those dependencies can be found:
-
-```console
-$ nix-shell
-```
-
-To get a shell with one of the other [supported compilation environments](#compilation-environments):
-
-```console
-$ nix-shell --attr devShells.x86_64-linux.native-clangStdenv
-```
-
-> **Note**
->
-> You can use `native-ccacheStdenv` to drastically improve rebuild time.
-> By default, [ccache](https://ccache.dev) keeps artifacts in `~/.cache/ccache/`.
-
-To build Nix itself in this shell:
-
-```console
-[nix-shell]$ out="$(pwd)/outputs/out" dev=$out debug=$out mesonFlags+=" --prefix=${out}"
-[nix-shell]$ dontAddPrefix=1 configurePhase
-[nix-shell]$ buildPhase
-```
-
-To test it:
-
-```console
-[nix-shell]$ checkPhase
-```
-
-To install it in `$(pwd)/outputs`:
-
-```console
-[nix-shell]$ installPhase
-[nix-shell]$ ./outputs/out/bin/nix --version
-nix (Nix) 2.12
-```
-
-To build a release version of Nix for the current operating system and CPU architecture:
-
-```console
-$ nix-build
-```
-
-You can also build Nix for one of the [supported platforms](#platforms).
-
-## Building Nix with flakes
-
-This section assumes you are using Nix with the [`flakes`] and [`nix-command`] experimental features enabled.
-
-[`flakes`]: @docroot@/development/experimental-features.md#xp-feature-flakes
-[`nix-command`]: @docroot@/development/experimental-features.md#xp-feature-nix-command
-
 To build all dependencies and start a shell in which all environment variables are set up so that those dependencies can be found:
 
 ```console
@@ -126,8 +58,6 @@ Nix can be built for various platforms, as specified in [`flake.nix`]:
 [`flake.nix`]: https://github.com/nixos/nix/blob/master/flake.nix
 
 - `x86_64-linux`
-- `x86_64-darwin`
-- `i686-linux`
 - `aarch64-linux`
 - `aarch64-darwin`
 - `armv6l-linux`
@@ -144,12 +74,6 @@ platform. Common solutions include [remote build machines] and [binary format em
 
 Given such a setup, executing the build only requires selecting the respective attribute.
 For example, to compile for `aarch64-linux`:
-
-```console
-$ nix-build --attr packages.aarch64-linux.default
-```
-
-or for Nix with the [`flakes`] and [`nix-command`] experimental features enabled:
 
 ```console
 $ nix build .#packages.aarch64-linux.default
@@ -219,6 +143,7 @@ For historic reasons and backward-compatibility, some CPU and OS identifiers are
 |-----------------------------|-------------------------|---------------------|
 | `x86`                       |                         | `i686`              |
 | `arm`                       |                         | `host_machine.cpu()`|
+| `arm64`                     |                         | `host_machine.cpu()`|
 | `ppc`                       | `little`                | `powerpcle`         |
 | `ppc64`                     | `little`                | `powerpc64le`       |
 | `ppc`                       | `big`                   | `powerpc`           |
@@ -243,20 +168,12 @@ To build with one of those environments, you can use
 $ nix build .#nix-cli-ccacheStdenv
 ```
 
-for flake-enabled Nix, or
-
-```console
-$ nix-build --attr nix-cli-ccacheStdenv
-```
-
-for classic Nix.
-
 You can use any of the other supported environments in place of `nix-cli-ccacheStdenv`.
 
 ## Editor integration
 
 The `clangd` LSP server is installed by default on the `clang`-based `devShell`s.
-See [supported compilation environments](#compilation-environments) and instructions how to set up a shell [with flakes](#building-nix-with-flakes) or in [classic Nix](#building-nix).
+See [supported compilation environments](#compilation-environments) and instructions how to [set up a shell](#building-nix).
 
 To use the LSP with your editor, you will want a `compile_commands.json` file telling `clangd` how we are compiling the code.
 Meson's configure always produces this inside the build directory.

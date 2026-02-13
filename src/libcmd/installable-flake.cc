@@ -17,6 +17,7 @@
 #include "nix/util/url.hh"
 #include "nix/fetchers/registry.hh"
 #include "nix/store/build-result.hh"
+#include "nix/flake/provenance.hh"
 
 #include <regex>
 #include <queue>
@@ -84,6 +85,8 @@ DerivedPathsWithInfo InstallableFlake::toDerivedPaths()
 
     auto attrPath = attr->getAttrPathStr();
 
+    PushProvenance pushedProvenance(*state, makeProvenance(attrPath));
+
     if (!attr->isDerivation()) {
 
         // FIXME: use eval cache?
@@ -102,6 +105,7 @@ DerivedPathsWithInfo InstallableFlake::toDerivedPaths()
     }
 
     auto drvPath = attr->forceDerivation();
+    state->waitForPath(drvPath);
 
     std::optional<NixInt::Inner> priority;
 
@@ -171,6 +175,8 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
     for (auto & attrPath : attrPaths) {
         debug("trying flake output attribute '%s'", attrPath);
 
+        PushProvenance pushedProvenance(state, makeProvenance(attrPath));
+
         auto attr = root->findAlongAttrPath(AttrPath::parse(state, attrPath));
         if (attr) {
             res.push_back(ref(*attr));
@@ -209,6 +215,16 @@ FlakeRef InstallableFlake::nixpkgsFlakeRef() const
     }
 
     return defaultNixpkgsFlakeRef();
+}
+
+std::shared_ptr<const Provenance> InstallableFlake::makeProvenance(std::string_view attrPath) const
+{
+    if (!evalSettings.pureEval)
+        return nullptr;
+    auto provenance = getLockedFlake()->flake.provenance;
+    if (!provenance)
+        return nullptr;
+    return std::make_shared<const FlakeProvenance>(provenance, std::string(attrPath));
 }
 
 } // namespace nix

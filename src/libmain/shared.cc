@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #include <signal.h>
 #ifdef __linux__
@@ -116,6 +117,26 @@ std::string getArg(const std::string & opt, Strings::iterator & i, const Strings
 static void sigHandler(int signo) {}
 #endif
 
+/**
+ * Increase the open file soft limit to the hard limit. On some
+ * platforms (macOS), the default soft limit is very low, but the hard
+ * limit is high. So let's just raise it the maximum permitted.
+ */
+void bumpFileLimit()
+{
+#ifndef _WIN32
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_NOFILE, &limit) != 0)
+        return;
+
+    if (limit.rlim_cur < limit.rlim_max) {
+        limit.rlim_cur = limit.rlim_max;
+        // Ignore errors, this is best effort.
+        setrlimit(RLIMIT_NOFILE, &limit);
+    }
+#endif
+}
+
 void initNix(bool loadConfig)
 {
     /* Turn on buffering for cerr. */
@@ -183,6 +204,8 @@ void initNix(bool loadConfig)
        now.  In particular, store objects should be readable by
        everybody. */
     umask(0022);
+
+    bumpFileLimit();
 }
 
 LegacyArgs::LegacyArgs(
@@ -292,9 +315,14 @@ void parseCmdLine(
     LegacyArgs(programName, parseArg).parseCmdline(args);
 }
 
+std::string version()
+{
+    return fmt("(Determinate Nix %s) %s", determinateNixVersion, nixVersion);
+}
+
 void printVersion(const std::string & programName)
 {
-    std::cout << fmt("%1% (Nix) %2%", programName, nixVersion) << std::endl;
+    std::cout << fmt("%s %s", programName, version()) << std::endl;
     if (verbosity > lvlInfo) {
         Strings cfg;
 #if NIX_USE_BOEHMGC
@@ -326,7 +354,7 @@ int handleExceptions(const std::string & programName, std::function<void()> fun)
         return e.status;
     } catch (UsageError & e) {
         logError(e.info());
-        printError("Try '%1% --help' for more information.", programName);
+        printError("\nTry '%1% --help' for more information.", programName);
         return 1;
     } catch (BaseError & e) {
         logError(e.info());
