@@ -15,9 +15,7 @@ in
 rec {
   outputNames = builtins.attrNames flake.outputs;
 
-  allSchemas = (flake.outputs.schemas or defaultSchemasFlake.schemas) // schemaOverrides;
-
-  schemaOverrides = { }; # FIXME
+  allSchemas = flake.outputs.schemas or defaultSchemasFlake.schemas;
 
   schemas = builtins.listToAttrs (
     builtins.concatLists (
