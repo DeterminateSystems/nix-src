@@ -18,6 +18,7 @@
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/sort.hh"
 #include "nix/util/mounted-source-accessor.hh"
+#include "nix/expr/provenance.hh"
 
 #include <boost/container/small_vector.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
@@ -1504,6 +1505,8 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
     StringSet outputs;
     outputs.insert("out");
 
+    auto provenance = state.evalContext.provenance;
+
     for (auto & i : attrs->lexicographicOrder(state.symbols)) {
         if (i->name == state.s.ignoreNulls)
             continue;
@@ -1569,6 +1572,29 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
                 if (state.forceBool(*i->value, pos, context_below)) {
                     isImpure = true;
                     experimentalFeatureSettings.require(Xp::ImpureDerivations);
+                }
+                break;
+            case EvalState::s.__meta.getId():
+                if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+                    state.forceAttrs(*i->value, pos, "");
+                    auto meta = i->value->attrs();
+                    auto obj = nlohmann::json();
+
+                    for (auto & i : meta->lexicographicOrder(state.symbols)) {
+                        auto key = state.symbols[i->name];
+                        switch (i->name.getId()) {
+                        case EvalState::s.identifiers.getId():
+                        case EvalState::s.license.getId():
+                        case EvalState::s.licenses.getId():
+                            obj.emplace(key, printValueAsJSON(state, true, *i->value, pos, context));
+                            break;
+                        default:
+                            continue;
+                        }
+                    }
+
+                    provenance =
+                        std::make_shared<const DerivationProvenance>(provenance, make_ref<nlohmann::json>(obj));
                 }
                 break;
             /* The `args' attribute is special: it supplies the
@@ -1847,8 +1873,7 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
     }
 
     /* Write the resulting term into the Nix store directory. */
-    auto drvPath =
-        writeDerivation(*state.store, *state.asyncPathWriter, drv, state.repair, false, state.evalContext.provenance);
+    auto drvPath = writeDerivation(*state.store, *state.asyncPathWriter, drv, state.repair, false, provenance);
     auto drvPathS = state.store->printStorePath(drvPath);
 
     printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
@@ -5420,7 +5445,14 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
        language feature gets added.  It's not necessary to increase it
        when primops get added, because you can just use `builtins ?
        primOp' to check. */
-    v.mkInt(6);
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+        /* Provenance allows for meta to be inside of derivations.
+           We increment the version to 7 so Nixpkgs will know when
+           provenance is available. */
+        v.mkInt(7);
+    } else {
+        v.mkInt(6);
+    }
     addConstant(
         "__langVersion",
         v,

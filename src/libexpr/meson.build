@@ -181,6 +181,7 @@ sources = files(
   'primops.cc',
   'print-ambiguous.cc',
   'print.cc',
+  'provenance.cc',
   'search-path.cc',
   'symbol-table.cc',
   'value-to-json.cc',
