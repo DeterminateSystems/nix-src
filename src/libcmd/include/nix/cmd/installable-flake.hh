@@ -36,11 +36,12 @@ struct ExtraPathInfoFlake : ExtraPathInfoValue
 struct InstallableFlake : InstallableValue
 {
     FlakeRef flakeRef;
-    Strings attrPaths;
-    Strings prefixes;
+    std::string fragment;
+    StringSet roles;
     ExtendedOutputsSpec extendedOutputsSpec;
     const flake::LockFlags & lockFlags;
     mutable std::shared_ptr<flake::LockedFlake> _lockedFlake;
+    std::optional<FlakeRef> defaultFlakeSchemas;
 
     InstallableFlake(
         SourceExprCommand * cmd,
@@ -48,16 +49,14 @@ struct InstallableFlake : InstallableValue
         FlakeRef && flakeRef,
         std::string_view fragment,
         ExtendedOutputsSpec extendedOutputsSpec,
-        Strings attrPaths,
-        Strings prefixes,
-        const flake::LockFlags & lockFlags);
+        StringSet roles,
+        const flake::LockFlags & lockFlags,
+        std::optional<FlakeRef> defaultFlakeSchemas);
 
     std::string what() const override
     {
-        return flakeRef.to_string() + "#" + *attrPaths.begin();
+        return flakeRef.to_string() + "#" + fragment;
     }
-
-    std::vector<std::string> getActualAttrPaths();
 
     DerivedPathsWithInfo toDerivedPaths() override;
 
@@ -67,13 +66,19 @@ struct InstallableFlake : InstallableValue
      * Get a cursor to every attrpath in getActualAttrPaths() that
      * exists. However if none exists, throw an exception.
      */
-    std::vector<ref<eval_cache::AttrCursor>> getCursors(EvalState & state) override;
+    std::vector<ref<eval_cache::AttrCursor>> getCursors(EvalState & state, bool useDefaultAttrPath) override;
 
     ref<flake::LockedFlake> getLockedFlake() const;
 
     FlakeRef nixpkgsFlakeRef() const;
 
     std::shared_ptr<const Provenance> makeProvenance(std::string_view attrPath) const;
+
+    ref<eval_cache::EvalCache> openEvalCache() const;
+
+private:
+
+    mutable std::shared_ptr<eval_cache::EvalCache> _evalCache;
 };
 
 /**

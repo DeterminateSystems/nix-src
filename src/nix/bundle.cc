@@ -58,21 +58,9 @@ struct CmdBundle : InstallableValueCommand
         return catSecondary;
     }
 
-    // FIXME: cut&paste from CmdRun.
-    Strings getDefaultFlakeAttrPaths() override
+    StringSet getRoles() override
     {
-        Strings res{"apps." + settings.thisSystem.get() + ".default", "defaultApp." + settings.thisSystem.get()};
-        for (auto & s : SourceExprCommand::getDefaultFlakeAttrPaths())
-            res.push_back(s);
-        return res;
-    }
-
-    Strings getDefaultFlakeAttrPathPrefixes() override
-    {
-        Strings res{"apps." + settings.thisSystem.get() + "."};
-        for (auto & s : SourceExprCommand::getDefaultFlakeAttrPathPrefixes())
-            res.push_back(s);
-        return res;
+        return {"nix-run"};
     }
 
     void run(ref<Store> store, ref<InstallableValue> installable) override
@@ -90,9 +78,9 @@ struct CmdBundle : InstallableValueCommand
             std::move(bundlerFlakeRef),
             bundlerName,
             std::move(extendedOutputsSpec),
-            {"bundlers." + settings.thisSystem.get() + ".default", "defaultBundler." + settings.thisSystem.get()},
-            {"bundlers." + settings.thisSystem.get() + "."},
-            lockFlags};
+            {"nix-bundler"},
+            lockFlags,
+            std::nullopt};
 
         auto vRes = evalState->allocValue();
         evalState->callFunction(*bundler.toValue(*evalState).first, *val, *vRes, noPos);
