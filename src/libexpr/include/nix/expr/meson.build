@@ -30,6 +30,7 @@ headers = [ config_pub_h ] + files(
   'print-ambiguous.hh',
   'print-options.hh',
   'print.hh',
+  'provenance.hh',
   'repl-exit-status.hh',
   'search-path.hh',
   'static-string-data.hh',
