@@ -338,8 +338,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
                 {{"hash", store.queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
         }
 
-        if (isLocked(settings))
-            accessor->provenance = std::make_shared<TreeProvenance>(*this);
+        accessor->provenance = std::make_shared<TreeProvenance>(*this);
 
         // FIXME: ideally we would use the `showPath()` of the
         // "real" accessor for this fetcher type.
@@ -365,8 +364,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         else
             accessor->fingerprint = result.getFingerprint(store);
 
-        if (result.isLocked(settings))
-            accessor->provenance = std::make_shared<TreeProvenance>(result);
+        accessor->provenance = std::make_shared<TreeProvenance>(result);
 
         return {accessor, std::move(result)};
     } catch (Error & e) {

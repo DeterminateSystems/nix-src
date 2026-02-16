@@ -51,6 +51,7 @@ builder=$(nix eval --raw "$flake1Dir#packages.$system.default._builder")
         "subpath": "/flake.nix",
         "type": "subpath"
       },
+      "pure": true,
       "type": "flake"
     },
     "type": "derivation"
@@ -95,6 +96,13 @@ EOF
   "subpath": "/simple.builder.sh",
   "type": "subpath"
 }
+EOF
+) ]]
+
+[[ "$(nix provenance show "$builder")" = $(cat <<EOF
+[1m$builder[0m
+← from file [1m/simple.builder.sh[0m
+← from tree [1mgit+file://$flake1Dir?ref=refs/heads/master&rev=$rev[0m
 EOF
 ) ]]
 
@@ -149,6 +157,7 @@ nix copy --from "file://$binaryCache" "$outPath" --no-check-sigs
           "subpath": "/flake.nix",
           "type": "subpath"
         },
+        "pure": true,
         "type": "flake"
       },
       "type": "derivation"
@@ -194,7 +203,26 @@ nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.defa
       }
     ]
   },
-  "next": null,
+  "next": {
+    "flakeOutput": "packages.$system.default",
+    "next": {
+      "next": {
+        "attrs": {
+          "lastModified": $lastModified,
+          "ref": "refs/heads/master",
+          "rev": "$rev",
+          "revCount": 1,
+          "type": "git",
+          "url": "file://$flake1Dir"
+        },
+        "type": "tree"
+      },
+      "subpath": "/flake.nix",
+      "type": "subpath"
+    },
+    "pure": false,
+    "type": "flake"
+  },
   "type": "derivation"
 }
 EOF
@@ -204,5 +232,21 @@ clearStore
 echo foo > "$flake1Dir/somefile"
 git -C "$flake1Dir" add somefile
 nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.default"
-builder=$(nix eval --raw "$flake1Dir#packages.$system.default._builder")
-[[ $(nix path-info --json --json-format 1 "$builder" | jq ".\"$builder\".provenance") = null ]]
+[[ $(nix path-info --json --json-format 1 "$builder" | jq ".\"$builder\".provenance") != null ]]
+
+[[ "$(nix provenance show "$outPath")" = $(cat <<EOF
+[1m$outPath[0m
+← built from derivation [1m$drvPath[0m (output [1mout[0m) on [1mtest-host[0m for [1m$system[0m
+← with derivation metadata
+    [1mLicenses:[0m
+        - lgpl21
+← [31;1mimpurely[0m instantiated from [31;1munlocked[0m flake output [1mgit+file://$flake1Dir#packages.$system.default[0m
+EOF
+) ]]
+
+[[ "$(nix provenance show "$builder")" = $(cat <<EOF
+[1m$builder[0m
+← from file [1m/simple.builder.sh[0m
+← from [31;1munlocked[0m tree [1mgit+file://$flake1Dir[0m
+EOF
+) ]]
