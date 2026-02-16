@@ -67,9 +67,6 @@ public:
     /* How often to purge expired entries from the cache. */
     const int purgeInterval = 24 * 3600;
 
-    /* How long to cache binary cache info (i.e. /nix-cache-info) */
-    const int cacheInfoTtl = 7 * 24 * 3600;
-
     struct Cache
     {
         int id;
@@ -184,7 +181,7 @@ private:
     {
         auto i = state.caches.find(uri);
         if (i == state.caches.end()) {
-            auto queryCache(state.queryCache.use()(uri)(time(0) - cacheInfoTtl));
+            auto queryCache(state.queryCache.use()(uri)(time(0) - settings.ttlNarInfoCacheMeta));
             if (!queryCache.next())
                 return std::nullopt;
             auto cache = Cache{
