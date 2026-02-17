@@ -249,7 +249,7 @@ static std::pair<std::map<FlakeId, FlakeInput>, fetchers::Attrs> parseFlakeInput
     return {inputs, selfAttrs};
 }
 
-static Flake readFlake(
+Flake readFlake(
     EvalState & state,
     const FlakeRef & originalRef,
     const FlakeRef & resolvedRef,
@@ -953,6 +953,7 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
 {
     auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
     auto useRegistriesTop = useRegistries ? fetchers::UseRegistries::All : fetchers::UseRegistries::No;
+
     return lockFlake(settings, state, topRef, lockFlags, getFlake(state, topRef, useRegistriesTop, {}, false));
 }
 
@@ -1060,11 +1061,6 @@ ref<eval_cache::EvalCache> openEvalCache(EvalState & state, ref<const LockedFlak
                            ? lockedFlake->getFingerprint(*state.store, state.fetchSettings)
                            : std::nullopt;
     auto rootLoader = [&state, lockedFlake]() {
-        /* For testing whether the evaluation cache is
-           complete. */
-        if (getEnv("NIX_ALLOW_EVAL").value_or("1") == "0")
-            throw Error("not everything is cached, but evaluation is not allowed");
-
         auto vFlake = state.allocValue();
         callFlake(state, *lockedFlake, *vFlake);
 
