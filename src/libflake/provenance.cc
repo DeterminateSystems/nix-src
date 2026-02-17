@@ -11,7 +11,7 @@ nlohmann::json FlakeProvenance::to_json() const
         {"type", "flake"},
         {"next", next ? next->to_json() : nlohmann::json(nullptr)},
         {"flakeOutput", flakeOutput},
-    };
+        {"pure", pure}};
 }
 
 Provenance::Register registerFlakeProvenance("flake", [](nlohmann::json json) {
@@ -19,7 +19,10 @@ Provenance::Register registerFlakeProvenance("flake", [](nlohmann::json json) {
     std::shared_ptr<const Provenance> next;
     if (auto p = optionalValueAt(obj, "next"); p && !p->is_null())
         next = Provenance::from_json(*p);
-    return make_ref<FlakeProvenance>(next, getString(valueAt(obj, "flakeOutput")));
+    bool pure = true;
+    if (auto p = optionalValueAt(obj, "pure"))
+        pure = getBoolean(*p);
+    return make_ref<FlakeProvenance>(next, getString(valueAt(obj, "flakeOutput")), pure);
 });
 
 } // namespace nix

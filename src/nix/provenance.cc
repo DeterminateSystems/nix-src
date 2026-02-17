@@ -79,7 +79,9 @@ struct CmdProvenanceShow : StorePathsCommand
                         fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs)),
                         Path(flakePath.parent().value_or(CanonPath::root).rel()));
                     logger->cout(
-                        "← instantiated from flake output " ANSI_BOLD "%s#%s" ANSI_NORMAL,
+                        "← %sinstantiated from %sflake output " ANSI_BOLD "%s#%s" ANSI_NORMAL,
+                        flake->pure ? "" : ANSI_RED "impurely" ANSI_NORMAL " ",
+                        flakeRef.input.isLocked(fetchSettings) ? "" : ANSI_RED "unlocked" ANSI_NORMAL " ",
                         flakeRef.to_string(),
                         flake->flakeOutput);
                     break;
@@ -89,7 +91,10 @@ struct CmdProvenanceShow : StorePathsCommand
                 }
             } else if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(provenance)) {
                 auto input = fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs));
-                logger->cout("← from tree " ANSI_BOLD "%s" ANSI_NORMAL, input.to_string());
+                logger->cout(
+                    "← from %stree " ANSI_BOLD "%s" ANSI_NORMAL,
+                    input.isLocked(fetchSettings) ? "" : ANSI_RED "unlocked" ANSI_NORMAL " ",
+                    input.to_string());
                 break;
             } else if (auto subpath = std::dynamic_pointer_cast<const SubpathProvenance>(provenance)) {
                 logger->cout("← from file " ANSI_BOLD "%s" ANSI_NORMAL, subpath->subpath.abs());
