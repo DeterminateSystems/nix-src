@@ -1576,7 +1576,7 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
                 break;
             case EvalState::s.__meta.getId():
                 if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
-                    state.forceAttrs(*i->value, pos, "");
+                    state.forceAttrs(*i->value, pos, "while evaluating __meta");
                     auto meta = i->value->attrs();
                     auto obj = nlohmann::json();
 

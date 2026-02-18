@@ -10,6 +10,8 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 
+#define TAB "    "
+
 using namespace nix;
 
 struct CmdProvenance : NixMultiCommand
@@ -101,7 +103,6 @@ struct CmdProvenanceShow : StorePathsCommand
                 provenance = subpath->next;
             } else if (auto drv = std::dynamic_pointer_cast<const DerivationProvenance>(provenance)) {
                 logger->cout("← with derivation metadata");
-#define TAB "    "
                 auto json = getObject(*(drv->meta));
                 if (auto identifiers = optionalValueAt(json, "identifiers")) {
                     auto ident = getObject(*identifiers);
@@ -151,7 +152,6 @@ struct CmdProvenanceShow : StorePathsCommand
                         logger->cout(TAB "" ANSI_BOLD "License:" ANSI_NORMAL " %s", shortName.get<std::string>());
                     }
                 }
-#undef TAB
                 provenance = drv->next;
             } else {
                 // Unknown or unhandled provenance type
