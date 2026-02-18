@@ -1054,9 +1054,9 @@ std::optional<Fingerprint> LockedFlake::getFingerprint(Store & store, const fetc
 
 Flake::~Flake() {}
 
-ref<eval_cache::EvalCache> openEvalCache(EvalState & state, ref<const LockedFlake> lockedFlake)
+ref<eval_cache::EvalCache> openEvalCache(EvalState & state, ref<const LockedFlake> lockedFlake, bool allowEvalCache)
 {
-    auto fingerprint = state.settings.useEvalCache && state.settings.pureEval
+    auto fingerprint = allowEvalCache && state.settings.useEvalCache && state.settings.pureEval
                            ? lockedFlake->getFingerprint(*state.store, state.fetchSettings)
                            : std::nullopt;
     auto rootLoader = [&state, lockedFlake]() {

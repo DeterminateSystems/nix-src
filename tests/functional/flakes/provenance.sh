@@ -106,6 +106,14 @@ EOF
 EOF
 ) ]]
 
+# Verify the provenance of all store paths.
+nix provenance verify --all
+
+# Verification should fail if the sources cannot be fetched
+mv "$flake1Dir" "$flake1Dir-tmp"
+expectStderr 1 nix provenance verify --all | grepQuiet "Git repository.*does not exist"
+mv "$flake1Dir-tmp" "$flake1Dir"
+
 # Check that substituting from a binary cache adds "copied" provenance.
 binaryCache="$TEST_ROOT/binary-cache"
 nix copy --to "file://$binaryCache" "$outPath"
@@ -185,6 +193,8 @@ unset _NIX_FORCE_HTTP
 EOF
 ) ]]
 
+nix provenance verify --all
+
 # Check that --impure does not add additional provenance.
 clearStore
 nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.default"
@@ -250,3 +260,30 @@ EOF
 ← from [31;1munlocked[0m tree [1mgit+file://$flake1Dir[0m
 EOF
 ) ]]
+
+nix provenance verify --all
+
+# Test that impure builds fail verification.
+clearStore
+echo x > "$TEST_ROOT/counter"
+cat > "$flake1Dir/flake.nix" <<EOF
+{
+  outputs = inputs: rec {
+    packages.$system = rec {
+      default =
+        with import ./config.nix;
+        mkDerivation {
+          name = "simple";
+          buildCommand = ''
+            set -x
+            cat "$TEST_ROOT/counter" > \$out
+            echo x >> "$TEST_ROOT/counter"
+          '';
+        };
+    };
+  };
+}
+EOF
+outPath=$(nix build --print-out-paths --no-link "$flake1Dir")
+
+expectStderr 1 nix provenance verify --all | grepQuiet "derivation .* may not be deterministic: output .* differs"

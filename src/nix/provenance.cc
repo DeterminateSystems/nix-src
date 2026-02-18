@@ -1,14 +1,21 @@
 #include "nix/cmd/command.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/store-open.hh"
 #include "nix/expr/provenance.hh"
 #include "nix/store/provenance.hh"
 #include "nix/flake/provenance.hh"
 #include "nix/fetchers/provenance.hh"
 #include "nix/util/provenance.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/fetchers/fetch-to-store.hh"
+#include "nix/util/exit.hh"
+#include "nix/cmd/installable-flake.hh"
+#include "nix/store/derivations.hh"
 
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <boost/unordered/concurrent_flat_map.hpp>
+#include <boost/unordered/unordered_flat_set.hpp>
 
 using namespace nix;
 
@@ -186,3 +193,267 @@ struct CmdProvenanceShow : StorePathsCommand
 };
 
 static auto rCmdProvenanceShow = registerCommand2<CmdProvenanceShow>({"provenance", "show"});
+
+struct CmdProvenanceVerify : StorePathsCommand
+{
+    bool noRebuild = false;
+
+    CmdProvenanceVerify()
+    {
+        addFlag({
+            .longName = "no-rebuild",
+            .description = "Skip rebuilding derivations to verify reproducibility.",
+            .handler = {&noRebuild, true},
+        });
+    }
+
+    std::string description() override
+    {
+        return "verify the provenance of store paths";
+    }
+
+    std::string doc() override
+    {
+        return
+#include "provenance-verify.md"
+            ;
+    }
+
+    bool verifySourcePath(Store & store, const StorePath & expectedPath, const SourcePath & sourcePath)
+    {
+        auto computedPath = fetchToStore2(fetchSettings, store, sourcePath, FetchMode::Copy, expectedPath.name()).first;
+        if (computedPath != expectedPath) {
+            logger->cout(
+                "❌ " ANSI_RED "store path mismatch for source '%s': expected '%s' but got '%s'" ANSI_NORMAL,
+                sourcePath.to_string(),
+                store.printStorePath(expectedPath),
+                store.printStorePath(computedPath));
+            return false;
+        } else {
+            logger->cout("✅ verified store path for source '%s'", sourcePath.to_string());
+            return true;
+        }
+    }
+
+    using CheckResult = std::variant<
+        std::pair<fetchers::Input, ref<SourceAccessor>>,
+        std::pair<fetchers::Input, SourcePath>,
+        std::monostate>;
+
+    std::pair<bool, CheckResult>
+    verify(Store & store, std::optional<StorePath> path, std::shared_ptr<const Provenance> provenance)
+    {
+        if (auto copied = std::dynamic_pointer_cast<const CopiedProvenance>(provenance)) {
+            if (!path) {
+                logger->cout("❌ " ANSI_RED "cannot verify copied provenance without a store path" ANSI_NORMAL);
+                return {false, std::monostate{}};
+            }
+            bool success = true;
+            auto fromStore = openStore(copied->from);
+            auto localInfo = store.queryPathInfo(*path);
+            auto fromInfo = fromStore->queryPathInfo(*path);
+            if (localInfo->narHash != fromInfo->narHash) {
+                logger->cout(
+                    "❌ " ANSI_RED "NAR hash mismatch in origin store '%s': should be '%s' but is '%s'" ANSI_NORMAL,
+                    copied->from,
+                    localInfo->narHash.to_string(HashFormat::SRI, true),
+                    fromInfo->narHash.to_string(HashFormat::SRI, true));
+                success = false;
+            } else
+                logger->cout("✅ verified NAR hash in origin store '%s'", copied->from);
+            auto [nextSuccess, result] = verify(store, path, copied->next);
+            return {success && nextSuccess, std::move(result)};
+        }
+
+        else if (auto build = std::dynamic_pointer_cast<const BuildProvenance>(provenance)) {
+            auto success = verify(store, build->drvPath, build->next).first;
+
+            // Verify that `path` is the expected output of the derivation.
+            auto outputMap = store.queryPartialDerivationOutputMap(build->drvPath);
+            auto it = outputMap.find(build->output);
+            if (it == outputMap.end()) {
+                logger->cout(
+                    "❌ " ANSI_RED "derivation '%s' does not have expected output '%s'" ANSI_NORMAL,
+                    store.printStorePath(build->drvPath),
+                    build->output);
+                return {false, std::monostate{}};
+            } else if (!it->second) {
+                // Note: this is not an error, should we even print a message?
+                logger->cout(
+                    "❓ output '%s' of derivation '%s' is not statically known",
+                    build->output,
+                    store.printStorePath(build->drvPath));
+            } else if (*it->second != path) {
+                logger->cout(
+                    "❌ " ANSI_RED "output '%s' of derivation '%s' is '%s', expected '%s'" ANSI_NORMAL,
+                    build->output,
+                    store.printStorePath(build->drvPath),
+                    store.printStorePath(*it->second),
+                    store.printStorePath(*path));
+                return {false, std::monostate{}};
+            }
+
+            // Do a check rebuild to verify that the derivation
+            // produces the same output.
+            if (noRebuild) {
+                logger->cout(
+                    "⏭️ skipped rebuild of derivation '%s^%s'", store.printStorePath(build->drvPath), build->output);
+            } else {
+                try {
+                    store.buildPaths(
+                        {DerivedPath::Built{
+                            .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{build->drvPath}),
+                            .outputs = OutputsSpec::Names{build->output},
+                        }},
+                        bmCheck);
+                    logger->cout("✅ rebuilt derivation '%s^%s'", store.printStorePath(build->drvPath), build->output);
+                } catch (Error & e) {
+                    logger->cout(
+                        "❌ " ANSI_RED "rebuild of derivation '%s^%s' failed: %s" ANSI_NORMAL,
+                        store.printStorePath(build->drvPath),
+                        build->output,
+                        e.what());
+                    success = false;
+                }
+            }
+
+            return {success, std::monostate{}};
+        }
+
+        else if (auto flake = std::dynamic_pointer_cast<const FlakeProvenance>(provenance)) {
+            // Fetch the flake source.
+            auto [success, _res] = verify(store, {}, flake->next);
+
+            auto res = std::get_if<std::pair<fetchers::Input, SourcePath>>(&_res);
+            if (!res)
+                return {false, std::monostate{}};
+
+            // Evaluate the flake output.
+            flake::LockFlags lockFlags{
+                .updateLockFile = false,
+                .failOnUnlocked = true,
+                .useRegistries = false,
+                .allowUnlocked = false,
+            };
+
+            if (res->second.path.baseName() != "flake.nix") {
+                logger->cout(
+                    "❌ " ANSI_RED "expected flake source to be a 'flake.nix' file, but got '%s'" ANSI_NORMAL,
+                    res->second.path.abs());
+                return {false, std::monostate{}};
+            }
+
+            InstallableFlake installable{
+                nullptr,
+                getEvalState(),
+                FlakeRef{std::move(res->first), std::string(res->second.path.parent().value().rel())},
+                "." + flake->flakeOutput,
+                ExtendedOutputsSpec::Default{}, // FIXME: record this in the provenance?
+                {},
+                {},
+                lockFlags};
+
+            // We have to disable the eval cache to ensure that we see which store paths get instantiated.
+            installable.useEvalCache = false;
+
+            // Hacky: we're abusing drvHashes to see what derivations got instantiated, so we have to clear it before
+            // evaluation.
+            drvHashes.clear();
+
+            // Similarly, ensure that fileEvalCache is nuked.
+            getEvalState()->resetFileCache();
+
+            installable.toDerivedPaths();
+
+            logger->cout("✅ evaluated '%s#%s'", installable.flakeRef.to_string(true), flake->flakeOutput);
+
+            if (path) {
+                boost::unordered_flat_set<StorePath> instantiatedPaths;
+                drvHashes.cvisit_all([&](const auto & kv) { instantiatedPaths.insert(kv.first); });
+                // FIXME: add non-derivation paths
+
+                if (!instantiatedPaths.contains(*path)) {
+                    logger->cout(
+                        "❌ " ANSI_RED "evaluation did not re-instantiate path '%s'" ANSI_NORMAL,
+                        store.printStorePath(*path));
+                    return {false, std::monostate{}};
+                }
+
+                logger->cout("✅ re-instantiated path '%s'", store.printStorePath(*path));
+            }
+
+            return {success, std::monostate{}};
+        }
+
+        else if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(provenance)) {
+            auto input = fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs));
+            try {
+                auto [accessor, final] = input.getAccessor(fetchSettings, store);
+                if (!input.isLocked(fetchSettings))
+                    logger->cout("❓ fetched tree '%s', but it's unlocked", input.to_string());
+                else
+                    // FIXME: check NAR hash?
+                    logger->cout("✅ fetched tree '%s'", input.to_string());
+
+                bool success = !path || verifySourcePath(store, *path, SourcePath(accessor, CanonPath::root));
+
+                return {success, std::make_pair(std::move(final), accessor)};
+            } catch (Error & e) {
+                logger->cout("❌ " ANSI_RED "failed to fetch tree '%s': %s" ANSI_NORMAL, input.to_string(), e.what());
+                return {false, std::monostate{}};
+            }
+        }
+
+        else if (auto subpath = std::dynamic_pointer_cast<const SubpathProvenance>(provenance)) {
+            auto [success, result] = verify(store, {}, subpath->next);
+            if (auto p = std::get_if<std::pair<fetchers::Input, ref<SourceAccessor>>>(&result)) {
+
+                auto sourcePath = SourcePath(p->second, subpath->subpath);
+
+                bool success = !path || verifySourcePath(store, *path, sourcePath);
+
+                return {success, std::make_pair(std::move(p->first), std::move(sourcePath))};
+            } else
+                return {false, std::monostate{}};
+        }
+
+        if (auto drv = std::dynamic_pointer_cast<const DerivationProvenance>(provenance))
+            return verify(store, path, drv->next);
+
+        else if (!provenance) {
+            logger->cout("❓ " ANSI_RED "missing further provenance" ANSI_NORMAL);
+            return {false, std::monostate{}};
+        }
+
+        else {
+            logger->cout("❓ " ANSI_RED "unknown provenance type" ANSI_NORMAL);
+            return {false, std::monostate{}};
+        }
+    }
+
+    void run(ref<Store> store, StorePaths && storePaths) override
+    {
+        bool first = true;
+        bool success = true;
+
+        for (auto & storePath : storePaths) {
+            auto info = store->queryPathInfo(storePath);
+            if (!first)
+                logger->cout("");
+            first = false;
+            logger->cout(ANSI_BOLD "%s" ANSI_NORMAL, store->printStorePath(info->path));
+
+            if (info->provenance)
+                success &= verify(*store, storePath, info->provenance).first;
+            else {
+                logger->cout(ANSI_RED "  (no provenance information available)" ANSI_NORMAL);
+                success = false;
+            }
+        }
+
+        if (!success)
+            throw Exit(1);
+    }
+};
+
+static auto rCmdProvenanceVerify = registerCommand2<CmdProvenanceVerify>({"provenance", "verify"});
