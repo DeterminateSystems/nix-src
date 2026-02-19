@@ -1608,21 +1608,7 @@ static void derivationStrictInternal(
                 if (acceptMeta && i->name == EvalState::s.__meta) {
                     if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
                         state.forceAttrs(*i->value, pos, "while evaluating __meta");
-                        auto meta = i->value->attrs();
-                        auto obj = nlohmann::json::object();
-
-                        for (auto & i : meta->lexicographicOrder(state.symbols)) {
-                            auto key = state.symbols[i->name];
-                            switch (i->name.getId()) {
-                            case EvalState::s.identifiers.getId():
-                            case EvalState::s.license.getId():
-                            case EvalState::s.licenses.getId():
-                                obj.emplace(key, printValueAsJSON(state, true, *i->value, pos, context));
-                                break;
-                            default:
-                                continue;
-                            }
-                        }
+                        auto obj = printValueAsJSON(state, true, *i->value, pos, context);
 
                         provenance =
                             std::make_shared<const DerivationProvenance>(provenance, make_ref<nlohmann::json>(obj));
