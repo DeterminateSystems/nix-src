@@ -262,11 +262,11 @@ public:
      */
     struct ItemHandle
     {
-        std::reference_wrapper<Item> item;
+        ref<Item> item;
         friend struct FileTransfer;
 
-        ItemHandle(Item & item)
-            : item(item)
+        explicit ItemHandle(ref<Item> item)
+            : item(std::move(item))
         {
         }
     };

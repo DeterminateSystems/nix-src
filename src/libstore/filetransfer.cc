@@ -962,7 +962,7 @@ struct curlFileTransfer : public FileTransfer
         writeFull(wakeupPipe.writeSide.get(), " ");
 #endif
 
-        return ItemHandle(static_cast<Item &>(*item));
+        return ItemHandle(ref<Item>(std::move(item)));
     }
 
     ItemHandle
@@ -977,7 +977,7 @@ struct curlFileTransfer : public FileTransfer
                 return enqueueItem(item);
             } catch (const nix::Error & e) {
                 item->fail(e);
-                return ItemHandle(static_cast<Item &>(*item));
+                return ItemHandle(ref<Item>(std::move(item)));
             }
         }
 
@@ -986,7 +986,7 @@ struct curlFileTransfer : public FileTransfer
             return enqueueItem(item);
         } catch (const nix::Error & e) {
             item->fail(e);
-            return ItemHandle(static_cast<Item &>(*item));
+            return ItemHandle(ref<Item>(std::move(item)));
         }
     }
 
@@ -1001,7 +1001,7 @@ struct curlFileTransfer : public FileTransfer
 
     void unpauseTransfer(ItemHandle handle) override
     {
-        unpauseTransfer(ref{static_cast<TransferItem &>(handle.item.get()).shared_from_this()});
+        unpauseTransfer(ref{static_cast<TransferItem &>(*handle.item).shared_from_this()});
     }
 };
 
