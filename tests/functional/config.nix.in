@@ -29,7 +29,7 @@ rec {
       '')];
       PATH = path;
     } // caArgs // optionalAttrs (builtins ? derivationWithMeta) {
-      __meta = args.meta or {};
+      __meta = removeAttrs (args.meta or {}) ["position"];
     } // removeAttrs args ["builder" "meta"])
     // { meta = args.meta or {}; };
 }
