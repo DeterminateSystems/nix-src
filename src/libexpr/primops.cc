@@ -1609,7 +1609,7 @@ static void derivationStrictInternal(
                     if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
                         state.forceAttrs(*i->value, pos, "while evaluating __meta");
                         auto meta = i->value->attrs();
-                        auto obj = nlohmann::json();
+                        auto obj = nlohmann::json::object();
 
                         for (auto & i : meta->lexicographicOrder(state.symbols)) {
                             auto key = state.symbols[i->name];
