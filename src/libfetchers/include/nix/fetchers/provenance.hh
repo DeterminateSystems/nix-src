@@ -19,4 +19,16 @@ struct TreeProvenance : Provenance
     nlohmann::json to_json() const override;
 };
 
+struct FetchurlProvenance : Provenance
+{
+    std::string url;
+
+    FetchurlProvenance(const std::string & url)
+        : url(url)
+    {
+    }
+
+    nlohmann::json to_json() const override;
+};
+
 } // namespace nix

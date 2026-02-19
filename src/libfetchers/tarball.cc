@@ -9,29 +9,11 @@
 #include "nix/store/store-api.hh"
 #include "nix/fetchers/git-utils.hh"
 #include "nix/fetchers/fetch-settings.hh"
-#include "nix/util/provenance.hh"
+#include "nix/fetchers/provenance.hh"
 
 #include <nlohmann/json.hpp>
 
 namespace nix::fetchers {
-
-struct FetchurlProvenance : Provenance
-{
-    std::string url;
-
-    FetchurlProvenance(const std::string & url)
-        : url(url)
-    {
-    }
-
-    nlohmann::json to_json() const override
-    {
-        return nlohmann::json{
-            {"type", "fetchurl"},
-            {"url", url},
-        };
-    }
-};
 
 DownloadFileResult downloadFile(
     Store & store,
