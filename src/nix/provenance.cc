@@ -530,7 +530,8 @@ struct CmdProvenanceVerify : StorePathsCommand
 
                 auto sourcePath = SourcePath(p->second, subpath->subpath);
 
-                bool success = !path || verifySourcePath(store, *path, sourcePath);
+                if (path && !verifySourcePath(store, *path, sourcePath))
+                    success = false;
 
                 return {success, std::make_pair(std::move(p->first), std::move(sourcePath))};
             } else
