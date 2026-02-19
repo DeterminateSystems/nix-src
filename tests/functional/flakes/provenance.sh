@@ -303,6 +303,7 @@ cat > "$flake1Dir/flake.nix" <<EOF
           src1 = ./config.nix;
           src2 = self;
           src3 = ./.;
+          src4 = builtins.path { name = "foo"; path = ./.; filter = path: type: builtins.match ".*\.nix" path != null; };
         };
     };
   };

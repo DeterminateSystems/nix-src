@@ -19,6 +19,7 @@
 #include "nix/util/sort.hh"
 #include "nix/util/mounted-source-accessor.hh"
 #include "nix/expr/provenance.hh"
+#include "nix/util/override-provenance-source-accessor.hh"
 
 #include <boost/container/small_vector.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
@@ -2923,10 +2924,21 @@ static void addPath(
         if (!expectedHash || !state.store->isValidPath(*expectedStorePath)) {
             // FIXME: make this lazy?
             // FIXME: support refs in fetchToStore()?
+            auto path2 = path.resolveSymlinks();
+            // Don't use source path provenance if we have a filter applied, since we can't accurately
+            // record that. Instead, use the current global provenance, since it's better than nothing.
+            auto path3 = filter
+                ? SourcePath{
+                      make_ref<OverrideProvenanceSourceAccessor>(
+                          path2.accessor, state.evalContext.provenance),
+                      path2.path
+                  }
+                : path2;
+
             auto dstPath = refs.empty() ? fetchToStore(
                                               state.fetchSettings,
                                               *state.store,
-                                              path.resolveSymlinks(),
+                                              path3,
                                               settings.readOnlyMode ? FetchMode::DryRun : FetchMode::Copy,
                                               name,
                                               method,
@@ -2934,7 +2946,7 @@ static void addPath(
                                               state.repair)
                                         : state.store->addToStore(
                                               name,
-                                              path.resolveSymlinks(),
+                                              path3,
                                               method,
                                               HashAlgorithm::SHA256,
                                               refs,
