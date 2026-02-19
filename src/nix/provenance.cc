@@ -8,6 +8,7 @@
 #include "nix/util/json-utils.hh"
 
 #include <memory>
+#include <string>
 #include <nlohmann/json.hpp>
 
 #define TAB "    "
@@ -103,54 +104,9 @@ struct CmdProvenanceShow : StorePathsCommand
                 provenance = subpath->next;
             } else if (auto drv = std::dynamic_pointer_cast<const DerivationProvenance>(provenance)) {
                 logger->cout("← with derivation metadata");
-                auto json = getObject(*(drv->meta));
-                if (auto identifiers = optionalValueAt(json, "identifiers")) {
-                    auto ident = getObject(*identifiers);
-                    if (auto cpeParts = optionalValueAt(ident, "cpeParts")) {
-                        auto parts = getObject(*cpeParts);
-
-                        auto vendor = parts["vendor"];
-                        auto product = parts["product"];
-                        auto version = parts["version"];
-                        auto update = parts["update"];
-
-                        logger->cout(
-                            TAB "" ANSI_BOLD "CPE:" ANSI_NORMAL " cpe:2.3:a:%s:%s:%s:%s:*:*:*:*:*:*",
-                            vendor.is_null() ? "*" : vendor.get<std::string>(),
-                            product.is_null() ? "*" : product.get<std::string>(),
-                            version.is_null() ? "*" : version.get<std::string>(),
-                            update.is_null() ? "*" : update.get<std::string>());
-                    }
-                }
-                if (auto license = optionalValueAt(json, "license")) {
-                    if (license->is_array()) {
-                        logger->cout(TAB "" ANSI_BOLD "Licenses:" ANSI_NORMAL);
-                        auto licenses = getArray(*license);
-                        for (auto it = licenses.begin(); it != licenses.end(); it++) {
-                            auto license = getObject(*it);
-                            auto shortName = license["shortName"];
-                            logger->cout(TAB "" TAB "- %s", shortName.get<std::string>());
-                        }
-                    } else {
-                        auto obj = getObject(*license);
-                        auto shortName = obj["shortName"];
-                        logger->cout(TAB "" ANSI_BOLD "License:" ANSI_NORMAL " %s", shortName.get<std::string>());
-                    }
-                }
-                if (auto licenses = optionalValueAt(json, "licenses")) {
-                    if (licenses->is_array()) {
-                        logger->cout(TAB "" ANSI_BOLD "Licenses:" ANSI_NORMAL);
-                        auto licensesArray = getArray(*licenses);
-                        for (auto it = licensesArray.begin(); it != licensesArray.end(); it++) {
-                            auto license = getObject(*it);
-                            auto shortName = license["shortName"];
-                            logger->cout(TAB "" TAB "- %s", shortName.get<std::string>());
-                        }
-                    } else {
-                        auto license = getObject(*licenses);
-                        auto shortName = license["shortName"];
-                        logger->cout(TAB "" ANSI_BOLD "License:" ANSI_NORMAL " %s", shortName.get<std::string>());
-                    }
+                std::istringstream stream((*drv->meta).dump(2));
+                for (std::string line; std::getline(stream, line);) {
+                    logger->cout("  %s", line);
                 }
                 provenance = drv->next;
             } else {
