@@ -287,3 +287,27 @@ EOF
 outPath=$(nix build --print-out-paths --no-link "$flake1Dir")
 
 expectStderr 1 nix provenance verify --all | grepQuiet "derivation .* may not be deterministic: output .* differs"
+
+# Test various types of source files.
+clearStore
+echo x > "$TEST_ROOT/counter"
+cat > "$flake1Dir/flake.nix" <<EOF
+{
+  outputs = { self }: rec {
+    packages.$system = rec {
+      default =
+        with import ./config.nix;
+        mkDerivation {
+          name = "simple";
+          buildCommand = "mkdir \$out";
+          src1 = ./config.nix;
+          src2 = self;
+          src3 = ./.;
+        };
+    };
+  };
+}
+EOF
+outPath=$(nix build --print-out-paths --no-link "$flake1Dir")
+
+nix provenance verify --all

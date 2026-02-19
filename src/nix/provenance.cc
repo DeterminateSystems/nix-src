@@ -13,6 +13,7 @@
 #include "nix/store/derivations.hh"
 
 #include <memory>
+#include "nix/util/callback.hh"
 #include <nlohmann/json.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
 #include <boost/unordered/unordered_flat_set.hpp>
@@ -194,6 +195,105 @@ struct CmdProvenanceShow : StorePathsCommand
 
 static auto rCmdProvenanceShow = registerCommand2<CmdProvenanceShow>({"provenance", "show"});
 
+/**
+ * A wrapper around an arbitrary store that intercepts `addToStore()`
+ * and `addToStoreFromDump()` calls to keep track of added paths.
+ */
+struct TrackingStore : public Store
+{
+    ref<Store> next;
+    boost::unordered_flat_set<StorePath> instantiatedPaths;
+
+    TrackingStore(ref<Store> next)
+        : Store(next->config)
+        , next(next)
+    {
+    }
+
+    void addToStore(const ValidPathInfo & info, Source & narSource, RepairFlag repair, CheckSigsFlag checkSigs) override
+    {
+        next->addToStore(info, narSource, repair, checkSigs);
+        instantiatedPaths.insert(info.path);
+        // FIXME: we should really just disable the path info cache, since the underlying store already does caching.
+        invalidatePathInfoCacheFor(info.path);
+    }
+
+    StorePath addToStore(
+        std::string_view name,
+        const SourcePath & path,
+        ContentAddressMethod method,
+        HashAlgorithm hashAlgo,
+        const StorePathSet & references,
+        PathFilter & filter,
+        RepairFlag repair) override
+    {
+        auto storePath = next->addToStore(name, path, method, hashAlgo, references, filter, repair);
+        instantiatedPaths.insert(storePath);
+        invalidatePathInfoCacheFor(storePath);
+        return storePath;
+    }
+
+    StorePath addToStoreFromDump(
+        Source & dump,
+        std::string_view name,
+        FileSerialisationMethod dumpMethod,
+        ContentAddressMethod hashMethod,
+        HashAlgorithm hashAlgo,
+        const StorePathSet & references,
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override
+    {
+        auto storePath =
+            next->addToStoreFromDump(dump, name, dumpMethod, hashMethod, hashAlgo, references, repair, provenance);
+        instantiatedPaths.insert(storePath);
+        invalidatePathInfoCacheFor(storePath);
+        return storePath;
+    }
+
+    void queryPathInfoUncached(
+        const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override
+    {
+        try {
+            callback(std::make_shared<ValidPathInfo>(*next->queryPathInfo(path)));
+        } catch (InvalidPath &) {
+            callback(nullptr);
+        } catch (...) {
+            callback.rethrow();
+        }
+    }
+
+    void queryRealisationUncached(
+        const DrvOutput & output, Callback<std::shared_ptr<const UnkeyedRealisation>> callback) noexcept override
+    {
+        next->queryRealisation(output, std::move(callback));
+    }
+
+    std::optional<StorePath> queryPathFromHashPart(const std::string & hashPart) override
+    {
+        return next->queryPathFromHashPart(hashPart);
+    }
+
+    void registerDrvOutput(const Realisation & output) override
+    {
+        next->registerDrvOutput(output);
+    }
+
+    ref<SourceAccessor> getFSAccessor(bool requireValidPath) override
+    {
+        return next->getFSAccessor(requireValidPath);
+    }
+
+    std::shared_ptr<SourceAccessor> getFSAccessor(const StorePath & path, bool requireValidPath) override
+    {
+        return next->getFSAccessor(path, requireValidPath);
+    }
+
+    std::optional<TrustedFlag> isTrustedClient() override
+    {
+        return next->isTrustedClient();
+    }
+};
+
 struct CmdProvenanceVerify : StorePathsCommand
 {
     bool noRebuild = false;
@@ -343,9 +443,20 @@ struct CmdProvenanceVerify : StorePathsCommand
                 return {false, std::monostate{}};
             }
 
+            auto trackingStore = make_ref<TrackingStore>(getEvalStore());
+
+            auto evalState =
+                ref(std::allocate_shared<EvalState>(
+                    traceable_allocator<EvalState>(),
+                    LookupPath{},
+                    ref<Store>(trackingStore),
+                    fetchSettings,
+                    evalSettings,
+                    getStore()));
+
             InstallableFlake installable{
                 nullptr,
-                getEvalState(),
+                evalState,
                 FlakeRef{std::move(res->first), std::string(res->second.path.parent().value().rel())},
                 "." + flake->flakeOutput,
                 ExtendedOutputsSpec::Default{}, // FIXME: record this in the provenance?
@@ -356,23 +467,14 @@ struct CmdProvenanceVerify : StorePathsCommand
             // We have to disable the eval cache to ensure that we see which store paths get instantiated.
             installable.useEvalCache = false;
 
-            // Hacky: we're abusing drvHashes to see what derivations got instantiated, so we have to clear it before
-            // evaluation.
-            drvHashes.clear();
-
-            // Similarly, ensure that fileEvalCache is nuked.
-            getEvalState()->resetFileCache();
-
             installable.toDerivedPaths();
+
+            evalState->waitForAllPaths();
 
             logger->cout("✅ evaluated '%s#%s'", installable.flakeRef.to_string(true), flake->flakeOutput);
 
             if (path) {
-                boost::unordered_flat_set<StorePath> instantiatedPaths;
-                drvHashes.cvisit_all([&](const auto & kv) { instantiatedPaths.insert(kv.first); });
-                // FIXME: add non-derivation paths
-
-                if (!instantiatedPaths.contains(*path)) {
+                if (!trackingStore->instantiatedPaths.contains(*path)) {
                     logger->cout(
                         "❌ " ANSI_RED "evaluation did not re-instantiate path '%s'" ANSI_NORMAL,
                         store.printStorePath(*path));
