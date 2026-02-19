@@ -1380,16 +1380,15 @@ static void prim_second(EvalState & state, const PosIdx pos, Value ** args, Valu
  * Derivations
  *************************************************************/
 
-static void derivationStrictInternal(EvalState & state, std::string_view name, const Bindings * attrs, Value & v);
+static void derivationStrictInternal(
+    EvalState & state,
+    std::string_view name,
+    const Bindings * attrs,
+    Value & v,
+    std::shared_ptr<const Provenance> provenance,
+    bool acceptMeta);
 
-/* Construct (as a unobservable side effect) a Nix derivation
-   expression that performs the derivation described by the argument
-   set.  Returns the original set extended with the following
-   attributes: `outPath' containing the primary output path of the
-   derivation; `drvPath' containing the path of the Nix expression;
-   and `type' set to `derivation' to indicate that this is a
-   derivation. */
-static void prim_derivationStrict(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_derivationStrictGeneric(EvalState & state, const PosIdx pos, Value ** args, Value & v, bool acceptMeta)
 {
     state.forceAttrs(*args[0], pos, "while evaluating the argument passed to builtins.derivationStrict");
 
@@ -1409,7 +1408,7 @@ static void prim_derivationStrict(EvalState & state, const PosIdx pos, Value ** 
     }
 
     try {
-        derivationStrictInternal(state, drvName, attrs, v);
+        derivationStrictInternal(state, drvName, attrs, v, state.evalContext.provenance, acceptMeta);
     } catch (Error & e) {
         Pos pos = state.positions[nameAttr->pos];
         /*
@@ -1440,6 +1439,18 @@ static void prim_derivationStrict(EvalState & state, const PosIdx pos, Value ** 
     }
 }
 
+/* Construct a Nix derivation with metadata provenance */
+static RegisterPrimOp primop_derivationStrictWithMeta(
+    PrimOp{
+        .name = "derivationStrictWithMeta",
+        .arity = 1,
+        .fun =
+            [](EvalState & state, const PosIdx pos, Value ** args, Value & v) {
+                prim_derivationStrictGeneric(state, pos, args, v, /*acceptMeta=*/true);
+            },
+        .experimentalFeature = Xp::Provenance,
+    });
+
 /**
  * Early validation for the derivation name, for better error message.
  * It is checked again when constructing store paths.
@@ -1463,7 +1474,13 @@ static void checkDerivationName(EvalState & state, std::string_view drvName)
     }
 }
 
-static void derivationStrictInternal(EvalState & state, std::string_view drvName, const Bindings * attrs, Value & v)
+static void derivationStrictInternal(
+    EvalState & state,
+    std::string_view drvName,
+    const Bindings * attrs,
+    Value & v,
+    std::shared_ptr<const Provenance> provenance,
+    bool acceptMeta)
 {
     checkDerivationName(state, drvName);
 
@@ -1504,8 +1521,6 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
 
     StringSet outputs;
     outputs.insert("out");
-
-    auto provenance = state.evalContext.provenance;
 
     for (auto & i : attrs->lexicographicOrder(state.symbols)) {
         if (i->name == state.s.ignoreNulls)
@@ -1574,29 +1589,6 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
                     experimentalFeatureSettings.require(Xp::ImpureDerivations);
                 }
                 break;
-            case EvalState::s.__meta.getId():
-                if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
-                    state.forceAttrs(*i->value, pos, "while evaluating __meta");
-                    auto meta = i->value->attrs();
-                    auto obj = nlohmann::json();
-
-                    for (auto & i : meta->lexicographicOrder(state.symbols)) {
-                        auto key = state.symbols[i->name];
-                        switch (i->name.getId()) {
-                        case EvalState::s.identifiers.getId():
-                        case EvalState::s.license.getId():
-                        case EvalState::s.licenses.getId():
-                            obj.emplace(key, printValueAsJSON(state, true, *i->value, pos, context));
-                            break;
-                        default:
-                            continue;
-                        }
-                    }
-
-                    provenance =
-                        std::make_shared<const DerivationProvenance>(provenance, make_ref<nlohmann::json>(obj));
-                }
-                break;
             /* The `args' attribute is special: it supplies the
                command-line arguments to the builder. */
             case EvalState::s.args.getId():
@@ -1613,7 +1605,29 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
                the environment. */
             default:
 
-                if (jsonObject) {
+                if (acceptMeta && i->name == EvalState::s.__meta) {
+                    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+                        state.forceAttrs(*i->value, pos, "while evaluating __meta");
+                        auto meta = i->value->attrs();
+                        auto obj = nlohmann::json();
+
+                        for (auto & i : meta->lexicographicOrder(state.symbols)) {
+                            auto key = state.symbols[i->name];
+                            switch (i->name.getId()) {
+                            case EvalState::s.identifiers.getId():
+                            case EvalState::s.license.getId():
+                            case EvalState::s.licenses.getId():
+                                obj.emplace(key, printValueAsJSON(state, true, *i->value, pos, context));
+                                break;
+                            default:
+                                continue;
+                            }
+                        }
+
+                        provenance =
+                            std::make_shared<const DerivationProvenance>(provenance, make_ref<nlohmann::json>(obj));
+                    }
+                } else if (jsonObject) {
 
                     if (i->name == state.s.structuredAttrs)
                         continue;
@@ -1900,11 +1914,21 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
     v.mkAttrs(result);
 }
 
+/* Construct (as a unobservable side effect) a Nix derivation
+   expression that performs the derivation described by the argument
+   set.  Returns the original set extended with the following
+   attributes: `outPath' containing the primary output path of the
+   derivation; `drvPath' containing the path of the Nix expression;
+   and `type' set to `derivation' to indicate that this is a
+   derivation. */
 static RegisterPrimOp primop_derivationStrict(
     PrimOp{
         .name = "derivationStrict",
         .arity = 1,
-        .fun = prim_derivationStrict,
+        .fun =
+            [](EvalState & state, const PosIdx pos, Value ** args, Value & v) {
+                prim_derivationStrictGeneric(state, pos, args, v, /*acceptMeta=*/false);
+            },
     });
 
 /* Return a placeholder string for the specified output that will be
@@ -5445,14 +5469,7 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
        language feature gets added.  It's not necessary to increase it
        when primops get added, because you can just use `builtins ?
        primOp' to check. */
-    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
-        /* Provenance allows for meta to be inside of derivations.
-           We increment the version to 7 so Nixpkgs will know when
-           provenance is available. */
-        v.mkInt(7);
-    } else {
-        v.mkInt(6);
-    }
+    v.mkInt(6);
     addConstant(
         "__langVersion",
         v,
@@ -5559,6 +5576,16 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
             .type = nFunction,
         });
 
+    auto vDerivationWithMeta = allocValue();
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+        addConstant(
+            "derivationWithMeta",
+            vDerivationWithMeta,
+            {
+                .type = nFunction,
+            });
+    }
+
     /* Now that we've added all primops, sort the `builtins' set,
        because attribute lookups expect it to be sorted. */
     const_cast<Bindings *>(getBuiltins().attrs())->sort();
@@ -5567,7 +5594,14 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
 
     /* Note: we have to initialize the 'derivation' constant *after*
        building baseEnv/staticBaseEnv because it uses 'builtins'. */
-    evalFile(derivationInternal, *vDerivation);
+    auto vDerivationValue = allocValue();
+    evalFile(derivationInternal, *vDerivationValue);
+
+    callFunction(*vDerivationValue, getBuiltin("derivationStrict"), *vDerivation, PosIdx());
+
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+        callFunction(*vDerivationValue, getBuiltin("derivationStrictWithMeta"), *vDerivationWithMeta, PosIdx());
+    }
 }
 
 } // namespace nix

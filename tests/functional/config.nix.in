@@ -20,7 +20,7 @@ rec {
   shared = builtins.getEnv "_NIX_TEST_SHARED";
 
   mkDerivation = args:
-    derivation ({
+    (if builtins ? derivationWithMeta then builtins.derivationWithMeta else builtins.derivation) ({
       inherit system;
       builder = shell;
       args = ["-e" args.builder or (builtins.toFile "builder-${args.name}.sh" ''
@@ -28,7 +28,7 @@ rec {
         eval "$buildCommand"
       '')];
       PATH = path;
-    } // caArgs // optionalAttrs (builtins.langVersion >= 7) {
+    } // caArgs // optionalAttrs (builtins ? derivationWithMeta) {
       __meta = args.meta or {};
     } // removeAttrs args ["builder" "meta"])
     // { meta = args.meta or {}; };
