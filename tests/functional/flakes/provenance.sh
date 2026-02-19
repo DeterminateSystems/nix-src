@@ -311,3 +311,22 @@ EOF
 outPath=$(nix build --print-out-paths --no-link "$flake1Dir")
 
 nix provenance verify --all
+
+# Test fetchurl provenance.
+clearStore
+
+echo hello > "$TEST_ROOT/hello.txt"
+
+path="$(nix store prefetch-file --json "file://$TEST_ROOT/hello.txt" | jq -r .storePath)"
+
+[[ "$(nix provenance show "$path")" = $(cat <<EOF
+[1m$path[0m
+← fetched from URL [1mfile://$TEST_ROOT/hello.txt[0m
+EOF
+) ]]
+
+nix provenance verify "$path"
+
+echo barf > "$TEST_ROOT/hello.txt"
+
+expectStderr 1 nix provenance verify "$path" | grepQuiet "hash mismatch for URL"
