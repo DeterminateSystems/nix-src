@@ -518,6 +518,24 @@ void regFuns(Linker & linker, bool useWasi)
     }
 }
 
+static NixWasmInstance instantiateWasm(EvalState & state, const SourcePath & wasmPath, bool useWasi)
+{
+    // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
+    // FIXME: move to EvalState?
+    // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
+    static boost::concurrent_flat_map<std::pair<SourcePath, bool>, std::shared_ptr<NixWasmInstancePre>> instancesPre;
+
+    std::shared_ptr<NixWasmInstancePre> instancePre;
+
+    instancesPre.try_emplace_and_cvisit(
+        {wasmPath, useWasi},
+        nullptr,
+        [&](auto & i) { instancePre = i.second = std::make_shared<NixWasmInstancePre>(wasmPath, useWasi); },
+        [&](auto & i) { instancePre = i.second; });
+
+    return NixWasmInstance{state, ref(instancePre)};
+}
+
 void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
     auto wasmPath = state.realisePath(pos, *args[0]);
@@ -525,22 +543,9 @@ void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
         std::string(state.forceStringNoCtx(*args[1], pos, "while evaluating the second argument of `builtins.wasm`"));
 
     try {
-        // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
-        // FIXME: move to EvalState?
-        // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
-        static boost::concurrent_flat_map<SourcePath, std::shared_ptr<NixWasmInstancePre>> instancesPre;
-
-        std::shared_ptr<NixWasmInstancePre> instancePre;
-
-        instancesPre.try_emplace_and_cvisit(
-            wasmPath,
-            nullptr,
-            [&](auto & i) { instancePre = i.second = std::make_shared<NixWasmInstancePre>(wasmPath); },
-            [&](auto & i) { instancePre = i.second; });
+        auto instance = instantiateWasm(state, wasmPath, false);
 
         debug("calling wasm module");
-
-        NixWasmInstance instance{state, ref(instancePre)};
 
         // FIXME: use the "start" function if present.
         instance.runFunction("nix_wasm_init_v1", {});
@@ -574,22 +579,9 @@ void prim_wasi(EvalState & state, const PosIdx pos, Value ** args, Value & v)
     auto functionName = "_start";
 
     try {
-        // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
-        // FIXME: move to EvalState?
-        // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
-        static boost::concurrent_flat_map<SourcePath, std::shared_ptr<NixWasmInstancePre>> instancesPre;
-
-        std::shared_ptr<NixWasmInstancePre> instancePre;
-
-        instancesPre.try_emplace_and_cvisit(
-            wasmPath,
-            nullptr,
-            [&](auto & i) { instancePre = i.second = std::make_shared<NixWasmInstancePre>(wasmPath, true); },
-            [&](auto & i) { instancePre = i.second; });
+        auto instance = instantiateWasm(state, wasmPath, true);
 
         debug("calling wasm module");
-
-        NixWasmInstance instance{state, ref(instancePre)};
 
         auto argId = instance.addValue(args[1]);
 
