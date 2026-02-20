@@ -1612,7 +1612,7 @@ static void derivationStrictInternal(
                         auto obj = printValueAsJSON(state, true, *i->value, pos, ctx);
 
                         if (!ctx.empty())
-                            throw Error("__meta cannot contain strings with context");
+                            throw Error("Derivation __meta provenance can't contain string context like store paths.");
 
                         provenance =
                             std::make_shared<const DerivationProvenance>(provenance, make_ref<nlohmann::json>(obj));
