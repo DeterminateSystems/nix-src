@@ -1448,7 +1448,7 @@ static RegisterPrimOp primop_derivationStrictWithMeta(
             [](EvalState & state, const PosIdx pos, Value ** args, Value & v) {
                 prim_derivationStrictGeneric(state, pos, args, v, /*acceptMeta=*/true);
             },
-        .experimentalFeature = Xp::Provenance,
+        .internal = true,
     });
 
 /**
@@ -5589,9 +5589,9 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
 
     callFunction(*vDerivationValue, getBuiltin("derivationStrict"), *vDerivation, PosIdx());
 
-    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
-        callFunction(*vDerivationValue, getBuiltin("derivationStrictWithMeta"), *vDerivationWithMeta, PosIdx());
-    }
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        callFunction(
+            *vDerivationValue, **get(internalPrimOps, "derivationStrictWithMeta"), *vDerivationWithMeta, PosIdx());
 }
 
 } // namespace nix
