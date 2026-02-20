@@ -78,7 +78,7 @@ TrapResult<InstancePre> instantiate_pre(Linker & linker, const Module & m)
     return InstancePre(instance_pre);
 }
 
-void regFuns(Linker & linker, bool useWasi);
+static void regFuns(Linker & linker, bool useWasi);
 
 struct NixWasmInstancePre
 {
@@ -116,6 +116,8 @@ struct NixWasmInstance
 
     ValueId resultId = 0;
 
+    std::string logPrefix;
+
     NixWasmInstance(EvalState & _state, ref<NixWasmInstancePre> _pre)
         : state(_state)
         , pre(_pre)
@@ -123,6 +125,7 @@ struct NixWasmInstance
         , wasmCtx(wasmStore)
         , instance(unwrap(pre->instancePre.instantiate(wasmCtx)))
         , memory_(getExport<Memory>("memory"))
+        , logPrefix(pre->wasmPath.baseName())
     {
         wasmCtx.set_data(this);
 
@@ -181,15 +184,16 @@ struct NixWasmInstance
 
     std::monostate warn(uint32_t ptr, uint32_t len)
     {
-        if (functionName)
-            nix::warn(
-                "'%s' function '%s': %s",
-                pre->wasmPath,
-                functionName.value_or("<unknown>"),
-                span2string(memory().subspan(ptr, len)));
-        else
-            nix::warn("'%s': %s", pre->wasmPath, span2string(memory().subspan(ptr, len)));
+        doWarn(span2string(memory().subspan(ptr, len)));
         return {};
+    }
+
+    void doWarn(std::string_view s)
+    {
+        if (functionName)
+            nix::warn("'%s' function '%s': %s", logPrefix, functionName.value_or("<unknown>"), s);
+        else
+            nix::warn("'%s': %s", logPrefix, s);
     }
 
     uint32_t get_type(ValueId valueId)
@@ -482,7 +486,7 @@ static void regFun(Linker & linker, std::string_view name, R (NixWasmInstance::*
     }));
 }
 
-void regFuns(Linker & linker, bool useWasi)
+static void regFuns(Linker & linker, bool useWasi)
 {
     regFun(linker, "panic", &NixWasmInstance::panic);
     regFun(linker, "warn", &NixWasmInstance::warn);
@@ -536,7 +540,7 @@ static NixWasmInstance instantiateWasm(EvalState & state, const SourcePath & was
     return NixWasmInstance{state, ref(instancePre)};
 }
 
-void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
     auto wasmPath = state.realisePath(pos, *args[0]);
     std::string functionName =
@@ -573,7 +577,36 @@ static RegisterPrimOp primop_wasm(
      .fun = prim_wasm,
      .experimentalFeature = Xp::WasmBuiltin});
 
-void prim_wasi(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+/**
+ * Callback for WASI stdout/stderr writes. It splits the output into lines and logs each line separately.
+ */
+struct WasiLogger
+{
+    NixWasmInstance & instance;
+
+    std::string data;
+
+    ~WasiLogger()
+    {
+        if (!data.empty())
+            instance.doWarn(data);
+    }
+
+    void operator()(std::string_view s)
+    {
+        data.append(s);
+
+        while (true) {
+            auto pos = data.find('\n');
+            if (pos == std::string_view::npos)
+                break;
+            instance.doWarn(data.substr(0, pos));
+            data.erase(0, pos + 1);
+        }
+    }
+};
+
+static void prim_wasi(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
     auto wasmPath = state.realisePath(pos, *args[0]);
     auto functionName = "_start";
@@ -585,8 +618,17 @@ void prim_wasi(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 
         auto argId = instance.addValue(args[1]);
 
+        WasiLogger logger{instance};
+
+        auto loggerTrampoline = [](void * data, const unsigned char * buf, size_t len) -> ptrdiff_t {
+            auto logger = static_cast<WasiLogger *>(data);
+            (*logger)(std::string_view((const char *) buf, len));
+            return len;
+        };
+
         WasiConfig wasiConfig;
-        wasiConfig.inherit_stderr();
+        wasi_config_set_stdout_custom(wasiConfig.capi(), loggerTrampoline, &logger, nullptr);
+        wasi_config_set_stderr_custom(wasiConfig.capi(), loggerTrampoline, &logger, nullptr);
         wasiConfig.argv({std::string(wasmPath.baseName()), std::to_string(argId)});
         unwrap(instance.wasmStore.context().set_wasi(std::move(wasiConfig)));
 
