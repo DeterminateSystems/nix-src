@@ -1608,7 +1608,11 @@ static void derivationStrictInternal(
                 if (acceptMeta && i->name == EvalState::s.__meta) {
                     if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
                         state.forceAttrs(*i->value, pos, "while evaluating __meta");
-                        auto obj = printValueAsJSON(state, true, *i->value, pos, context);
+                        NixStringContext ctx;
+                        auto obj = printValueAsJSON(state, true, *i->value, pos, ctx);
+
+                        if (!ctx.empty())
+                            throw Error("__meta cannot contain strings with context");
 
                         provenance =
                             std::make_shared<const DerivationProvenance>(provenance, make_ref<nlohmann::json>(obj));
