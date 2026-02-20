@@ -90,7 +90,7 @@ UnresolvedApp InstallableValue::toApp(EvalState & state)
                         },
                         [&](const NixStringContextElem::Opaque & o) -> DerivedPath {
                             return DerivedPath::Opaque{
-                                .path = o.path,
+                                .path = state.devirtualize(o.path),
                             };
                         },
                         [&](const NixStringContextElem::Path & p) -> DerivedPath {
@@ -102,7 +102,7 @@ UnresolvedApp InstallableValue::toApp(EvalState & state)
 
         return UnresolvedApp{App{
             .context = std::move(context2),
-            .program = program,
+            .program = state.devirtualize(program, context),
         }};
     }
 
