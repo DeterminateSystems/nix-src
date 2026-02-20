@@ -41,6 +41,7 @@ struct InstallableFlake : InstallableValue
     ExtendedOutputsSpec extendedOutputsSpec;
     const flake::LockFlags & lockFlags;
     mutable std::shared_ptr<flake::LockedFlake> _lockedFlake;
+    bool useEvalCache = true;
 
     InstallableFlake(
         SourceExprCommand * cmd,
@@ -72,6 +73,8 @@ struct InstallableFlake : InstallableValue
     ref<flake::LockedFlake> getLockedFlake() const;
 
     FlakeRef nixpkgsFlakeRef() const;
+
+    std::shared_ptr<const Provenance> makeProvenance(std::string_view attrPath) const;
 };
 
 /**

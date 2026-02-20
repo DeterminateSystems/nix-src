@@ -67,6 +67,8 @@ struct WorkerProto
     {
         Source & from;
         Version version;
+        bool shortStorePaths = false;
+        bool provenance = false;
     };
 
     /**
@@ -77,6 +79,8 @@ struct WorkerProto
     {
         Sink & to;
         Version version;
+        bool shortStorePaths = false;
+        bool provenance = false;
     };
 
     /**
@@ -137,6 +141,9 @@ struct WorkerProto
     using Feature = std::string;
     using FeatureSet = std::set<Feature, std::less<>>;
 
+    static constexpr std::string_view featureQueryActiveBuilds{"queryActiveBuilds"};
+    static constexpr std::string_view featureProvenance{"provenance"};
+
     static const FeatureSet allFeatures;
 };
 
@@ -185,6 +192,7 @@ enum struct WorkerProto::Op : uint64_t {
     AddBuildLog = 45,
     BuildPathsWithResults = 46,
     AddPermRoot = 47,
+    QueryActiveBuilds = 48,
 };
 
 struct WorkerProto::ClientHandshakeInfo

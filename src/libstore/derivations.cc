@@ -9,6 +9,7 @@
 #include "nix/store/common-protocol-impl.hh"
 #include "nix/util/strings-inline.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/store/async-path-writer.hh"
 
 #include <boost/container/small_vector.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
@@ -126,16 +127,22 @@ static auto infoForDerivation(Store & store, const Derivation & drv)
     };
 }
 
-StorePath writeDerivation(Store & store, const Derivation & drv, RepairFlag repair, bool readOnly)
+StorePath writeDerivation(
+    Store & store,
+    const Derivation & drv,
+    RepairFlag repair,
+    bool readOnly,
+    std::shared_ptr<const Provenance> provenance)
 {
     if (readOnly || settings.readOnlyMode) {
         auto [_x, _y, _z, path] = infoForDerivation(store, drv);
         return path;
     } else
-        return store.writeDerivation(drv, repair);
+        return store.writeDerivation(drv, repair, provenance);
 }
 
-StorePath Store::writeDerivation(const Derivation & drv, RepairFlag repair)
+StorePath
+Store::writeDerivation(const Derivation & drv, RepairFlag repair, std::shared_ptr<const Provenance> provenance)
 {
     auto [suffix, contents, references, path] = infoForDerivation(*this, drv);
 
@@ -150,10 +157,31 @@ StorePath Store::writeDerivation(const Derivation & drv, RepairFlag repair)
         ContentAddressMethod::Raw::Text,
         HashAlgorithm::SHA256,
         references,
-        repair);
+        repair,
+        provenance);
     assert(path2 == path);
 
     return path;
+}
+
+StorePath writeDerivation(
+    Store & store,
+    AsyncPathWriter & asyncPathWriter,
+    const Derivation & drv,
+    RepairFlag repair,
+    bool readOnly,
+    std::shared_ptr<const Provenance> provenance)
+{
+    auto references = drv.inputSrcs;
+    for (auto & i : drv.inputDrvs.map)
+        references.insert(i.first);
+    return asyncPathWriter.addPath(
+        drv.unparse(store, false),
+        std::string(drv.name) + drvExtension,
+        references,
+        repair,
+        readOnly || settings.readOnlyMode,
+        provenance);
 }
 
 namespace {
