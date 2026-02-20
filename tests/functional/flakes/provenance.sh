@@ -106,6 +106,14 @@ EOF
 EOF
 ) ]]
 
+# Verify the provenance of all store paths.
+nix provenance verify --all
+
+# Verification should fail if the sources cannot be fetched
+mv "$flake1Dir" "$flake1Dir-tmp"
+expectStderr 1 nix provenance verify --all | grepQuiet "Git repository.*does not exist"
+mv "$flake1Dir-tmp" "$flake1Dir"
+
 # Check that substituting from a binary cache adds "copied" provenance.
 binaryCache="$TEST_ROOT/binary-cache"
 nix copy --to "file://$binaryCache" "$outPath"
@@ -196,6 +204,8 @@ unset _NIX_FORCE_HTTP
 EOF
 )" ]]
 
+nix provenance verify --all
+
 # Check that --impure does not add additional provenance.
 clearStore
 nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.default"
@@ -272,3 +282,74 @@ EOF
 ← from [31;1munlocked[0m tree [1mgit+file://$flake1Dir[0m
 EOF
 ) ]]
+
+nix provenance verify --all
+
+# Test that impure builds fail verification.
+clearStore
+echo x > "$TEST_ROOT/counter"
+cat > "$flake1Dir/flake.nix" <<EOF
+{
+  outputs = inputs: rec {
+    packages.$system = rec {
+      default =
+        with import ./config.nix;
+        mkDerivation {
+          name = "simple";
+          buildCommand = ''
+            set -x
+            cat "$TEST_ROOT/counter" > \$out
+            echo x >> "$TEST_ROOT/counter"
+          '';
+        };
+    };
+  };
+}
+EOF
+outPath=$(nix build --print-out-paths --no-link "$flake1Dir")
+
+expectStderr 1 nix provenance verify --all | grepQuiet "derivation .* may not be deterministic: output .* differs"
+
+# Test various types of source files.
+clearStore
+echo x > "$TEST_ROOT/counter"
+cat > "$flake1Dir/flake.nix" <<EOF
+{
+  outputs = { self }: rec {
+    packages.$system = rec {
+      default =
+        with import ./config.nix;
+        mkDerivation {
+          name = "simple";
+          buildCommand = "mkdir \$out";
+          src1 = ./config.nix;
+          src2 = self;
+          src3 = ./.;
+          src4 = builtins.path { name = "foo"; path = ./.; filter = path: type: builtins.match ".*\.nix" path != null; };
+        };
+    };
+  };
+}
+EOF
+outPath=$(nix build --print-out-paths --no-link "$flake1Dir")
+
+nix provenance verify --all
+
+# Test fetchurl provenance.
+clearStore
+
+echo hello > "$TEST_ROOT/hello.txt"
+
+path="$(nix store prefetch-file --json "file://$TEST_ROOT/hello.txt" | jq -r .storePath)"
+
+[[ "$(nix provenance show "$path")" = $(cat <<EOF
+[1m$path[0m
+← fetched from URL [1mfile://$TEST_ROOT/hello.txt[0m
+EOF
+) ]]
+
+nix provenance verify "$path"
+
+echo barf > "$TEST_ROOT/hello.txt"
+
+expectStderr 1 nix provenance verify "$path" | grepQuiet "hash mismatch for URL"
