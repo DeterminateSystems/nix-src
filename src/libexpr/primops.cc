@@ -4741,8 +4741,9 @@ static void prim_hashString(EvalState & state, const PosIdx pos, Value ** args, 
         state.error<EvalError>("unknown hash algorithm '%1%'", algo).atPos(pos).debugThrow();
 
     NixStringContext context; // discarded
-    auto s =
-        state.forceString(*args[1], context, pos, "while evaluating the second argument passed to builtins.hashString");
+    auto s = state.devirtualize(
+        state.forceString(*args[1], context, pos, "while evaluating the second argument passed to builtins.hashString"),
+        context);
 
     v.mkString(hashString(*ha, s).to_string(HashFormat::Base16, false), state.mem);
 }
