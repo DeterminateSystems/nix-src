@@ -174,16 +174,27 @@ EOF
 unset _NIX_FORCE_HTTP
 
 # Test `nix provenance show`.
-[[ "$(nix provenance show "$outPath")" = $(cat <<EOF
+[[ "$(nix provenance show "$outPath")" = "$(cat <<EOF
 [1m$outPath[0m
 ← copied from [1mfile://$binaryCache[0m
 ← built from derivation [1m$drvPath[0m (output [1mout[0m) on [1mtest-host[0m for [1m$system[0m
 ← with derivation metadata
-    [1mLicenses:[0m
-        - lgpl21
+  {
+    "license": [
+      {
+        "deprecated": true,
+        "free": true,
+        "fullName": "GNU Lesser General Public License v2.1",
+        "redistributable": true,
+        "shortName": "lgpl21",
+        "spdxId": "LGPL-2.1",
+        "url": "https://spdx.org/licenses/LGPL-2.1.html"
+      }
+    ]
+  }
 ← instantiated from flake output [1mgit+file://$flake1Dir?ref=refs/heads/master&rev=$rev#packages.$system.default[0m
 EOF
-) ]]
+)" ]]
 
 # Check that --impure does not add additional provenance.
 clearStore
@@ -234,15 +245,26 @@ git -C "$flake1Dir" add somefile
 nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.default"
 [[ $(nix path-info --json --json-format 1 "$builder" | jq ".\"$builder\".provenance") != null ]]
 
-[[ "$(nix provenance show "$outPath")" = $(cat <<EOF
+[[ "$(nix provenance show "$outPath")" = "$(cat <<EOF
 [1m$outPath[0m
 ← built from derivation [1m$drvPath[0m (output [1mout[0m) on [1mtest-host[0m for [1m$system[0m
 ← with derivation metadata
-    [1mLicenses:[0m
-        - lgpl21
+  {
+    "license": [
+      {
+        "deprecated": true,
+        "free": true,
+        "fullName": "GNU Lesser General Public License v2.1",
+        "redistributable": true,
+        "shortName": "lgpl21",
+        "spdxId": "LGPL-2.1",
+        "url": "https://spdx.org/licenses/LGPL-2.1.html"
+      }
+    ]
+  }
 ← [31;1mimpurely[0m instantiated from [31;1munlocked[0m flake output [1mgit+file://$flake1Dir#packages.$system.default[0m
 EOF
-) ]]
+)" ]]
 
 [[ "$(nix provenance show "$builder")" = $(cat <<EOF
 [1m$builder[0m
