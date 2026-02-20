@@ -629,7 +629,7 @@ static void prim_wasi(EvalState & state, const PosIdx pos, Value ** args, Value 
         WasiConfig wasiConfig;
         wasi_config_set_stdout_custom(wasiConfig.capi(), loggerTrampoline, &logger, nullptr);
         wasi_config_set_stderr_custom(wasiConfig.capi(), loggerTrampoline, &logger, nullptr);
-        wasiConfig.argv({std::string(wasmPath.baseName()), std::to_string(argId)});
+        wasiConfig.argv({"wasi", std::to_string(argId)});
         unwrap(instance.wasmStore.context().set_wasi(std::move(wasiConfig)));
 
         auto res = instance.getExport<Func>(functionName).call(instance.wasmCtx, {});
