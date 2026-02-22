@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.16.0.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.16.1.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -174,3 +174,19 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 * Add subcommand 'nix provenance show' [DeterminateSystems/nix-src#340](https://github.com/DeterminateSystems/nix-src/pull/340)
 
 * Increase the open file soft limit to the hard limit [DeterminateSystems/nix-src#347](https://github.com/DeterminateSystems/nix-src/pull/347)
+
+<!-- Determinate Nix version 3.16.1 -->
+
+* Upstream C store API improvements by @edolstra in [DeterminateSystems/nix-src#352](https://github.com/DeterminateSystems/nix-src/pull/352)
+
+* Record provenance for unlocked inputs and impure evaluations by @edolstra in [DeterminateSystems/nix-src#354](https://github.com/DeterminateSystems/nix-src/pull/354)
+
+* Add setting narinfo-cache-meta-ttl by @edolstra in [DeterminateSystems/nix-src#355](https://github.com/DeterminateSystems/nix-src/pull/355)
+
+* Add derivationWithMeta builtin by @RossComputerGuy in [DeterminateSystems/nix-src#357](https://github.com/DeterminateSystems/nix-src/pull/357)
+
+* Add builtins.wasi by @edolstra in [DeterminateSystems/nix-src#359](https://github.com/DeterminateSystems/nix-src/pull/359)
+
+* Add `nix provenance verify` command by @edolstra in [DeterminateSystems/nix-src#356](https://github.com/DeterminateSystems/nix-src/pull/356)
+
+* builtins.hashString: Devirtualize lazy paths, and re-enable lazy trees tests by @edolstra in [DeterminateSystems/nix-src#360](https://github.com/DeterminateSystems/nix-src/pull/360)
