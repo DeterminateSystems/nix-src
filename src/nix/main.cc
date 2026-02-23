@@ -94,6 +94,8 @@ static void disableNet()
         settings.useSubstitutes = false;
     if (!settings.tarballTtl.overridden)
         settings.tarballTtl = std::numeric_limits<unsigned int>::max();
+    if (!settings.ttlNarInfoCacheMeta.overridden)
+        settings.ttlNarInfoCacheMeta = std::numeric_limits<unsigned int>::max();
     if (!fileTransferSettings.tries.overridden)
         fileTransferSettings.tries = 0;
     if (!fileTransferSettings.connectTimeout.overridden)
@@ -568,6 +570,7 @@ void mainWrapped(int argc, char ** argv)
         settings.tarballTtl = 0;
         settings.ttlNegativeNarInfoCache = 0;
         settings.ttlPositiveNarInfoCache = 0;
+        settings.ttlNarInfoCacheMeta = 0;
     }
 
     if (args.command->second->forceImpureByDefault() && !evalSettings.pureEval.overridden) {

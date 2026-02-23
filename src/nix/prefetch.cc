@@ -15,6 +15,8 @@
 #include "nix/util/environment-variables.hh"
 #include "nix/util/url.hh"
 #include "nix/store/path.hh"
+#include "nix/util/override-provenance-source-accessor.hh"
+#include "nix/fetchers/provenance.hh"
 
 #include "man-pages.hh"
 
@@ -143,7 +145,15 @@ std::tuple<StorePath, Hash> prefetchFile(
 
         Activity act(*logger, lvlChatty, actUnknown, fmt("adding '%s' to the store", url.to_string()));
 
-        auto info = store->addToStoreSlow(name, makeFSSourceAccessor(tmpFile), method, hashAlgo, {}, expectedHash);
+        auto info = store->addToStoreSlow(
+            name,
+            {make_ref<OverrideProvenanceSourceAccessor>(
+                makeFSSourceAccessor(tmpFile),
+                unpack ? nullptr : std::make_shared<FetchurlProvenance>(url.parsed().renderSanitized()))},
+            method,
+            hashAlgo,
+            {},
+            expectedHash);
         storePath = info.path;
         assert(info.ca);
         hash = info.ca->hash;

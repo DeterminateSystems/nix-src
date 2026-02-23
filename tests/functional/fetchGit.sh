@@ -363,3 +363,17 @@ rm "$TEST_ROOT"/flake/flake.lock
 nix eval "path:$TEST_ROOT/flake"#isModern
 nix eval --nix-219-compat "path:$TEST_ROOT/flake"#isModern
 [[ $(jq -r .nodes.eol.locked.narHash < "$TEST_ROOT"/flake/flake.lock) = "$newHash" ]]
+
+
+# Test that builtins.hashString devirtualizes lazy paths (https://github.com/DeterminateSystems/determinate/issues/160).
+hashStringRepo="$TEST_ROOT/hashString"
+createGitRepo "$hashStringRepo"
+echo hello > "$hashStringRepo"/hello
+git -C "$hashStringRepo" add hello
+git -C "$hashStringRepo" commit -m 'Initial'
+hashStringRev=$(git -C "$hashStringRepo" rev-parse HEAD)
+
+hash1=$(nix eval --lazy-trees --raw --expr "builtins.hashString \"sha256\" (toString ((builtins.fetchGit { url = file://$hashStringRepo; rev = \"$hashStringRev\"; })))")
+hash2=$(nix eval --lazy-trees --raw --expr "builtins.hashString \"sha256\" (toString ((builtins.fetchGit { url = file://$hashStringRepo; rev = \"$hashStringRev\"; })))")
+
+[[ "$hash1" = "$hash2" ]]

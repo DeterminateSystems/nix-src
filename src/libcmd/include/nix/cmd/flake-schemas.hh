@@ -8,8 +8,11 @@ namespace nix::flake_schemas {
 
 using namespace eval_cache;
 
-ref<eval_cache::EvalCache>
-call(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake, std::optional<FlakeRef> defaultSchemasFlake);
+ref<eval_cache::EvalCache> call(
+    EvalState & state,
+    std::shared_ptr<flake::LockedFlake> lockedFlake,
+    std::optional<FlakeRef> defaultSchemasFlake,
+    bool allowEvalCache = true);
 
 void forEachOutput(
     ref<AttrCursor> inventory,

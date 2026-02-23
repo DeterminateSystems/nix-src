@@ -53,6 +53,7 @@ headers = files(
   'muxable-pipe.hh',
   'nar-accessor.hh',
   'os-string.hh',
+  'override-provenance-source-accessor.hh',
   'pool.hh',
   'pos-idx.hh',
   'pos-table.hh',

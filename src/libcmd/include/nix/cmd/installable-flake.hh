@@ -41,6 +41,7 @@ struct InstallableFlake : InstallableValue
     ExtendedOutputsSpec extendedOutputsSpec;
     const flake::LockFlags & lockFlags;
     mutable std::shared_ptr<flake::LockedFlake> _lockedFlake;
+    bool useEvalCache = true;
     std::optional<FlakeRef> defaultFlakeSchemas;
 
     InstallableFlake(

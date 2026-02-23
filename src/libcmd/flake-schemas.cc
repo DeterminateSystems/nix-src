@@ -36,8 +36,11 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
     return lockFlake(flakeSettings, state, flakeRef, {}, flake);
 }
 
-ref<EvalCache>
-call(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake, std::optional<FlakeRef> defaultSchemasFlake)
+ref<EvalCache> call(
+    EvalState & state,
+    std::shared_ptr<flake::LockedFlake> lockedFlake,
+    std::optional<FlakeRef> defaultSchemasFlake,
+    bool allowEvalCache)
 {
     auto fingerprint = lockedFlake->getFingerprint(*state.store, state.fetchSettings);
 
@@ -62,7 +65,7 @@ call(EvalState & state, std::shared_ptr<flake::LockedFlake> lockedFlake, std::op
 
     // FIXME: merge with openEvalCache().
     auto cache = make_ref<EvalCache>(
-        evalSettings.useEvalCache && evalSettings.pureEval ? fingerprint2 : std::nullopt,
+        allowEvalCache && evalSettings.useEvalCache && evalSettings.pureEval ? fingerprint2 : std::nullopt,
         state,
         [&state, lockedFlake, callFlakeSchemasNix, lockedDefaultSchemasFlake]() {
             auto vCallFlakeSchemas = state.allocValue();

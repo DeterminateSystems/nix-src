@@ -78,7 +78,7 @@ TrapResult<InstancePre> instantiate_pre(Linker & linker, const Module & m)
     return InstancePre(instance_pre);
 }
 
-void regFuns(Linker & linker);
+static void regFuns(Linker & linker, bool useWasi);
 
 struct NixWasmInstancePre
 {
@@ -86,12 +86,14 @@ struct NixWasmInstancePre
     SourcePath wasmPath;
     InstancePre instancePre;
 
-    NixWasmInstancePre(SourcePath _wasmPath)
+    NixWasmInstancePre(SourcePath _wasmPath, bool useWasi = false)
         : engine(getEngine())
         , wasmPath(_wasmPath)
         , instancePre(({
             Linker linker(engine);
-            regFuns(linker);
+            if (useWasi)
+                unwrap(linker.define_wasi());
+            regFuns(linker, useWasi);
             unwrap(instantiate_pre(linker, unwrap(Module::compile(engine, string2span(wasmPath.readFile())))));
         }))
     {
@@ -112,6 +114,10 @@ struct NixWasmInstance
 
     std::optional<std::string> functionName;
 
+    ValueId resultId = 0;
+
+    std::string logPrefix;
+
     NixWasmInstance(EvalState & _state, ref<NixWasmInstancePre> _pre)
         : state(_state)
         , pre(_pre)
@@ -119,6 +125,7 @@ struct NixWasmInstance
         , wasmCtx(wasmStore)
         , instance(unwrap(pre->instancePre.instantiate(wasmCtx)))
         , memory_(getExport<Memory>("memory"))
+        , logPrefix(pre->wasmPath.baseName())
     {
         wasmCtx.set_data(this);
 
@@ -177,12 +184,16 @@ struct NixWasmInstance
 
     std::monostate warn(uint32_t ptr, uint32_t len)
     {
-        nix::warn(
-            "'%s' function '%s': %s",
-            pre->wasmPath,
-            functionName.value_or("<unknown>"),
-            span2string(memory().subspan(ptr, len)));
+        doWarn(span2string(memory().subspan(ptr, len)));
         return {};
+    }
+
+    void doWarn(std::string_view s)
+    {
+        if (functionName)
+            nix::warn("'%s' function '%s': %s", logPrefix, functionName.value_or("<unknown>"), s);
+        else
+            nix::warn("'%s': %s", logPrefix, s);
     }
 
     uint32_t get_type(ValueId valueId)
@@ -475,7 +486,7 @@ static void regFun(Linker & linker, std::string_view name, R (NixWasmInstance::*
     }));
 }
 
-void regFuns(Linker & linker)
+static void regFuns(Linker & linker, bool useWasi)
 {
     regFun(linker, "panic", &NixWasmInstance::panic);
     regFun(linker, "warn", &NixWasmInstance::warn);
@@ -500,31 +511,45 @@ void regFuns(Linker & linker)
     regFun(linker, "call_function", &NixWasmInstance::call_function);
     regFun(linker, "make_app", &NixWasmInstance::make_app);
     regFun(linker, "read_file", &NixWasmInstance::read_file);
+
+    if (useWasi) {
+        unwrap(linker.func_wrap(
+            "env", "return_to_nix", [](Caller caller, ValueId resultId) -> Result<std::monostate, Trap> {
+                auto instance = std::any_cast<NixWasmInstance *>(caller.context().get_data());
+                instance->resultId = resultId;
+                return Trap("return_to_nix");
+            }));
+    }
 }
 
-void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static NixWasmInstance instantiateWasm(EvalState & state, const SourcePath & wasmPath, bool useWasi)
+{
+    // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
+    // FIXME: move to EvalState?
+    // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
+    static boost::concurrent_flat_map<std::pair<SourcePath, bool>, std::shared_ptr<NixWasmInstancePre>> instancesPre;
+
+    std::shared_ptr<NixWasmInstancePre> instancePre;
+
+    instancesPre.try_emplace_and_cvisit(
+        {wasmPath, useWasi},
+        nullptr,
+        [&](auto & i) { instancePre = i.second = std::make_shared<NixWasmInstancePre>(wasmPath, useWasi); },
+        [&](auto & i) { instancePre = i.second; });
+
+    return NixWasmInstance{state, ref(instancePre)};
+}
+
+static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
     auto wasmPath = state.realisePath(pos, *args[0]);
     std::string functionName =
         std::string(state.forceStringNoCtx(*args[1], pos, "while evaluating the second argument of `builtins.wasm`"));
 
     try {
-        // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
-        // FIXME: move to EvalState?
-        // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
-        static boost::concurrent_flat_map<SourcePath, std::shared_ptr<NixWasmInstancePre>> instancesPre;
-
-        std::shared_ptr<NixWasmInstancePre> instancePre;
-
-        instancesPre.try_emplace_and_cvisit(
-            wasmPath,
-            nullptr,
-            [&](auto & i) { instancePre = i.second = std::make_shared<NixWasmInstancePre>(wasmPath); },
-            [&](auto & i) { instancePre = i.second; });
+        auto instance = instantiateWasm(state, wasmPath, false);
 
         debug("calling wasm module");
-
-        NixWasmInstance instance{state, ref(instancePre)};
 
         // FIXME: use the "start" function if present.
         instance.runFunction("nix_wasm_init_v1", {});
@@ -550,6 +575,85 @@ static RegisterPrimOp primop_wasm(
       Call a Wasm function with the specified argument.
      )",
      .fun = prim_wasm,
+     .experimentalFeature = Xp::WasmBuiltin});
+
+/**
+ * Callback for WASI stdout/stderr writes. It splits the output into lines and logs each line separately.
+ */
+struct WasiLogger
+{
+    NixWasmInstance & instance;
+
+    std::string data;
+
+    ~WasiLogger()
+    {
+        if (!data.empty())
+            instance.doWarn(data);
+    }
+
+    void operator()(std::string_view s)
+    {
+        data.append(s);
+
+        while (true) {
+            auto pos = data.find('\n');
+            if (pos == std::string_view::npos)
+                break;
+            instance.doWarn(data.substr(0, pos));
+            data.erase(0, pos + 1);
+        }
+    }
+};
+
+static void prim_wasi(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+{
+    auto wasmPath = state.realisePath(pos, *args[0]);
+    auto functionName = "_start";
+
+    try {
+        auto instance = instantiateWasm(state, wasmPath, true);
+
+        debug("calling wasm module");
+
+        auto argId = instance.addValue(args[1]);
+
+        WasiLogger logger{instance};
+
+        auto loggerTrampoline = [](void * data, const unsigned char * buf, size_t len) -> ptrdiff_t {
+            auto logger = static_cast<WasiLogger *>(data);
+            (*logger)(std::string_view((const char *) buf, len));
+            return len;
+        };
+
+        WasiConfig wasiConfig;
+        wasi_config_set_stdout_custom(wasiConfig.capi(), loggerTrampoline, &logger, nullptr);
+        wasi_config_set_stderr_custom(wasiConfig.capi(), loggerTrampoline, &logger, nullptr);
+        wasiConfig.argv({"wasi", std::to_string(argId)});
+        unwrap(instance.wasmStore.context().set_wasi(std::move(wasiConfig)));
+
+        auto res = instance.getExport<Func>(functionName).call(instance.wasmCtx, {});
+        if (!instance.resultId) {
+            unwrap(std::move(res));
+            throw Error("Wasm function '%s' from '%s' finished without returning a value", functionName, wasmPath);
+        }
+
+        auto & vRes = instance.getValue(instance.resultId);
+        state.forceValue(vRes, pos);
+        v = vRes;
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while executing the Wasm function '%s' from '%s'", functionName, wasmPath);
+        throw;
+    }
+}
+
+static RegisterPrimOp primop_wasi(
+    {.name = "wasi",
+     .args = {"wasi", "arg"},
+     .doc = R"(
+      Call a WASI function with the specified argument.
+     )",
+     .fun = prim_wasi,
      .experimentalFeature = Xp::WasmBuiltin});
 
 } // namespace nix

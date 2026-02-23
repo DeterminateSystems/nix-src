@@ -147,7 +147,7 @@ std::pair<Value *, PosIdx> InstallableFlake::toValue(EvalState & state)
 
 std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState & state, bool useDefaultAttrPath)
 {
-    auto cache = flake_schemas::call(state, getLockedFlake(), defaultFlakeSchemas);
+    auto cache = flake_schemas::call(state, getLockedFlake(), defaultFlakeSchemas, useEvalCache);
 
     auto inventory = cache->getRoot()->getAttr("inventory");
     auto outputs = cache->getRoot()->getAttr("outputs");
@@ -284,12 +284,10 @@ FlakeRef InstallableFlake::nixpkgsFlakeRef() const
 
 std::shared_ptr<const Provenance> InstallableFlake::makeProvenance(std::string_view attrPath) const
 {
-    if (!evalSettings.pureEval)
-        return nullptr;
     auto provenance = getLockedFlake()->flake.provenance;
     if (!provenance)
         return nullptr;
-    return std::make_shared<const FlakeProvenance>(provenance, std::string(attrPath));
+    return std::make_shared<const FlakeProvenance>(provenance, std::string(attrPath), evalSettings.pureEval);
 }
 
 } // namespace nix

@@ -1057,6 +1057,17 @@ public:
           mismatch if the build isn't reproducible.
         )"};
 
+    Setting<unsigned int> ttlNarInfoCacheMeta{
+        this,
+        7 * 24 * 3600,
+        "narinfo-cache-meta-ttl",
+        R"(
+          The TTL in seconds for caching binary cache metadata (i.e.
+          `/nix-cache-info`). This determines how long information about a
+          binary cache (such as its store directory, priority, and whether it
+          wants mass queries) is considered valid before being refreshed.
+        )"};
+
     Setting<bool> printMissing{
         this, true, "print-missing", "Whether to print what paths need to be built or downloaded."};
 
