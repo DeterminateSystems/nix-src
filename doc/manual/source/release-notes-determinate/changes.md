@@ -192,18 +192,3 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 
 <!-- Determinate Nix version 3.16.2 -->
 
-* Upstream C store API improvements by @edolstra in [DeterminateSystems/nix-src#352](https://github.com/DeterminateSystems/nix-src/pull/352)
-
-* Record provenance for unlocked inputs and impure evaluations by @edolstra in [DeterminateSystems/nix-src#354](https://github.com/DeterminateSystems/nix-src/pull/354)
-
-* Add setting narinfo-cache-meta-ttl by @edolstra in [DeterminateSystems/nix-src#355](https://github.com/DeterminateSystems/nix-src/pull/355)
-
-* Add derivationWithMeta builtin by @RossComputerGuy in [DeterminateSystems/nix-src#357](https://github.com/DeterminateSystems/nix-src/pull/357)
-
-* Add builtins.wasi by @edolstra in [DeterminateSystems/nix-src#359](https://github.com/DeterminateSystems/nix-src/pull/359)
-
-* Add `nix provenance verify` command by @edolstra in [DeterminateSystems/nix-src#356](https://github.com/DeterminateSystems/nix-src/pull/356)
-
-* builtins.hashString: Devirtualize lazy paths, and re-enable lazy trees tests by @edolstra in [DeterminateSystems/nix-src#360](https://github.com/DeterminateSystems/nix-src/pull/360)
-
-* Release v3.16.1 by @github-actions[bot] in [DeterminateSystems/nix-src#362](https://github.com/DeterminateSystems/nix-src/pull/362)
