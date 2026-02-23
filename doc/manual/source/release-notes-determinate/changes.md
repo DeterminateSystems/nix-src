@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.16.1.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.16.2.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -189,3 +189,6 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 * Add `nix provenance verify` command in [DeterminateSystems/nix-src#356](https://github.com/DeterminateSystems/nix-src/pull/356)
 
 * builtins.hashString: Devirtualize lazy paths, and re-enable lazy trees tests in [DeterminateSystems/nix-src#360](https://github.com/DeterminateSystems/nix-src/pull/360)
+
+<!-- Determinate Nix version 3.16.2 -->
+
