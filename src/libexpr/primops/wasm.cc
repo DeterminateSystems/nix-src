@@ -569,7 +569,7 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
 }
 
 static RegisterPrimOp primop_wasm(
-    {.name = "wasm",
+    {.name = "__wasm",
      .args = {"wasm", "entry", "arg"},
      .doc = R"(
       Call a Wasm function with the specified argument.
@@ -648,7 +648,7 @@ static void prim_wasi(EvalState & state, const PosIdx pos, Value ** args, Value 
 }
 
 static RegisterPrimOp primop_wasi(
-    {.name = "wasi",
+    {.name = "__wasi",
      .args = {"wasi", "arg"},
      .doc = R"(
       Call a WASI function with the specified argument.
