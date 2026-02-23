@@ -149,7 +149,7 @@ std::tuple<StorePath, Hash> prefetchFile(
             name,
             {make_ref<OverrideProvenanceSourceAccessor>(
                 makeFSSourceAccessor(tmpFile),
-                unpack ? nullptr : std::make_shared<FetchurlProvenance>(url.parsed().renderSanitized()))},
+                unpack ? nullptr : std::make_shared<FetchurlProvenance>(url.to_string()))},
             method,
             hashAlgo,
             {},
