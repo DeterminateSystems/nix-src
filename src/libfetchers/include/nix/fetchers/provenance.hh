@@ -23,10 +23,7 @@ struct FetchurlProvenance : Provenance
 {
     std::string url;
 
-    FetchurlProvenance(const std::string & url)
-        : url(url)
-    {
-    }
+    FetchurlProvenance(std::string url, bool sanitize = true);
 
     nlohmann::json to_json() const override;
 };

@@ -87,7 +87,7 @@ DownloadFileResult downloadFile(
             hashString(HashAlgorithm::SHA256, sink.s));
         info.narSize = sink.s.size();
         if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
-            info.provenance = std::make_shared<FetchurlProvenance>(request.uri.parsed().renderSanitized());
+            info.provenance = std::make_shared<FetchurlProvenance>(request.uri.to_string());
         auto source = StringSource{sink.s};
         store.addToStore(info, source, NoRepair, NoCheckSigs);
         storePath = std::move(info.path);

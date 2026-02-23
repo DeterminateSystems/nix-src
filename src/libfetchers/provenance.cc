@@ -31,6 +31,17 @@ Provenance::Register registerTreeProvenance("tree", [](nlohmann::json json) {
     return make_ref<TreeProvenance>(make_ref<nlohmann::json>(attrsJson));
 });
 
+FetchurlProvenance::FetchurlProvenance(std::string _url, bool sanitize)
+    : url(std::move(_url))
+{
+    if (sanitize) {
+        try {
+            url = parseURL(url, true).renderSanitized();
+        } catch (BadURL &) {
+        }
+    }
+}
+
 nlohmann::json FetchurlProvenance::to_json() const
 {
     return nlohmann::json{
@@ -41,7 +52,7 @@ nlohmann::json FetchurlProvenance::to_json() const
 
 Provenance::Register registerFetchurlProvenance("fetchurl", [](nlohmann::json json) {
     auto & obj = getObject(json);
-    return make_ref<FetchurlProvenance>(getString(valueAt(obj, "url")));
+    return make_ref<FetchurlProvenance>(getString(valueAt(obj, "url")), false);
 });
 
 } // namespace nix
