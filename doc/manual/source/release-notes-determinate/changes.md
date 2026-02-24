@@ -195,6 +195,3 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 
 <!-- Determinate Nix version 3.16.3 -->
 
-* Don't add the wasm/wasi builtins to the global lexical scope by @edolstra in [DeterminateSystems/nix-src#364](https://github.com/DeterminateSystems/nix-src/pull/364)
-
-* Release v3.16.2 by @github-actions[bot] in [DeterminateSystems/nix-src#365](https://github.com/DeterminateSystems/nix-src/pull/365)
