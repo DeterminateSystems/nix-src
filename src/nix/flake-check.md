@@ -27,7 +27,7 @@ of the output. Then, for every item in the contents:
   by the schema for that item, printing an error or warning for every
   check that fails to evaluate or that evaluates to `false`.
 
-* It builds `derivation` attribute returned by the schema for that
+* It builds the `derivation` attribute returned by the schema for that
   item, if the item has the `isFlakeCheck` attribute.
 
 If the `keep-going` option is set to `true`, Nix will keep evaluating as much
