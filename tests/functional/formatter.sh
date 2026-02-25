@@ -87,5 +87,4 @@ rm ./my-result
 nix flake check
 
 clearStore
-nix flake show
-nix flake show | grep -P ": formatter"
+expectStderr 0 nix flake show | grepQuiet ": formatter"
