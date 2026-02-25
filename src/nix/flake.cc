@@ -909,8 +909,6 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
 
                     if (auto forSystems = leaf.forSystems())
                         obj.emplace("forSystems", *forSystems);
-
-                    // FIXME: add more stuff
                 },
 
                 [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
