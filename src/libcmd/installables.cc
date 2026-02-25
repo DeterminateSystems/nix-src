@@ -303,83 +303,31 @@ void completeFlakeRefWithFragment(
     flake::LockFlags lockFlags,
     const StringSet & roles,
     std::string_view prefix)
-{
-    /* Look for flake output attributes that match the
-       prefix. */
-    try {
-        auto hash = prefix.find('#');
-        if (hash == std::string::npos) {
-            completeFlakeRef(completions, evalState->store, prefix);
-        } else {
-            completions.setType(AddCompletions::Type::Attrs);
-
-            auto fragment = prefix.substr(hash + 1);
-            std::string prefixRoot = "";
-            if (fragment.starts_with(".")) {
-                fragment = fragment.substr(1);
-                prefixRoot = ".";
-            }
-            auto flakeRefS = std::string(prefix.substr(0, hash));
-
-            // TODO: ideally this would use the command base directory instead of assuming ".".
-            auto flakeRef =
-                parseFlakeRef(fetchSettings, expandTilde(flakeRefS), std::filesystem::current_path().string());
-
-            auto evalCache = openEvalCache(
-                *evalState, make_ref<flake::LockedFlake>(lockFlake(flakeSettings, *evalState, flakeRef, lockFlags)));
-
-            auto root = evalCache->getRoot();
-
-#if 0
-            if (prefixRoot == ".") {
-                attrPathPrefixes.clear();
-            }
-            /* Complete 'fragment' relative to all the
-               attrpath prefixes as well as the root of the
-               flake. */
-            attrPathPrefixes.push_back("");
-
-            for (auto & attrPathPrefixS : attrPathPrefixes) {
-                auto attrPathPrefix = AttrPath::parse(*evalState, attrPathPrefixS);
-                auto attrPathS = attrPathPrefixS + std::string(fragment);
-                auto attrPath = AttrPath::parse(*evalState, attrPathS);
-
-                std::string lastAttr;
-                if (!attrPath.empty() && !hasSuffix(attrPathS, ".")) {
-                    lastAttr = evalState->symbols[attrPath.back()];
-                    attrPath.pop_back();
-                }
-
-                auto attr = root->findAlongAttrPath(attrPath);
-                if (!attr)
-                    continue;
-
-                for (auto & attr2 : (*attr)->getAttrs()) {
-                    if (hasPrefix(evalState->symbols[attr2], lastAttr)) {
-                        auto attrPath2 = (*attr)->getAttrPath(attr2);
-                        /* Strip the attrpath prefix. */
-                        attrPath2.erase(attrPath2.begin(), attrPath2.begin() + attrPathPrefix.size());
-                        // FIXME: handle names with dots
-                        completions.add(flakeRefS + "#" + prefixRoot + attrPath2.to_string(*evalState));
-                    }
-                }
-            }
-
-            /* And add an empty completion for the default
-               attrpaths. */
-            if (fragment.empty()) {
-                for (auto & attrPath : defaultFlakeAttrPaths) {
-                    auto attr = root->findAlongAttrPath(AttrPath::parse(*evalState, attrPath));
-                    if (!attr)
-                        continue;
-                    completions.add(flakeRefS + "#" + prefixRoot);
-                }
-            }
-#endif
-        }
-    } catch (Error & e) {
-        warn(e.msg());
+try {
+    auto hash = prefix.find('#');
+    if (hash == std::string::npos) {
+        completeFlakeRef(completions, evalState->store, prefix);
+        return;
     }
+
+    completions.setType(AddCompletions::Type::Attrs);
+
+    auto fragment = prefix.substr(hash + 1);
+    auto flakeRefS = std::string(prefix.substr(0, hash));
+
+    InstallableFlake{
+        nullptr,
+        evalState,
+        // TODO: ideally this would use the command base directory instead of assuming ".".
+        parseFlakeRef(fetchSettings, expandTilde(flakeRefS), std::filesystem::current_path().string()),
+        fragment,
+        ExtendedOutputsSpec::Default{}, // FIXME: could be that we're completing the outputs spec...
+        roles,
+        lockFlags,
+        {}}
+        .getCompletions(flakeRefS, completions);
+} catch (Error & e) {
+    warn(e.msg());
 }
 
 void completeFlakeRef(AddCompletions & completions, ref<Store> store, std::string_view prefix)

@@ -37,6 +37,7 @@ struct InstallableFlake : InstallableValue
 {
     FlakeRef flakeRef;
     std::string fragment;
+    AttrPath parsedFragment;
     StringSet roles;
     ExtendedOutputsSpec extendedOutputsSpec;
     const flake::LockFlags & lockFlags;
@@ -69,6 +70,8 @@ struct InstallableFlake : InstallableValue
      */
     std::vector<ref<eval_cache::AttrCursor>> getCursors(EvalState & state, bool useDefaultAttrPath) override;
 
+    void getCompletions(const std::string & flakeRefS, AddCompletions & completions);
+
     ref<flake::LockedFlake> getLockedFlake() const;
 
     FlakeRef nixpkgsFlakeRef() const;
@@ -80,6 +83,8 @@ struct InstallableFlake : InstallableValue
 private:
 
     mutable std::shared_ptr<eval_cache::EvalCache> _evalCache;
+
+    std::vector<AttrPath> getAttrsPaths(bool useDefaultAttrPath, ref<eval_cache::AttrCursor> inventory);
 };
 
 /**
