@@ -253,7 +253,7 @@ std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, AttrPath attrPath
         if (!children)
             break;
         auto attr = pathLeft.front();
-        node = children->maybeGetAttr(attr); // FIXME: add suggestions
+        node = children->maybeGetAttr(attr);
         if (!node)
             return std::nullopt;
         pathLeft = pathLeft.subspan(1);
