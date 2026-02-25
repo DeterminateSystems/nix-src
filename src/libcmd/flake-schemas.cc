@@ -239,7 +239,7 @@ std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, AttrPath attrPath
     auto outputName = attrPath.front();
 
     auto schemaInfo = inventory->maybeGetAttr(outputName);
-    if (!schemaInfo) // FIXME: shouldn't be needed
+    if (!schemaInfo)
         return std::nullopt;
 
     auto node = schemaInfo->maybeGetAttr("output");
