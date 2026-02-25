@@ -13,9 +13,11 @@ let
 in
 
 rec {
-  outputNames = builtins.attrNames flake.outputs;
+  outputs = flake.outputs;
 
-  allSchemas = flake.outputs.schemas or defaultSchemasFlake.schemas;
+  outputNames = builtins.attrNames outputs;
+
+  allSchemas = outputs.schemas or defaultSchemasFlake.schemas;
 
   schemas = builtins.listToAttrs (
     builtins.concatLists (
@@ -30,11 +32,9 @@ rec {
           ]
         else
           [ ]
-      ) flake.outputs
+      ) outputs
     )
   );
-
-  outputs = flake.outputs;
 
   inventory = builtins.mapAttrs (
     outputName: output:
