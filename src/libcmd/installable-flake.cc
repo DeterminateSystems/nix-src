@@ -212,7 +212,7 @@ std::vector<AttrPath> InstallableFlake::getAttrsPaths(bool useDefaultAttrPath, r
 
 std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState & state, bool useDefaultAttrPath)
 {
-    auto cache = flake_schemas::call(state, getLockedFlake(), defaultFlakeSchemas, useEvalCache);
+    auto cache = openEvalCache();
 
     auto inventory = cache->getRoot()->getAttr("inventory");
     auto outputs = cache->getRoot()->getAttr("outputs");
@@ -255,7 +255,7 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
 
 void InstallableFlake::getCompletions(const std::string & flakeRefS, AddCompletions & completions)
 {
-    auto cache = flake_schemas::call(*state, getLockedFlake(), defaultFlakeSchemas, useEvalCache);
+    auto cache = openEvalCache();
 
     auto inventory = cache->getRoot()->getAttr("inventory");
     auto outputs = cache->getRoot()->getAttr("outputs");
@@ -316,7 +316,7 @@ ref<flake::LockedFlake> InstallableFlake::getLockedFlake() const
 ref<eval_cache::EvalCache> InstallableFlake::openEvalCache() const
 {
     if (!_evalCache) {
-        _evalCache = flake_schemas::call(*state, getLockedFlake(), defaultFlakeSchemas);
+        _evalCache = flake_schemas::call(*state, getLockedFlake(), defaultFlakeSchemas, useEvalCache);
     }
     return ref(_evalCache);
 }
