@@ -390,8 +390,12 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                         if (auto evalChecks = leaf.node->maybeGetAttr("evalChecks")) {
                             auto checkNames = evalChecks->getAttrs();
                             for (auto & checkName : checkNames) {
-                                // FIXME: update activity
                                 auto cursor = evalChecks->getAttr(checkName);
+                                Activity act(
+                                    *logger,
+                                    lvlInfo,
+                                    actUnknown,
+                                    fmt("running flake check '%s'", cursor->getAttrPathStr()));
                                 auto b = cursor->getBool();
                                 if (!b)
                                     throw Error("Evaluation check '%s' failed.", cursor->getAttrPathStr());
