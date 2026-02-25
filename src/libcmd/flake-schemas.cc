@@ -63,7 +63,6 @@ ref<EvalCache> call(
                 fingerprint->to_string(HashFormat::Base16, false),
                 lockedDefaultSchemasFlakeFingerprint->to_string(HashFormat::Base16, false)));
 
-    // FIXME: merge with openEvalCache().
     auto cache = make_ref<EvalCache>(
         allowEvalCache && evalSettings.useEvalCache && evalSettings.pureEval ? fingerprint2 : std::nullopt,
         state,
