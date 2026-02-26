@@ -861,6 +861,12 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
 
     void run(nix::ref<nix::Store> store) override
     {
+        if (showOutputPaths && !json)
+            throw UsageError("The '--output-paths' flag requires '--json'.");
+
+        if (showDrvPaths && !json)
+            throw UsageError("The '--drv-paths' flag requires '--json'.");
+
         auto state = getEvalState();
         auto flake = make_ref<LockedFlake>(lockFlake());
         auto localSystem = std::string(settings.thisSystem.get());
