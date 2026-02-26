@@ -132,19 +132,23 @@ void forEachOutput(
     auto doOutputs = [&](bool allowIFD) {
         evalSettings.enableImportFromDerivation.setDefault(allowIFD);
         for (const auto & [i, outputName] : enumerate(outputNames)) {
-            auto output = inventory->getAttr(outputName);
+            auto outputInfo = inventory->getAttr(outputName);
             try {
-                auto allowIFDAttr = output->maybeGetAttr("allowIFD");
+                auto allowIFDAttr = outputInfo->maybeGetAttr("allowIFD");
                 if (allowIFD != (!allowIFDAttr || allowIFDAttr->getBool()))
                     continue;
-                Activity act(*logger, lvlInfo, actUnknown, fmt("evaluating '%s'", output->getAttrPathStr()));
+                auto output = outputInfo->maybeGetAttr("output");
+                if (!output)
+                    // We have a schema but no corresponding output, so skip this.
+                    continue;
+                Activity act(*logger, lvlInfo, actUnknown, fmt("evaluating '%s'", outputInfo->getAttrPathStr()));
                 auto isUnknown = (bool) output->maybeGetAttr("unknown");
                 f(outputName,
-                  isUnknown ? std::shared_ptr<AttrCursor>() : output->getAttr("output"),
-                  isUnknown ? "" : output->getAttr("doc")->getString(),
+                  isUnknown ? std::shared_ptr<AttrCursor>() : output,
+                  isUnknown ? "" : outputInfo->getAttr("doc")->getString(),
                   i + 1 == outputNames.size());
             } catch (Error & e) {
-                e.addTrace(nullptr, "while evaluating the flake output '%s':", output->getAttrPathStr());
+                e.addTrace(nullptr, "while evaluating the flake output '%s':", outputInfo->getAttrPathStr());
                 throw;
             }
         }

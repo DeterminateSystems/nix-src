@@ -10,43 +10,29 @@ let
 
   mapAttrsToList = f: attrs: map (name: f name attrs.${name}) (builtins.attrNames attrs);
 
+  outputNames = builtins.attrNames flake.outputs;
+
+  schemas = flake.outputs.schemas or defaultSchemasFlake.schemas;
+
 in
 
 rec {
   outputs = flake.outputs;
 
-  outputNames = builtins.attrNames outputs;
-
-  allSchemas = outputs.schemas or defaultSchemasFlake.schemas;
-
-  schemas = builtins.listToAttrs (
-    builtins.concatLists (
-      mapAttrsToList (
-        outputName: output:
-        if allSchemas ? ${outputName} then
-          [
-            {
-              name = outputName;
-              value = allSchemas.${outputName};
-            }
-          ]
-        else
-          [ ]
-      ) outputs
-    )
-  );
-
   inventory = builtins.mapAttrs (
-    outputName: output:
+    outputName: _:
     if schemas ? ${outputName} && schemas.${outputName}.version == 1 then
-      let
-        schema = schemas.${outputName};
-      in
-      schema
-      // {
-        output = schema.inventory output;
-      }
+      schemas.${outputName}
+      // (
+        if outputs ? ${outputName} then
+          {
+            output = schemas.${outputName}.inventory outputs.${outputName};
+          }
+        else
+          {
+          }
+      )
     else
       { unknown = true; }
-  ) outputs;
+  ) (schemas // outputs);
 }

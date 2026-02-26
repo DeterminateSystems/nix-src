@@ -221,7 +221,9 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
 
     if (attrPaths.empty())
         throw Error(
-            "Flake '%s' does not have a default output for the role(s) %s.", flakeRef, concatStringsSep(", ", roles));
+            "Flake '%s' does not have any schema that provides a default output for the role(s) %s.",
+            flakeRef,
+            concatStringsSep(", ", roles));
 
     std::vector<ref<eval_cache::AttrCursor>> res;
 
