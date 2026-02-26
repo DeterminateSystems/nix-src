@@ -171,7 +171,7 @@ void visit(
     /* Apply the system type filter. */
     if (system) {
         if (auto forSystems = Node(node).forSystems()) {
-            if (std::find(forSystems->begin(), forSystems->end(), system) == forSystems->end()) {
+            if (std::find(forSystems->begin(), forSystems->end(), *system) == forSystems->end()) {
                 visitFiltered(node, *forSystems);
                 return;
             }

@@ -80,7 +80,7 @@ struct CmdBundle : InstallableValueCommand
             std::move(extendedOutputsSpec),
             {"nix-bundler"},
             lockFlags,
-            std::nullopt};
+            getDefaultFlakeSchemas()};
 
         auto vRes = evalState->allocValue();
         evalState->callFunction(*bundler.toValue(*evalState).first, *val, *vRes, noPos);
