@@ -884,7 +884,11 @@ PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
     PathsInChroot pathsInChroot = defaultPathsInChroot;
 
     for (auto & p : pathsInChroot)
-        if (!p.second.optional && !maybeLstat(p.second.source))
+        if (!p.second.optional
+#if HAVE_EMBEDDED_SANDBOX_SHELL
+            && p.second.source != SANDBOX_SHELL
+#endif
+            && !maybeLstat(p.second.source))
             throw SysError(
                 "path '%s' is configured as part of the `sandbox-paths` option, but is inaccessible", p.second.source);
 
