@@ -84,17 +84,31 @@ struct NixWasmInstancePre
 {
     Engine & engine;
     SourcePath wasmPath;
+    bool useWasi;
     InstancePre instancePre;
 
-    NixWasmInstancePre(SourcePath _wasmPath, bool useWasi = false)
+    NixWasmInstancePre(SourcePath _wasmPath)
         : engine(getEngine())
         , wasmPath(_wasmPath)
+        , useWasi(false)
         , instancePre(({
+            // Compile the module
+            auto module = unwrap(Module::compile(engine, string2span(wasmPath.readFile())));
+
+            // Auto-detect WASI by checking for _start export
+            for (const auto & ref : module.exports())
+                if (const_cast<std::decay_t<decltype(ref)> &>(ref).name() == "_start") {
+                    useWasi = true;
+                    break;
+                }
+
+            // Create linker with appropriate WASI support
             Linker linker(engine);
             if (useWasi)
                 unwrap(linker.define_wasi());
             regFuns(linker, useWasi);
-            unwrap(instantiate_pre(linker, unwrap(Module::compile(engine, string2span(wasmPath.readFile())))));
+
+            unwrap(instantiate_pre(linker, module));
         }))
     {
     }
@@ -522,19 +536,19 @@ static void regFuns(Linker & linker, bool useWasi)
     }
 }
 
-static NixWasmInstance instantiateWasm(EvalState & state, const SourcePath & wasmPath, bool useWasi)
+static NixWasmInstance instantiateWasm(EvalState & state, const SourcePath & wasmPath)
 {
     // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
     // FIXME: move to EvalState?
     // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
-    static boost::concurrent_flat_map<std::pair<SourcePath, bool>, std::shared_ptr<NixWasmInstancePre>> instancesPre;
+    static boost::concurrent_flat_map<SourcePath, std::shared_ptr<NixWasmInstancePre>> instancesPre;
 
     std::shared_ptr<NixWasmInstancePre> instancePre;
 
     instancesPre.try_emplace_and_cvisit(
-        {wasmPath, useWasi},
+        wasmPath,
         nullptr,
-        [&](auto & i) { instancePre = i.second = std::make_shared<NixWasmInstancePre>(wasmPath, useWasi); },
+        [&](auto & i) { instancePre = i.second = std::make_shared<NixWasmInstancePre>(wasmPath); },
         [&](auto & i) { instancePre = i.second; });
 
     return NixWasmInstance{state, ref(instancePre)};
@@ -579,31 +593,10 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
         throw Error("missing required 'path' attribute in first argument to `builtins.wasm`");
     auto wasmPath = state.realisePath(pos, *pathAttr->value);
 
-    // Extract 'wasi' attribute (default: false)
-    bool useWasi = false;
-    auto wasiAttr = args[0]->attrs()->get(state.symbols.create("wasi"));
-    if (wasiAttr)
-        useWasi = state.forceBool(*wasiAttr->value, pos, "while evaluating the 'wasi' attribute");
-
-    // Extract 'function' attribute (optional for wasi, required for non-wasi)
-    std::string functionName;
-    auto functionAttr = args[0]->attrs()->get(state.symbols.create("function"));
-    if (useWasi) {
-        functionName = "_start";
-        if (functionAttr)
-            throw Error("'function' attribute is not allowed when 'wasi' is true");
-    } else {
-        if (!functionAttr)
-            throw Error(
-                "missing required 'function' attribute in first argument to `builtins.wasm` when 'wasi' is false");
-        functionName =
-            std::string(state.forceStringNoCtx(*functionAttr->value, pos, "while evaluating the 'function' attribute"));
-    }
-
     // Check for unknown attributes
     for (auto & attr : *args[0]->attrs()) {
         auto name = state.symbols[attr.name];
-        if (name != "path" && name != "function" && name != "wasi")
+        if (name != "path" && name != "function")
             throw Error("unknown attribute '%s' in first argument to `builtins.wasm`", name);
     }
 
@@ -611,13 +604,28 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
     auto argValue = args[1];
 
     try {
-        auto instance = instantiateWasm(state, wasmPath, useWasi);
+        auto instance = instantiateWasm(state, wasmPath);
+
+        // Extract 'function' attribute (optional for wasi, required for non-wasi)
+        std::string functionName;
+        auto functionAttr = args[0]->attrs()->get(state.symbols.create("function"));
+        if (instance.pre->useWasi) {
+            functionName = "_start";
+            if (functionAttr)
+                throw Error("'function' attribute is not allowed for WASI modules (modules with a '_start' export)");
+        } else {
+            if (!functionAttr)
+                throw Error(
+                    "missing required 'function' attribute in first argument to `builtins.wasm` for non-WASI modules");
+            functionName = std::string(
+                state.forceStringNoCtx(*functionAttr->value, pos, "while evaluating the 'function' attribute"));
+        }
 
         debug("calling wasm module");
 
         auto argId = instance.addValue(argValue);
 
-        if (useWasi) {
+        if (instance.pre->useWasi) {
             WasiLogger logger{instance};
 
             auto loggerTrampoline = [](void * data, const unsigned char * buf, size_t len) -> ptrdiff_t {
@@ -655,7 +663,7 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
             v = vRes;
         }
     } catch (Error & e) {
-        e.addTrace(state.positions[pos], "while executing the Wasm function '%s' from '%s'", functionName, wasmPath);
+        e.addTrace(state.positions[pos], "while executing the Wasm function from '%s'", wasmPath);
         throw;
     }
 }
@@ -667,18 +675,18 @@ static RegisterPrimOp primop_wasm(
       Call a Wasm function with the specified argument.
 
       The first argument must be an attribute set with the following attributes:
-      - `path`: Path to the Wasm module
-      - `function`: Function name to call (required when `wasi` is false)
-      - `wasi`: Whether to use WASI (default: false)
+      - `path`: Path to the Wasm module (required)
+      - `function`: Function name to call (required for non-WASI modules, not allowed for WASI modules)
 
       The second argument is the value to pass to the function.
+
+      WASI mode is automatically detected by checking if the module exports a `_start` function.
 
       Example (non-WASI):
       ```nix
       builtins.wasm {
         path = ./foo.wasm;
         function = "fib";
-        wasi = false;
       } 33
       ```
 
@@ -686,7 +694,6 @@ static RegisterPrimOp primop_wasm(
       ```nix
       builtins.wasm {
         path = ./bar.wasm;
-        wasi = true;
       } { x = 42; }
       ```
      )",

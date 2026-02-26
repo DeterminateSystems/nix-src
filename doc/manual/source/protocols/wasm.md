@@ -9,14 +9,13 @@ WebAssembly modules can interact with Nix values through a host interface that p
 The `builtins.wasm` builtin takes two arguments:
 1. A configuration attribute set with the following attributes:
    - `path` - Path to the WebAssembly module (required)
-   - `function` - Name of the Wasm function to call (required when `wasi` is `false`)
-   - `wasi` - Whether to use WASI mode (optional, defaults to `false`)
+   - `function` - Name of the Wasm function to call (required for non-WASI modules, not allowed for WASI modules)
 2. The argument value to pass to the function
 
-There are two calling conventions, controlled by the `wasi` attribute:
+WASI mode is automatically detected by checking if the module exports a `_start` function. There are two calling conventions:
 
-- **Non-WASI mode** (`wasi = false`) calls a named Wasm export directly. The function receives its input as a `ValueId` parameter and returns a `ValueId`.
-- **WASI mode** (`wasi = true`) runs a WASI module's `_start` entry point. The input `ValueId` is passed as a command-line argument (`argv[1]`), and the result is returned by calling the `return_to_nix` host function.
+- **Non-WASI mode** (no `_start` export) calls a named Wasm export directly. The function receives its input as a `ValueId` parameter and returns a `ValueId`.
+- **WASI mode** (has `_start` export) runs the WASI module's `_start` entry point. The input `ValueId` is passed as a command-line argument (`argv[1]`), and the result is returned by calling the `return_to_nix` host function.
 
 ## Value IDs
 
@@ -26,12 +25,13 @@ Nix values are represented in Wasm code as a `u32` referred to below as a `Value
 
 ### Non-WASI Mode
 
+Non-WASI mode is used when the module does **not** export a `_start` function.
+
 Usage:
 ```nix
 builtins.wasm {
   path = <module>;
   function = <function-name>;
-  wasi = false;  # or omit this attribute
 } <arg>
 ```
 
@@ -42,11 +42,12 @@ Every Wasm module used in non-WASI mode must export:
 
 ### WASI Mode
 
+WASI mode is automatically used when the module exports a `_start` function.
+
 Usage:
 ```nix
 builtins.wasm {
   path = <module>;
-  wasi = true;
 } <arg>
 ```
 
