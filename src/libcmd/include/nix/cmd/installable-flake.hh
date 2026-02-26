@@ -84,7 +84,7 @@ private:
 
     mutable std::shared_ptr<eval_cache::EvalCache> _evalCache;
 
-    std::vector<AttrPath> getAttrsPaths(bool useDefaultAttrPath, ref<eval_cache::AttrCursor> inventory);
+    std::vector<AttrPath> getAttrPaths(bool useDefaultAttrPath, ref<eval_cache::AttrCursor> inventory);
 };
 
 /**

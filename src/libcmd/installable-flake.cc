@@ -146,14 +146,14 @@ std::pair<Value *, PosIdx> InstallableFlake::toValue(EvalState & state)
     return {&getCursor(state)->forceValue(), noPos};
 }
 
-std::vector<AttrPath> InstallableFlake::getAttrsPaths(bool useDefaultAttrPath, ref<eval_cache::AttrCursor> inventory)
+std::vector<AttrPath> InstallableFlake::getAttrPaths(bool useDefaultAttrPath, ref<eval_cache::AttrCursor> inventory)
 {
     if (fragment.starts_with("."))
         return {AttrPath::parse(*state, fragment.substr(1))};
 
     std::vector<AttrPath> attrPaths;
 
-    auto schemas = flake_schemas::getSchema(inventory);
+    auto schemas = flake_schemas::getSchemas(inventory);
 
     // FIXME: Ugly hack to preserve the historical precedence
     // between outputs. We should add a way for schemas to declare
@@ -217,10 +217,11 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
     auto inventory = cache->getRoot()->getAttr("inventory");
     auto outputs = cache->getRoot()->getAttr("outputs");
 
-    auto attrPaths = getAttrsPaths(useDefaultAttrPath, inventory);
+    auto attrPaths = getAttrPaths(useDefaultAttrPath, inventory);
 
     if (attrPaths.empty())
-        throw Error("flake '%s' does not provide a default output", flakeRef);
+        throw Error(
+            "Flake '%s' does not have a default output for the role(s) %s.", flakeRef, concatStringsSep(", ", roles));
 
     std::vector<ref<eval_cache::AttrCursor>> res;
 
@@ -265,7 +266,7 @@ void InstallableFlake::getCompletions(const std::string & flakeRefS, AddCompleti
         // parent.
         parsedFragment.push_back(state->symbols.create(""));
 
-    auto attrPaths = getAttrsPaths(true, inventory);
+    auto attrPaths = getAttrPaths(true, inventory);
 
     if (fragment.empty())
         // Return all top-level flake outputs.

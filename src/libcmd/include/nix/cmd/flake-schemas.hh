@@ -75,6 +75,6 @@ struct SchemaInfo
 
 using Schemas = std::map<std::string, SchemaInfo>;
 
-Schemas getSchema(ref<AttrCursor> root);
+Schemas getSchemas(ref<AttrCursor> root);
 
 } // namespace nix::flake_schemas

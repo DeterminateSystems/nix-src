@@ -265,7 +265,7 @@ std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, AttrPath attrPath
     };
 }
 
-Schemas getSchema(ref<AttrCursor> inventory)
+Schemas getSchemas(ref<AttrCursor> inventory)
 {
     auto & state(inventory->root->state);
 
