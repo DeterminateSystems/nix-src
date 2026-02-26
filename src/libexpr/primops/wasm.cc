@@ -95,9 +95,9 @@ struct NixWasmInstancePre
             // Compile the module
             auto module = unwrap(Module::compile(engine, string2span(wasmPath.readFile())));
 
-            // Auto-detect WASI by checking for _start export
-            for (const auto & ref : module.exports())
-                if (const_cast<std::decay_t<decltype(ref)> &>(ref).name() == "_start") {
+            // Auto-detect WASI by checking for wasi_snapshot_preview1 imports.
+            for (const auto & ref : module.imports())
+                if (const_cast<std::decay_t<decltype(ref)> &>(ref).module() == "wasi_snapshot_preview1") {
                     useWasi = true;
                     break;
                 }

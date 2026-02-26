@@ -12,10 +12,10 @@ The `builtins.wasm` builtin takes two arguments:
    - `function` - Name of the Wasm function to call (required for non-WASI modules, not allowed for WASI modules)
 2. The argument value to pass to the function
 
-WASI mode is automatically detected by checking if the module exports a `_start` function. There are two calling conventions:
+WASI mode is automatically detected by checking if the module imports from `wasi_snapshot_preview1`. There are two calling conventions:
 
-- **Non-WASI mode** (no `_start` export) calls a named Wasm export directly. The function receives its input as a `ValueId` parameter and returns a `ValueId`.
-- **WASI mode** (has `_start` export) runs the WASI module's `_start` entry point. The input `ValueId` is passed as a command-line argument (`argv[1]`), and the result is returned by calling the `return_to_nix` host function.
+- **Non-WASI mode** (no WASI imports) calls the Wasm export specified by `function` directly. The function receives its input as a `ValueId` parameter and returns a `ValueId`.
+- **WASI mode** (when the module imports from `wasi_snapshot_preview1`) runs the WASI module's `_start` entry point. The input `ValueId` is passed as a command-line argument (`argv[1]`), and the result is returned by calling the `return_to_nix` host function.
 
 ## Value IDs
 
@@ -25,7 +25,7 @@ Nix values are represented in Wasm code as a `u32` referred to below as a `Value
 
 ### Non-WASI Mode
 
-Non-WASI mode is used when the module does **not** export a `_start` function.
+Non-WASI mode is used when the module does **not** import from `wasi_snapshot_preview1`.
 
 Usage:
 ```nix
@@ -352,7 +352,7 @@ Creates a lazy or partially applied function application.
 
 #### `return_to_nix(value: ValueId)`
 
-Returns a result value to the Nix evaluator from a WASI module. This function is only available when `wasi = true`.
+Returns a result value to the Nix evaluator from a WASI module. This function is only available in WASI mode.
 
 **Parameters:**
 - `value` - ID of the Nix value to return as the result of the `builtins.wasm` call
