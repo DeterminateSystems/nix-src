@@ -162,7 +162,7 @@ struct GitArchiveInputScheme : InputScheme
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         auto owner = getStrAttr(input.attrs, "owner");
         auto repo = getStrAttr(input.attrs, "repo");
@@ -173,7 +173,7 @@ struct GitArchiveInputScheme : InputScheme
         if (ref)
             path.push_back(*ref);
         if (rev)
-            path.push_back(rev->to_string(HashFormat::Base16, false));
+            path.push_back(abbreviate ? rev->gitShortRev() : rev->gitRev());
         auto url = ParsedURL{
             .scheme = std::string{schemeName()},
             .path = path,
@@ -354,7 +354,14 @@ struct GitArchiveInputScheme : InputScheme
         input.attrs.insert_or_assign("lastModified", uint64_t(tarballInfo.lastModified));
 
         auto accessor =
-            settings.getTarballCache()->getAccessor(tarballInfo.treeHash, {}, "«" + input.to_string() + "»");
+            settings.getTarballCache()->getAccessor(tarballInfo.treeHash, {}, "«" + input.to_string(true) + "»");
+
+        if (!settings.trustTarballsFromGitForges)
+            // FIXME: computing the NAR hash here is wasteful if
+            // copyInputToStore() is just going to hash/copy it as
+            // well.
+            input.attrs.insert_or_assign(
+                "narHash", accessor->hashPath(CanonPath::root).to_string(HashFormat::SRI, true));
 
         return {accessor, input};
     }
@@ -368,15 +375,10 @@ struct GitArchiveInputScheme : InputScheme
         return input.getRev().has_value() && (settings.trustTarballsFromGitForges || input.getNarHash().has_value());
     }
 
-    std::optional<ExperimentalFeature> experimentalFeature() const override
-    {
-        return Xp::Flakes;
-    }
-
     std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
     {
         if (auto rev = input.getRev())
-            return rev->gitRev();
+            return "github:" + rev->gitRev();
         else
             return std::nullopt;
     }
@@ -454,8 +456,7 @@ struct GitHubInputScheme : GitArchiveInputScheme
                             : headers.empty()    ? "https://%s/%s/%s/archive/%s.tar.gz"
                                                  : "https://api.%s/repos/%s/%s/tarball/%s";
 
-        const auto url =
-            fmt(urlFmt, host, getOwner(input), getRepo(input), input.getRev()->to_string(HashFormat::Base16, false));
+        const auto url = fmt(urlFmt, host, getOwner(input), getRepo(input), input.getRev()->gitRev());
 
         return DownloadUrl{parseURL(url), headers};
     }
@@ -542,7 +543,7 @@ struct GitLabInputScheme : GitArchiveInputScheme
                 host,
                 getStrAttr(input.attrs, "owner"),
                 getStrAttr(input.attrs, "repo"),
-                input.getRev()->to_string(HashFormat::Base16, false));
+                input.getRev()->gitRev());
 
         Headers headers = makeHeadersWithAuthTokens(settings, host, input);
         return DownloadUrl{parseURL(url), headers};
@@ -638,7 +639,7 @@ struct SourceHutInputScheme : GitArchiveInputScheme
                 host,
                 getStrAttr(input.attrs, "owner"),
                 getStrAttr(input.attrs, "repo"),
-                input.getRev()->to_string(HashFormat::Base16, false));
+                input.getRev()->gitRev());
 
         Headers headers = makeHeadersWithAuthTokens(settings, host, input);
         return DownloadUrl{parseURL(url), headers};

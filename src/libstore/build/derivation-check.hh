@@ -22,6 +22,7 @@ void checkOutputs(
     const StorePath & drvPath,
     const decltype(Derivation::outputs) & drvOutputs,
     const decltype(DerivationOptions<StorePath>::outputChecks) & drvOptions,
-    const std::map<std::string, ValidPathInfo> & outputs);
+    const std::map<std::string, ValidPathInfo> & outputs,
+    Activity & act);
 
 } // namespace nix

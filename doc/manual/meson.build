@@ -5,19 +5,9 @@ project(
   license : 'LGPL-2.1-or-later',
 )
 
-# Compute documentation URL based on version and release type
-version = meson.project_version()
-official_release = get_option('official-release')
+fs = import('fs')
 
-if official_release
-  # For official releases, use versioned URL (dropping patch version)
-  version_parts = version.split('.')
-  major_minor = '@0@.@1@'.format(version_parts[0], version_parts[1])
-  doc_url = 'https://nix.dev/manual/nix/@0@'.format(major_minor)
-else
-  # For development builds, use /latest
-  doc_url = 'https://nix.dev/manual/nix/latest'
-endif
+doc_url = 'https://manual.determinate.systems/'
 
 nix = find_program('nix', native : true)
 
@@ -40,7 +30,7 @@ nix_env_for_docs = {
   'NIX_CONFIG' : 'cores = 0',
 }
 
-nix_for_docs = [ nix, '--experimental-features', 'nix-command' ]
+nix_for_docs = [ nix ]
 nix_eval_for_docs_common = nix_for_docs + [
   'eval',
   '-I',
@@ -137,7 +127,7 @@ if get_option('html-manual')
         python.full_path(),
         mdbook.full_path(),
         meson.current_build_dir(),
-        meson.project_version(),
+        fs.read('../../.version-determinate').strip(),
         rsync.full_path(),
       ),
     ],

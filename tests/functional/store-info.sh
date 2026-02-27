@@ -65,7 +65,7 @@ check_human_readable "$STORE_INFO"
 check_human_readable "$LEGACY_STORE_INFO"
 
 if [[ -v NIX_DAEMON_PACKAGE ]] && isDaemonNewer "2.7.0pre20220126"; then
-    DAEMON_VERSION=$("$NIX_DAEMON_PACKAGE"/bin/nix daemon --version | cut -d' ' -f3)
+    DAEMON_VERSION=$("$NIX_DAEMON_PACKAGE"/bin/nix daemon --version | sed 's/.*) //')
     echo "$STORE_INFO" | grep "Version: $DAEMON_VERSION"
     [[ "$(echo "$STORE_INFO_JSON" | jq -r ".version")" == "$DAEMON_VERSION" ]]
 fi

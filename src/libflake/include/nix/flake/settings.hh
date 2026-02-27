@@ -21,13 +21,7 @@ struct Settings : public Config
     void configureEvalSettings(nix::EvalSettings & evalSettings) const;
 
     Setting<bool> useRegistries{
-        this,
-        true,
-        "use-registries",
-        "Whether to use flake registries to resolve flake references.",
-        {},
-        true,
-        Xp::Flakes};
+        this, true, "use-registries", "Whether to use flake registries to resolve flake references.", {}, true};
 
     Setting<bool> acceptFlakeConfig{
         this,
@@ -35,8 +29,7 @@ struct Settings : public Config
         "accept-flake-config",
         "Whether to accept Nix configuration settings from a flake without prompting.",
         {},
-        true,
-        Xp::Flakes};
+        true};
 
     Setting<std::string> commitLockFileSummary{
         this,
@@ -47,8 +40,7 @@ struct Settings : public Config
           empty, the summary is generated based on the action performed.
         )",
         {"commit-lockfile-summary"},
-        true,
-        Xp::Flakes};
+        true};
 };
 
 } // namespace nix::flake

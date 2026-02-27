@@ -8,6 +8,8 @@
 
 #include <coroutine>
 
+#include <nlohmann/json.hpp>
+
 namespace nix {
 
 PathSubstitutionGoal::PathSubstitutionGoal(
@@ -27,23 +29,40 @@ PathSubstitutionGoal::~PathSubstitutionGoal()
     cleanup();
 }
 
-Goal::Done PathSubstitutionGoal::doneSuccess(BuildResult::Success::Status status)
+Goal::Done
+PathSubstitutionGoal::doneSuccess(BuildResult::Success::Status status, std::shared_ptr<const Provenance> provenance)
 {
-    return Goal::doneSuccess(
+    auto res = Goal::doneSuccess(
         BuildResult::Success{
             .status = status,
+            .provenance = provenance,
         });
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+
+    return res;
 }
 
 Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failure::Status status, std::string errorMsg)
 {
     debug(errorMsg);
-    return Goal::doneFailure(
+
+    auto res = Goal::doneFailure(
         result,
         BuildResult::Failure{
             .status = status,
             .errorMsg = std::move(errorMsg),
         });
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+
+    return res;
 }
 
 Goal::Co PathSubstitutionGoal::init()
@@ -54,7 +73,7 @@ Goal::Co PathSubstitutionGoal::init()
 
     /* If the path already exists we're done. */
     if (!repair && worker.store.isValidPath(storePath)) {
-        co_return doneSuccess(BuildResult::Success::AlreadyValid);
+        co_return doneSuccess(BuildResult::Success::AlreadyValid, nullptr);
     }
 
     if (settings.readOnlyMode)
@@ -224,7 +243,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
     outPipe.createAsyncPipe(worker.ioport.get());
 #endif
 
-    auto promise = std::promise<void>();
+    auto promise = std::promise<std::shared_ptr<const ValidPathInfo>>();
 
     thr = std::thread([this, &promise, &subPath, &sub]() {
         try {
@@ -239,9 +258,8 @@ Goal::Co PathSubstitutionGoal::tryToRun(
                 Logger::Fields{worker.store.printStorePath(storePath), sub->config.getHumanReadableURI()});
             PushActivity pact(act.id);
 
-            copyStorePath(*sub, worker.store, subPath, repair, sub->config.isTrusted ? NoCheckSigs : CheckSigs);
-
-            promise.set_value();
+            promise.set_value(
+                copyStorePath(*sub, worker.store, subPath, repair, sub->config.isTrusted ? NoCheckSigs : CheckSigs));
         } catch (...) {
             promise.set_exception(std::current_exception());
         }
@@ -266,8 +284,12 @@ Goal::Co PathSubstitutionGoal::tryToRun(
     thr.join();
     worker.childTerminated(this);
 
+    std::shared_ptr<const Provenance> provenance;
+
     try {
-        promise.get_future().get();
+        auto info = promise.get_future().get();
+        if (info)
+            provenance = info->provenance;
     } catch (std::exception & e) {
         /* Cause the parent build to fail unless --fallback is given,
            or the substitute has disappeared. The latter case behaves
@@ -308,7 +330,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
 
     worker.updateProgress();
 
-    co_return doneSuccess(BuildResult::Success::Substituted);
+    co_return doneSuccess(BuildResult::Success::Substituted, provenance);
 }
 
 void PathSubstitutionGoal::handleEOF(Descriptor fd)

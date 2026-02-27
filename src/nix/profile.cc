@@ -288,11 +288,11 @@ struct ProfileManifest
 
         while (i != prev.elements.end() || j != cur.elements.end()) {
             if (j != cur.elements.end() && (i == prev.elements.end() || i->first > j->first)) {
-                logger->cout("%s%s: ∅ -> %s", indent, j->second.identifier(), j->second.versions());
+                logger->cout("%s%s: %s added", indent, j->second.identifier(), j->second.versions());
                 changes = true;
                 ++j;
             } else if (i != prev.elements.end() && (j == cur.elements.end() || i->first < j->first)) {
-                logger->cout("%s%s: %s -> ∅", indent, i->second.identifier(), i->second.versions());
+                logger->cout("%s%s: %s removed", indent, i->second.identifier(), i->second.versions());
                 changes = true;
                 ++i;
             } else {
@@ -313,11 +313,11 @@ struct ProfileManifest
 };
 
 static std::map<Installable *, std::pair<BuiltPaths, ref<ExtraPathInfo>>>
-builtPathsPerInstallable(const std::vector<std::pair<ref<Installable>, BuiltPathWithResult>> & builtPaths)
+builtPathsPerInstallable(const std::vector<InstallableWithBuildResult> & builtPaths)
 {
     std::map<Installable *, std::pair<BuiltPaths, ref<ExtraPathInfo>>> res;
-    for (auto & [installable, builtPath] : builtPaths) {
-        auto & r = res.insert({&*installable,
+    for (auto & b : builtPaths) {
+        auto & r = res.insert({&*b.installable,
                                {
                                    {},
                                    make_ref<ExtraPathInfo>(),
@@ -327,6 +327,7 @@ builtPathsPerInstallable(const std::vector<std::pair<ref<Installable>, BuiltPath
            (e.g. meta.priority fields) if the installable returned
            multiple derivations. So pick one arbitrarily. FIXME:
            print a warning? */
+        auto builtPath = b.getSuccess();
         r.first.push_back(builtPath.path);
         r.second = builtPath.info;
     }
@@ -363,8 +364,10 @@ struct CmdProfileAdd : InstallablesCommand, MixDefaultProfile
     {
         ProfileManifest manifest(*getEvalState(), *profile);
 
-        auto builtPaths = builtPathsPerInstallable(
-            Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal));
+        auto buildResults = Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal);
+        Installable::throwBuildErrors(buildResults, *store);
+
+        auto builtPaths = builtPathsPerInstallable(buildResults);
 
         for (auto & installable : installables) {
             ProfileElement element;
@@ -726,11 +729,11 @@ struct CmdProfileUpgrade : virtual SourceExprCommand, MixDefaultProfile, MixProf
                 this,
                 getEvalState(),
                 FlakeRef(element.source->originalRef),
-                "",
+                "." + element.source->attrPath, // absolute lookup
                 element.source->outputs,
-                Strings{element.source->attrPath},
-                Strings{},
-                lockFlags);
+                StringSet{},
+                lockFlags,
+                getDefaultFlakeSchemas());
 
             auto derivedPaths = installable->toDerivedPaths();
             if (derivedPaths.empty())
@@ -766,8 +769,10 @@ struct CmdProfileUpgrade : virtual SourceExprCommand, MixDefaultProfile, MixProf
             return;
         }
 
-        auto builtPaths = builtPathsPerInstallable(
-            Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal));
+        auto buildResults = Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal);
+        Installable::throwBuildErrors(buildResults, *store);
+
+        auto builtPaths = builtPathsPerInstallable(buildResults);
 
         for (size_t i = 0; i < installables.size(); ++i) {
             auto & installable = installables.at(i);

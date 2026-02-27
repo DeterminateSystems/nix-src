@@ -396,8 +396,8 @@ StringSet DerivationOptions<Input>::getRequiredSystemFeatures(const BasicDerivat
 template<typename Input>
 bool DerivationOptions<Input>::canBuildLocally(Store & localStore, const BasicDerivation & drv) const
 {
-    if (drv.platform != settings.thisSystem.get() && !settings.extraPlatforms.get().count(drv.platform)
-        && !drv.isBuiltin())
+    if (drv.platform != settings.thisSystem.get() && drv.platform != "wasm32-wasip1"
+        && !settings.extraPlatforms.get().count(drv.platform) && !drv.isBuiltin())
         return false;
 
     if (settings.maxBuildJobs.get() == 0 && !drv.isBuiltin())

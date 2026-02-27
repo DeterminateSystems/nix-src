@@ -9,6 +9,9 @@
 #include "nix/store/store-api.hh"
 #include "nix/fetchers/git-utils.hh"
 #include "nix/fetchers/fetch-settings.hh"
+#include "nix/fetchers/provenance.hh"
+
+#include <nlohmann/json.hpp>
 
 namespace nix::fetchers {
 
@@ -83,6 +86,8 @@ DownloadFileResult downloadFile(
             },
             hashString(HashAlgorithm::SHA256, sink.s));
         info.narSize = sink.s.size();
+        if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+            info.provenance = std::make_shared<FetchurlProvenance>(request.uri.to_string());
         auto source = StringSource{sink.s};
         store.addToStore(info, source, NoRepair, NoCheckSigs);
         storePath = std::move(info.path);
@@ -374,7 +379,7 @@ struct CurlInputScheme : InputScheme
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         auto url = parseURL(getStrAttr(input.attrs, "url"));
         // NAR hashes are preferred over file hashes since tar/zip
@@ -429,7 +434,7 @@ struct FileInputScheme : CurlInputScheme
 
         auto accessor = ref{store.getFSAccessor(file.storePath)};
 
-        accessor->setPathDisplay("«" + input.to_string() + "»");
+        accessor->setPathDisplay("«" + input.to_string(true) + "»");
 
         return {accessor, input};
     }
@@ -484,7 +489,7 @@ struct TarballInputScheme : CurlInputScheme
     {
         auto input(_input);
 
-        auto result = downloadTarball_(settings, getStrAttr(input.attrs, "url"), {}, "«" + input.to_string() + "»");
+        auto result = downloadTarball_(settings, getStrAttr(input.attrs, "url"), {}, "«" + input.to_string(true) + "»");
 
         if (result.immutableUrl) {
             auto immutableInput = Input::fromURL(settings, *result.immutableUrl);
@@ -508,9 +513,9 @@ struct TarballInputScheme : CurlInputScheme
     std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
     {
         if (auto narHash = input.getNarHash())
-            return narHash->to_string(HashFormat::SRI, true);
+            return "tarball:" + narHash->to_string(HashFormat::SRI, true);
         else if (auto rev = input.getRev())
-            return rev->gitRev();
+            return "tarball:" + rev->gitRev();
         else
             return std::nullopt;
     }

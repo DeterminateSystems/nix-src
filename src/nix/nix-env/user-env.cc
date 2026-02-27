@@ -38,8 +38,10 @@ bool createUserEnv(
        exist already. */
     std::vector<StorePathWithOutputs> drvsToBuild;
     for (auto & i : elems)
-        if (auto drvPath = i.queryDrvPath())
+        if (auto drvPath = i.queryDrvPath()) {
+            state.waitForPath(*drvPath);
             drvsToBuild.push_back({*drvPath});
+        }
 
     debug("building user environment dependencies");
     state.store->buildPaths(toDerivedPaths(drvsToBuild), state.repair ? bmRepair : bmNormal);
@@ -108,7 +110,7 @@ bool createUserEnv(
        environment. */
     auto manifestFile = ({
         std::ostringstream str;
-        printAmbiguous(manifest, state.symbols, str, nullptr, std::numeric_limits<int>::max());
+        printAmbiguous(state, manifest, str, nullptr, std::numeric_limits<int>::max());
         StringSource source{str.view()};
         state.store->addToStoreFromDump(
             source,
@@ -152,6 +154,7 @@ bool createUserEnv(
     debug("building user environment");
     std::vector<StorePathWithOutputs> topLevelDrvs;
     topLevelDrvs.push_back({topLevelDrv});
+    state.waitForPath(topLevelDrv);
     state.store->buildPaths(toDerivedPaths(topLevelDrvs), state.repair ? bmRepair : bmNormal);
 
     /* Switch the current user environment to the output path. */

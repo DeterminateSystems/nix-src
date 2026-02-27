@@ -228,6 +228,11 @@ struct ParsedURL
      */
     std::string renderPath(bool encode = false) const;
 
+    /**
+     * Like to_string(), but removes query strings and passwords.
+     */
+    std::string renderSanitized() const;
+
     auto operator<=>(const ParsedURL & other) const noexcept = default;
 
     /**

@@ -459,7 +459,7 @@ Goal::Done DerivationGoal::doneSuccess(BuildResult::Success::Status status, Unke
 
     worker.updateProgress();
 
-    return Goal::doneSuccess(
+    auto res = Goal::doneSuccess(
         BuildResult::Success{
             .status = status,
             .builtOutputs = {{
@@ -473,6 +473,15 @@ Goal::Done DerivationGoal::doneSuccess(BuildResult::Success::Status status, Unke
                 },
             }},
         });
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
+    return res;
 }
 
 Goal::Done DerivationGoal::doneFailure(BuildError ex)
@@ -488,13 +497,22 @@ Goal::Done DerivationGoal::doneFailure(BuildError ex)
 
     worker.updateProgress();
 
-    return Goal::doneFailure(
+    auto res = Goal::doneFailure(
         ecFailed,
         BuildResult::Failure{
             .status = ex.status,
             .errorMsg = fmt("%s", Uncolored(ex.info().msg)),
         },
         std::move(ex));
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
+    return res;
 }
 
 } // namespace nix

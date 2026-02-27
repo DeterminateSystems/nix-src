@@ -39,6 +39,9 @@ struct Registry
 
     static std::shared_ptr<Registry> read(const Settings & settings, const SourcePath & path, RegistryType type);
 
+    static std::shared_ptr<Registry>
+    read(const Settings & settings, std::string_view whence, std::string_view jsonStr, RegistryType type);
+
     void write(const std::filesystem::path & path);
 
     void add(const Input & from, const Input & to, const Attrs & extraAttrs);

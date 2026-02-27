@@ -14,6 +14,7 @@
   boehmgc,
   nlohmann_json,
   toml11,
+  wasmtime,
 
   # Configuration Options
 
@@ -29,6 +30,11 @@
   # Temporarily disabled on Windows because the `GC_throw_bad_alloc`
   # symbol is missing during linking.
   enableGC ? !stdenv.hostPlatform.isWindows,
+
+  # Whether to use wasmtime for wasm integration in the Nix language evaluator
+  #
+  # Temporarily disabled when static linking due to Rust not compiling
+  enableWasm ? !stdenv.hostPlatform.isStatic,
 }:
 
 let
@@ -36,7 +42,7 @@ let
 in
 
 mkMesonLibrary (finalAttrs: {
-  pname = "nix-expr";
+  pname = "determinate-nix-expr";
   inherit version;
 
   workDir = ./.;
@@ -64,7 +70,8 @@ mkMesonLibrary (finalAttrs: {
 
   buildInputs = [
     toml11
-  ];
+  ]
+  ++ lib.optional enableWasm wasmtime;
 
   propagatedBuildInputs = [
     nix-util
@@ -77,7 +84,19 @@ mkMesonLibrary (finalAttrs: {
 
   mesonFlags = [
     (lib.mesonEnable "gc" enableGC)
+    (lib.mesonEnable "wasm" enableWasm)
   ];
+
+  # Fixes a problem with the "nix-expr-libcxxStdenv-static" package output.
+  # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
+  # Force this to be built with compiler-rt over libgcc_eh works.
+  # Issue: https://github.com/NixOS/nixpkgs/issues/177129
+  NIX_CFLAGS_COMPILE = lib.optional (
+    stdenv.cc.isClang
+    && stdenv.hostPlatform.isStatic
+    && stdenv.cc.libcxx != null
+    && stdenv.cc.libcxx.isLLVM
+  ) "-rtlib=compiler-rt";
 
   meta = {
     platforms = lib.platforms.unix ++ lib.platforms.windows;

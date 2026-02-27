@@ -86,6 +86,22 @@ static bool haveInternet()
 #endif
 }
 
+static void disableNet()
+{
+    // FIXME: should check for command line overrides only.
+    if (!settings.useSubstitutes.overridden)
+        // FIXME: should not disable local substituters (like file:///).
+        settings.useSubstitutes = false;
+    if (!settings.tarballTtl.overridden)
+        settings.tarballTtl = std::numeric_limits<unsigned int>::max();
+    if (!settings.ttlNarInfoCacheMeta.overridden)
+        settings.ttlNarInfoCacheMeta = std::numeric_limits<unsigned int>::max();
+    if (!fileTransferSettings.tries.overridden)
+        fileTransferSettings.tries = 0;
+    if (!fileTransferSettings.connectTimeout.overridden)
+        fileTransferSettings.connectTimeout = 1;
+}
+
 std::string programPath;
 
 struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
@@ -119,7 +135,6 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             .description = "Print full build logs on standard error.",
             .category = loggingCategory,
             .handler = {[&]() { logger->setPrintBuildLogs(true); }},
-            .experimentalFeature = Xp::NixCommand,
         });
 
         addFlag({
@@ -135,7 +150,6 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             .description = "Disable substituters and consider all previously downloaded files up-to-date.",
             .category = miscCategory,
             .handler = {[&]() { useNet = false; }},
-            .experimentalFeature = Xp::NixCommand,
         });
 
         addFlag({
@@ -143,7 +157,6 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             .description = "Consider all previously downloaded files out-of-date.",
             .category = miscCategory,
             .handler = {[&]() { refresh = true; }},
-            .experimentalFeature = Xp::NixCommand,
         });
 
         aliases = {
@@ -441,7 +454,6 @@ void mainWrapped(int argc, char ** argv)
 
     if (argc == 2 && std::string(argv[1]) == "__dump-language") {
         experimentalFeatureSettings.experimentalFeatures = {
-            Xp::Flakes,
             Xp::FetchClosure,
             Xp::DynamicDerivations,
             Xp::FetchTree,
@@ -500,6 +512,12 @@ void mainWrapped(int argc, char ** argv)
         }
     });
 
+    if (getEnv("NIX_GET_COMPLETIONS"))
+        /* Avoid fetching stuff during tab completion. We have to this
+           early because we haven't checked `haveInternet()` yet
+           (below). */
+        disableNet();
+
     try {
         auto isNixCommand = std::regex_search(programName, std::regex("nix$"));
         auto allowShebang = isNixCommand && argc > 1;
@@ -510,6 +528,8 @@ void mainWrapped(int argc, char ** argv)
     }
 
     applyJSONLogger();
+
+    printTalkative("Nix %s", version());
 
     if (args.helpRequested) {
         std::vector<std::string> subcommand;
@@ -543,22 +563,14 @@ void mainWrapped(int argc, char ** argv)
         args.useNet = false;
     }
 
-    if (!args.useNet) {
-        // FIXME: should check for command line overrides only.
-        if (!settings.useSubstitutes.overridden)
-            settings.useSubstitutes = false;
-        if (!settings.tarballTtl.overridden)
-            settings.tarballTtl = std::numeric_limits<unsigned int>::max();
-        if (!fileTransferSettings.tries.overridden)
-            fileTransferSettings.tries = 0;
-        if (!fileTransferSettings.connectTimeout.overridden)
-            fileTransferSettings.connectTimeout = 1;
-    }
+    if (!args.useNet)
+        disableNet();
 
     if (args.refresh) {
         settings.tarballTtl = 0;
         settings.ttlNegativeNarInfoCache = 0;
         settings.ttlPositiveNarInfoCache = 0;
+        settings.ttlNarInfoCacheMeta = 0;
     }
 
     if (args.command->second->forceImpureByDefault() && !evalSettings.pureEval.overridden) {
@@ -579,15 +591,15 @@ void mainWrapped(int argc, char ** argv)
 
 int main(int argc, char ** argv)
 {
+    using namespace nix;
+
     // The CLI has a more detailed version than the libraries; see nixVersion.
-    nix::nixVersion = NIX_CLI_VERSION;
+    nixVersion = NIX_CLI_VERSION;
 #ifndef _WIN32
     // Increase the default stack size for the evaluator and for
     // libstdc++'s std::regex.
-    // This used to be 64 MiB, but macOS as deployed on GitHub Actions has a
-    // hard limit slightly under that, so we round it down a bit.
-    nix::setStackSize(60 * 1024 * 1024);
+    setStackSize(evalStackSize);
 #endif
 
-    return nix::handleExceptions(argv[0], [&]() { nix::mainWrapped(argc, argv); });
+    return handleExceptions(argv[0], [&]() { mainWrapped(argc, argv); });
 }

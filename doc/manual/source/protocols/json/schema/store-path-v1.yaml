@@ -6,12 +6,6 @@ description: |
 
   This schema describes the JSON representation of store paths as used in various Nix JSON APIs.
 
-  > **Warning**
-  >
-  > This JSON format is currently
-  > [**experimental**](@docroot@/development/experimental-features.md#xp-feature-nix-command)
-  > and subject to change.
-
   ## Format
 
   Store paths in JSON are represented as strings containing just the hash and name portion, without the store directory prefix.

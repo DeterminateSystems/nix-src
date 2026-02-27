@@ -238,6 +238,23 @@ void nix_flake_reference_free(nix_flake_reference * store);
 nix_value * nix_locked_flake_get_output_attrs(
     nix_c_context * context, nix_flake_settings * settings, EvalState * evalState, nix_locked_flake * lockedFlake);
 
+/**
+ * @brief Reads a file within the flake.
+ * @note The callback borrows the string only for the duration of the call.
+ *
+ * @param[out] context Optional, stores error information
+ * @param[in] locked_flake the flake to get the path for
+ * @param[in] path The path within the flake.
+ * @param[in] callback The callback to call with the string
+ * @param[in] user_data Additional data to pass for the callback
+ */
+nix_err nix_locked_flake_read_path(
+    nix_c_context * context,
+    nix_locked_flake * lockedFlake,
+    const char * path,
+    nix_get_string_callback callback,
+    void * user_data);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

@@ -1,5 +1,7 @@
 #include "nix/store/build-result.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/util/provenance.hh"
+
 #include <array>
 
 namespace nix {
@@ -22,7 +24,7 @@ static constexpr std::array<std::pair<BuildResult::Success::Status, std::string_
 #undef ENUM_ENTRY
 }};
 
-static std::string_view successStatusToString(BuildResult::Success::Status status)
+std::string_view BuildResult::Success::statusToString(BuildResult::Success::Status status)
 {
     for (const auto & [enumVal, str] : successStatusStrings) {
         if (enumVal == status)
@@ -40,7 +42,7 @@ static BuildResult::Success::Status successStatusFromString(std::string_view str
     throw Error("unknown built result success status '%s'", str);
 }
 
-static constexpr std::array<std::pair<BuildResult::Failure::Status, std::string_view>, 12> failureStatusStrings{{
+static constexpr std::array<std::pair<BuildResult::Failure::Status, std::string_view>, 13> failureStatusStrings{{
 #define ENUM_ENTRY(e) {BuildResult::Failure::e, #e}
     ENUM_ENTRY(PermanentFailure),
     ENUM_ENTRY(InputRejected),
@@ -54,10 +56,11 @@ static constexpr std::array<std::pair<BuildResult::Failure::Status, std::string_
     ENUM_ENTRY(NotDeterministic),
     ENUM_ENTRY(NoSubstituters),
     ENUM_ENTRY(HashMismatch),
+    ENUM_ENTRY(Cancelled),
 #undef ENUM_ENTRY
 }};
 
-static std::string_view failureStatusToString(BuildResult::Failure::Status status)
+std::string_view BuildResult::Failure::statusToString(BuildResult::Failure::Status status)
 {
     for (const auto & [enumVal, str] : failureStatusStrings) {
         if (enumVal == status)
@@ -102,14 +105,18 @@ void adl_serializer<BuildResult>::to_json(json & res, const BuildResult & br)
         overloaded{
             [&](const BuildResult::Success & success) {
                 res["success"] = true;
-                res["status"] = successStatusToString(success.status);
+                res["status"] = BuildResult::Success::statusToString(success.status);
                 res["builtOutputs"] = success.builtOutputs;
+                if (success.provenance)
+                    res["provenance"] = success.provenance->to_json();
             },
             [&](const BuildResult::Failure & failure) {
                 res["success"] = false;
-                res["status"] = failureStatusToString(failure.status);
+                res["status"] = BuildResult::Failure::statusToString(failure.status);
                 res["errorMsg"] = failure.errorMsg;
                 res["isNonDeterministic"] = failure.isNonDeterministic;
+                if (failure.provenance)
+                    res["provenance"] = failure.provenance->to_json();
             },
         },
         br.inner);
@@ -137,16 +144,24 @@ BuildResult adl_serializer<BuildResult>::from_json(const json & _json)
     bool success = getBoolean(valueAt(json, "success"));
     std::string statusStr = getString(valueAt(json, "status"));
 
+    auto provenanceFromJson = [](const nlohmann::json * j) -> std::shared_ptr<const Provenance> {
+        if (j && !j->is_null())
+            return Provenance::from_json(*j);
+        return nullptr;
+    };
+
     if (success) {
         BuildResult::Success s;
         s.status = successStatusFromString(statusStr);
         s.builtOutputs = valueAt(json, "builtOutputs");
+        s.provenance = provenanceFromJson(optionalValueAt(json, "provenance"));
         br.inner = std::move(s);
     } else {
         BuildResult::Failure f;
         f.status = failureStatusFromString(statusStr);
         f.errorMsg = getString(valueAt(json, "errorMsg"));
         f.isNonDeterministic = getBoolean(valueAt(json, "isNonDeterministic"));
+        f.provenance = provenanceFromJson(optionalValueAt(json, "provenance"));
         br.inner = std::move(f);
     }
 

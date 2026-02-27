@@ -2,106 +2,148 @@
 #include "nix/expr/eval-inline.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/signals.hh"
+#include "nix/expr/parallel-eval.hh"
 
 #include <cstdlib>
 #include <iomanip>
 #include <nlohmann/json.hpp>
 
 namespace nix {
+
 using json = nlohmann::json;
+
+#pragma GCC diagnostic ignored "-Wswitch-enum"
+
+static void parallelForceDeep(EvalState & state, Value & v, PosIdx pos)
+{
+    state.forceValue(v, pos);
+
+    Executor::WorkItems work;
+
+    switch (v.type()) {
+
+    case nAttrs: {
+        NixStringContext context;
+        if (state.tryAttrsToString(pos, v, context, false, false))
+            return;
+        if (v.attrs()->get(state.s.outPath))
+            return;
+        for (auto & a : *v.attrs())
+            state.addWork(work, 0, [value(allocRootValue(a.value)), pos(a.pos), &state]() {
+                parallelForceDeep(state, **value, pos);
+            });
+        break;
+    }
+
+    default:
+        break;
+    }
+
+    state.executor->spawn(std::move(work));
+}
 
 // TODO: rename. It doesn't print.
 json printValueAsJSON(
     EvalState & state, bool strict, Value & v, const PosIdx pos, NixStringContext & context, bool copyToStore)
 {
-    checkInterrupt();
+    if (strict && state.executor->enabled && !Executor::amWorkerThread)
+        parallelForceDeep(state, v, pos);
 
-    auto _level = state.addCallDepth(pos);
+    auto recurse = [&](this const auto & recurse, json & res, Value & v, PosIdx pos) -> void {
+        checkInterrupt();
 
-    if (strict)
-        state.forceValue(v, pos);
+        auto _level = state.addCallDepth(pos);
 
-    json out;
+        if (strict)
+            state.forceValue(v, pos);
 
-    switch (v.type()) {
+        switch (v.type()) {
 
-    case nInt:
-        out = v.integer().value;
-        break;
+        case nInt:
+            res = v.integer().value;
+            break;
 
-    case nBool:
-        out = v.boolean();
-        break;
+        case nBool:
+            res = v.boolean();
+            break;
 
-    case nString:
-        copyContext(v, context);
-        out = v.string_view();
-        break;
-
-    case nPath:
-        if (copyToStore)
-            out = state.store->printStorePath(state.copyPathToStore(context, v.path()));
-        else
-            out = v.path().path.abs();
-        break;
-
-    case nNull:
-        // already initialized as null
-        break;
-
-    case nAttrs: {
-        auto maybeString = state.tryAttrsToString(pos, v, context, false, false);
-        if (maybeString) {
-            out = *maybeString;
+        case nString: {
+            copyContext(v, context);
+            res = v.string_view();
             break;
         }
-        if (auto i = v.attrs()->get(state.s.outPath))
-            return printValueAsJSON(state, strict, *i->value, i->pos, context, copyToStore);
-        else {
-            out = json::object();
-            for (auto & a : v.attrs()->lexicographicOrder(state.symbols)) {
+
+        case nPath:
+            if (copyToStore)
+                res = state.store->printStorePath(state.copyPathToStore(context, v.path(), v.determinePos(pos)));
+            else
+                res = v.path().path.abs();
+            break;
+
+        case nNull:
+            // already initialized as null
+            break;
+
+        case nAttrs: {
+            auto maybeString = state.tryAttrsToString(pos, v, context, false, false);
+            if (maybeString) {
+                res = *maybeString;
+                break;
+            }
+            if (auto i = v.attrs()->get(state.s.outPath))
+                return recurse(res, *i->value, i->pos);
+            else {
+                res = json::object();
+                for (auto & a : v.attrs()->lexicographicOrder(state.symbols)) {
+                    json & j = res.emplace(state.symbols[a->name], json()).first.value();
+                    try {
+                        recurse(j, *a->value, a->pos);
+                    } catch (Error & e) {
+                        e.addTrace(
+                            state.positions[a->pos],
+                            HintFmt("while evaluating attribute '%1%'", state.symbols[a->name]));
+                        throw;
+                    }
+                }
+            }
+            break;
+        }
+
+        case nList: {
+            res = json::array();
+            for (const auto & [i, elem] : enumerate(v.listView())) {
                 try {
-                    out.emplace(
-                        state.symbols[a->name],
-                        printValueAsJSON(state, strict, *a->value, a->pos, context, copyToStore));
+                    res.push_back(json());
+                    recurse(res.back(), *elem, pos);
                 } catch (Error & e) {
-                    e.addTrace(
-                        state.positions[a->pos], HintFmt("while evaluating attribute '%1%'", state.symbols[a->name]));
+                    e.addTrace(state.positions[pos], HintFmt("while evaluating list element at index %1%", i));
                     throw;
                 }
             }
+            break;
         }
-        break;
-    }
 
-    case nList: {
-        out = json::array();
-        int i = 0;
-        for (auto elem : v.listView()) {
-            try {
-                out.push_back(printValueAsJSON(state, strict, *elem, pos, context, copyToStore));
-            } catch (Error & e) {
-                e.addTrace(state.positions[pos], HintFmt("while evaluating list element at index %1%", i));
-                throw;
-            }
-            i++;
+        case nExternal: {
+            res = v.external()->printValueAsJSON(state, strict, context, copyToStore);
+            break;
         }
-        break;
-    }
 
-    case nExternal:
-        return v.external()->printValueAsJSON(state, strict, context, copyToStore);
-        break;
+        case nFloat:
+            res = v.fpoint();
+            break;
 
-    case nFloat:
-        out = v.fpoint();
-        break;
+        case nThunk:
+        case nFailed:
+        case nFunction:
+            state.error<TypeError>("cannot convert %1% to JSON", showType(v)).atPos(v.determinePos(pos)).debugThrow();
+        }
+    };
 
-    case nThunk:
-    case nFunction:
-        state.error<TypeError>("cannot convert %1% to JSON", showType(v)).atPos(v.determinePos(pos)).debugThrow();
-    }
-    return out;
+    json res;
+
+    recurse(res, v, pos);
+
+    return res;
 }
 
 void printValueAsJSON(

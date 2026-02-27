@@ -91,7 +91,7 @@ struct EvalSettings : Config
 
           - `$HOME/.nix-defexpr/channels`
 
-            The [user channel link](@docroot@/command-ref/files/default-nix-expression.md#user-channel-link), pointing to the current state of [channels](@docroot@/command-ref/files/channels.md) for the current user.
+            The user channel link pointing to the current state of channels for the current user.
 
           - `nixpkgs=$NIX_STATE_DIR/profiles/per-user/root/channels/nixpkgs`
 
@@ -101,7 +101,7 @@ struct EvalSettings : Config
 
             The current state of all channels for the `root` user.
 
-          These files are set up by the [Nix installer](@docroot@/installation/installing-binary.md).
+          These files are set up by the Nix installer.
           See [`NIX_STATE_DIR`](@docroot@/command-ref/env-common.md#env-NIX_STATE_DIR) for details on the environment variable.
 
           > **Note**
@@ -142,7 +142,7 @@ struct EvalSettings : Config
         R"(
           If set to `true`, the Nix evaluator doesn't allow access to any
           files outside of
-          [`builtins.nixPath`](@docroot@/language/builtins.md#builtins-nixPath),
+          [`builtins.nixPath`](@docroot@/language/builtins.md#builtins-nixPath)
           or to URIs outside of
           [`allowed-uris`](@docroot@/command-ref/conf-file.md#conf-allowed-uris).
         )"};
@@ -271,7 +271,7 @@ struct EvalSettings : Config
         "ignore-try",
         R"(
           If set to true, ignore exceptions inside 'tryEval' calls when evaluating Nix expressions in
-          debug mode (using the --debugger flag). By default the debugger pauses on all exceptions.
+          debug mode (using the --debugger flag). By default, the debugger pauses on all exceptions.
         )"};
 
     Setting<bool> traceVerbose{
@@ -289,7 +289,7 @@ struct EvalSettings : Config
         "debugger-on-trace",
         R"(
           If set to true and the `--debugger` flag is given, the following functions
-          enter the debugger like [`builtins.break`](@docroot@/language/builtins.md#builtins-break):
+          enter the debugger like [`builtins.break`](@docroot@/language/builtins.md#builtins-break).
 
           * [`builtins.trace`](@docroot@/language/builtins.md#builtins-trace)
           * [`builtins.traceVerbose`](@docroot@/language/builtins.md#builtins-traceVerbose)
@@ -305,7 +305,7 @@ struct EvalSettings : Config
         "debugger-on-warn",
         R"(
           If set to true and the `--debugger` flag is given, [`builtins.warn`](@docroot@/language/builtins.md#builtins-warn)
-          will enter the debugger like [`builtins.break`](@docroot@/language/builtins.md#builtins-break).
+          enter the debugger like [`builtins.break`](@docroot@/language/builtins.md#builtins-break).
 
           This is useful for debugging warnings in third-party Nix code.
 
@@ -319,7 +319,7 @@ struct EvalSettings : Config
         R"(
           If set to true, [`builtins.warn`](@docroot@/language/builtins.md#builtins-warn) throws an error when logging a warning.
 
-          This will give you a stack trace that leads to the location of the warning.
+          This gives you a stack trace that leads to the location of the warning.
 
           This is useful for finding information about warnings in third-party Nix code when you can not start the interactive debugger, such as when Nix is called from a non-interactive script. See [`debugger-on-warn`](#conf-debugger-on-warn).
 
@@ -361,11 +361,55 @@ struct EvalSettings : Config
           The default value is chosen to balance performance and memory usage. On 32 bit systems
           where memory is scarce, the default is a large value to reduce the amount of allocations.
     )"};
+
+    Setting<bool> lazyTrees{
+        this,
+        false,
+        "lazy-trees",
+        R"(
+          If set to true, flakes and trees fetched by [`builtins.fetchTree`](@docroot@/language/builtins.md#builtins-fetchTree) are only copied to the Nix store when they're used as a dependency of a derivation. This avoids copying (potentially large) source trees unnecessarily.
+        )"};
+
+    // FIXME: this setting should really be in libflake, but it's
+    // currently needed in mountInput().
+    Setting<bool> lazyLocks{
+        this,
+        false,
+        "lazy-locks",
+        R"(
+          If enabled, Nix only includes NAR hashes in lock file entries if they're necessary to lock the input (i.e. when there is no other attribute that allows the content to be verified, like a Git revision).
+          This is not backward compatible with older versions of Nix.
+          If disabled, lock file entries always contain a NAR hash.
+        )"};
+
+    Setting<unsigned int> evalCores{
+        this,
+        1,
+        "eval-cores",
+        R"(
+          The number of threads used to evaluate Nix expressions. This currently affects the following commands:
+
+          * `nix search`
+          * `nix flake check`
+          * `nix flake show`
+          * `nix eval --json`
+          * Any evaluation that uses `builtins.parallel`
+
+          The value `0` causes Nix to use all available CPU cores in the system.
+
+          Note that enabling the debugger (`--debugger`) disables multi-threaded evaluation.
+        )"};
 };
 
 /**
  * Conventionally part of the default nix path in impure mode.
  */
 std::filesystem::path getNixDefExpr();
+
+/**
+ * Stack size for evaluator threads. This used to be 64 MiB, but macOS as deployed on GitHub Actions has a
+ * hard limit slightly under that, so we round it down a bit.
+ */
+constexpr size_t evalStackSize = 60 * 1024 * 1024;
 
 } // namespace nix

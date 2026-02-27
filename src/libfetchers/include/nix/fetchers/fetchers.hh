@@ -61,11 +61,11 @@ public:
      */
     static Input fromAttrs(const Settings & settings, Attrs && attrs);
 
-    ParsedURL toURL() const;
+    ParsedURL toURL(bool abbreviate = false) const;
 
-    std::string toURLString(const StringMap & extraQuery = {}) const;
+    std::string toURLString(const StringMap & extraQuery = {}, bool abbreviate = false) const;
 
-    std::string to_string() const;
+    std::string to_string(bool abbreviate = false) const;
 
     Attrs toAttrs() const;
 
@@ -113,7 +113,7 @@ public:
      * Fetch the entire input into the Nix store, returning the
      * location in the Nix store and the locked input.
      */
-    std::pair<StorePath, Input> fetchToStore(const Settings & settings, Store & store) const;
+    std::tuple<StorePath, ref<SourceAccessor>, Input> fetchToStore(const Settings & settings, Store & store) const;
 
     /**
      * Check the locking attributes in `result` against
@@ -225,7 +225,7 @@ struct InputScheme
      */
     virtual const std::map<std::string, AttributeInfo> & allowedAttrs() const = 0;
 
-    virtual ParsedURL toURL(const Input & input) const;
+    virtual ParsedURL toURL(const Input & input, bool abbreviate = false) const;
 
     virtual Input applyOverrides(const Input & input, std::optional<std::string> ref, std::optional<Hash> rev) const;
 

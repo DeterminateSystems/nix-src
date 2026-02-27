@@ -162,7 +162,7 @@ EOF
 testReplResponse '
 foo + baz
 ' "3" \
-    ./flake ./flake\#bar --experimental-features 'flakes'
+    ./flake ./flake\#bar
 
 testReplResponse $'
 :a { a = 1; b = 2; longerName = 3; "with spaces" = 4; }
@@ -197,7 +197,7 @@ testReplResponseNoRegex $'
 # - Check that the result has changed
 mkfifo repl_fifo
 touch repl_output
-nix repl ./flake --experimental-features 'flakes' < repl_fifo >> repl_output 2>&1 &
+nix repl ./flake < repl_fifo >> repl_output 2>&1 &
 repl_pid=$!
 exec 3>repl_fifo # Open fifo for writing
 echo "changingThing" >&3
@@ -321,7 +321,7 @@ import $testDir/lang/parse-fail-eof-pos.nix
 badDiff=0
 badExitCode=0
 
-nixVersion="$(nix eval --impure --raw --expr 'builtins.nixVersion' --extra-experimental-features nix-command)"
+nixVersion="$(nix --version | sed 's/nix //')"
 
 # TODO: write a repl interacter for testing. Papering over the differences between readline / editline and between platforms is a pain.
 

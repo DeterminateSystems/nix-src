@@ -17,6 +17,8 @@
 namespace nix {
 
 struct StoreDirConfig;
+struct AsyncPathWriter;
+struct Provenance;
 
 /* Abstract syntax of derivations. */
 
@@ -455,7 +457,23 @@ class Store;
 /**
  * Write a derivation to the Nix store, and return its path.
  */
-StorePath writeDerivation(Store & store, const Derivation & drv, RepairFlag repair = NoRepair, bool readOnly = false);
+StorePath writeDerivation(
+    Store & store,
+    const Derivation & drv,
+    RepairFlag repair = NoRepair,
+    bool readOnly = false,
+    std::shared_ptr<const Provenance> provenance = nullptr);
+
+/**
+ * Asynchronously write a derivation to the Nix store, and return its path.
+ */
+StorePath writeDerivation(
+    Store & store,
+    AsyncPathWriter & asyncPathWriter,
+    const Derivation & drv,
+    RepairFlag repair = NoRepair,
+    bool readOnly = false,
+    std::shared_ptr<const Provenance> provenance = nullptr);
 
 /**
  * Read a derivation from a file.

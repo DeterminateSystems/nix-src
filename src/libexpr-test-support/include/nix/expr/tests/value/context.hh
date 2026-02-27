@@ -27,6 +27,12 @@ struct Arbitrary<NixStringContextElem::DrvDeep>
 };
 
 template<>
+struct Arbitrary<NixStringContextElem::Path>
+{
+    static Gen<NixStringContextElem::Path> arbitrary();
+};
+
+template<>
 struct Arbitrary<NixStringContextElem>
 {
     static Gen<NixStringContextElem> arbitrary();

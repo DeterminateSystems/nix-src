@@ -22,12 +22,11 @@ It is based on the current generation of the active [profile](@docroot@/command-
 
 The arguments *args* map to store paths in a number of possible ways:
 
-- By default, *args* is a set of names denoting derivations in the [default Nix expression].
+- By default, *args* is a set of names denoting derivations in the default Nix expression.
   These are [realised], and the resulting output paths are installed.
   Currently installed derivations with a name equal to the name of a derivation being added are removed unless the option `--preserve-installed` is specified.
 
   [derivation expression]: @docroot@/glossary.md#gloss-derivation-expression
-  [default Nix expression]: @docroot@/command-ref/files/default-nix-expression.md
   [realised]: @docroot@/glossary.md#gloss-realise
 
   If there are multiple derivations matching a name in *args* that
@@ -45,7 +44,7 @@ The arguments *args* map to store paths in a number of possible ways:
   gcc-3.3.6 gcc-4.1.1` will install both version of GCC (and will
   probably cause a user environment conflict\!).
 
-- If [`--attr`](#opt-attr) / `-A` is specified, the arguments are *attribute paths* that select attributes from the [default Nix expression].
+- If [`--attr`](#opt-attr) / `-A` is specified, the arguments are *attribute paths* that select attributes from the default Nix expression.
   This is faster than using derivation names and unambiguous.
   Show the attribute paths of available packages with [`nix-env --query`](./query.md):
 
@@ -58,7 +57,7 @@ The arguments *args* map to store paths in a number of possible ways:
   easy way to copy user environment elements from one profile to
   another.
 
-- If `--from-expression` is given, *args* are [Nix language functions](@docroot@/language/syntax.md#functions) that are called with the [default Nix expression] as their single argument.
+- If `--from-expression` is given, *args* are [Nix language functions](@docroot@/language/syntax.md#functions) that are called with the default Nix expression as their single argument.
   The derivations returned by those function calls are installed.
   This allows derivations to be specified in an unambiguous way, which is necessary if there are multiple derivations with the same name.
 
@@ -204,7 +203,7 @@ To install a specific [store derivation] (typically created by
 `nix-instantiate`):
 
 ```console
-$ nix-env --install /nix/store/fibjb1bfbpm5mrsxc4mh2d8n37sxh91i-gcc-3.4.3.drv
+$ nix-env --install /nix/store/8la6y31fmm6i4wfmby6avly1wf718xnj-gcc-3.4.3.drv
 ```
 
 To install a specific output path:
@@ -232,7 +231,7 @@ $ nix-env --file '<nixpkgs>' --install --attr hello --dry-run
 (dry run; not doing anything)
 installing ‘hello-2.10’
 this path will be fetched (0.04 MiB download, 0.19 MiB unpacked):
-  /nix/store/wkhdf9jinag5750mqlax6z2zbwhqb76n-hello-2.10
+  /nix/store/ikwkxz4wwlp2g1428n7dy729cg1d9hin-hello-2.10
   ...
 ```
 

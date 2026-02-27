@@ -45,7 +45,7 @@
     ```json5
     [
       {
-        "path": "/nix/store/8fv91097mbh5049i9rglc73dx6kjg3qk-bash-5.2-p15",
+        "path": "/nix/store/fvqsvk65d38p8qqir371ii0hyqxvjcw6-bash-5.2-p15",
         "valid": true,
         // ...
       },
@@ -60,7 +60,7 @@
 
     ```json5
     {
-      "/nix/store/8fv91097mbh5049i9rglc73dx6kjg3qk-bash-5.2-p15": {
+      "/nix/store/fvqsvk65d38p8qqir371ii0hyqxvjcw6-bash-5.2-p15": {
         // ...
       },
       "/nix/store/wffw7l0alvs3iw94cbgi1gmmbmw99sqb-home-manager-path": null,
@@ -69,7 +69,7 @@
 
   This makes it match `nix derivation show`, which also maps store paths to information.
 
-- When Nix is installed using the [binary installer](@docroot@/installation/installing-binary.md), in supported shells (Bash, Zsh, Fish)
+- When Nix is installed using the binary installer, in supported shells (Bash, Zsh, Fish)
   [`XDG_DATA_DIRS`](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html#variables) is now populated with the path to the `/share` subdirectory of the current profile.
   This means that command completion scripts, `.desktop` files, and similar artifacts installed via [`nix-env`](@docroot@/command-ref/nix-env.md) or [`nix profile`](@docroot@/command-ref/new-cli/nix3-profile.md)
   (experimental) can be found by any program that follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html).

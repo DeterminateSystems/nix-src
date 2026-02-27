@@ -7,6 +7,7 @@
 #include "nix/store/worker-protocol-impl.hh"
 #include "nix/util/archive.hh"
 #include "nix/store/path-info.hh"
+#include "nix/util/provenance.hh"
 
 #include <chrono>
 #include <nlohmann/json.hpp>
@@ -303,6 +304,8 @@ UnkeyedValidPathInfo WorkerProto::Serialise<UnkeyedValidPathInfo>::read(const St
         info.sigs = readStrings<StringSet>(conn.from);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
     }
+    if (conn.provenance)
+        info.provenance = Provenance::from_json_str_optional(readString(conn.from));
     return info;
 }
 
@@ -316,6 +319,8 @@ void WorkerProto::Serialise<UnkeyedValidPathInfo>::write(
     if (GET_PROTOCOL_MINOR(conn.version) >= 16) {
         conn.to << pathInfo.ultimate << pathInfo.sigs << renderContentAddress(pathInfo.ca);
     }
+    if (conn.provenance)
+        conn.to << (pathInfo.provenance ? pathInfo.provenance->to_json_str() : "");
 }
 
 WorkerProto::ClientHandshakeInfo

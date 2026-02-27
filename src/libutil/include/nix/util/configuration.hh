@@ -444,7 +444,7 @@ struct ExperimentalFeatureSettings : Config
           Example:
 
           ```
-          experimental-features = nix-command flakes
+          experimental-features = ca-derivations
           ```
 
           The following experimental features are available:

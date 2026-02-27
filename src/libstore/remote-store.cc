@@ -18,6 +18,7 @@
 #include "nix/util/callback.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/provenance.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -71,8 +72,11 @@ void RemoteStore::initConnection(Connection & conn)
         StringSink saved;
         TeeSource tee(conn.from, saved);
         try {
+            auto myFeatures = WorkerProto::allFeatures;
+            if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
+                myFeatures.erase(std::string(WorkerProto::featureProvenance));
             auto [protoVersion, features] =
-                WorkerProto::BasicClientConnection::handshake(conn.to, tee, PROTOCOL_VERSION, WorkerProto::allFeatures);
+                WorkerProto::BasicClientConnection::handshake(conn.to, tee, PROTOCOL_VERSION, myFeatures);
             if (protoVersion < MINIMUM_PROTOCOL_VERSION)
                 throw Error("the Nix daemon version is too old");
             conn.protoVersion = protoVersion;
@@ -311,7 +315,8 @@ ref<const ValidPathInfo> RemoteStore::addCAToStore(
     ContentAddressMethod caMethod,
     HashAlgorithm hashAlgo,
     const StorePathSet & references,
-    RepairFlag repair)
+    RepairFlag repair,
+    std::shared_ptr<const Provenance> provenance)
 {
     std::optional<ConnectionHandle> conn_(getConnection());
     auto & conn = *conn_;
@@ -321,6 +326,8 @@ ref<const ValidPathInfo> RemoteStore::addCAToStore(
         conn->to << WorkerProto::Op::AddToStore << name << caMethod.renderWithAlgo(hashAlgo);
         WorkerProto::write(*this, *conn, references);
         conn->to << repair;
+        if (conn->features.contains(WorkerProto::featureProvenance))
+            conn->to << (provenance ? provenance->to_json_str() : "");
 
         // The dump source may invoke the store, so we need to make some room.
         connections->incCapacity();
@@ -398,7 +405,8 @@ StorePath RemoteStore::addToStoreFromDump(
     ContentAddressMethod hashMethod,
     HashAlgorithm hashAlgo,
     const StorePathSet & references,
-    RepairFlag repair)
+    RepairFlag repair,
+    std::shared_ptr<const Provenance> provenance)
 {
     FileSerialisationMethod fsm;
     switch (hashMethod.getFileIngestionMethod()) {
@@ -417,7 +425,7 @@ StorePath RemoteStore::addToStoreFromDump(
     }
     if (fsm != dumpMethod)
         unsupported("RemoteStore::addToStoreFromDump doesn't support this `dumpMethod` `hashMethod` combination");
-    auto storePath = addCAToStore(dump, name, hashMethod, hashAlgo, references, repair)->path;
+    auto storePath = addCAToStore(dump, name, hashMethod, hashAlgo, references, repair, provenance)->path;
     invalidatePathInfoCacheFor(storePath);
     return storePath;
 }
@@ -431,8 +439,10 @@ void RemoteStore::addToStore(const ValidPathInfo & info, Source & source, Repair
     WorkerProto::write(*this, *conn, info.deriver);
     conn->to << info.narHash.to_string(HashFormat::Base16, false);
     WorkerProto::write(*this, *conn, info.references);
-    conn->to << info.registrationTime << info.narSize << info.ultimate << info.sigs << renderContentAddress(info.ca)
-             << repair << !checkSigs;
+    conn->to << info.registrationTime << info.narSize << info.ultimate << info.sigs << renderContentAddress(info.ca);
+    if (conn->features.contains(WorkerProto::featureProvenance))
+        conn->to << (info.provenance ? info.provenance->to_json_str() : "");
+    conn->to << repair << !checkSigs;
 
     if (GET_PROTOCOL_MINOR(conn->protoVersion) >= 23) {
         conn.withFramedSink([&](Sink & sink) { copyNAR(source, sink); });
@@ -767,6 +777,16 @@ void RemoteStore::addBuildLog(const StorePath & drvPath, std::string_view log)
     StringSource source(log);
     conn.withFramedSink([&](Sink & sink) { source.drainInto(sink); });
     readInt(conn->from);
+}
+
+std::vector<ActiveBuildInfo> RemoteStore::queryActiveBuilds()
+{
+    auto conn(getConnection());
+    if (!conn->features.count(WorkerProto::featureQueryActiveBuilds))
+        throw Error("remote store does not support querying active builds");
+    conn->to << WorkerProto::Op::QueryActiveBuilds;
+    conn.processStderr();
+    return nlohmann::json::parse(readString(conn->from)).get<std::vector<ActiveBuildInfo>>();
 }
 
 std::optional<std::string> RemoteStore::getVersion()

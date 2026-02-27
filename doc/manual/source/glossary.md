@@ -136,7 +136,7 @@
 
   > **Example**
   >
-  > `/nix/store/a040m110amc4h71lds2jmr8qrkj2jhxd-git-2.38.1`
+  > `/nix/store/jf6gn2dzna4nmsfbdxsd7kwhsk6gnnlr-git-2.38.1`
 
   See [Store Path](@docroot@/store/store-path.md) for details.
 
@@ -352,14 +352,6 @@
   and `nix-store --restore`.
 
   See [Nix Archive](store/file-system-object/content-address.html#serial-nix-archive) for details.
-
-- [`∅`]{#gloss-empty-set}
-
-  The empty set symbol. In the context of profile history, this denotes a package is not present in a particular version of the profile.
-
-- [`ε`]{#gloss-epsilon}
-
-  The epsilon symbol. In the context of a package, this means the version is empty. More precisely, the derivation does not have a version attribute.
 
 - [package]{#package}
 

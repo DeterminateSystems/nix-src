@@ -8,6 +8,7 @@
   # Image configuration
   name ? "nix",
   tag ? "latest",
+  fromImage ? null,
   bundleNixpkgs ? true,
   channelName ? "nixpkgs",
   channelURL ? "https://channels.nixos.org/nixpkgs-unstable",
@@ -27,6 +28,8 @@
     "org.opencontainers.image.description" = "Nix container image";
   },
   Cmd ? [ (lib.getExe bashInteractive) ],
+  extraPrePaths ? [ ],
+  extraPostPaths ? [ ],
   # Default Packages
   nix ? pkgs.nix,
   bashInteractive ? pkgs.bashInteractive,
@@ -336,7 +339,7 @@ let
           globalFlakeRegistryPath="$nixCacheDir/flake-registry.json"
           ln -s ${flake-registry-path} $out$globalFlakeRegistryPath
           mkdir -p $out/nix/var/nix/gcroots/auto
-          rootName=$(${lib.getExe' nix "nix"} --extra-experimental-features nix-command hash file --type sha1 --base32 <(echo -n $globalFlakeRegistryPath))
+          rootName=$(${lib.getExe' nix "nix"} hash file --type sha1 --base32 <(echo -n $globalFlakeRegistryPath))
           ln -s $globalFlakeRegistryPath $out/nix/var/nix/gcroots/auto/$rootName
         '')
       );
@@ -352,6 +355,7 @@ dockerTools.buildLayeredImageWithNixDb {
     gid
     uname
     gname
+    fromImage
     ;
 
   contents = [ baseSystem ];
@@ -373,11 +377,15 @@ dockerTools.buildLayeredImageWithNixDb {
     Env = [
       "USER=${uname}"
       "PATH=${
-        lib.concatStringsSep ":" [
-          "${userHome}/.nix-profile/bin"
-          "/nix/var/nix/profiles/default/bin"
-          "/nix/var/nix/profiles/default/sbin"
-        ]
+        lib.concatStringsSep ":" (
+          extraPrePaths
+          ++ [
+            "${userHome}/.nix-profile/bin"
+            "/nix/var/nix/profiles/default/bin"
+            "/nix/var/nix/profiles/default/sbin"
+          ]
+          ++ extraPostPaths
+        )
       }"
       "MANPATH=${
         lib.concatStringsSep ":" [

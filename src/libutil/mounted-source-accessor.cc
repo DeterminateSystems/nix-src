@@ -99,6 +99,18 @@ struct MountedSourceAccessorImpl : MountedSourceAccessor
         auto [accessor, subpath] = resolve(path);
         return accessor->getFingerprint(subpath);
     }
+
+    std::shared_ptr<const Provenance> getProvenance(const CanonPath & path) override
+    {
+        auto [accessor, subpath] = resolve(path);
+        return accessor->getProvenance(subpath);
+    }
+
+    void invalidateCache(const CanonPath & path) override
+    {
+        auto [accessor, subpath] = resolve(path);
+        accessor->invalidateCache(subpath);
+    }
 };
 
 ref<MountedSourceAccessor> makeMountedSourceAccessor(std::map<CanonPath, ref<SourceAccessor>> mounts)

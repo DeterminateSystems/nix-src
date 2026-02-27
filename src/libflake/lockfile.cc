@@ -71,6 +71,7 @@ LockedNode::LockedNode(const fetchers::Settings & fetchSettings, const nlohmann:
     : lockedRef(getFlakeRef(fetchSettings, json, "locked", "info")) // FIXME: remove "info"
     , originalRef(getFlakeRef(fetchSettings, json, "original", nullptr))
     , isFlake(json.find("flake") != json.end() ? (bool) json["flake"] : true)
+    , buildTime(json.find("buildTime") != json.end() ? (bool) json["buildTime"] : false)
     , parentInputAttrPath(
           json.find("parent") != json.end() ? (std::optional<InputAttrPath>) json["parent"] : std::nullopt)
 {
@@ -229,13 +230,11 @@ std::pair<nlohmann::json, LockFile::KeyMap> LockFile::toJSON() const
         if (auto lockedNode = node.dynamic_pointer_cast<const LockedNode>()) {
             n["original"] = fetchers::attrsToJSON(lockedNode->originalRef.toAttrs());
             n["locked"] = fetchers::attrsToJSON(lockedNode->lockedRef.toAttrs());
-            /* For backward compatibility, omit the "__final"
-               attribute. We never allow non-final inputs in lock files
-               anyway. */
             assert(lockedNode->lockedRef.input.isFinal() || lockedNode->lockedRef.input.isRelative());
-            n["locked"].erase("__final");
             if (!lockedNode->isFlake)
                 n["flake"] = false;
+            if (lockedNode->buildTime)
+                n["buildTime"] = true;
             if (lockedNode->parentInputAttrPath)
                 n["parent"] = *lockedNode->parentInputAttrPath;
         }
@@ -339,7 +338,7 @@ std::map<InputAttrPath, Node::Edge> LockFile::getAllInputs() const
 
 static std::string describe(const FlakeRef & flakeRef)
 {
-    auto s = fmt("'%s'", flakeRef.to_string());
+    auto s = fmt("'%s'", flakeRef.to_string(true));
 
     if (auto lastModified = flakeRef.input.getLastModified())
         s += fmt(" (%s)", std::put_time(std::gmtime(&*lastModified), "%Y-%m-%d"));

@@ -2,266 +2,158 @@ name: "CI"
 
 on:
   pull_request:
-  merge_group:
   push:
     branches:
+      # NOTE: make sure any branches here are also valid directory names,
+      # otherwise creating the directory and uploading to s3 will fail
+      - main
       - master
-  workflow_dispatch:
-    inputs:
-      dogfood:
-        description: 'Use dogfood Nix build'
-        required: false
-        default: true
-        type: boolean
+  merge_group:
+  release:
+    types:
+      - published
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
-permissions: read-all
+permissions:
+  id-token: "write"
+  contents: "read"
+  pull-requests: "write"
+  statuses: "write"
+  deployments: "write"
 
 jobs:
   eval:
-    runs-on: ubuntu-24.04
+    runs-on: UbuntuLatest32Cores128G
     steps:
-    - uses: actions/checkout@v6
-      with:
-        fetch-depth: 0
-    - uses: ./.github/actions/install-nix-action
-      with:
-        dogfood: ${{ github.event_name == 'workflow_dispatch' && inputs.dogfood || github.event_name != 'workflow_dispatch' }}
-        extra_nix_config:
-          experimental-features = nix-command flakes
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        use_cache: false
-    - run: nix flake show --all-systems --json
-
-  pre-commit-checks:
-    name: pre-commit checks
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/install-nix-action
+      - uses: actions/checkout@v4
         with:
-          dogfood: ${{ github.event_name == 'workflow_dispatch' && inputs.dogfood || github.event_name != 'workflow_dispatch' }}
-          extra_nix_config: experimental-features = nix-command flakes
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      - run: ./ci/gha/tests/pre-commit-checks
+          fetch-depth: 0
+      - uses: DeterminateSystems/determinate-nix-action@main
+      - run: nix flake show --all-systems --json
 
-  basic-checks:
-    name: aggregate basic checks
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    needs: [pre-commit-checks, eval]
-    steps:
-      - name: Exit with any errors
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
-        run: |
-          exit 1
-
-  tests:
-    needs: basic-checks
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - scenario: on ubuntu
-            runs-on: ubuntu-24.04
-            os: linux
-            instrumented: false
-            primary: true
-            stdenv: stdenv
-          - scenario: on macos
-            runs-on: macos-14
-            os: darwin
-            instrumented: false
-            primary: true
-            stdenv: stdenv
-          - scenario: on ubuntu (with sanitizers / coverage)
-            runs-on: ubuntu-24.04
-            os: linux
-            instrumented: true
-            primary: false
-            stdenv: clangStdenv
-    name: tests ${{ matrix.scenario }}
-    runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 60
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        fetch-depth: 0
-    - uses: ./.github/actions/install-nix-action
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        dogfood: ${{ github.event_name == 'workflow_dispatch' && inputs.dogfood || github.event_name != 'workflow_dispatch' }}
-        # The sandbox would otherwise be disabled by default on Darwin
-        extra_nix_config: "sandbox = true"
-    # Since ubuntu 22.30, unprivileged usernamespaces are no longer allowed to map to the root user:
-    # https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces
-    - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      if: matrix.os == 'linux'
-    - name: Run component tests
-      run: |
-        nix build --file ci/gha/tests/wrapper.nix componentTests -L \
-          --arg withInstrumentation ${{ matrix.instrumented }} \
-          --argstr stdenv "${{ matrix.stdenv }}"
-    - name: Run VM tests
-      run: |
-        nix build --file ci/gha/tests/wrapper.nix vmTests -L \
-          --arg withInstrumentation ${{ matrix.instrumented }} \
-          --argstr stdenv "${{ matrix.stdenv }}"
-      if: ${{ matrix.os == 'linux' }}
-    - name: Run flake checks and prepare the installer tarball
-      run: |
-        ci/gha/tests/build-checks
-        ci/gha/tests/prepare-installer-for-github-actions
-      if: ${{ matrix.primary }}
-    - name: Collect code coverage
-      run: |
-        nix build --file ci/gha/tests/wrapper.nix codeCoverage.coverageReports -L \
-          --arg withInstrumentation ${{ matrix.instrumented }} \
-          --argstr stdenv "${{ matrix.stdenv }}" \
-          --out-link coverage-reports
-        cat coverage-reports/index.txt >> $GITHUB_STEP_SUMMARY
-      if: ${{ matrix.instrumented }}
-    - name: Upload coverage reports
-      uses: actions/upload-artifact@v5
-      with:
-        name: coverage-reports
-        path: coverage-reports/
-      if: ${{ matrix.instrumented }}
-    - name: Upload installer tarball
-      uses: actions/upload-artifact@v5
-      with:
-        name: installer-${{matrix.os}}
-        path: out/*
-      if: ${{ matrix.primary }}
-
-  installer_test:
-    needs: [tests]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - scenario: on ubuntu
-            runs-on: ubuntu-24.04
-            os: linux
-            experimental-installer: false
-          - scenario: on macos
-            runs-on: macos-14
-            os: darwin
-            experimental-installer: false
-          - scenario: on ubuntu (experimental)
-            runs-on: ubuntu-24.04
-            os: linux
-            experimental-installer: true
-          - scenario: on macos (experimental)
-            runs-on: macos-14
-            os: darwin
-            experimental-installer: true
-    name: installer test ${{ matrix.scenario }}
-    runs-on: ${{ matrix.runs-on }}
-    steps:
-    - uses: actions/checkout@v6
-    - name: Download installer tarball
-      uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-      with:
-        name: installer-${{matrix.os}}
-        path: out
-    - name: Looking up the installer tarball URL
-      id: installer-tarball-url
-      run: |
-        echo "installer-url=file://$GITHUB_WORKSPACE/out" >> "$GITHUB_OUTPUT"
-        TARBALL_PATH="$(find "$GITHUB_WORKSPACE/out" -name 'nix*.tar.xz' -print | head -n 1)"
-        echo "tarball-path=file://$TARBALL_PATH" >> "$GITHUB_OUTPUT"
-    - uses: cachix/install-nix-action@0b0e072294b088b73964f1d72dfdac0951439dbd # v31.8.4
-      if: ${{ !matrix.experimental-installer }}
-      with:
-        install_url: ${{ format('{0}/install', steps.installer-tarball-url.outputs.installer-url) }}
-        install_options: ${{ format('--tarball-url-prefix {0}', steps.installer-tarball-url.outputs.installer-url) }}
-    - uses: ./.github/actions/install-nix-action
-      if: ${{ matrix.experimental-installer }}
-      with:
-        dogfood: false
-        experimental-installer: true
-        tarball_url: ${{ steps.installer-tarball-url.outputs.tarball-path }}
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-    - run: sudo apt install fish zsh
-      if: matrix.os == 'linux'
-    - run: brew install fish
-      if: matrix.os == 'darwin'
-    - run: exec bash -c "nix-instantiate -E 'builtins.currentTime' --eval"
-    - run: exec sh -c "nix-instantiate -E 'builtins.currentTime' --eval"
-    - run: exec zsh -c "nix-instantiate -E 'builtins.currentTime' --eval"
-    - run: exec fish -c "nix-instantiate -E 'builtins.currentTime' --eval"
-    - run: exec bash -c "nix-channel --add https://releases.nixos.org/nixos/unstable/nixos-23.05pre466020.60c1d71f2ba nixpkgs"
-    - run: exec bash -c "nix-channel --update && nix-env -iA nixpkgs.hello && hello"
-
-  docker_push_image:
-    name: Push docker image to DockerHub and GHCR
-    needs: [flake_regressions, installer_test]
-    if: github.event_name == 'push' && github.ref_name == 'master'
-    uses: ./.github/workflows/docker-push.yml
+  build_x86_64-linux:
+    uses: ./.github/workflows/build.yml
     with:
-      ref: ${{ github.sha }}
-      is_master: true
-    permissions:
-      contents: read
-      packages: write
+      system: x86_64-linux
+      runner: namespace-profile-linuxamd32c64g-cache
+      runner_for_virt: UbuntuLatest32Cores128G
+      runner_small: ubuntu-latest
+      run_tests: true
+      run_vm_tests: true
+      run_regression_tests: true
+      publish_manual: true
     secrets:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      manual_netlify_auth_token: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      manual_netlify_site_id: ${{ secrets.NETLIFY_SITE_ID }}
 
-  flake_regressions:
-    needs: tests
-    runs-on: ubuntu-24.04
+  build_aarch64-linux:
+    uses: ./.github/workflows/build.yml
+    with:
+      if: ${{
+            github.event_name != 'pull_request'
+            || (
+              github.event.pull_request.head.repo.full_name == 'DeterminateSystems/nix-src'
+              && (
+                (github.event.action == 'labeled' && github.event.label.name == 'upload to s3')
+                || (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'upload to s3'))
+              )
+            )
+          }}
+      system: aarch64-linux
+      runner: UbuntuLatest32Cores128GArm
+      runner_for_virt: UbuntuLatest32Cores128GArm
+      runner_small: UbuntuLatest32Cores128GArm
+
+  build_aarch64-darwin:
+    uses: ./.github/workflows/build.yml
+    with:
+      system: aarch64-darwin
+      runner: namespace-profile-mac-m2-12c28g
+      runner_for_virt: namespace-profile-mac-m2-12c28g
+      runner_small: macos-latest-xlarge
+
+  success:
+    runs-on: ubuntu-latest
+    needs:
+      - eval
+      - build_x86_64-linux
+      - build_aarch64-linux
+      - build_aarch64-darwin
+    if: ${{ always() }}
     steps:
-      - name: Checkout nix
-        uses: actions/checkout@v6
-      - name: Checkout flake-regressions
-        uses: actions/checkout@v6
+      - run: "true"
+      - run: |
+          echo "A dependent in the build matrix failed:"
+          echo "$needs"
+          exit 1
+        env:
+          needs: ${{ toJSON(needs) }}
+        if: |
+          contains(needs.*.result, 'failure') ||
+          contains(needs.*.result, 'cancelled')
+
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/determinate-nix-action@main
+
+      - name: Create artifacts directory
+        run: mkdir -p ./artifacts
+
+      - name: Fetch artifacts
+        uses: actions/download-artifact@v4
         with:
-          repository: NixOS/flake-regressions
-          path: flake-regressions
-      - name: Checkout flake-regressions-data
-        uses: actions/checkout@v6
-        with:
-          repository: NixOS/flake-regressions-data
-          path: flake-regressions/tests
-      - name: Download installer tarball
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: installer-linux
-          path: out
-      - name: Looking up the installer tarball URL
-        id: installer-tarball-url
+          path: downloaded
+      - name: Move downloaded artifacts to artifacts directory
         run: |
-          echo "installer-url=file://$GITHUB_WORKSPACE/out" >> "$GITHUB_OUTPUT"
-      - uses: cachix/install-nix-action@4e002c8ec80594ecd40e759629461e26c8abed15 # v31.9.0
-        with:
-          install_url: ${{ format('{0}/install', steps.installer-tarball-url.outputs.installer-url) }}
-          install_options: ${{ format('--tarball-url-prefix {0}', steps.installer-tarball-url.outputs.installer-url) }}
-      - name: Run flake regressions tests
-        run: MAX_FLAKES=25 flake-regressions/eval-all.sh
+          for dir in ./downloaded/*; do
+            arch="$(basename "$dir")"
+            mv "$dir"/*.xz ./artifacts/"${arch}"
+          done
 
-  profile_build:
-    needs: tests
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    if: >-
-      github.event_name == 'push' &&
-      github.ref_name == 'master'
+      - name: Build fallback-paths.nix
+        if: ${{
+              github.event_name != 'pull_request'
+              || (
+                github.event.pull_request.head.repo.full_name == 'DeterminateSystems/nix-src'
+                && (
+                  (github.event.action == 'labeled' && github.event.label.name == 'upload to s3')
+                  || (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'upload to s3'))
+                )
+              )
+            }}
+        run: |
+          nix build .#fallbackPathsNix --out-link fallback
+          cat fallback > ./artifacts/fallback-paths.nix
+
+      - uses: DeterminateSystems/push-artifact-ids@main
+        with:
+          s3_upload_role: ${{ secrets.AWS_S3_UPLOAD_ROLE_ARN }}
+          bucket: ${{ secrets.AWS_S3_UPLOAD_BUCKET_NAME }}
+          directory: ./artifacts
+          ids_project_name: determinate-nix
+          ids_binary_prefix: determinate-nix
+          skip_acl: true
+          allowed_branches: '["main"]'
+
+  publish:
+    needs:
+      - success
+    if: (!github.repository.fork && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/')))
+    environment: ${{ github.event_name == 'release' && 'production' || '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
     steps:
-    - uses: actions/checkout@v6
-      with:
-        fetch-depth: 0
-    - uses: ./.github/actions/install-nix-action
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        dogfood: ${{ github.event_name == 'workflow_dispatch' && inputs.dogfood || github.event_name != 'workflow_dispatch' }}
-        extra_nix_config: |
-          experimental-features = flakes nix-command ca-derivations impure-derivations
-          max-jobs = 1
-    - run: |
-        nix build -L --file ./ci/gha/profile-build buildTimeReport --out-link build-time-report.md
-        cat build-time-report.md >> $GITHUB_STEP_SUMMARY
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/determinate-nix-action@main
+      - uses: DeterminateSystems/flakehub-push@main
+        with:
+          rolling: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          visibility: "public"
+          tag: "${{ github.ref_name }}"
+      - name: Update the release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release edit "$TAG_NAME" --notes-file doc/manual/source/release-notes-determinate/"$TAG_NAME".md || true
