@@ -137,12 +137,12 @@ void forEachOutput(
                 auto allowIFDAttr = outputInfo->maybeGetAttr("allowIFD");
                 if (allowIFD != (!allowIFDAttr || allowIFDAttr->getBool()))
                     continue;
+                auto isUnknown = (bool) outputInfo->maybeGetAttr("unknown");
                 auto output = outputInfo->maybeGetAttr("output");
-                if (!output)
+                if (!output && !isUnknown)
                     // We have a schema but no corresponding output, so skip this.
                     continue;
                 Activity act(*logger, lvlInfo, actUnknown, fmt("evaluating '%s'", outputInfo->getAttrPathStr()));
-                auto isUnknown = (bool) output->maybeGetAttr("unknown");
                 f(outputName,
                   isUnknown ? std::shared_ptr<AttrCursor>() : output,
                   isUnknown ? "" : outputInfo->getAttr("doc")->getString(),
