@@ -242,8 +242,16 @@ std::optional<AttrPath> Leaf::derivationAttrPath() const
 std::shared_ptr<AttrCursor> Leaf::derivation(const ref<AttrCursor> & outputs) const
 {
     auto path = derivationAttrPath();
-    if (!path)
-        return nullptr;
+    if (!path) {
+        auto n = node->maybeGetAttr("derivation");
+        if (n)
+            warn(
+                "Flake output '%s' has a schema that uses the deprecated 'derivation' attribute instead of 'derivationAttrPath'. "
+                "Please update the schema to use 'derivationAttrPath' instead. "
+                "You may want to upgrade to version 0.3.0 or higher of https://github.com/DeterminateSystems/flake-schemas.",
+                node->getAttrPathStr());
+        return n;
+    }
     auto drv = getOutput(outputs)->findAlongAttrPath(*path);
     if (!drv)
         throw Error(
