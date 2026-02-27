@@ -79,6 +79,8 @@ struct CmdProvenanceShow : StorePathsCommand
                     build->output,
                     build->buildHost.value_or("unknown host").c_str(),
                     build->system);
+                for (auto & [tagName, tagValue] : build->tags)
+                    logger->cout("  tag " ANSI_BOLD "%s" ANSI_NORMAL ": %s", tagName, tagValue);
                 provenance = build->next;
             }
 
