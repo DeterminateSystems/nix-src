@@ -16,7 +16,7 @@ let
 
 in
 
-rec {
+{
   outputs = flake.outputs;
 
   inventory = builtins.mapAttrs (
@@ -24,9 +24,9 @@ rec {
     if schemas ? ${outputName} && schemas.${outputName}.version == 1 then
       schemas.${outputName}
       // (
-        if outputs ? ${outputName} then
+        if flake.outputs ? ${outputName} then
           {
-            output = schemas.${outputName}.inventory outputs.${outputName};
+            output = schemas.${outputName}.inventory flake.outputs.${outputName};
           }
         else
           {
@@ -34,5 +34,5 @@ rec {
       )
     else
       { unknown = true; }
-  ) (schemas // outputs);
+  ) (schemas // flake.outputs);
 }
