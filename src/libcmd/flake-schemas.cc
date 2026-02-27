@@ -208,6 +208,14 @@ std::optional<std::vector<std::string>> Node::forSystems() const
         return std::nullopt;
 }
 
+ref<AttrCursor> Node::getOutput(const ref<AttrCursor> & outputs) const
+{
+    auto res = outputs->findAlongAttrPath(node->getAttrPath());
+    if (!res)
+        throw Error("flake output '%s' should exist according to its schema, but it doesn't", node->getAttrPathStr());
+    return *res;
+}
+
 std::optional<std::string> Leaf::what() const
 {
     if (auto what = node->maybeGetAttr("what"))
@@ -223,9 +231,26 @@ std::optional<std::string> Leaf::shortDescription() const
     return std::nullopt;
 }
 
-std::shared_ptr<AttrCursor> Leaf::derivation() const
+std::optional<AttrPath> Leaf::derivationAttrPath() const
 {
-    return node->maybeGetAttr("derivation");
+    auto n = node->maybeGetAttr("derivationAttrPath");
+    if (!n)
+        return std::nullopt;
+    return AttrPath::fromStrings(node->root->state, n->getListOfStrings());
+}
+
+std::shared_ptr<AttrCursor> Leaf::derivation(const ref<AttrCursor> & outputs) const
+{
+    auto path = derivationAttrPath();
+    if (!path)
+        return nullptr;
+    auto drv = getOutput(outputs)->findAlongAttrPath(*path);
+    if (!drv)
+        throw Error(
+            "flake output '%s' does not have a derivation attribute '%s'",
+            node->getAttrPathStr(),
+            path->to_string(node->root->state));
+    return *drv;
 }
 
 bool Leaf::isFlakeCheck() const
@@ -234,7 +259,7 @@ bool Leaf::isFlakeCheck() const
     return isFlakeCheck && isFlakeCheck->getBool();
 }
 
-std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, AttrPath attrPath)
+std::optional<OutputInfo> getOutputInfo(ref<AttrCursor> inventory, AttrPath attrPath)
 {
     if (attrPath.empty())
         return std::nullopt;

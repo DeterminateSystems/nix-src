@@ -234,7 +234,8 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
 
         PushProvenance pushedProvenance(state, makeProvenance(attrPath.to_string(state)));
 
-        auto outputInfo = flake_schemas::getOutput(inventory, attrPath);
+#if 0
+        auto outputInfo = flake_schemas::getOutputInfo(inventory, attrPath);
 
         if (outputInfo && outputInfo->leafAttrPath.empty()) {
             if (auto drv = outputInfo->nodeInfo->maybeGetAttr("derivation")) {
@@ -242,6 +243,7 @@ std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState 
                 continue;
             }
         }
+#endif
 
         auto attr = outputs->findAlongAttrPath(attrPath);
         if (attr)

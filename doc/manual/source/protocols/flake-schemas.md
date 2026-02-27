@@ -27,13 +27,13 @@ Non-leaf nodes must have the following attribute:
 
 Leaf nodes can have the following attributes:
 
-| Attribute          | Description                                                                                                                                                                                      |
-| :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `derivation`       | The main derivation of this node, if any. It must evaluate for `nix flake check` and `nix flake show` to succeed.                                                                                |
-| `evalChecks`       | An attribute set of Boolean values, used by `nix flake check`. Each attribute must evaluate to `true`.                                                                                           |
-| `isFlakeCheck`     | Whether `nix flake check` should build the `derivation` attribute of this node.                                                                                                                  |
-| `shortDescription` | A one-sentence description of the node (such as the `meta.description` attribute in Nixpkgs).                                                                                                    |
-| `what`             | A brief human-readable string describing the type of the node, e.g. `"package"` or `"development environment"`. This is used by tools like `nix flake show` to describe the contents of a flake. |
+| Attribute            | Description                                                                                                                                                                                      |
+| :------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `derivationAttrPath` | If not null, a list of strings denoting the attribute path of the "main" derivation of this node.                                                                                                |
+| `evalChecks`         | An attribute set of Boolean values, used by `nix flake check`. Each attribute must evaluate to `true`.                                                                                           |
+| `isFlakeCheck`       | Whether `nix flake check` should build the attribute denoted by `derivationAttrPath`.                                                                                                            |
+| `shortDescription`   | A one-sentence description of the node (such as the `meta.description` attribute in Nixpkgs).                                                                                                    |
+| `what`               | A brief human-readable string describing the type of the node, e.g. `"package"` or `"development environment"`. This is used by tools like `nix flake show` to describe the contents of a flake. |
 
 Both leaf and non-leaf nodes can have the following attributes:
 
@@ -56,7 +56,7 @@ outputs = {
       children = builtins.mapAttrs (configName: machine:
         {
           what = "NixOS configuration";
-          derivation = machine.config.system.build.toplevel;
+          derivationAttrPath = [ "config" "system" "build" "toplevel" ];
         }) output;
     };
   };

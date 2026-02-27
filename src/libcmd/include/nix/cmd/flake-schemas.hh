@@ -18,6 +18,9 @@ void forEachOutput(
     ref<AttrCursor> inventory,
     std::function<void(Symbol outputName, std::shared_ptr<AttrCursor> output, const std::string & doc, bool isLast)> f);
 
+/**
+ * A convenience wrapper around `AttrCursor` for nodes in the `inventory` tree returned by call-flake-schemas.nix.
+ */
 struct Node
 {
     const ref<AttrCursor> node;
@@ -32,6 +35,11 @@ struct Node
      * means "all systems".
      */
     std::optional<std::vector<std::string>> forSystems() const;
+
+    /**
+     * Return the actual output corresponding to this info node.
+     */
+    ref<AttrCursor> getOutput(const ref<AttrCursor> & outputs) const;
 };
 
 struct Leaf : Node
@@ -42,7 +50,12 @@ struct Leaf : Node
 
     std::optional<std::string> shortDescription() const;
 
-    std::shared_ptr<AttrCursor> derivation() const;
+    std::optional<AttrPath> derivationAttrPath() const;
+
+    /**
+     * Return the attribute corresponding to `derivationAttrPath`, if set.
+     */
+    std::shared_ptr<AttrCursor> derivation(const ref<AttrCursor> & outputs) const;
 
     bool isFlakeCheck() const;
 };
@@ -63,7 +76,7 @@ struct OutputInfo
     AttrPath leafAttrPath;
 };
 
-std::optional<OutputInfo> getOutput(ref<AttrCursor> inventory, AttrPath attrPath);
+std::optional<OutputInfo> getOutputInfo(ref<AttrCursor> inventory, AttrPath attrPath);
 
 struct SchemaInfo
 {

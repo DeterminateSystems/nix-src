@@ -20,6 +20,7 @@
 #include "nix/expr/parallel-eval.hh"
 #include "nix/util/exit.hh"
 #include "nix/cmd/flake-schemas.hh"
+#include "nix/store/names.hh"
 
 #include <filesystem>
 #include <nlohmann/json.hpp>
@@ -365,6 +366,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
         auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas());
 
         auto inventory = cache->getRoot()->getAttr("inventory");
+        auto outputs = cache->getRoot()->getAttr("outputs");
 
         FutureVector futures(*state->executor);
 
@@ -402,7 +404,14 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                             }
                         }
 
-                        if (auto drv = leaf.derivation()) {
+                        if (auto drv = leaf.derivation(outputs)) {
+
+                            /* Check whether this is a valid derivation. */
+                            if (!drv->maybeGetAttr("drvPath") || drv->getAttr("type")->getString() != "derivation")
+                                throw Error("Flake output '%s' is not a derivation.", drv->getAttrPathStr());
+
+                            DrvName parsedDrvName(drv->getAttr("name")->getString());
+
                             if (buildAll || leaf.isFlakeCheck()) {
                                 auto drvPath = drv->forceDerivation();
                                 auto derivedPath = DerivedPath::Built{
@@ -874,6 +883,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
         auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas());
 
         auto inventory = cache->getRoot()->getAttr("inventory");
+        auto outputs = cache->getRoot()->getAttr("outputs");
 
         FutureVector futures(*state->executor);
 
@@ -891,10 +901,11 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                     if (auto shortDescription = leaf.shortDescription())
                         obj.emplace("shortDescription", *shortDescription);
 
-                    if (auto drv = leaf.derivation()) {
+                    if (auto drv = leaf.derivation(outputs)) {
                         auto drvObj = nlohmann::json::object();
 
-                        drvObj.emplace("name", drv->getAttr(state->s.name)->getString());
+                        if (json)
+                            drvObj.emplace("name", drv->getAttr(state->s.name)->getString());
 
                         if (showDrvPaths) {
                             auto drvPath = drv->forceDerivation();
