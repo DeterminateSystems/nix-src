@@ -42,7 +42,7 @@ Every Wasm module used in non-WASI mode must export:
 
 ### WASI Mode
 
-WASI mode is automatically used when the module exports a `_start` function.
+WASI mode is automatically used when the module imports a `wasi_snapshot_preview1` function.
 
 Usage:
 ```nix
@@ -357,7 +357,7 @@ Returns a result value to the Nix evaluator from a WASI module. This function is
 **Parameters:**
 - `value` - ID of the Nix value to return as the result of the `builtins.wasm` call
 
-**Note:** Calling this function immediately terminates the WASI module's execution. The module's `_start` function must call `return_to_nix` before finishing; otherwise, an error is raised.
+**Note:** Calling this function immediately terminates the WASI module's execution. The module must call `return_to_nix` before finishing; otherwise, an error is raised.
 
 ### File I/O
 

@@ -612,7 +612,7 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
         if (instance.pre->useWasi) {
             functionName = "_start";
             if (functionAttr)
-                throw Error("'function' attribute is not allowed for WASI modules (modules with a '_start' export)");
+                throw Error("'function' attribute is not allowed for WASI modules");
         } else {
             if (!functionAttr)
                 throw Error(
@@ -680,7 +680,7 @@ static RegisterPrimOp primop_wasm(
 
       The second argument is the value to pass to the function.
 
-      WASI mode is automatically detected by checking if the module exports a `_start` function.
+      WASI mode is automatically enabled if the module imports from `wasi_snapshot_preview1`.
 
       Example (non-WASI):
       ```nix
