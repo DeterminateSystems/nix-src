@@ -831,6 +831,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
     bool showAllSystems = false;
     bool showOutputPaths = false;
     bool showDrvPaths = false;
+    bool showDrvNames = false;
 
     CmdFlakeShow()
     {
@@ -853,6 +854,11 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
             .longName = "drv-paths",
             .description = "Include the store paths of derivations in the JSON output.",
             .handler = {&showDrvPaths, true},
+        });
+        addFlag({
+            .longName = "drv-names",
+            .description = "Show the names and versions of derivations.",
+            .handler = {&showDrvNames, true},
         });
     }
 
@@ -904,7 +910,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                     if (auto drv = leaf.derivation(outputs)) {
                         auto drvObj = nlohmann::json::object();
 
-                        if (json)
+                        if (json || showDrvNames)
                             drvObj.emplace("name", drv->getAttr(state->s.name)->getString());
 
                         if (showDrvPaths) {
