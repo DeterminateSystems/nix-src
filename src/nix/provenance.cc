@@ -435,8 +435,8 @@ struct CmdProvenanceVerify : StorePathsCommand
                 "." + flake->flakeOutput,
                 ExtendedOutputsSpec::Default{}, // FIXME: record this in the provenance?
                 {},
-                {},
-                lockFlags};
+                lockFlags,
+                {}};
 
             // We have to disable the eval cache to ensure that we see which store paths get instantiated.
             installable.useEvalCache = false;
