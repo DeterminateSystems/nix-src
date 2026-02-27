@@ -160,6 +160,7 @@ struct AsyncPathWriterImpl : AsyncPathWriter
 
         for (auto & item : items) {
             StringSource source(item.contents);
+            store->addTempRoot(item.storePath);
             auto storePath = store->addToStoreFromDump(
                 source,
                 item.storePath.name(),
