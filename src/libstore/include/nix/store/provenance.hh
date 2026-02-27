@@ -24,6 +24,11 @@ struct BuildProvenance : Provenance
     std::optional<std::string> buildHost;
 
     /**
+     * User-defined tags from the build host.
+     */
+    std::map<std::string, std::string> tags;
+
+    /**
      * The system type of the derivation.
      */
     std::string system;
@@ -39,11 +44,13 @@ struct BuildProvenance : Provenance
         const StorePath & drvPath,
         const OutputName & output,
         std::optional<std::string> buildHost,
+        std::map<std::string, std::string> tags,
         std::string system,
         std::shared_ptr<const Provenance> next)
         : drvPath(drvPath)
         , output(output)
         , buildHost(std::move(buildHost))
+        , tags(std::move(tags))
         , system(std::move(system))
         , next(std::move(next))
     {
