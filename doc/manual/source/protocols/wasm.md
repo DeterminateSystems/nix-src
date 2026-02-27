@@ -1,15 +1,21 @@
 # Wasm Host Interface
 
-Nix provides two builtins for calling WebAssembly modules: `builtins.wasm` and `builtins.wasi`. These allow extending Nix with custom functionality written in languages that compile to WebAssembly (such as Rust).
+Nix provides a builtin for calling WebAssembly modules: `builtins.wasm`. This allows extending Nix with custom functionality written in languages that compile to WebAssembly (such as Rust).
 
 ## Overview
 
 WebAssembly modules can interact with Nix values through a host interface that provides functions for creating and inspecting Nix values. The WASM module receives Nix values as opaque `ValueId` handles and uses host functions to work with them.
 
-There are two calling conventions:
+The `builtins.wasm` builtin takes two arguments:
+1. A configuration attribute set with the following attributes:
+   - `path` - Path to the WebAssembly module (required)
+   - `function` - Name of the Wasm function to call (required for non-WASI modules, not allowed for WASI modules)
+2. The argument value to pass to the function
 
-- **`builtins.wasm`** calls a named Wasm export directly. The function receives its input as a `ValueId` parameter and returns a `ValueId`.
-- **`builtins.wasi`** runs a WASI module's `_start` entry point. The input `ValueId` is passed as a command-line argument (`argv[1]`), and the result is returned by calling the `return_to_nix` host function.
+WASI mode is automatically detected by checking if the module imports from `wasi_snapshot_preview1`. There are two calling conventions:
+
+- **Non-WASI mode** (no WASI imports) calls the Wasm export specified by `function` directly. The function receives its input as a `ValueId` parameter and returns a `ValueId`.
+- **WASI mode** (when the module imports from `wasi_snapshot_preview1`) runs the WASI module's `_start` entry point. The input `ValueId` is passed as a command-line argument (`argv[1]`), and the result is returned by calling the `return_to_nix` host function.
 
 ## Value IDs
 
@@ -17,20 +23,35 @@ Nix values are represented in Wasm code as a `u32` referred to below as a `Value
 
 ## Entry Points
 
-### `builtins.wasm` Entry Point
+### Non-WASI Mode
 
-Usage: `builtins.wasm <module> <function-name> <arg>`
+Non-WASI mode is used when the module does **not** import from `wasi_snapshot_preview1`.
 
-Every Wasm module used with `builtins.wasm` must export:
+Usage:
+```nix
+builtins.wasm {
+  path = <module>;
+  function = <function-name>;
+} <arg>
+```
+
+Every Wasm module used in non-WASI mode must export:
 - A `memory` object that the host can use to read/write data.
 - `nix_wasm_init_v1()`, a function that is called once when the module is instantiated.
-- The entry point of the Wasm function, its name corresponding to the second argument to `builtins.wasm`. It takes a single `ValueId` and returns a single `ValueId` (i.e. it has type `fn(arg: u32) -> u32`).
+- The entry point function, whose name is specified by the `function` attribute. It takes a single `ValueId` and returns a single `ValueId` (i.e. it has type `fn(arg: u32) -> u32`).
 
-### `builtins.wasi` Entry Point
+### WASI Mode
 
-Usage: `builtins.wasi <module> <arg>`
+WASI mode is automatically used when the module imports a `wasi_snapshot_preview1` function.
 
-Every WASI module used with `builtins.wasi` must export:
+Usage:
+```nix
+builtins.wasm {
+  path = <module>;
+} <arg>
+```
+
+Every WASI module must export:
 - A `memory` object that the host can use to read/write data.
 - `_start()`, the standard WASI entry point. This function takes no parameters.
 
@@ -42,7 +63,7 @@ Standard output and standard error from the WASI module are captured and emitted
 
 ## Host Functions
 
-All host functions are imported from the `env` module provided by `builtins.wasm` and `builtins.wasi`.
+All host functions are imported from the `env` module.
 
 ### Error Handling
 
@@ -327,16 +348,16 @@ Creates a lazy or partially applied function application.
 
 **Returns:** Value ID of the unevaluated application
 
-### Returning Results (`builtins.wasi` only)
+### Returning Results (WASI mode only)
 
 #### `return_to_nix(value: ValueId)`
 
-Returns a result value to the Nix evaluator from a WASI module. This function is only available in modules called via `builtins.wasi`.
+Returns a result value to the Nix evaluator from a WASI module. This function is only available in WASI mode.
 
 **Parameters:**
-- `value` - ID of the Nix value to return as the result of the `builtins.wasi` call
+- `value` - ID of the Nix value to return as the result of the `builtins.wasm` call
 
-**Note:** Calling this function immediately terminates the WASI module's execution. The module's `_start` function must call `return_to_nix` before finishing; otherwise, an error is raised.
+**Note:** Calling this function immediately terminates the WASI module's execution. The module must call `return_to_nix` before finishing; otherwise, an error is raised.
 
 ### File I/O
 
