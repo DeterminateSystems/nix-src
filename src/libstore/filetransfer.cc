@@ -59,7 +59,7 @@ struct curlFileTransfer : public FileTransfer
         char errbuf[CURL_ERROR_SIZE];
         bool active = false;   // whether the handle has been added to the multi object
         bool paused = false;   // whether the request has been paused previously
-        bool enqueued = false; // whether the request has been added the incoming queue
+        bool enqueued = false; // whether the request has been added to the incoming queue
         std::string statusMsg;
 
         unsigned int attempt = 0;
