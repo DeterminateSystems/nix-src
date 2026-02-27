@@ -990,15 +990,18 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
             render = [&](nlohmann::json j, const std::string & headerPrefix, const std::string & nextPrefix) {
                 auto what = j.find("what");
                 auto filtered = j.find("filtered");
-                auto derivationName = j.find("derivationName");
+                auto derivation = j.find("derivation");
 
                 auto s = headerPrefix;
 
                 if (what != j.end())
                     s += fmt(": %s", (std::string) *what);
 
-                if (derivationName != j.end())
-                    s += fmt(ANSI_ITALIC " [%s]" ANSI_NORMAL, (std::string) *derivationName);
+                if (derivation != j.end()) {
+                    auto name = derivation->find("name");
+                    if (name != derivation->end())
+                        s += fmt(ANSI_ITALIC " [%s]" ANSI_NORMAL, (std::string) *name);
+                }
 
                 if (filtered != j.end() && (bool) *filtered)
                     s += " " ANSI_WARNING "omitted" ANSI_NORMAL " (use '--all-systems' to show)";
