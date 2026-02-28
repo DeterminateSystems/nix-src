@@ -12,6 +12,7 @@
 namespace nix {
 
 struct NarInfo;
+class NarCache;
 class RemoteFSAccessor;
 
 struct BinaryCacheStoreConfig : virtual StoreConfig
@@ -38,9 +39,9 @@ struct BinaryCacheStoreConfig : virtual StoreConfig
     const Setting<std::string> secretKeyFiles{
         this, "", "secret-keys", "List of comma-separated paths to the secret keys used to sign the binary cache."};
 
-    const Setting<Path> localNarCache{
+    const Setting<std::optional<std::filesystem::path>> localNarCache{
         this,
-        "",
+        std::nullopt,
         "local-nar-cache",
         "Path to a local cache of NARs fetched from this binary cache, used by commands such as `nix store cat`."};
 
@@ -88,6 +89,8 @@ protected:
     constexpr const static std::string realisationsPrefix = "realisations";
 
     constexpr const static std::string cacheInfoFile = "nix-cache-info";
+
+    std::shared_ptr<NarCache> narCache;
 
     BinaryCacheStore(Config &);
 

@@ -13,6 +13,7 @@
 #include "nix/util/callback.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/archive.hh"
+#include "nix/store/nar-cache.hh"
 
 #include <chrono>
 #include <future>
@@ -26,6 +27,7 @@ namespace nix {
 
 BinaryCacheStore::BinaryCacheStore(Config & config)
     : config{config}
+    , narCache{config.localNarCache.get() ? std::make_shared<NarCache>(*config.localNarCache.get()) : nullptr}
 {
     if (config.secretKeyFile != "")
         signers.push_back(std::make_unique<LocalSigner>(SecretKey{readFile(config.secretKeyFile)}));
@@ -408,11 +410,27 @@ void BinaryCacheStore::narFromPath(const StorePath & storePath, Sink & sink)
 {
     auto info = queryPathInfo(storePath).cast<const NarInfo>();
 
+    if (narCache) {
+        if (auto nar = narCache->getNar(info->narHash)) {
+            notice("substituted '%s' from local NAR cache", printStorePath(storePath));
+            sink(*nar);
+            stats.narRead++;
+            stats.narReadBytes += nar->size();
+            return;
+        }
+    }
+
+    std::unique_ptr<Sink> narCacheSink;
+    if (narCache)
+        narCacheSink = sourceToSink([&](Source & source) { narCache->upsertNar(info->narHash, source); });
+
     uint64_t narSize = 0;
 
     LambdaSink uncompressedSink{
         [&](std::string_view data) {
             narSize += data.size();
+            if (narCacheSink)
+                (*narCacheSink)(data);
             sink(data);
         },
         [&]() {
@@ -559,7 +577,7 @@ void BinaryCacheStore::registerDrvOutput(const Realisation & info)
 
 ref<RemoteFSAccessor> BinaryCacheStore::getRemoteFSAccessor(bool requireValidPath)
 {
-    return make_ref<RemoteFSAccessor>(ref<Store>(shared_from_this()), requireValidPath, config.localNarCache);
+    return make_ref<RemoteFSAccessor>(ref<Store>(shared_from_this()), requireValidPath, narCache);
 }
 
 ref<SourceAccessor> BinaryCacheStore::getFSAccessor(bool requireValidPath)
