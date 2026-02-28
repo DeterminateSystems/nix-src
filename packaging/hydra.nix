@@ -9,7 +9,7 @@
   officialRelease,
 }:
 let
-  inherit (inputs) nixpkgs nixpkgs-regression;
+  inherit (inputs) determinate-nixpkgs nixpkgs-regression;
 
   installScriptFor =
     tarballs:
@@ -167,7 +167,8 @@ rec {
   # System tests.
   tests =
     import ../tests/nixos {
-      inherit lib nixpkgs;
+      inherit lib;
+      nixpkgs = determinate-nixpkgs;
       pkgs = nixpkgsFor.x86_64-linux.native;
       nixComponents = nixpkgsFor.x86_64-linux.native.nixComponents2;
       inherit (self.inputs) nixpkgs-23-11;
@@ -193,7 +194,7 @@ rec {
 
       nixpkgsLibTests = forAllSystems (
         system:
-        import (nixpkgs + "/lib/tests/test-with-nix.nix") {
+        import (determinate-nixpkgs + "/lib/tests/test-with-nix.nix") {
           lib = nixpkgsFor.${system}.native.lib;
           nix = self.packages.${system}.nix-cli;
           pkgs = nixpkgsFor.${system}.native;
@@ -203,7 +204,7 @@ rec {
       nixpkgsLibTestsLazy = forAllSystems (
         system:
         lib.overrideDerivation
-          (import (nixpkgs + "/lib/tests/test-with-nix.nix") {
+          (import (determinate-nixpkgs + "/lib/tests/test-with-nix.nix") {
             lib = nixpkgsFor.${system}.native.lib;
             nix = self.packages.${system}.nix-cli;
             pkgs = nixpkgsFor.${system}.native;
