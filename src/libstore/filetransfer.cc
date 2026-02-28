@@ -968,19 +968,32 @@ struct curlFileTransfer : public FileTransfer
         writeFull(wakeupPipe.writeSide.get(), " ");
 #endif
 
-        return ItemHandle(static_cast<Item &>(*item));
+        return ItemHandle(ref<Item>(std::move(item)));
     }
 
-    ItemHandle enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) override
+    ItemHandle
+    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) noexcept override
     {
         /* Handle s3:// URIs by converting to HTTPS and optionally adding auth */
         if (request.uri.scheme() == "s3") {
             auto modifiedRequest = request;
             modifiedRequest.setupForS3();
-            return enqueueItem(make_ref<TransferItem>(*this, std::move(modifiedRequest), std::move(callback)));
+            auto item = make_ref<TransferItem>(*this, std::move(modifiedRequest), std::move(callback));
+            try {
+                return enqueueItem(item);
+            } catch (const nix::Error & e) {
+                item->fail(e);
+                return ItemHandle(ref<Item>(std::move(item)));
+            }
         }
 
-        return enqueueItem(make_ref<TransferItem>(*this, request, std::move(callback)));
+        auto item = make_ref<TransferItem>(*this, request, std::move(callback));
+        try {
+            return enqueueItem(item);
+        } catch (const nix::Error & e) {
+            item->fail(e);
+            return ItemHandle(ref<Item>(std::move(item)));
+        }
     }
 
     void unpauseTransfer(ref<TransferItem> item)
@@ -994,7 +1007,7 @@ struct curlFileTransfer : public FileTransfer
 
     void unpauseTransfer(ItemHandle handle) override
     {
-        unpauseTransfer(ref{static_cast<TransferItem &>(handle.item.get()).shared_from_this()});
+        unpauseTransfer(ref{static_cast<TransferItem &>(*handle.item).shared_from_this()});
     }
 };
 
@@ -1053,7 +1066,7 @@ void FileTransferRequest::setupForS3()
 #endif
 }
 
-std::future<FileTransferResult> FileTransfer::enqueueFileTransfer(const FileTransferRequest & request)
+std::future<FileTransferResult> FileTransfer::enqueueFileTransfer(const FileTransferRequest & request) noexcept
 {
     auto promise = std::make_shared<std::promise<FileTransferResult>>();
     enqueueFileTransfer(request, {[promise](std::future<FileTransferResult> fut) {
