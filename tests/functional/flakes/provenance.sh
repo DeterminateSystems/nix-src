@@ -58,6 +58,10 @@ builder=$(nix eval --raw "$flake1Dir#packages.$system.default._builder")
   },
   "output": "out",
   "system": "$system",
+  "tags": {
+    "branch": "main",
+    "pr": "1234"
+  },
   "type": "build"
 }
 EOF
@@ -172,6 +176,10 @@ nix copy --from "file://$binaryCache" "$outPath" --no-check-sigs
     },
     "output": "out",
     "system": "$system",
+    "tags": {
+      "branch": "main",
+      "pr": "1234"
+    },
     "type": "build"
   },
   "type": "copied"
@@ -186,6 +194,8 @@ unset _NIX_FORCE_HTTP
 [1m$outPath[0m
 ← copied from [1mfile://$binaryCache[0m
 ← built from derivation [1m$drvPath[0m (output [1mout[0m) on [1mtest-host[0m for [1m$system[0m
+  tag [1mbranch[0m: main
+  tag [1mpr[0m: 1234
 ← with derivation metadata
   {
     "license": [
@@ -258,6 +268,8 @@ nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.defa
 [[ "$(nix provenance show "$outPath")" = "$(cat <<EOF
 [1m$outPath[0m
 ← built from derivation [1m$drvPath[0m (output [1mout[0m) on [1mtest-host[0m for [1m$system[0m
+  tag [1mbranch[0m: main
+  tag [1mpr[0m: 1234
 ← with derivation metadata
   {
     "license": [
