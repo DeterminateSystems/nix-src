@@ -858,8 +858,13 @@ struct GitInputScheme : InputScheme
 
         auto originalRef = input.getRef();
         bool shallow = canDoShallow(input);
-        auto ref = originalRef ? *originalRef : getDefaultRef(repoInfo, shallow);
-        input.attrs.insert_or_assign("ref", ref);
+
+        /* When a specific rev is requested without an explicit ref, don't
+           resolve the default ref (which would contact the remote). The
+           rev can be fetched directly by its hash. */
+        auto ref = originalRef ? *originalRef : !origRev ? getDefaultRef(repoInfo, shallow) : std::string{};
+        if (!ref.empty())
+            input.attrs.insert_or_assign("ref", ref);
 
         std::filesystem::path repoDir;
 
@@ -941,7 +946,7 @@ struct GitInputScheme : InputScheme
                 } catch (Error & e) {
                     warn("could not update mtime for file %s: %s", localRefFile, e.info().msg);
                 }
-                if (!originalRef && !storeCachedHead(repoUrl.to_string(), shallow, ref))
+                if (!originalRef && !ref.empty() && !storeCachedHead(repoUrl.to_string(), shallow, ref))
                     warn("could not update cached head '%s' for '%s'", ref, repoInfo.locationToArg());
             }
 
