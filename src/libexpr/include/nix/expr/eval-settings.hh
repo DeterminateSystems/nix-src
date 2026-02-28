@@ -412,4 +412,9 @@ std::filesystem::path getNixDefExpr();
  */
 constexpr size_t evalStackSize = 60 * 1024 * 1024;
 
+/**
+ * EvalSettings instance from libexpr.
+ */
+extern EvalSettings evalSettings;
+
 } // namespace nix

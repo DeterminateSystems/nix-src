@@ -19,9 +19,8 @@
 
 namespace nix {
 
-EvalSettings evalSettings{
-    settings.readOnlyMode,
-    {
+static GlobalConfig::Register rEvalSettings(&evalSettings, [] {
+    evalSettings.lookupPathHooks = {
         {
             "flake",
             [](EvalState & state, std::string_view rest) {
@@ -40,10 +39,8 @@ EvalSettings evalSettings{
                 return state.storePath(storePath);
             },
         },
-    },
-};
-
-static GlobalConfig::Register rEvalSettings(&evalSettings);
+    };
+});
 
 flake::Settings flakeSettings;
 
