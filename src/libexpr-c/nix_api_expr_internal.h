@@ -13,6 +13,7 @@ extern "C" {
 struct nix_eval_state_builder
 {
     nix::ref<nix::Store> store;
+    nix::ref<nix::AsyncPathWriter> asyncPathWriter;
     nix::EvalSettings settings;
     nix::fetchers::Settings fetchSettings;
     nix::LookupPath lookupPath;

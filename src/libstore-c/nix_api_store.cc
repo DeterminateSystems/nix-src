@@ -44,17 +44,26 @@ Store * nix_store_open(nix_c_context * context, const char * uri, const char ***
     try {
         std::string uri_str = uri ? uri : "";
 
-        if (uri_str.empty())
-            return new Store{nix::openStore()};
+        if (uri_str.empty()) {
+            auto store = nix::openStore();
+            auto asyncPathWriter = nix::AsyncPathWriter::make(store);
+            return new Store{asyncPathWriter, store};
+        }
 
-        if (!params)
-            return new Store{nix::openStore(uri_str)};
+        if (!params) {
+            auto store = nix::openStore(uri_str);
+            auto asyncPathWriter = nix::AsyncPathWriter::make(store);
+            return new Store{asyncPathWriter, store};
+        }
 
         nix::Store::Config::Params params_map;
         for (size_t i = 0; params[i] != nullptr; i++) {
             params_map[params[i][0]] = params[i][1];
         }
-        return new Store{nix::openStore(uri_str, params_map)};
+
+        auto store = nix::openStore(uri_str, params_map);
+        auto asyncPathWriter = nix::AsyncPathWriter::make(store);
+        return new Store{asyncPathWriter, store};
     }
     NIXC_CATCH_ERRS_NULL
 }
@@ -127,6 +136,7 @@ StorePath * nix_store_parse_path(nix_c_context * context, Store * store, const c
         context->last_err_code = NIX_OK;
     try {
         nix::StorePath s = store->ptr->parseStorePath(path);
+        store->asyncPathWriter->waitForPath(s);
         return new StorePath{std::move(s)};
     }
     NIXC_CATCH_ERRS_NULL
