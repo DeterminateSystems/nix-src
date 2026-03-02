@@ -512,6 +512,8 @@ bool DerivationBuilderImpl::killChild()
         pid.wait();
 
         activeBuildHandle.reset();
+
+        miscMethods->childTerminated();
     }
     return ret;
 }
