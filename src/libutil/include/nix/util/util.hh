@@ -390,6 +390,11 @@ struct MaintainCount
         counter += delta;
     }
 
+    MaintainCount(MaintainCount &&) = delete;
+    MaintainCount(const MaintainCount &) = delete;
+    MaintainCount & operator=(MaintainCount &&) = delete;
+    MaintainCount & operator=(const MaintainCount &) = delete;
+
     ~MaintainCount()
     {
         counter -= delta;
