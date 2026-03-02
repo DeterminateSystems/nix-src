@@ -27,7 +27,6 @@
 #include "cli-config-private.hh"
 
 #include <sys/types.h>
-#include <regex>
 #include <nlohmann/json.hpp>
 
 #ifndef _WIN32
@@ -519,7 +518,7 @@ void mainWrapped(int argc, char ** argv)
         disableNet();
 
     try {
-        auto isNixCommand = std::regex_search(programName, std::regex("nix$"));
+        auto isNixCommand = programName.ends_with("nix");
         auto allowShebang = isNixCommand && argc > 1;
         args.parseCmdline(argvToStrings(argc, argv), allowShebang);
     } catch (UsageError &) {
