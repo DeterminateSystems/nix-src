@@ -465,11 +465,8 @@ struct NixWasmInstance
     uint32_t read_file(ValueId pathId, uint32_t ptr, uint32_t len)
     {
         auto & pathValue = getValue(pathId);
-        state.forceValue(pathValue, noPos);
-        if (pathValue.type() != nPath)
-            throw Error("read_file expects a path value");
+        auto path = state.realisePath(noPos, pathValue);
 
-        auto path = pathValue.path();
         auto contents = path.readFile();
 
         if (contents.size() > std::numeric_limits<uint32_t>::max())
