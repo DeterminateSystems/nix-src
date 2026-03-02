@@ -942,7 +942,7 @@ struct curlFileTransfer : public FileTransfer
             if (state->isQuitting())
                 throw nix::Error("cannot enqueue download request because the download thread is shutting down");
             state->incoming.push(item);
-            item->enqueued = true;
+            item->enqueued = true; /* Now any exceptions should be reported via the callback. */
         }
 
         wakeupMulti();
