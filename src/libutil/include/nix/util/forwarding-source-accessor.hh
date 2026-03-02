@@ -18,11 +18,6 @@ struct ForwardingSourceAccessor : SourceAccessor
     {
     }
 
-    std::string readFile(const CanonPath & path) override
-    {
-        return next->readFile(path);
-    }
-
     void readFile(const CanonPath & path, Sink & sink, std::function<void(uint64_t)> sizeCallback) override
     {
         next->readFile(path, sink, sizeCallback);
