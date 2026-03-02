@@ -53,7 +53,7 @@ jobs:
       - run: nix build .#packages.${{ inputs.system }}.default .#packages.${{ inputs.system }}.binaryTarball --no-link -L
       - run: nix build .#packages.${{ inputs.system }}.binaryTarball --out-link tarball
       - run: nix build .#packages.${{ inputs.system }}.nix-cli-static --no-link -L
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ inputs.system }}
           path: ./tarball/*.xz
