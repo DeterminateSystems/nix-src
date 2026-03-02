@@ -220,6 +220,12 @@ public:
     {
         unsupported("queryRealisation");
     }
+
+    StorePathSet querySubstitutablePaths(const StorePathSet & paths) override
+    {
+        // not supported
+        return {};
+    }
 };
 
 } // namespace nix

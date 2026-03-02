@@ -52,6 +52,7 @@ headers = files(
   'mounted-source-accessor.hh',
   'muxable-pipe.hh',
   'nar-accessor.hh',
+  'nar-listing.hh',
   'os-string.hh',
   'override-provenance-source-accessor.hh',
   'pool.hh',
