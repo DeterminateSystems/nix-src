@@ -59,8 +59,13 @@ RemoteStore::RemoteStore(const Config & config)
 
 ref<RemoteStore::Connection> RemoteStore::openConnectionWrapper()
 {
-    if (failed)
+    if (failed) {
+        checkInterrupt();
+        /* Throw Interrupted instead of the following error to silence pesky
+           warning messages that ThreadPool prints on shutdown if other threads
+           failed. */
         throw Error("opening a connection to remote store '%s' previously failed", config.getHumanReadableURI());
+    }
     try {
         return openConnection();
     } catch (...) {
@@ -384,10 +389,10 @@ ref<const ValidPathInfo> RemoteStore::addCAToStore(
                     }
                 }
                 conn.processStderr();
-            } catch (SysError & e) {
+            } catch (SystemError & e) {
                 /* Daemon closed while we were sending the path. Probably OOM
                   or I/O error. */
-                if (e.errNo == EPIPE)
+                if (e.is(std::errc::broken_pipe))
                     try {
                         conn.processStderr();
                     } catch (EndOfFile & e) {
