@@ -2,7 +2,6 @@
 ///@file
 
 #include "nix/util/canon-path.hh"
-#include "nix/util/types.hh"
 #include "nix/util/error.hh"
 
 #ifdef _WIN32
@@ -236,18 +235,6 @@ std::wstring handleToFileName(Descriptor handle);
 #ifndef _WIN32
 namespace unix {
 
-struct SymlinkNotAllowed : public Error
-{
-    CanonPath path;
-
-    SymlinkNotAllowed(CanonPath path)
-        /* Can't provide better error message, since the parent directory is only known to the caller. */
-        : Error("relative path '%s' points to a symlink, which is not allowed", path.rel())
-        , path(std::move(path))
-    {
-    }
-};
-
 /**
  * Safe(r) function to open \param path file relative to \param dirFd, while
  * disallowing escaping from a directory and resolving any symlinks in the
@@ -273,5 +260,15 @@ Descriptor openFileEnsureBeneathNoSymlinks(Descriptor dirFd, const CanonPath & p
 #endif
 
 MakeError(EndOfFile, Error);
+
+#ifdef _WIN32
+
+/**
+ * Windows specific replacement for POSIX `lseek` that operates on a `HANDLE` and not
+ * a file descriptor.
+ */
+off_t lseek(Descriptor fd, off_t offset, int whence);
+
+#endif
 
 } // namespace nix
