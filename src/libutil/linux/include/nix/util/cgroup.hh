@@ -6,6 +6,7 @@
 #include <filesystem>
 
 #include "nix/util/types.hh"
+#include "nix/util/canon-path.hh"
 
 namespace nix {
 
@@ -31,14 +32,14 @@ CgroupStats getCgroupStats(const std::filesystem::path & cgroup);
  */
 CgroupStats destroyCgroup(const std::filesystem::path & cgroup);
 
-std::string getCurrentCgroup();
+CanonPath getCurrentCgroup();
 
 /**
  * Get the cgroup that should be used as the parent when creating new
  * sub-cgroups. The first time this is called, the current cgroup will be
  * returned, and then all subsequent calls will return the original cgroup.
  */
-std::string getRootCgroup();
+CanonPath getRootCgroup();
 
 /**
  * Get the PIDs of all processes in the given cgroup.
