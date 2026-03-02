@@ -296,6 +296,7 @@ sources = files(
   'async-path-writer.cc',
   'binary-cache-store.cc',
   'build-result.cc',
+  'build/build-log.cc',
   'build/derivation-builder.cc',
   'build/derivation-building-goal.cc',
   'build/derivation-check.cc',

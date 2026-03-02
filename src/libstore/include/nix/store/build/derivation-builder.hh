@@ -108,7 +108,7 @@ struct DerivationBuilderParams
     /**
      * The activity corresponding to the build.
      */
-    std::unique_ptr<Activity> & act;
+    ref<Activity> act;
 };
 
 /**
@@ -121,7 +121,7 @@ struct DerivationBuilderCallbacks
     /**
      * Open a log file and a pipe to it.
      */
-    virtual std::filesystem::path openLogFile() = 0;
+    virtual void openLogFile() = 0;
 
     /**
      * Close the log file.
