@@ -42,7 +42,7 @@
       crossSystems = [
         #"armv6l-unknown-linux-gnueabihf"
         #"armv7l-unknown-linux-gnueabihf"
-        #"riscv64-unknown-linux-gnu"
+        "riscv64-unknown-linux-gnu"
         # Disabled because of https://github.com/NixOS/nixpkgs/issues/344423
         # "x86_64-unknown-netbsd"
         #"x86_64-unknown-freebsd"
@@ -505,7 +505,10 @@
                 echo "file binary-dist $image" >> $out/nix-support/hydra-build-products
               '';
         }
-      );
+      ) // {
+        riscv64-linux.default = nixpkgsFor.aarch64-linux.cross.riscv64-unknown-linux-gnu.nixComponents2.nix-everything;
+        riscv64-linux.nix-everything = nixpkgsFor.aarch64-linux.cross.riscv64-unknown-linux-gnu.nixComponents2.nix-everything;
+      };
 
       apps = forAllSystems (
         system:
