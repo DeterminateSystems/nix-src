@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.16.3.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.17.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -194,4 +194,7 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 
 
 <!-- Determinate Nix version 3.16.3 -->
+
+
+<!-- Determinate Nix version 3.17.0 -->
 
