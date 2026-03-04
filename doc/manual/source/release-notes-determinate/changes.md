@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.16.3.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.17.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -195,3 +195,21 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 
 <!-- Determinate Nix version 3.16.3 -->
 
+
+<!-- Determinate Nix version 3.17.0 -->
+
+* More parallelism by @grahamc in [DeterminateSystems/nix-src#367](https://github.com/DeterminateSystems/nix-src/pull/367)
+
+* fixup: don't check accessibility of embedded sandbox shell by @cole-h in [DeterminateSystems/nix-src#371](https://github.com/DeterminateSystems/nix-src/pull/371)
+
+* Add test for nix_store_build_paths by @RossComputerGuy in [DeterminateSystems/nix-src#372](https://github.com/DeterminateSystems/nix-src/pull/372)
+
+* Flake schemas by @edolstra in [DeterminateSystems/nix-src#217](https://github.com/DeterminateSystems/nix-src/pull/217)
+
+* Add missing temp roots by @edolstra in [DeterminateSystems/nix-src#373](https://github.com/DeterminateSystems/nix-src/pull/373)
+
+* Merge builtins.wasm and builtins.wasi into one function by @edolstra in [DeterminateSystems/nix-src#370](https://github.com/DeterminateSystems/nix-src/pull/370)
+
+* libstore/filetransfer: Fix double callback on enqueueFileTransfer that is shutting down by @cole-h in [DeterminateSystems/nix-src#363](https://github.com/DeterminateSystems/nix-src/pull/363)
+
+* read_file: Support any value than can be coerced to a path by @edolstra in [DeterminateSystems/nix-src#375](https://github.com/DeterminateSystems/nix-src/pull/375)
