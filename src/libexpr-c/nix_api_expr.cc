@@ -137,6 +137,7 @@ nix_eval_state_builder * nix_eval_state_builder_new(nix_c_context * context, Sto
         return unsafe_new_with_self<nix_eval_state_builder>([&](auto * self) {
             return nix_eval_state_builder{
                 .store = nix::ref<nix::Store>(store->ptr),
+                .asyncPathWriter = nix::ref<nix::AsyncPathWriter>(store->asyncPathWriter),
                 .settings = nix::EvalSettings{/* &bool */ self->readOnlyMode},
                 .fetchSettings = nix::fetchers::Settings{},
                 .readOnlyMode = true,
@@ -190,7 +191,13 @@ EvalState * nix_eval_state_build(nix_c_context * context, nix_eval_state_builder
             return EvalState{
                 .fetchSettings = std::move(builder->fetchSettings),
                 .settings = std::move(builder->settings),
-                .state = nix::EvalState(builder->lookupPath, builder->store, self->fetchSettings, self->settings),
+                .state = nix::EvalState(
+                    builder->lookupPath,
+                    builder->store,
+                    self->fetchSettings,
+                    self->settings,
+                    nullptr,
+                    builder->asyncPathWriter),
             };
         });
     }
