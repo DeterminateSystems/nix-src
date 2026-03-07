@@ -156,7 +156,10 @@ private:
      */
     void killChild();
 
-    Done doneSuccess(BuildResult::Success::Status status, SingleDrvOutputs builtOutputs);
+    Done doneSuccess(
+        BuildResult::Success::Status status,
+        SingleDrvOutputs builtOutputs,
+        std::shared_ptr<const Provenance> provenance = nullptr);
 
     Done doneFailure(BuildError ex);
 

@@ -513,7 +513,7 @@ void Args::checkArgs()
 {
     for (auto & [name, flag] : longFlags) {
         if (flag->required && flag->timesUsed == 0)
-            throw UsageError("required argument '--%s' is missing", name);
+            throw UsageError("required argument '%s' is missing", "--" + name);
     }
 }
 
@@ -607,7 +607,7 @@ Strings argvToStrings(int argc, char ** argv)
 
 std::optional<ExperimentalFeature> Command::experimentalFeature()
 {
-    return {Xp::NixCommand};
+    return {};
 }
 
 MultiCommand::MultiCommand(std::string_view commandName, const Commands & commands_)

@@ -17,6 +17,8 @@
 #include "nix/util/git.hh"
 #include "nix/util/logging.hh"
 #include "nix/store/globals.hh"
+#include "nix/store/active-builds.hh"
+#include "nix/util/provenance.hh"
 
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
 #  include "nix/util/monitor-fd.hh"
@@ -432,6 +434,9 @@ static void performOp(
             bool repairBool;
             conn.from >> repairBool;
             auto repair = RepairFlag{repairBool};
+            auto provenance = conn.features.contains(WorkerProto::featureProvenance)
+                                  ? Provenance::from_json_str_optional(readString(conn.from))
+                                  : nullptr;
 
             logger->startWork();
             auto pathInfo = [&]() {
@@ -457,8 +462,8 @@ static void performOp(
                     assert(false);
                 }
                 // TODO these two steps are essentially RemoteStore::addCAToStore. Move it up to Store.
-                auto path =
-                    store->addToStoreFromDump(source, name, dumpMethod, contentAddressMethod, hashAlgo, refs, repair);
+                auto path = store->addToStoreFromDump(
+                    source, name, dumpMethod, contentAddressMethod, hashAlgo, refs, repair, provenance);
                 return store->queryPathInfo(path);
             }();
             logger->stopWork();
@@ -746,6 +751,7 @@ static void performOp(
         options.action = WorkerProto::Serialise<GCOptions::GCAction>::read(*store, rconn);
         options.pathsToDelete = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
         conn.from >> options.ignoreLiveness >> options.maxFreed;
+        options.censor = !trusted;
         // obsolete fields
         readInt(conn.from);
         readInt(conn.from);
@@ -754,7 +760,7 @@ static void performOp(
         GCResults results;
 
         logger->startWork();
-        if (options.ignoreLiveness)
+        if (options.ignoreLiveness && !getEnv("_NIX_IN_TEST").has_value())
             throw Error("you are not allowed to ignore liveness");
         auto & gcStore = require<GcStore>(*store);
         gcStore.collectGarbage(options, results);
@@ -852,7 +858,10 @@ static void performOp(
         auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         std::shared_ptr<const ValidPathInfo> info;
         logger->startWork();
-        info = store->queryPathInfo(path);
+        try {
+            info = store->queryPathInfo(path);
+        } catch (InvalidPath &) {
+        }
         logger->stopWork();
         if (info) {
             conn.to << 1;
@@ -911,6 +920,9 @@ static void performOp(
         conn.from >> info.registrationTime >> info.narSize >> info.ultimate;
         info.sigs = readStrings<StringSet>(conn.from);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
+        info.provenance = conn.features.contains(WorkerProto::featureProvenance)
+                              ? Provenance::from_json_str_optional(readString(conn.from))
+                              : nullptr;
         conn.from >> repair >> dontCheckSigs;
         if (!trusted && dontCheckSigs)
             dontCheckSigs = false;
@@ -1015,6 +1027,15 @@ static void performOp(
     case WorkerProto::Op::ClearFailedPaths:
         throw Error("Removed operation %1%", op);
 
+    case WorkerProto::Op::QueryActiveBuilds: {
+        logger->startWork();
+        auto & activeBuildsStore = require<QueryActiveBuildsStore>(*store);
+        auto activeBuilds = activeBuildsStore.queryActiveBuilds();
+        logger->stopWork();
+        conn.to << nlohmann::json(activeBuilds).dump();
+        break;
+    }
+
     default:
         throw Error("invalid operation %1%", op);
     }
@@ -1029,8 +1050,12 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
 #endif
 
     /* Exchange the greeting. */
+    auto myFeatures = WorkerProto::allFeatures;
+    if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        myFeatures.erase(std::string(WorkerProto::featureProvenance));
+
     auto [protoVersion, features] =
-        WorkerProto::BasicServerConnection::handshake(to, from, PROTOCOL_VERSION, WorkerProto::allFeatures);
+        WorkerProto::BasicServerConnection::handshake(to, from, PROTOCOL_VERSION, myFeatures);
 
     if (protoVersion < MINIMUM_PROTOCOL_VERSION)
         throw Error("the Nix client version is too old");
