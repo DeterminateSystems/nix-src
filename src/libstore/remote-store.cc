@@ -450,7 +450,9 @@ void RemoteStore::addToStore(const ValidPathInfo & info, Source & source, Repair
     WorkerProto::write(*this, *conn, info.deriver);
     conn->to << info.narHash.to_string(HashFormat::Base16, false);
     WorkerProto::write(*this, *conn, info.references);
-    conn->to << info.registrationTime << info.narSize << info.ultimate << info.sigs << renderContentAddress(info.ca);
+    conn->to << info.registrationTime << info.narSize << info.ultimate;
+    WorkerProto::write(*this, *conn, info.sigs);
+    conn->to << renderContentAddress(info.ca);
     if (conn->features.contains(WorkerProto::featureProvenance))
         conn->to << (info.provenance ? info.provenance->to_json_str() : "");
     conn->to << repair << !checkSigs;
@@ -748,12 +750,12 @@ bool RemoteStore::verifyStore(bool checkContents, RepairFlag repair)
     return readInt(conn->from);
 }
 
-void RemoteStore::addSignatures(const StorePath & storePath, const StringSet & sigs)
+void RemoteStore::addSignatures(const StorePath & storePath, const std::set<Signature> & sigs)
 {
     auto conn(getConnection());
     conn->to << WorkerProto::Op::AddSignatures;
     WorkerProto::write(*this, *conn, storePath);
-    conn->to << sigs;
+    WorkerProto::write(*this, *conn, sigs);
     conn.processStderr();
     readInt(conn->from);
 }

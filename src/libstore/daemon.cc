@@ -870,7 +870,7 @@ static void performOp(
 
     case WorkerProto::Op::AddSignatures: {
         auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
-        StringSet sigs = readStrings<StringSet>(conn.from);
+        auto sigs = WorkerProto::Serialise<std::set<Signature>>::read(*store, rconn);
         logger->startWork();
         store->addSignatures(path, sigs);
         logger->stopWork();
@@ -895,7 +895,7 @@ static void performOp(
         info.deriver = std::move(deriver);
         info.references = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
         conn.from >> info.registrationTime >> info.narSize >> info.ultimate;
-        info.sigs = readStrings<StringSet>(conn.from);
+        info.sigs = WorkerProto::Serialise<std::set<Signature>>::read(*store, rconn);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
         info.provenance = conn.features.contains(WorkerProto::featureProvenance)
                               ? Provenance::from_json_str_optional(readString(conn.from))

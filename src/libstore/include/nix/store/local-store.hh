@@ -373,7 +373,7 @@ public:
 
     void vacuumDB();
 
-    void addSignatures(const StorePath & storePath, const StringSet & sigs) override;
+    void addSignatures(const StorePath & storePath, const std::set<Signature> & sigs) override;
 
     /**
      * If free disk space in /nix/store if below minFree, delete

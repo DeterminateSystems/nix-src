@@ -276,7 +276,7 @@ public:
                 if (!queryNAR.isNull(9))
                     narInfo->deriver = StorePath(queryNAR.getStr(9));
                 for (auto & sig : tokenizeString<Strings>(queryNAR.getStr(10), " "))
-                    narInfo->sigs.insert(sig);
+                    narInfo->sigs.insert(Signature::parse(sig));
                 narInfo->ca = ContentAddress::parseOpt(queryNAR.getStr(11));
                 if (experimentalFeatureSettings.isEnabled(Xp::Provenance) && !queryNAR.isNull(12))
                     narInfo->provenance = Provenance::from_json_str_optional(queryNAR.getStr(12));
@@ -339,7 +339,8 @@ public:
                         narInfo ? narInfo->fileSize : 0, narInfo != 0 && narInfo->fileSize)(info->narHash.to_string(
                         HashFormat::Nix32, true))(info->narSize)(concatStringsSep(" ", info->shortRefs()))(
                         info->deriver ? std::string(info->deriver->to_string()) : "",
-                        (bool) info->deriver)(concatStringsSep(" ", info->sigs))(renderContentAddress(info->ca))(
+                        (bool) info->deriver)(concatStringsSep(" ", Signature::toStrings(info->sigs)))(
+                        renderContentAddress(info->ca))(
                         info->provenance ? info->provenance->to_json_str() : "",
                         experimentalFeatureSettings.isEnabled(Xp::Provenance) && info->provenance)(time(0))
                     .exec();
