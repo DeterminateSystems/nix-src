@@ -113,10 +113,7 @@ struct BuildResult
         bool operator==(const BuildResult::Failure &) const noexcept;
         std::strong_ordering operator<=>(const BuildResult::Failure &) const noexcept;
 
-        [[noreturn]] void rethrow() const
-        {
-            throw Error("%s", errorMsg.empty() ? statusToString(status) : errorMsg);
-        }
+        [[noreturn]] void rethrow() const;
     };
 
     std::variant<Success, Failure> inner = Failure{};
