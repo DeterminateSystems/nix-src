@@ -649,7 +649,7 @@ struct CmdFlakeInitCommon : virtual Args, EvalCommand, MixFlakeSchemas
                         from2,
                         st.typeString());
                 changedFiles.push_back(to2);
-                notice("wrote: %s", to2);
+                notice("wrote: %s", PathFmt(to2));
             }
         }(templateDir, flakeDir);
 

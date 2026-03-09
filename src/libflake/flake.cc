@@ -889,11 +889,11 @@ LockedFlake lockFlake(
                             auto s = chomp(diff);
                             if (lockFileExists) {
                                 if (s.empty())
-                                    warn("updating lock file %s", outputLockFilePath);
+                                    warn("updating lock file %s", PathFmt(outputLockFilePath));
                                 else
-                                    warn("updating lock file %s:\n%s", outputLockFilePath, s);
+                                    warn("updating lock file %s:\n%s", PathFmt(outputLockFilePath), s);
                             } else
-                                warn("creating lock file %s: \n%s", outputLockFilePath, s);
+                                warn("creating lock file %s: \n%s", PathFmt(outputLockFilePath), s);
 
                             std::optional<std::string> commitMessage = std::nullopt;
 

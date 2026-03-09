@@ -796,7 +796,7 @@ void NixRepl::loadFiles()
     loadedFiles.clear();
 
     for (auto & i : old) {
-        notice("Loading '%1%'...", i);
+        notice("Loading %1%...", PathFmt(i));
         loadFile(i);
     }
 

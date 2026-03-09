@@ -589,7 +589,7 @@ SingleDrvOutputs DerivationBuilderImpl::unprepareBuild()
 static void chmod_(const std::filesystem::path & path, mode_t mode)
 {
     if (chmod(path.c_str(), mode) == -1)
-        throw SysError("setting permissions on %s", path);
+        throw SysError("setting permissions on %s", PathFmt(path));
 }
 
 /* Move/rename path 'src' to 'dst'. Temporarily make 'src' writable if
@@ -709,7 +709,7 @@ static void checkNotWorldWritable(std::filesystem::path path)
     while (true) {
         auto st = lstat(path);
         if (st.st_mode & S_IWOTH)
-            throw Error("Path %s is world-writable or a symlink. That's not allowed for security.", path);
+            throw Error("Path %s is world-writable or a symlink. That's not allowed for security.", PathFmt(path));
         if (path == path.parent_path())
             break;
         path = path.parent_path();
@@ -749,7 +749,7 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
        POSIX semantics.*/
     tmpDirFd = AutoCloseFD{open(tmpDir.c_str(), O_RDONLY | O_NOFOLLOW | O_DIRECTORY)};
     if (!tmpDirFd)
-        throw SysError("failed to open the build temporary directory descriptor %1%", tmpDir);
+        throw SysError("failed to open the build temporary directory descriptor %1%", PathFmt(tmpDir));
 
     chownToBuilder(tmpDirFd.get(), tmpDir);
 
@@ -815,7 +815,8 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
 
     if (needsHashRewrite() && pathExists(homeDir))
         throw Error(
-            "home directory %1% exists; please remove it to assure purity of builds without sandboxing", homeDir);
+            "home directory %1% exists; please remove it to assure purity of builds without sandboxing",
+            PathFmt(homeDir));
 
     /* Fire up a Nix daemon to process recursive Nix calls from the
        builder. */
@@ -897,7 +898,8 @@ PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
 #endif
             && !maybeLstat(p.second.source))
             throw SysError(
-                "path '%s' is configured as part of the `sandbox-paths` option, but is inaccessible", p.second.source);
+                "path %s is configured as part of the `sandbox-paths` option, but is inaccessible",
+                PathFmt(p.second.source));
 
     if (hasPrefix(store.storeDir, tmpDirInSandbox().native())) {
         throw Error("`sandbox-build-dir` must not contain the storeDir");
@@ -1264,7 +1266,7 @@ void DerivationBuilderImpl::chownToBuilder(const std::filesystem::path & path)
     if (!buildUser)
         return;
     if (chown(path.c_str(), buildUser->getUID(), buildUser->getGID()) == -1)
-        throw SysError("cannot change ownership of %1%", path);
+        throw SysError("cannot change ownership of %1%", PathFmt(path));
 }
 
 void DerivationBuilderImpl::chownToBuilder(int fd, const std::filesystem::path & path)
@@ -1272,7 +1274,7 @@ void DerivationBuilderImpl::chownToBuilder(int fd, const std::filesystem::path &
     if (!buildUser)
         return;
     if (fchown(fd, buildUser->getUID(), buildUser->getGID()) == -1)
-        throw SysError("cannot change ownership of file %1%", path);
+        throw SysError("cannot change ownership of file %1%", PathFmt(path));
 }
 
 void DerivationBuilderImpl::writeBuilderFile(const std::string & name, std::string_view contents)
@@ -1281,7 +1283,7 @@ void DerivationBuilderImpl::writeBuilderFile(const std::string & name, std::stri
     AutoCloseFD fd{
         openat(tmpDirFd.get(), name.c_str(), O_WRONLY | O_TRUNC | O_CREAT | O_CLOEXEC | O_EXCL | O_NOFOLLOW, 0666)};
     if (!fd)
-        throw SysError("creating file %s", path);
+        throw SysError("creating file %s", PathFmt(path));
     writeFile(fd, path, contents);
     chownToBuilder(fd.get(), path);
 }
@@ -1323,7 +1325,7 @@ void DerivationBuilderImpl::runChild(RunChildArgs args)
         enterChroot();
 
         if (chdir(tmpDirInSandbox().c_str()) == -1)
-            throw SysError("changing into %1%", tmpDir);
+            throw SysError("changing into %1%", PathFmt(tmpDir));
 
         /* Close all other file descriptors. */
         unix::closeExtraFDs();
@@ -1485,10 +1487,10 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
         if (!optSt)
             throw BuildError(
                 BuildResult::Failure::OutputRejected,
-                "builder for '%s' failed to produce output path for output '%s' at '%s'",
+                "builder for '%s' failed to produce output path for output '%s' at %s",
                 store.printStorePath(drvPath),
                 outputName,
-                actualPath);
+                PathFmt(actualPath));
         struct stat & st = *optSt;
 
 #ifndef __CYGWIN__
@@ -1500,8 +1502,8 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
             || (buildUser && st.st_uid != buildUser->getUID()))
             throw BuildError(
                 BuildResult::Failure::OutputRejected,
-                "suspicious ownership or permission on '%s' for output '%s'; rejecting this build output",
-                actualPath,
+                "suspicious ownership or permission on %s for output '%s'; rejecting this build output",
+                PathFmt(actualPath),
                 outputName);
 #endif
 
@@ -1520,7 +1522,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
         if (discardReferences)
             debug("discarding references of output '%s'", outputName);
         else {
-            debug("scanning for references for output '%s' in temp location %s", outputName, actualPath);
+            debug("scanning for references for output '%s' in temp location %s", outputName, PathFmt(actualPath));
 
             /* Pass blank Sink as we are not ready to hash data at this stage. */
             NullSink blank;
@@ -1616,7 +1618,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
         auto rewriteOutput = [&](const StringMap & rewrites) {
             /* Apply hash rewriting if necessary. */
             if (!rewrites.empty()) {
-                debug("rewriting hashes in %1%; cross fingers", actualPath);
+                debug("rewriting hashes in %1%; cross fingers", PathFmt(actualPath));
 
                 /* FIXME: Is this actually streaming? */
                 auto source = sinkToSource([&](Sink & nextSink) {
@@ -1664,15 +1666,17 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
             auto st = get(outputStats, outputName);
             if (!st)
                 throw BuildError(
-                    BuildResult::Failure::OutputRejected, "output path %1% without valid stats info", actualPath);
+                    BuildResult::Failure::OutputRejected,
+                    "output path %1% without valid stats info",
+                    PathFmt(actualPath));
             if (outputHash.method.getFileIngestionMethod() == FileIngestionMethod::Flat) {
                 /* The output path should be a regular file without execute permission. */
                 if (!S_ISREG(st->st_mode) || (st->st_mode & S_IXUSR) != 0)
                     throw BuildError(
                         BuildResult::Failure::OutputRejected,
-                        "output path '%1%' should be a non-executable regular file "
+                        "output path %1% should be a non-executable regular file "
                         "since recursive hashing is not enabled (one of outputHashMode={flat,text} is true)",
-                        actualPath);
+                        PathFmt(actualPath));
             }
             rewriteOutput(outputRewrites);
             /* FIXME optimize and deduplicate with addToStore */
@@ -1973,7 +1977,7 @@ void DerivationBuilderImpl::cleanupBuild(bool force)
         /* Don't keep temporary directories for builtins because they
            might have privileged stuff (like a copy of netrc). */
         if (settings.keepFailed && !force && !drv.isBuiltin()) {
-            printError("note: keeping build directory %s", tmpDir);
+            printError("note: keeping build directory %s", PathFmt(tmpDir));
             chmod(topTmpDir.c_str(), 0755);
             chmod(tmpDir.c_str(), 0755);
         } else

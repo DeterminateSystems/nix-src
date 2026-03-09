@@ -208,9 +208,9 @@ void chrootHelper(int argc, char ** argv)
             auto st = entry.symlink_status();
             if (std::filesystem::is_directory(st)) {
                 if (mkdir(dst.c_str(), 0700) == -1)
-                    throw SysError("creating directory '%s'", dst);
+                    throw SysError("creating directory %s", PathFmt(dst));
                 if (mount(src.c_str(), dst.c_str(), "", MS_BIND | MS_REC, 0) == -1)
-                    throw SysError("mounting '%s' on '%s'", src, dst);
+                    throw SysError("mounting %s on %s", PathFmt(src), PathFmt(dst));
             } else if (std::filesystem::is_symlink(st))
                 createSymlink(readLink(src), dst);
         }
@@ -221,7 +221,7 @@ void chrootHelper(int argc, char ** argv)
         Finally freeCwd([&]() { free(cwd); });
 
         if (chroot(tmpDir.c_str()) == -1)
-            throw SysError("chrooting into '%s'", tmpDir);
+            throw SysError("chrooting into %s", PathFmt(tmpDir));
 
         if (chdir(cwd) == -1)
             throw SysError("chdir to '%s' in chroot", cwd);
