@@ -239,14 +239,19 @@ void ignoreExceptionInDestructor(Verbosity lvl)
 
 void ignoreExceptionExceptInterrupt(Verbosity lvl)
 {
+    logExceptionExceptInterrupt("error (ignored):", lvl);
+}
+
+void logExceptionExceptInterrupt(std::string_view prefix, Verbosity lvl)
+{
     try {
         throw;
     } catch (const Interrupted & e) {
         throw;
     } catch (Error & e) {
-        printMsg(lvl, ANSI_RED "error (ignored):" ANSI_NORMAL " %s", e.info().msg);
+        printMsg(lvl, ANSI_RED "%s" ANSI_NORMAL "%s", prefix, e.info().msg);
     } catch (std::exception & e) {
-        printMsg(lvl, ANSI_RED "error (ignored):" ANSI_NORMAL " %s", e.what());
+        printMsg(lvl, ANSI_RED "%s" ANSI_NORMAL "%s", prefix, e.what());
     }
 }
 
