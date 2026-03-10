@@ -64,10 +64,12 @@ typedef std::function<void(Symbol attrName, ref<AttrCursor> attr, bool isLast)> 
 
 void visit(
     std::optional<std::string> system,
+    bool includeLegacy,
     ref<AttrCursor> node,
     std::function<void(const Leaf & leaf)> visitLeaf,
     std::function<void(std::function<void(ForEachChild)>)> visitNonLeaf,
-    std::function<void(ref<AttrCursor> node, const std::vector<std::string> & systems)> visitFiltered);
+    std::function<void(ref<AttrCursor> node, const std::vector<std::string> & systems)> visitFiltered,
+    std::function<void(ref<AttrCursor> node)> visitLegacy);
 
 struct OutputInfo
 {
