@@ -271,7 +271,8 @@ struct GitArchiveInputScheme : InputScheme
         time_t lastModified;
     };
 
-    std::pair<Input, TarballInfo> downloadArchive(const Settings & settings, Store & store, Input input) const
+    std::optional<std::pair<Input, TarballInfo>>
+    downloadArchive(const Settings & settings, Store & store, Input input, bool fastOnly) const
     {
         if (!maybeGetStrAttr(input.attrs, "ref"))
             input.attrs.insert_or_assign("ref", "HEAD");
@@ -299,11 +300,15 @@ struct GitArchiveInputScheme : InputScheme
                 auto treeHash = getRevAttr(*treeHashAttrs, "treeHash");
                 auto lastModified = getIntAttr(*lastModifiedAttrs, "lastModified");
                 if (settings.getTarballCache()->hasObject(treeHash))
-                    return {std::move(input), TarballInfo{.treeHash = treeHash, .lastModified = (time_t) lastModified}};
+                    return {
+                        {std::move(input), TarballInfo{.treeHash = treeHash, .lastModified = (time_t) lastModified}}};
                 else
                     debug("Git tree with hash '%s' has disappeared from the cache, refetching...", treeHash.gitRev());
             }
         }
+
+        if (fastOnly)
+            return std::nullopt;
 
         /* Stream the tarball into the tarball cache. */
         auto url = getDownloadUrl(settings, input);
@@ -340,13 +345,17 @@ struct GitArchiveInputScheme : InputScheme
                 rev->gitRev(), input.to_string(), upstreamTreeHash->gitRev(), tarballInfo.treeHash.gitRev());
 #endif
 
-        return {std::move(input), tarballInfo};
+        return {{std::move(input), tarballInfo}};
     }
 
-    std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, Store & store, const Input & _input) const override
+    std::optional<std::pair<ref<SourceAccessor>, Input>>
+    getAccessor(const Settings & settings, Store & store, const Input & _input, bool fastOnly) const override
     {
-        auto [input, tarballInfo] = downloadArchive(settings, store, _input);
+        auto res = downloadArchive(settings, store, _input, fastOnly);
+        if (fastOnly && !res)
+            return std::nullopt;
+        assert(res);
+        auto [input, tarballInfo] = *res;
 
 #if 0
         input.attrs.insert_or_assign("treeHash", tarballInfo.treeHash.gitRev());
@@ -363,7 +372,7 @@ struct GitArchiveInputScheme : InputScheme
             input.attrs.insert_or_assign(
                 "narHash", accessor->hashPath(CanonPath::root).to_string(HashFormat::SRI, true));
 
-        return {accessor, input};
+        return {{accessor, input}};
     }
 
     bool isLocked(const Settings & settings, const Input & input) const override

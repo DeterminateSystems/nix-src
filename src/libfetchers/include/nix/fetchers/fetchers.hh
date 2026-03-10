@@ -240,8 +240,19 @@ struct InputScheme
         std::string_view contents,
         std::optional<std::string> commitMsg) const;
 
+    virtual std::optional<std::pair<ref<SourceAccessor>, Input>>
+    getAccessor(const Settings & settings, Store & store, const Input & input, bool fastOnly) const
+    {
+        if (fastOnly)
+            return std::nullopt;
+        return getAccessor(settings, store, input);
+    }
+
     virtual std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, Store & store, const Input & input) const = 0;
+    getAccessor(const Settings & settings, Store & store, const Input & input) const
+    {
+        return getAccessor(settings, store, input, false).value();
+    }
 
     /**
      * Is this `InputScheme` part of an experimental feature?
