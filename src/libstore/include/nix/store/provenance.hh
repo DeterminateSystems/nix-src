@@ -46,15 +46,7 @@ struct BuildProvenance : Provenance
         std::optional<std::string> buildHost,
         std::map<std::string, std::string> tags,
         std::string system,
-        std::shared_ptr<const Provenance> next)
-        : drvPath(drvPath)
-        , output(output)
-        , buildHost(std::move(buildHost))
-        , tags(std::move(tags))
-        , system(std::move(system))
-        , next(std::move(next))
-    {
-    }
+        std::shared_ptr<const Provenance> next);
 
     nlohmann::json to_json() const override;
 };
