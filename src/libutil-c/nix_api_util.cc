@@ -2,6 +2,7 @@
 #include "nix/util/config-global.hh"
 #include "nix/util/error.hh"
 #include "nix_api_util_internal.h"
+#include "nix/util/signals.hh"
 #include "nix/util/util.hh"
 
 #include <cxxabi.h>
@@ -111,6 +112,9 @@ nix_err nix_libutil_init(nix_c_context * context)
         context->last_err_code = NIX_OK;
     try {
         nix::initLibUtil();
+#ifndef _WIN32
+        nix::unix::startSignalHandlerThread();
+#endif
         return NIX_OK;
     }
     NIXC_CATCH_ERRS

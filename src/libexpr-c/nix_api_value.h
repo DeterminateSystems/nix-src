@@ -100,7 +100,10 @@ typedef enum {
     /** @brief External value from C++ plugins or C API
      * @see Externals
      */
-    NIX_TYPE_EXTERNAL
+    NIX_TYPE_EXTERNAL,
+    /** @brief Failed value. Contains an exception that can be rethrown.
+     */
+    NIX_TYPE_FAILED,
 } ValueType;
 
 // forward declarations

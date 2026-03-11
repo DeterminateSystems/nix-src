@@ -58,21 +58,9 @@ struct CmdBundle : InstallableValueCommand
         return catSecondary;
     }
 
-    // FIXME: cut&paste from CmdRun.
-    Strings getDefaultFlakeAttrPaths() override
+    StringSet getRoles() override
     {
-        Strings res{"apps." + settings.thisSystem.get() + ".default", "defaultApp." + settings.thisSystem.get()};
-        for (auto & s : SourceExprCommand::getDefaultFlakeAttrPaths())
-            res.push_back(s);
-        return res;
-    }
-
-    Strings getDefaultFlakeAttrPathPrefixes() override
-    {
-        Strings res{"apps." + settings.thisSystem.get() + "."};
-        for (auto & s : SourceExprCommand::getDefaultFlakeAttrPathPrefixes())
-            res.push_back(s);
-        return res;
+        return {"nix-run"};
     }
 
     void run(ref<Store> store, ref<InstallableValue> installable) override
@@ -90,9 +78,9 @@ struct CmdBundle : InstallableValueCommand
             std::move(bundlerFlakeRef),
             bundlerName,
             std::move(extendedOutputsSpec),
-            {"bundlers." + settings.thisSystem.get() + ".default", "defaultBundler." + settings.thisSystem.get()},
-            {"bundlers." + settings.thisSystem.get() + "."},
-            lockFlags};
+            {"nix-bundler"},
+            lockFlags,
+            getDefaultFlakeSchemas()};
 
         auto vRes = evalState->allocValue();
         evalState->callFunction(*bundler.toValue(*evalState).first, *val, *vRes, noPos);
@@ -107,6 +95,8 @@ struct CmdBundle : InstallableValueCommand
         NixStringContext context2;
         auto drvPath = evalState->coerceToStorePath(attr1->pos, *attr1->value, context2, "");
 
+        evalState->waitForAllPaths();
+
         drvPath.requireDerivation();
 
         auto attr2 = vRes->attrs()->get(evalState->s.outPath);
@@ -114,6 +104,8 @@ struct CmdBundle : InstallableValueCommand
             throw Error("the bundler '%s' does not produce a derivation", bundler.what());
 
         auto outPath = evalState->coerceToStorePath(attr2->pos, *attr2->value, context2, "");
+
+        evalState->waitForAllPaths();
 
         store->buildPaths({
             DerivedPath::Built{
