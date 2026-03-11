@@ -239,7 +239,7 @@ void ignoreExceptionInDestructor(Verbosity lvl)
 
 void ignoreExceptionExceptInterrupt(Verbosity lvl)
 {
-    logExceptionExceptInterrupt("error (ignored):", lvl);
+    logExceptionExceptInterrupt("error (ignored): ", lvl);
 }
 
 void logExceptionExceptInterrupt(std::string_view prefix, Verbosity lvl)
