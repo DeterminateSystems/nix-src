@@ -18,7 +18,7 @@ let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in
 assert show_output.inventory.packages.output.children.someOtherSystem.filtered;
 assert show_output.inventory.packages.output.children.${builtins.currentSystem}.children.default.derivation.name == "simple";
-assert show_output.inventory.legacyPackages.skipped;
+assert show_output.inventory.legacyPackages.output.children.${builtins.currentSystem}.isLegacy;
 true
 '
 
@@ -29,7 +29,7 @@ nix eval --impure --expr '
 let show_output = builtins.fromJSON (builtins.readFile ./show-output.json);
 in
 assert show_output.inventory.packages.output.children.someOtherSystem.children.default.derivation.name == "simple";
-assert show_output.inventory.legacyPackages.skipped;
+assert show_output.inventory.legacyPackages.output.children.${builtins.currentSystem}.isLegacy;
 true
 '
 

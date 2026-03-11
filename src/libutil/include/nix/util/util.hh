@@ -228,6 +228,11 @@ void ignoreExceptionInDestructor(Verbosity lvl = lvlError);
 void ignoreExceptionExceptInterrupt(Verbosity lvl = lvlError);
 
 /**
+ * Like ignoreExceptionExceptInterrupt(), but specifies the error prefix.
+ */
+void logExceptionExceptInterrupt(std::string_view prefix = "error: ", Verbosity lvl = lvlError);
+
+/**
  * Tree formatting.
  */
 constexpr char treeConn[] = "├───";
