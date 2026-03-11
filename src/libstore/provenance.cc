@@ -1,7 +1,34 @@
 #include "nix/store/provenance.hh"
 #include "nix/util/json-utils.hh"
 
+#include <regex>
+
 namespace nix {
+
+static void checkProvenanceTagName(std::string_view name)
+{
+    static const std::regex tagNameRegex("^[A-Za-z_][A-Za-z0-9_+\\-]*$");
+    if (!std::regex_match(name.begin(), name.end(), tagNameRegex))
+        throw Error("tag name '%s' is invalid", name);
+}
+
+BuildProvenance::BuildProvenance(
+    const StorePath & drvPath,
+    const OutputName & output,
+    std::optional<std::string> buildHost,
+    std::map<std::string, std::string> tags,
+    std::string system,
+    std::shared_ptr<const Provenance> next)
+    : drvPath(drvPath)
+    , output(output)
+    , buildHost(std::move(buildHost))
+    , tags(std::move(tags))
+    , system(std::move(system))
+    , next(std::move(next))
+{
+    for (const auto & [name, value] : this->tags)
+        checkProvenanceTagName(name);
+}
 
 nlohmann::json BuildProvenance::to_json() const
 {

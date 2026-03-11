@@ -365,3 +365,8 @@ nix provenance verify "$path"
 echo barf > "$TEST_ROOT/hello.txt"
 
 expectStderr 1 nix provenance verify "$path" | grepQuiet "hash mismatch for URL"
+
+# Test invalid tag names
+for name in "123-invalid" "invalid tag" "invalid@tag" "-invalid" " foo"; do
+    expectStderr 1 nix build --build-provenance-tags "{\"$name\": \"value\"}" --no-link "$flake1Dir#packages.$system.default" 2>&1 | grepQuiet "tag name '$name' is invalid"
+done
