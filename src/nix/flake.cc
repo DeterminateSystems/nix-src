@@ -965,7 +965,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                     obj.emplace("filtered", true);
                 },
 
-                [&](ref<eval_cache::AttrCursor> node) { obj.emplace("legacy", true); });
+                [&](ref<eval_cache::AttrCursor> node) { obj.emplace("isLegacy", true); });
         };
 
         auto inv = nlohmann::json::object();
@@ -1000,7 +1000,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
             render = [&](nlohmann::json j, const std::string & headerPrefix, const std::string & nextPrefix) {
                 auto what = j.find("what");
                 auto filtered = j.find("filtered");
-                auto legacy = j.find("legacy");
+                auto isLegacy = j.find("isLegacy");
                 auto derivation = j.find("derivation");
 
                 auto s = headerPrefix;
@@ -1017,7 +1017,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 if (filtered != j.end() && (bool) *filtered)
                     s += " " ANSI_WARNING "omitted" ANSI_NORMAL " (use '--all-systems' to show)";
 
-                if (legacy != j.end() && (bool) *legacy)
+                if (isLegacy != j.end() && (bool) *isLegacy)
                     s += " " ANSI_WARNING "omitted" ANSI_NORMAL " (use '--legacy' to show)";
 
                 logger->cout(s);
