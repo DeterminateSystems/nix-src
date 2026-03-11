@@ -3,6 +3,7 @@
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/memory-source-accessor.hh"
 #include "nix/util/mounted-source-accessor.hh"
+#include "nix/flake/provenance.hh"
 
 namespace nix::flake_schemas {
 
@@ -162,11 +163,17 @@ void forEachOutput(
 void visit(
     std::optional<std::string> system,
     ref<AttrCursor> node,
+    std::shared_ptr<const Provenance> provenance,
     std::function<void(const Leaf & leaf)> visitLeaf,
     std::function<void(std::function<void(ForEachChild)>)> visitNonLeaf,
     std::function<void(ref<AttrCursor> node, const std::vector<std::string> & systems)> visitFiltered)
 {
     Activity act(*logger, lvlInfo, actUnknown, fmt("evaluating '%s'", node->getAttrPathStr()));
+
+    PushProvenance pushedProvenance(
+        node->root->state,
+        provenance ? std::make_shared<const FlakeProvenance>(provenance, node->getAttrPathStr(), evalSettings.pureEval)
+                   : nullptr);
 
     /* Apply the system type filter. */
     if (system) {

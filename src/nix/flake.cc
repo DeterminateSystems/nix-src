@@ -383,6 +383,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
             flake_schemas::visit(
                 checkAllSystems ? std::optional<std::string>() : localSystem,
                 node,
+                flake->flake.provenance,
 
                 [&](const flake_schemas::Leaf & leaf) {
                     try {
@@ -899,6 +900,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
             flake_schemas::visit(
                 showAllSystems ? std::optional<std::string>() : localSystem,
                 node,
+                flake->flake.provenance,
 
                 [&](const flake_schemas::Leaf & leaf) {
                     if (auto what = leaf.what())
