@@ -367,7 +367,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         return {accessor, result};
     };
 
-    /* See if the input is in the fetcher cache. */
+    /* See if the input is in the cache of the fetcher. */
     try {
         if (auto res = scheme->getAccessor(settings, store, *this, true))
             return fixupAccessor(res->first, std::move(res->second));
