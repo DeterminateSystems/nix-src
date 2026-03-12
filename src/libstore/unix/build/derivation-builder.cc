@@ -242,7 +242,7 @@ protected:
      */
     virtual std::unique_ptr<UserLock> getBuildUser()
     {
-        return acquireUserLock(1, false);
+        return acquireUserLock(settings.buildUsersGroup, 1, false);
     }
 
     /**
