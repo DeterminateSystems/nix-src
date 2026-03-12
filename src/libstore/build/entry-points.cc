@@ -63,12 +63,13 @@ std::vector<KeyedBuildResult> Store::buildPathsWithResults(
     std::vector<KeyedBuildResult> results;
     results.reserve(state.size());
 
-    for (auto & [req, goalPtr] : state)
+    for (auto & [req, goalPtr] : state) {
         results.emplace_back(
             KeyedBuildResult{
                 goalPtr->buildResult,
                 /* .path = */ req,
             });
+    }
 
     return results;
 }
