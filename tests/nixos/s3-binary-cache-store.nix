@@ -968,13 +968,11 @@ in
 
           # Verify store info works with profile credentials (no env vars)
           client.succeed(f"HOME=/root nix store info --store '{store_url}' >&2")
-          print("  ✓ nix store info works with profile credentials")
 
           # Verify we can copy from the store using profile
           verify_packages_in_store(client, PKGS['A'], should_exist=False)
           client.succeed(f"HOME=/root nix copy --no-check-sigs --from '{store_url}' {PKGS['A']}")
           verify_packages_in_store(client, PKGS['A'])
-          print("  ✓ nix copy works with profile credentials")
 
           # Clean up the package we just copied so we can test invalid profile
           client.succeed(f"nix store delete --ignore-liveness {PKGS['A']}")
@@ -983,7 +981,6 @@ in
           # Verify invalid profile fails when trying to copy
           invalid_url = make_s3_url(bucket, profile="invalid")
           client.fail(f"HOME=/root nix copy --no-check-sigs --from '{invalid_url}' {PKGS['A']} 2>&1")
-          print("  ✓ Invalid profile credentials correctly rejected")
 
       @setup_s3(
           populate_bucket=[PKGS['A']],
@@ -1005,14 +1002,12 @@ in
           output = client.succeed(
               f"HOME=/root {ENV_WITH_CREDS} nix copy --no-check-sigs --debug --from '{store_url}' {PKGS['A']} 2>&1"
           )
-          print("  ✓ nix copy succeeded with env vars overriding wrong profile")
 
           # Verify the credential chain shows Environment provider was added
           if "Added AWS Environment Credential Provider" not in output:
               print("Debug output:")
               print(output)
               raise Exception("Expected Environment provider to be added to chain")
-          print("  ✓ Environment provider added to credential chain")
 
           # Clean up the package so we can test again without env vars
           client.succeed(f"nix store delete --ignore-liveness {PKGS['A']}")
@@ -1020,7 +1015,6 @@ in
 
           # Without env vars, same URL should fail (proving profile creds are actually wrong)
           client.fail(f"HOME=/root nix copy --no-check-sigs --from '{store_url}' {PKGS['A']} 2>&1")
-          print("  ✓ Without env vars, wrong profile credentials correctly fail")
 
       @setup_s3(
           populate_bucket=[PKGS['A']],
@@ -1046,14 +1040,12 @@ in
                   print("Debug output:")
                   print(output)
                   raise Exception(f"Expected to find: {msg}")
-              print(f"  ✓ {provider} provider added to chain")
 
           # SSO should be skipped (no SSO config for this profile)
           if "Skipped AWS SSO Credential Provider for profile 'testprofile'" not in output:
               print("Debug output:")
               print(output)
               raise Exception("Expected SSO provider to be skipped")
-          print("  ✓ SSO provider correctly skipped (not configured)")
 
       # ============================================================================
       # Main Test Execution
