@@ -55,7 +55,7 @@ void PosixSourceAccessor::readFile(const CanonPath & path, Sink & sink, std::fun
     if (!fd)
         throw SysError("opening file '%1%'", ap.string());
 
-    struct stat st;
+    PosixStat st;
     if (fstat(fromDescriptorReadOnly(fd.get()), &st) == -1)
         throw SysError("statting file");
 
@@ -90,7 +90,7 @@ bool PosixSourceAccessor::pathExists(const CanonPath & path)
 using Cache = boost::concurrent_flat_map<Path, std::optional<struct stat>>;
 static Cache cache;
 
-std::optional<struct stat> PosixSourceAccessor::cachedLstat(const CanonPath & path)
+std::optional<PosixStat> PosixSourceAccessor::cachedLstat(const CanonPath & path)
 {
     // Note: we convert std::filesystem::path to Path because the
     // former is not hashable on libc++.

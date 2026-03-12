@@ -1455,7 +1455,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
         scratchOutputsInverse.insert_or_assign(path, outputName);
 
     std::map<std::string, std::variant<AlreadyRegistered, PerhapsNeedToRegister>> outputReferencesIfUnregistered;
-    std::map<std::string, struct stat> outputStats;
+    std::map<std::string, PosixStat> outputStats;
     for (auto & [outputName, _] : drv.outputs) {
         auto scratchOutput = get(scratchOutputs, outputName);
         assert(scratchOutput);
@@ -1484,7 +1484,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
                 store.printStorePath(drvPath),
                 outputName,
                 PathFmt(actualPath));
-        struct stat & st = *optSt;
+        PosixStat & st = *optSt;
 
 #ifndef __CYGWIN__
         /* Check that the output is not group or world writable, as
