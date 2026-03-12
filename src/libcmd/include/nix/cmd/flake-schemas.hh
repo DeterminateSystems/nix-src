@@ -65,6 +65,7 @@ typedef std::function<void(Symbol attrName, ref<AttrCursor> attr, bool isLast)> 
 void visit(
     std::optional<std::string> system,
     ref<AttrCursor> node,
+    std::shared_ptr<const Provenance> provenance,
     std::function<void(const Leaf & leaf)> visitLeaf,
     std::function<void(std::function<void(ForEachChild)>)> visitNonLeaf,
     std::function<void(ref<AttrCursor> node, const std::vector<std::string> & systems)> visitFiltered);

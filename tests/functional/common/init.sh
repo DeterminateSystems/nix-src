@@ -53,6 +53,7 @@ substituters =
 flake-registry = $TEST_ROOT/registry.json
 show-trace = true
 host-name = test-host
+build-provenance-tags = {"pr": "1234", "branch": "main"}
 include nix.conf.extra
 trusted-users = $(whoami)
 ${_NIX_TEST_EXTRA_CONFIG:-}
