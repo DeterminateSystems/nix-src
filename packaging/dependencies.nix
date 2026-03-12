@@ -16,37 +16,6 @@ in
 scope: {
   inherit stdenv;
 
-  libblake3 =
-    (pkgs.libblake3.override {
-      inherit stdenv;
-      # Nixpkgs disables tbb on static
-      useTBB = !stdenv.hostPlatform.isStatic;
-    })
-    # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
-    # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
-    # Issue: https://github.com/NixOS/nixpkgs/issues/177129
-    .overrideAttrs
-      (
-        attrs:
-        lib.optionalAttrs
-          (
-            stdenv.cc.isClang
-            && stdenv.hostPlatform.isStatic
-            && stdenv.cc.libcxx != null
-            && stdenv.cc.libcxx.isLLVM
-          )
-          {
-            NIX_CFLAGS_COMPILE = [
-              "-rtlib=compiler-rt"
-              "-unwindlib=libunwind"
-            ];
-
-            buildInputs = [
-              pkgs.llvmPackages.libunwind
-            ];
-          }
-      );
-
   boehmgc =
     (pkgs.boehmgc.override {
       enableLargeConfig = true;
@@ -104,20 +73,43 @@ scope: {
             (prevAttrs.postInstall or "");
       });
 
-  # TODO: Remove this when https://github.com/NixOS/nixpkgs/pull/442682 is included in a stable release
-  toml11 =
-    if lib.versionAtLeast pkgs.toml11.version "4.4.0" then
-      pkgs.toml11
-    else
-      pkgs.toml11.overrideAttrs rec {
-        version = "4.4.0";
-        src = pkgs.fetchFromGitHub {
-          owner = "ToruNiina";
-          repo = "toml11";
-          tag = "v${version}";
-          hash = "sha256-sgWKYxNT22nw376ttGsTdg0AMzOwp8QH3E8mx0BZJTQ=";
-        };
-      };
+  curl = pkgs.curl.override {
+    http3Support = !pkgs.stdenv.hostPlatform.isWindows;
+    # libpsl uses a data file needed at runtime, not useful for nix.
+    pslSupport = !stdenv.hostPlatform.isStatic;
+    idnSupport = !stdenv.hostPlatform.isStatic;
+  };
+
+  libblake3 =
+    (pkgs.libblake3.override {
+      inherit stdenv;
+      # Nixpkgs disables tbb on static
+      useTBB = !(stdenv.hostPlatform.isWindows || stdenv.hostPlatform.isStatic);
+    })
+    # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
+    # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
+    # Issue: https://github.com/NixOS/nixpkgs/issues/177129
+    .overrideAttrs
+      (
+        attrs:
+        lib.optionalAttrs
+          (
+            stdenv.cc.isClang
+            && stdenv.hostPlatform.isStatic
+            && stdenv.cc.libcxx != null
+            && stdenv.cc.libcxx.isLLVM
+          )
+          {
+            NIX_CFLAGS_COMPILE = [
+              "-rtlib=compiler-rt"
+              "-unwindlib=libunwind"
+            ];
+
+            buildInputs = [
+              pkgs.llvmPackages.libunwind
+            ];
+          }
+      );
 
   # TODO Hack until https://github.com/NixOS/nixpkgs/issues/45462 is fixed.
   boost =
@@ -140,10 +132,4 @@ scope: {
       });
 
   wasmtime = pkgs.callPackage ./wasmtime.nix { };
-
-  curl = pkgs.curl.override {
-    # libpsl uses a data file needed at runtime, not useful for nix.
-    pslSupport = !stdenv.hostPlatform.isStatic;
-    idnSupport = !stdenv.hostPlatform.isStatic;
-  };
 }
