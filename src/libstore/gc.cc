@@ -649,7 +649,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
     /* Helper function that deletes a path from the store and throws
        GCLimitReached if we've deleted enough garbage. */
-    auto deleteFromStore = [&](std::string_view baseName) {
+    auto deleteFromStore = [&](std::string_view baseName, bool isKnownPath) {
         Path path = storeDir + "/" + std::string(baseName);
         Path realPath = config->realStoreDir + "/" + std::string(baseName);
 
@@ -669,7 +669,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         results.paths.insert(path);
 
         uint64_t bytesFreed;
-        deleteStorePath(realPath, bytesFreed);
+        deleteStorePath(realPath, bytesFreed, isKnownPath);
 
         results.bytesFreed += bytesFreed;
 
@@ -803,7 +803,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
             if (shouldDelete) {
                 try {
                     invalidatePathChecked(path);
-                    deleteFromStore(path.to_string());
+                    deleteFromStore(path.to_string(), true);
                     referrersCache.erase(path);
                 } catch (PathInUse & e) {
                     // If we end up here, it's likely a new occurrence
@@ -849,7 +849,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                 if (auto storePath = maybeParseStorePath(storeDir + "/" + name))
                     deleteReferrersClosure(*storePath);
                 else
-                    deleteFromStore(name);
+                    deleteFromStore(name, false);
             }
         } catch (GCLimitReached & e) {
         }
