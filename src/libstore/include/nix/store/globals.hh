@@ -731,29 +731,6 @@ public:
           duplicate files.
         )"};
 
-    Setting<bool> envKeepDerivations{
-        this,
-        false,
-        "keep-env-derivations",
-        R"(
-          If `false` (default), derivations are not stored in Nix user
-          environments. That is, the derivations of any build-time-only
-          dependencies may be garbage-collected.
-
-          If `true`, when you add a Nix derivation to a user environment, the
-          path of the derivation is stored in the user environment. Thus, the
-          derivation isn't garbage-collected until the user environment
-          generation is deleted (`nix-env --delete-generations`). To prevent
-          build-time-only dependencies from being collected, you should also
-          turn on `keep-outputs`.
-
-          The difference between this option and `keep-derivations` is that
-          this one is “sticky”: it applies to any user environment created
-          while this option was enabled, while `keep-derivations` only applies
-          at the moment the garbage collector is run.
-        )",
-        {"env-keep-derivations"}};
-
     Setting<SandboxMode> sandboxMode{
         this,
 #ifdef __linux__
@@ -1429,16 +1406,6 @@ public:
         {},   // aliases
         true, // document default
         Xp::ConfigurableImpureEnv};
-
-    Setting<std::string> upgradeNixStorePathUrl{
-        this,
-        "",
-        "upgrade-nix-store-path-url",
-        R"(
-          Deprecated. This option was used to configure how `nix upgrade-nix` operated.
-
-          Using this setting has no effect. It will be removed in a future release of Determinate Nix.
-        )"};
 
     Setting<uint64_t> warnLargePathThreshold{
         this,
