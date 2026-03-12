@@ -32,6 +32,8 @@ struct OptimiseStats
     uint64_t bytesFreed = 0;
 };
 
+struct GCSettings;
+
 struct LocalBuildStoreConfig : virtual LocalFSStoreConfig
 {
 
@@ -86,6 +88,11 @@ private:
     bool getDefaultRequireSigs();
 
 public:
+    /**
+     * For now, this just grabs the global GC settings, but by having this method we get ready for these being per-store
+     * settings instead.
+     */
+    const GCSettings & getGCSettings() const;
 
     Setting<bool> requireSigs{
         this,
