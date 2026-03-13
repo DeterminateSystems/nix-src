@@ -76,6 +76,7 @@ sources = files(
   'common-eval-args.cc',
   'editor-for.cc',
   'flake-schemas.cc',
+  'get-build-log.cc',
   'installable-attr-path.cc',
   'installable-derived-path.cc',
   'installable-flake.cc',

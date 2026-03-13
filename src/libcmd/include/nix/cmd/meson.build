@@ -10,6 +10,7 @@ headers = files(
   'compatibility-settings.hh',
   'editor-for.hh',
   'flake-schemas.hh',
+  'get-build-log.hh',
   'installable-attr-path.hh',
   'installable-derived-path.hh',
   'installable-flake.hh',
