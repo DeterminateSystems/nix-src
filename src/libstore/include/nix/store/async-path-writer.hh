@@ -6,6 +6,8 @@ namespace nix {
 
 struct AsyncPathWriter
 {
+    virtual ~AsyncPathWriter() = default;
+
     virtual StorePath addPath(
         std::string contents,
         std::string name,
