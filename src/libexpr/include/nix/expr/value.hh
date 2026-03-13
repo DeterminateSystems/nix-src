@@ -171,7 +171,7 @@ public:
     virtual bool operator==(const ExternalValueBase & b) const noexcept;
 
     /**
-     * Print the value as JSON. Defaults to unconvertable, i.e. throws an error
+     * Print the value as JSON. Defaults to unconvertible, i.e. throws an error
      */
     virtual nlohmann::json
     printValueAsJSON(EvalState & state, bool strict, NixStringContext & context, bool copyToStore = true) const;
