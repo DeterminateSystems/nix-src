@@ -60,10 +60,8 @@ create table if not exists LastPurge (
 
 )sql";
 
-class NarInfoDiskCacheImpl : public NarInfoDiskCache
+struct NarInfoDiskCacheImpl : NarInfoDiskCache
 {
-public:
-
     /* How often to purge expired entries from the cache. */
     const int purgeInterval = 24 * 3600;
 
@@ -85,13 +83,17 @@ public:
 
     Sync<State> _state;
 
-    NarInfoDiskCacheImpl(Path dbPath = (getCacheDir() / "binary-cache-v8.sqlite").string())
+    NarInfoDiskCacheImpl(
+        const Settings & settings,
+        SQLiteSettings sqliteSettings,
+        Path dbPath = (getCacheDir() / "binary-cache-v8.sqlite").string())
+        : NarInfoDiskCache{settings}
     {
         auto state(_state.lock());
 
         createDirs(dirOf(dbPath));
 
-        state->db = SQLite(dbPath, {.useWAL = settings.useSQLiteWAL});
+        state->db = SQLite(dbPath, SQLite::Settings{sqliteSettings});
 
         state->db.isCache();
 
@@ -154,8 +156,8 @@ public:
                     .use()
                     // Use a minimum TTL to prevent --refresh from
                     // nuking the entire disk cache.
-                    (now - std::max(settings.ttlNegativeNarInfoCache.get(), 3600U))(
-                        now - std::max(settings.ttlPositiveNarInfoCache.get(), 30 * 24 * 3600U))
+                    (now - std::max(settings.ttlNegative.get(), 3600U))(
+                        now - std::max(settings.ttlPositive.get(), 30 * 24 * 3600U))
                     .exec();
 
                 debug("deleted %d entries from the NAR info disk cache", sqlite3_changes(state->db));
@@ -181,7 +183,7 @@ private:
     {
         auto i = state.caches.find(uri);
         if (i == state.caches.end()) {
-            auto queryCache(state.queryCache.use()(uri)(time(0) - settings.ttlNarInfoCacheMeta));
+            auto queryCache(state.queryCache.use()(uri)(time(0) - settings.ttlMeta));
             if (!queryCache.next())
                 return std::nullopt;
             auto cache = Cache{
@@ -253,8 +255,8 @@ public:
 
                 auto now = time(0);
 
-                auto queryNAR(state->queryNAR.use()(cache.id)(hashPart) (now - settings.ttlNegativeNarInfoCache)(
-                    now - settings.ttlPositiveNarInfoCache));
+                auto queryNAR(
+                    state->queryNAR.use()(cache.id)(hashPart) (now - settings.ttlNegative)(now - settings.ttlPositive));
 
                 if (!queryNAR.next())
                     return {oUnknown, 0};
@@ -297,7 +299,7 @@ public:
                 auto now = time(0);
 
                 auto queryRealisation(state->queryRealisation.use()(cache.id)(id.to_string())(
-                    now - settings.ttlNegativeNarInfoCache)(now - settings.ttlPositiveNarInfoCache));
+                    now - settings.ttlNegative)(now - settings.ttlPositive));
 
                 if (!queryRealisation.next())
                     return {oUnknown, 0};
@@ -374,15 +376,15 @@ public:
     }
 };
 
-ref<NarInfoDiskCache> getNarInfoDiskCache()
+ref<NarInfoDiskCache> NarInfoDiskCache::get(const Settings & settings, SQLiteSettings sqliteSettings)
 {
-    static ref<NarInfoDiskCache> cache = make_ref<NarInfoDiskCacheImpl>();
+    static ref<NarInfoDiskCache> cache = make_ref<NarInfoDiskCacheImpl>(settings, sqliteSettings);
     return cache;
 }
 
-ref<NarInfoDiskCache> getTestNarInfoDiskCache(Path dbPath)
+ref<NarInfoDiskCache> NarInfoDiskCache::getTest(const Settings & settings, SQLiteSettings sqliteSettings, Path dbPath)
 {
-    return make_ref<NarInfoDiskCacheImpl>(dbPath);
+    return make_ref<NarInfoDiskCacheImpl>(settings, sqliteSettings, dbPath);
 }
 
 } // namespace nix

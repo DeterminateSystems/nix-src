@@ -95,8 +95,8 @@ static void disableNet()
         settings.getWorkerSettings().useSubstitutes = false;
     if (!fetchSettings.tarballTtl.overridden)
         fetchSettings.tarballTtl = std::numeric_limits<unsigned int>::max();
-    if (!settings.ttlNarInfoCacheMeta.overridden)
-        settings.ttlNarInfoCacheMeta = std::numeric_limits<unsigned int>::max();
+    if (!settings.getNarInfoDiskCacheSettings().ttlMeta.overridden)
+        settings.getNarInfoDiskCacheSettings().ttlMeta = std::numeric_limits<unsigned int>::max();
     if (!fileTransferSettings.tries.overridden)
         fileTransferSettings.tries = 0;
     if (!fileTransferSettings.connectTimeout.overridden)
@@ -577,9 +577,9 @@ void mainWrapped(int argc, char ** argv)
 
     if (args.refresh) {
         fetchSettings.tarballTtl = 0;
-        settings.ttlNegativeNarInfoCache = 0;
-        settings.ttlPositiveNarInfoCache = 0;
-        settings.ttlNarInfoCacheMeta = 0;
+        settings.getNarInfoDiskCacheSettings().ttlNegative = 0;
+        settings.getNarInfoDiskCacheSettings().ttlPositive = 0;
+        settings.getNarInfoDiskCacheSettings().ttlMeta = 0;
     }
 
     if (args.command->second->forceImpureByDefault() && !evalSettings.pureEval.overridden) {
