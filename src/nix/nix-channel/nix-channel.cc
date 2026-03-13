@@ -197,7 +197,7 @@ For details and to offer feedback on the deprecation process, see: https://githu
         nixDefExpr = getNixDefExpr();
 
         // Figure out the name of the channels profile.
-        profile = profilesDir() + "/channels";
+        profile = profilesDir(settings.getProfileDirsOptions()) + "/channels";
         createDirs(dirOf(profile));
 
         enum { cNone, cAdd, cRemove, cList, cUpdate, cListGenerations, cRollback } cmd = cNone;

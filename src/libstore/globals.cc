@@ -1,4 +1,5 @@
 #include "nix/store/globals.hh"
+#include "nix/store/profiles.hh"
 #include "nix/util/config-impl.hh"
 #include "nix/util/config-global.hh"
 #include "nix/util/current-process.hh"
@@ -296,7 +297,7 @@ const ExternalBuilder * Settings::findExternalDerivationBuilderIfSupported(const
     return nullptr;
 }
 
-std::optional<std::string> Settings::getHostName()
+std::optional<std::string> WorkerSettings::getHostName()
 {
     if (hostName != "")
         return hostName;
@@ -308,6 +309,14 @@ std::optional<std::string> Settings::getHostName()
 #endif
 
     return std::nullopt;
+}
+
+ProfileDirsOptions Settings::getProfileDirsOptions() const
+{
+    return {
+        .nixStateDir = nixStateDir,
+        .useXDGBaseDirectories = useXDGBaseDirectories,
+    };
 }
 
 std::string nixVersion = PACKAGE_VERSION;

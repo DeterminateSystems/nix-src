@@ -15,6 +15,8 @@
 
 namespace nix {
 
+struct ProfileDirsOptions;
+
 struct LogFileSettings : public virtual Config
 {
     /**
@@ -426,15 +428,10 @@ public:
      */
     const ExternalBuilder * findExternalDerivationBuilderIfSupported(const Derivation & drv);
 
-    Setting<std::string> hostName{
-        this,
-        "",
-        "host-name",
-        R"(
-          The name of this host for recording build provenance. If unset, the Unix host name is used.
-        )"};
-
-    std::optional<std::string> getHostName();
+    /**
+     * Get the options needed for profile directory functions.
+     */
+    ProfileDirsOptions getProfileDirsOptions() const;
 };
 
 // FIXME: don't use a global variable.
