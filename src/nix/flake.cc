@@ -1,3 +1,4 @@
+#include "nix/cmd/common-eval-args.hh"
 #include "nix/main/common-args.hh"
 #include "nix/main/shared.hh"
 #include "nix/expr/eval.hh"
@@ -9,6 +10,7 @@
 #include "nix/store/derivations.hh"
 #include "nix/store/outputs-spec.hh"
 #include "nix/expr/attr-path.hh"
+#include "nix/fetchers/fetch-settings.hh"
 #include "nix/fetchers/fetchers.hh"
 #include "nix/fetchers/registry.hh"
 #include "nix/expr/eval-cache.hh"
@@ -133,7 +135,7 @@ public:
 
     void run(nix::ref<nix::Store> store) override
     {
-        settings.tarballTtl = 0;
+        fetchSettings.tarballTtl = 0;
         auto updateAll = lockFlags.inputUpdates.empty();
 
         lockFlags.recreateLockFile = updateAll;
@@ -167,7 +169,7 @@ struct CmdFlakeLock : FlakeCommand
 
     void run(nix::ref<nix::Store> store) override
     {
-        settings.tarballTtl = 0;
+        fetchSettings.tarballTtl = 0;
 
         lockFlags.writeLockFile = true;
         lockFlags.failOnUnlocked = true;
@@ -438,7 +440,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                         throw;
                     } catch (Error & e) {
                         printError("❌ " ANSI_RED "%s" ANSI_NORMAL, leaf.node->getAttrPathStr());
-                        if (settings.keepGoing) {
+                        if (settings.getWorkerSettings().keepGoing) {
                             logEvalError();
                             hasErrors = true;
                         } else

@@ -180,7 +180,7 @@ void Store::addMultipleToStore(PathsSource && pathsToCopy, Activity & act, Repai
                     addToStore(info, *source, repair, checkSigs);
                 } catch (Error & e) {
                     nrFailed++;
-                    if (!settings.keepGoing)
+                    if (!settings.getWorkerSettings().keepGoing)
                         throw e;
                     printMsg(lvlError, "could not copy %s: %s", printStorePath(path), e.what());
                     showProgress();
@@ -412,7 +412,7 @@ StorePathSet Store::queryDerivationOutputs(const StorePath & path)
 
 void Store::querySubstitutablePathInfos(const StorePathCAMap & paths, SubstitutablePathInfos & infos)
 {
-    if (!settings.useSubstitutes)
+    if (!settings.getWorkerSettings().useSubstitutes)
         return;
 
     for (auto & path : paths) {
@@ -468,7 +468,7 @@ void Store::querySubstitutablePathInfos(const StorePathCAMap & paths, Substituta
             }
         }
         if (lastStoresException.has_value()) {
-            if (!settings.tryFallback) {
+            if (!settings.getWorkerSettings().tryFallback) {
                 throw *lastStoresException;
             } else
                 logError(lastStoresException->info());
@@ -478,7 +478,7 @@ void Store::querySubstitutablePathInfos(const StorePathCAMap & paths, Substituta
 
 StorePathSet Store::querySubstitutablePaths(const StorePathSet & paths)
 {
-    if (!settings.useSubstitutes)
+    if (!settings.getWorkerSettings().useSubstitutes)
         return StorePathSet();
 
     StorePathSet remaining;

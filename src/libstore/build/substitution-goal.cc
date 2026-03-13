@@ -155,7 +155,7 @@ Goal::Co PathSubstitutionGoal::init()
         worker.updateProgress();
     }
     if (lastStoresException.has_value()) {
-        if (!settings.tryFallback) {
+        if (!worker.settings.tryFallback) {
             throw *lastStoresException;
         } else
             logError(lastStoresException->info());
@@ -207,7 +207,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
     /* Make sure that we are allowed to start a substitution.  Note that even
        if maxSubstitutionJobs == 0, we still allow a substituter to run. This
        prevents infinite waiting. */
-    while (worker.getNrSubstitutions() >= std::max(1U, (unsigned int) settings.maxSubstitutionJobs)) {
+    while (worker.getNrSubstitutions() >= std::max(1U, (unsigned int) worker.settings.maxSubstitutionJobs)) {
         co_await waitForBuildSlot();
     }
 
