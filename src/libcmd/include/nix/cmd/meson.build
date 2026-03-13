@@ -21,4 +21,5 @@ headers = files(
   'network-proxy.hh',
   'repl-interacter.hh',
   'repl.hh',
+  'unix-socket-server.hh',
 )

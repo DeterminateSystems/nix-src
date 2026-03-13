@@ -88,6 +88,12 @@ sources = files(
   'repl.cc',
 )
 
+if host_machine.system() != 'windows'
+  sources += files(
+    'unix/unix-socket-server.cc',
+  )
+endif
+
 sources += [
   gen_header.process('call-flake-schemas.nix'),
   gen_header.process('builtin-flake-schemas.nix'),
