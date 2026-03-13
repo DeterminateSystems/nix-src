@@ -32,7 +32,7 @@ struct OptimiseStats
     uint64_t bytesFreed = 0;
 };
 
-struct GCSettings;
+struct LocalSettings;
 
 struct LocalBuildStoreConfig : virtual LocalFSStoreConfig
 {
@@ -68,6 +68,12 @@ private:
             See also the global [`build-dir`](@docroot@/command-ref/conf-file.md#conf-build-dir) setting.
         )"};
 public:
+    /**
+     * For now, this just grabs the global local settings, but by having this method we get ready for these being
+     * per-store settings instead.
+     */
+    const LocalSettings & getLocalSettings() const;
+
     Path getBuildDir() const;
 };
 
@@ -88,12 +94,6 @@ private:
     bool getDefaultRequireSigs();
 
 public:
-    /**
-     * For now, this just grabs the global GC settings, but by having this method we get ready for these being per-store
-     * settings instead.
-     */
-    const GCSettings & getGCSettings() const;
-
     Setting<bool> requireSigs{
         this,
         getDefaultRequireSigs(),
