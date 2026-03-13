@@ -35,6 +35,6 @@ std::pair<StorePath, Hash> fetchToStore2(
     RepairFlag repair = NoRepair);
 
 fetchers::Cache::Key
-makeSourcePathToHashCacheKey(const std::string & fingerprint, ContentAddressMethod method, const std::string & path);
+makeSourcePathToHashCacheKey(std::string_view fingerprint, ContentAddressMethod method, const CanonPath & path);
 
 } // namespace nix

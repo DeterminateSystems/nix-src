@@ -160,7 +160,8 @@ struct PathInputScheme : InputScheme
             if (info) {
                 accessor->fingerprint = fmt("path:%s", info->narHash.to_string(HashFormat::SRI, true));
                 settings.getCache()->upsert(
-                    makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
+                    makeSourcePathToHashCacheKey(
+                        *accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, CanonPath::root),
                     {{"hash", info->narHash.to_string(HashFormat::SRI, true)}});
             }
         }

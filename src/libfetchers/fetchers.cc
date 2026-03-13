@@ -334,7 +334,8 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         // input back into the store on every evaluation.
         if (accessor->fingerprint) {
             settings.getCache()->upsert(
-                makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
+                makeSourcePathToHashCacheKey(
+                    *accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, CanonPath::root),
                 {{"hash", store.queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
         }
 
