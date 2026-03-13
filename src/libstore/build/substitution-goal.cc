@@ -28,40 +28,12 @@ PathSubstitutionGoal::~PathSubstitutionGoal()
     cleanup();
 }
 
-Goal::Done
-PathSubstitutionGoal::doneSuccess(BuildResult::Success::Status status, std::shared_ptr<const Provenance> provenance)
+Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failure failure)
 {
-    auto res = Goal::doneSuccess(
-        BuildResult::Success{
-            .status = status,
-            .provenance = provenance,
-        });
-
     logger->result(
-        getCurActivity(),
-        resBuildResult,
-        nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+        getCurActivity(), resBuildResult, nlohmann::json(KeyedBuildResult({failure}, DerivedPath::Opaque{storePath})));
 
-    return res;
-}
-
-Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failure::Status status, std::string errorMsg)
-{
-    debug(errorMsg);
-
-    auto res = Goal::doneFailure(
-        result,
-        BuildResult::Failure{
-            .status = status,
-            .errorMsg = std::move(errorMsg),
-        });
-
-    logger->result(
-        getCurActivity(),
-        resBuildResult,
-        nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
-
-    return res;
+    return Goal::doneFailure(result, std::move(failure));
 }
 
 Goal::Co PathSubstitutionGoal::init()
@@ -72,7 +44,7 @@ Goal::Co PathSubstitutionGoal::init()
 
     /* If the path already exists we're done. */
     if (!repair && worker.store.isValidPath(storePath)) {
-        co_return doneSuccess(BuildResult::Success::AlreadyValid, nullptr);
+        co_return doneSuccess(BuildResult::Success{.status = BuildResult::Success::AlreadyValid});
     }
 
     if (settings.readOnlyMode)
@@ -194,9 +166,12 @@ Goal::Co PathSubstitutionGoal::init()
        build. */
     co_return doneFailure(
         substituterFailed ? ecFailed : ecNoSubstituters,
-        BuildResult::Failure::NoSubstituters,
-        fmt("path '%s' is required, but there is no substituter that can build it",
-            worker.store.printStorePath(storePath)));
+        BuildResult::Failure{{
+            .status = BuildResult::Failure::NoSubstituters,
+            .msg = HintFmt(
+                "path '%s' is required, but there is no substituter that can build it",
+                worker.store.printStorePath(storePath)),
+        }});
 }
 
 Goal::Co PathSubstitutionGoal::tryToRun(
@@ -207,8 +182,11 @@ Goal::Co PathSubstitutionGoal::tryToRun(
     if (nrFailed > 0) {
         co_return doneFailure(
             nrNoSubstituters > 0 ? ecNoSubstituters : ecFailed,
-            BuildResult::Failure::DependencyFailed,
-            fmt("some references of path '%s' could not be realised", worker.store.printStorePath(storePath)));
+            BuildResult::Failure{{
+                .status = BuildResult::Failure::DependencyFailed,
+                .msg = HintFmt(
+                    "some references of path '%s' could not be realised", worker.store.printStorePath(storePath)),
+            }});
     }
 
     for (auto & i : info->references)
@@ -338,7 +316,12 @@ Goal::Co PathSubstitutionGoal::tryToRun(
 
     worker.updateProgress();
 
-    co_return doneSuccess(BuildResult::Success::Substituted, provenance);
+    auto success = BuildResult::Success{.status = BuildResult::Success::Substituted, .provenance = provenance};
+
+    logger->result(
+        getCurActivity(), resBuildResult, nlohmann::json(KeyedBuildResult({success}, DerivedPath::Opaque{storePath})));
+
+    co_return doneSuccess(std::move(success));
 }
 
 void PathSubstitutionGoal::cleanup()

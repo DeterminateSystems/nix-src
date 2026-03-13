@@ -12,9 +12,6 @@ std::strong_ordering BuildResult::operator<=>(const BuildResult &) const noexcep
 bool BuildResult::Success::operator==(const BuildResult::Success &) const noexcept = default;
 std::strong_ordering BuildResult::Success::operator<=>(const BuildResult::Success &) const noexcept = default;
 
-bool BuildResult::Failure::operator==(const BuildResult::Failure &) const noexcept = default;
-std::strong_ordering BuildResult::Failure::operator<=>(const BuildResult::Failure &) const noexcept = default;
-
 static constexpr std::array<std::pair<BuildResult::Success::Status, std::string_view>, 4> successStatusStrings{{
 #define ENUM_ENTRY(e) {BuildResult::Success::e, #e}
     ENUM_ENTRY(Built),
@@ -24,7 +21,7 @@ static constexpr std::array<std::pair<BuildResult::Success::Status, std::string_
 #undef ENUM_ENTRY
 }};
 
-std::string_view BuildResult::Success::statusToString(BuildResult::Success::Status status)
+static std::string_view successStatusToString(BuildResult::Success::Status status)
 {
     for (const auto & [enumVal, str] : successStatusStrings) {
         if (enumVal == status)
@@ -60,7 +57,7 @@ static constexpr std::array<std::pair<BuildResult::Failure::Status, std::string_
 #undef ENUM_ENTRY
 }};
 
-std::string_view BuildResult::Failure::statusToString(BuildResult::Failure::Status status)
+static std::string_view failureStatusToString(BuildResult::Failure::Status status)
 {
     for (const auto & [enumVal, str] : failureStatusStrings) {
         if (enumVal == status)
@@ -78,9 +75,18 @@ static BuildResult::Failure::Status failureStatusFromString(std::string_view str
     throw Error("unknown built result failure status '%s'", str);
 }
 
-[[noreturn]] void BuildResult::Failure::rethrow() const
+bool BuildError::operator==(const BuildError & other) const noexcept
 {
-    throw Error("%s", errorMsg.empty() ? statusToString(status) : errorMsg);
+    return status == other.status && isNonDeterministic == other.isNonDeterministic && message() == other.message();
+}
+
+std::strong_ordering BuildError::operator<=>(const BuildError & other) const noexcept
+{
+    if (auto cmp = status <=> other.status; cmp != 0)
+        return cmp;
+    if (auto cmp = isNonDeterministic <=> other.isNonDeterministic; cmp != 0)
+        return cmp;
+    return message() <=> other.message();
 }
 
 } // namespace nix
@@ -110,15 +116,15 @@ void adl_serializer<BuildResult>::to_json(json & res, const BuildResult & br)
         overloaded{
             [&](const BuildResult::Success & success) {
                 res["success"] = true;
-                res["status"] = BuildResult::Success::statusToString(success.status);
+                res["status"] = successStatusToString(success.status);
                 res["builtOutputs"] = success.builtOutputs;
                 if (success.provenance)
                     res["provenance"] = success.provenance->to_json();
             },
             [&](const BuildResult::Failure & failure) {
                 res["success"] = false;
-                res["status"] = BuildResult::Failure::statusToString(failure.status);
-                res["errorMsg"] = failure.errorMsg;
+                res["status"] = failureStatusToString(failure.status);
+                res["errorMsg"] = failure.message();
                 res["isNonDeterministic"] = failure.isNonDeterministic;
                 if (failure.provenance)
                     res["provenance"] = failure.provenance->to_json();
@@ -162,12 +168,11 @@ BuildResult adl_serializer<BuildResult>::from_json(const json & _json)
         s.provenance = provenanceFromJson(optionalValueAt(json, "provenance"));
         br.inner = std::move(s);
     } else {
-        BuildResult::Failure f;
-        f.status = failureStatusFromString(statusStr);
-        f.errorMsg = getString(valueAt(json, "errorMsg"));
-        f.isNonDeterministic = getBoolean(valueAt(json, "isNonDeterministic"));
-        f.provenance = provenanceFromJson(optionalValueAt(json, "provenance"));
-        br.inner = std::move(f);
+        br.inner = BuildResult::Failure{
+            {.status = failureStatusFromString(statusStr),
+             .msg = HintFmt(getString(valueAt(json, "errorMsg"))),
+             .isNonDeterministic = getBoolean(valueAt(json, "isNonDeterministic")),
+             .provenance = provenanceFromJson(optionalValueAt(json, "provenance"))}};
     }
 
     return br;

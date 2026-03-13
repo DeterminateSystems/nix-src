@@ -498,7 +498,7 @@ const BuiltPathWithResult & InstallableWithBuildResult::getSuccess() const
     if (auto * failure = std::get_if<Failure>(&result)) {
         auto failure2 = failure->tryGetFailure();
         assert(failure2);
-        failure2->rethrow();
+        throw *failure2;
     } else
         return *std::get_if<Success>(&result);
 }
@@ -532,7 +532,7 @@ void Installable::throwBuildErrors(std::vector<InstallableWithBuildResult> & bui
                     assert(failure2);
                     printError("❌ " ANSI_RED "%s" ANSI_NORMAL, buildResult.installable->what());
                     try {
-                        failure2->rethrow();
+                        throw *failure2;
                     } catch (Error & e) {
                         logError(e.info());
                     }

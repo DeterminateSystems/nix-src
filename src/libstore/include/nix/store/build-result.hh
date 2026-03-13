@@ -7,6 +7,8 @@
 
 #include "nix/store/derived-path.hh"
 #include "nix/store/realisation.hh"
+#include "nix/util/error.hh"
+#include "nix/util/fmt.hh"
 #include "nix/util/json-impls.hh"
 
 namespace nix {
@@ -53,6 +55,76 @@ enum struct BuildResultFailureStatus : uint8_t {
     Cancelled,
 };
 
+/**
+ * Denotes a permanent build failure.
+ *
+ * This is both an exception type (inherits from Error) and serves as
+ * the failure variant in BuildResult::inner.
+ */
+struct BuildError : public Error
+{
+    using Status = BuildResultFailureStatus;
+    using enum Status;
+
+    Status status = MiscFailure;
+
+    /**
+     * If timesBuilt > 1, whether some builds did not produce the same
+     * result. (Note that 'isNonDeterministic = false' does not mean
+     * the build is deterministic, just that we don't have evidence of
+     * non-determinism.)
+     */
+    bool isNonDeterministic = false;
+
+    /**
+     * The provenance of the derivation, if any.
+     */
+    std::shared_ptr<const Provenance> provenance;
+
+public:
+    /**
+     * Variadic constructor for throwing with format strings.
+     * Delegates to the string constructor after formatting.
+     */
+    template<typename... Args>
+    BuildError(Status status, const Args &... args)
+        : Error(args...)
+        , status{status}
+    {
+    }
+
+    struct Args
+    {
+        Status status;
+        HintFmt msg;
+        bool isNonDeterministic = false;
+        std::shared_ptr<const Provenance> provenance;
+    };
+
+    /**
+     * Constructor taking a pre-formatted error message.
+     * Also used for deserialization.
+     */
+    BuildError(Args args)
+        : Error(std::move(args.msg))
+        , status{args.status}
+        , isNonDeterministic{args.isNonDeterministic}
+        , provenance{args.provenance}
+    {
+    }
+
+    /**
+     * Default constructor for deserialization.
+     */
+    BuildError()
+        : Error("")
+    {
+    }
+
+    bool operator==(const BuildError &) const noexcept;
+    std::strong_ordering operator<=>(const BuildError &) const noexcept;
+};
+
 struct BuildResult
 {
     struct Success
@@ -60,8 +132,6 @@ struct BuildResult
         using Status = enum BuildResultSuccessStatus;
         using enum Status;
         Status status;
-
-        static std::string_view statusToString(Status status);
 
         /**
          * For derivations, a mapping from the names of the wanted outputs
@@ -79,40 +149,10 @@ struct BuildResult
         std::strong_ordering operator<=>(const BuildResult::Success &) const noexcept;
     };
 
-    struct Failure
-    {
-        using Status = enum BuildResultFailureStatus;
-        using enum Status;
-        Status status = MiscFailure;
-
-        static std::string_view statusToString(Status status);
-
-        /**
-         * Information about the error if the build failed.
-         *
-         * @todo This should be an entire ErrorInfo object, not just a
-         * string, for richer information.
-         */
-        std::string errorMsg;
-
-        /**
-         * If timesBuilt > 1, whether some builds did not produce the same
-         * result. (Note that 'isNonDeterministic = false' does not mean
-         * the build is deterministic, just that we don't have evidence of
-         * non-determinism.)
-         */
-        bool isNonDeterministic = false;
-
-        /**
-         * The provenance of the derivation, if any.
-         */
-        std::shared_ptr<const Provenance> provenance;
-
-        bool operator==(const BuildResult::Failure &) const noexcept;
-        std::strong_ordering operator<=>(const BuildResult::Failure &) const noexcept;
-
-        [[noreturn]] void rethrow() const;
-    };
+    /**
+     * Failure is now an alias for BuildError.
+     */
+    using Failure = BuildError;
 
     std::variant<Success, Failure> inner = Failure{};
 
@@ -134,6 +174,19 @@ struct BuildResult
     auto * tryGetFailure(this auto & self)
     {
         return std::get_if<Failure>(&self.inner);
+    }
+
+    /**
+     * Throw the build error if this result represents a failure.
+     * Optionally set the exit status on the error before throwing.
+     */
+    void tryThrowBuildError(std::optional<unsigned int> exitStatus = std::nullopt)
+    {
+        if (auto * failure = tryGetFailure()) {
+            if (exitStatus)
+                failure->withExitStatus(*exitStatus);
+            throw *failure;
+        }
     }
 
     /**
@@ -160,20 +213,6 @@ struct BuildResult
         auto failure = tryGetFailure();
         // FIXME: remove MiscFailure eventually.
         return failure && (failure->status == Failure::Cancelled || failure->status == Failure::MiscFailure);
-    }
-};
-
-/**
- * denotes a permanent build failure
- */
-struct BuildError : public Error
-{
-    BuildResult::Failure::Status status;
-
-    BuildError(BuildResult::Failure::Status status, auto &&... args)
-        : Error{args...}
-        , status{status}
-    {
     }
 };
 

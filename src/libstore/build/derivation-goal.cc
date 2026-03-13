@@ -252,7 +252,7 @@ Goal::Co DerivationGoal::haveDerivation(bool storeDerivation)
     auto g = worker.makeDerivationBuildingGoal(drvPath, *drv, buildMode, storeDerivation);
 
     /* We will finish with it ourselves, as if we were the derivational goal. */
-    g->preserveException = true;
+    g->preserveFailure = true;
 
     {
         Goals waitees;
@@ -312,7 +312,7 @@ Goal::Co DerivationGoal::haveDerivation(bool storeDerivation)
         }
     }
 
-    co_return amDone(g->exitCode, g->ex);
+    co_return amDone(g->exitCode);
 }
 
 Goal::Co DerivationGoal::repairClosure()
@@ -510,22 +510,13 @@ Goal::Done DerivationGoal::doneFailure(BuildError ex)
 
     worker.updateProgress();
 
-    auto res = Goal::doneFailure(
-        ecFailed,
-        BuildResult::Failure{
-            .status = ex.status,
-            .errorMsg = fmt("%s", Uncolored(ex.info().msg)),
-        },
-        std::move(ex));
-
     logger->result(
         getCurActivity(),
         resBuildResult,
         nlohmann::json(KeyedBuildResult(
-            buildResult,
-            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+            {ex}, DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
-    return res;
+    return Goal::doneFailure(ecFailed, std::move(ex));
 }
 
 } // namespace nix

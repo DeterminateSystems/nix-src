@@ -41,10 +41,6 @@ struct PathSubstitutionGoal : public Goal
      */
     std::optional<ContentAddress> ca;
 
-    Done doneSuccess(BuildResult::Success::Status status, std::shared_ptr<const Provenance> provenance);
-
-    Done doneFailure(ExitCode result, BuildResult::Failure::Status status, std::string errorMsg);
-
 public:
     PathSubstitutionGoal(
         const StorePath & storePath,
@@ -74,6 +70,8 @@ public:
     {
         return JobCategory::Substitution;
     };
+
+    Done doneFailure(ExitCode result, BuildResult::Failure failure);
 };
 
 } // namespace nix

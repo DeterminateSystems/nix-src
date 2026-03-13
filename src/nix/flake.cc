@@ -529,7 +529,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                             else
                                 printError("❌ " ANSI_RED "%s" ANSI_NORMAL, attrPath.to_string(*state));
                         if (failure->status != BuildResult::Failure::Cancelled)
-                            failure->rethrow();
+                            throw *failure;
                     } catch (Error & e) {
                         logError(e.info());
                     }
