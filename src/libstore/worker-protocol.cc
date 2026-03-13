@@ -154,7 +154,7 @@ void WorkerProto::Serialise<std::optional<std::chrono::microseconds>>::write(
 DerivedPath WorkerProto::Serialise<DerivedPath>::read(const StoreDirConfig & store, WorkerProto::ReadConn conn)
 {
     auto s = readString(conn.from);
-    if (GET_PROTOCOL_MINOR(conn.version) >= 30) {
+    if (conn.version >= WorkerProto::Version{1, 30}) {
         return DerivedPath::parseLegacy(store, s);
     } else {
         return parsePathWithOutputs(store, s).toDerivedPath();
@@ -164,7 +164,7 @@ DerivedPath WorkerProto::Serialise<DerivedPath>::read(const StoreDirConfig & sto
 void WorkerProto::Serialise<DerivedPath>::write(
     const StoreDirConfig & store, WorkerProto::WriteConn conn, const DerivedPath & req)
 {
-    if (GET_PROTOCOL_MINOR(conn.version) >= 30) {
+    if (conn.version >= WorkerProto::Version{1, 30}) {
         conn.to << req.to_string_legacy(store);
     } else {
         auto sOrDrvPath = StorePathWithOutputs::tryFromDerivedPath(req);
@@ -175,8 +175,8 @@ void WorkerProto::Serialise<DerivedPath>::write(
                     throw Error(
                         "trying to request '%s', but daemon protocol %d.%d is too old (< 1.29) to request a derivation file",
                         store.printStorePath(drvPath),
-                        GET_PROTOCOL_MAJOR(conn.version),
-                        GET_PROTOCOL_MINOR(conn.version));
+                        conn.version.major,
+                        conn.version.minor);
                 },
                 [&](std::monostate) {
                     throw Error(
@@ -217,14 +217,14 @@ BuildResult WorkerProto::Serialise<BuildResult>::read(const StoreDirConfig & sto
     auto status = WorkerProto::Serialise<BuildResultStatus>::read(store, {conn.from});
     conn.from >> errorMsg;
 
-    if (GET_PROTOCOL_MINOR(conn.version) >= 29) {
+    if (conn.version >= WorkerProto::Version{1, 29}) {
         conn.from >> res.timesBuilt >> isNonDeterministic >> res.startTime >> res.stopTime;
     }
-    if (GET_PROTOCOL_MINOR(conn.version) >= 37) {
+    if (conn.version >= WorkerProto::Version{1, 37}) {
         res.cpuUser = WorkerProto::Serialise<std::optional<std::chrono::microseconds>>::read(store, conn);
         res.cpuSystem = WorkerProto::Serialise<std::optional<std::chrono::microseconds>>::read(store, conn);
     }
-    if (GET_PROTOCOL_MINOR(conn.version) >= 28) {
+    if (conn.version >= WorkerProto::Version{1, 28}) {
         auto builtOutputs = WorkerProto::Serialise<DrvOutputs>::read(store, conn);
         for (auto && [output, realisation] : builtOutputs)
             success.builtOutputs.insert_or_assign(std::move(output.outputName), std::move(realisation));
@@ -259,14 +259,14 @@ void WorkerProto::Serialise<BuildResult>::write(
        default value for the fields that don't exist in that case. */
     auto common = [&](std::string_view errorMsg, bool isNonDeterministic, const auto & builtOutputs) {
         conn.to << errorMsg;
-        if (GET_PROTOCOL_MINOR(conn.version) >= 29) {
+        if (conn.version >= WorkerProto::Version{1, 29}) {
             conn.to << res.timesBuilt << isNonDeterministic << res.startTime << res.stopTime;
         }
-        if (GET_PROTOCOL_MINOR(conn.version) >= 37) {
+        if (conn.version >= WorkerProto::Version{1, 37}) {
             WorkerProto::write(store, conn, res.cpuUser);
             WorkerProto::write(store, conn, res.cpuSystem);
         }
-        if (GET_PROTOCOL_MINOR(conn.version) >= 28) {
+        if (conn.version >= WorkerProto::Version{1, 28}) {
             DrvOutputs builtOutputsFullKey;
             for (auto & [output, realisation] : builtOutputs)
                 builtOutputsFullKey.insert_or_assign(realisation.id, realisation);
@@ -311,7 +311,7 @@ UnkeyedValidPathInfo WorkerProto::Serialise<UnkeyedValidPathInfo>::read(const St
     info.deriver = std::move(deriver);
     info.references = WorkerProto::Serialise<StorePathSet>::read(store, conn);
     conn.from >> info.registrationTime >> info.narSize;
-    if (GET_PROTOCOL_MINOR(conn.version) >= 16) {
+    if (conn.version >= WorkerProto::Version{1, 16}) {
         conn.from >> info.ultimate;
         info.sigs = WorkerProto::Serialise<std::set<Signature>>::read(store, conn);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
@@ -328,7 +328,7 @@ void WorkerProto::Serialise<UnkeyedValidPathInfo>::write(
     conn.to << pathInfo.narHash.to_string(HashFormat::Base16, false);
     WorkerProto::write(store, conn, pathInfo.references);
     conn.to << pathInfo.registrationTime << pathInfo.narSize;
-    if (GET_PROTOCOL_MINOR(conn.version) >= 16) {
+    if (conn.version >= WorkerProto::Version{1, 16}) {
         conn.to << pathInfo.ultimate;
         WorkerProto::write(store, conn, pathInfo.sigs);
         conn.to << renderContentAddress(pathInfo.ca);
@@ -342,11 +342,11 @@ WorkerProto::Serialise<WorkerProto::ClientHandshakeInfo>::read(const StoreDirCon
 {
     WorkerProto::ClientHandshakeInfo res;
 
-    if (GET_PROTOCOL_MINOR(conn.version) >= 33) {
+    if (conn.version >= WorkerProto::Version{1, 33}) {
         res.daemonNixVersion = readString(conn.from);
     }
 
-    if (GET_PROTOCOL_MINOR(conn.version) >= 35) {
+    if (conn.version >= WorkerProto::Version{1, 35}) {
         res.remoteTrustsUs = WorkerProto::Serialise<std::optional<TrustedFlag>>::read(store, conn);
     } else {
         // We don't know the answer; protocol to old.
@@ -359,12 +359,12 @@ WorkerProto::Serialise<WorkerProto::ClientHandshakeInfo>::read(const StoreDirCon
 void WorkerProto::Serialise<WorkerProto::ClientHandshakeInfo>::write(
     const StoreDirConfig & store, WriteConn conn, const WorkerProto::ClientHandshakeInfo & info)
 {
-    if (GET_PROTOCOL_MINOR(conn.version) >= 33) {
+    if (conn.version >= WorkerProto::Version{1, 33}) {
         assert(info.daemonNixVersion);
         conn.to << *info.daemonNixVersion;
     }
 
-    if (GET_PROTOCOL_MINOR(conn.version) >= 35) {
+    if (conn.version >= WorkerProto::Version{1, 35}) {
         WorkerProto::write(store, conn, info.remoteTrustsUs);
     }
 }
