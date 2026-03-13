@@ -11,31 +11,21 @@ esac
 
 set -m # enable job control, needed for kill
 
-TODO_NixOS
-
-profiles="$NIX_STATE_DIR"/profiles
-rm -rf "$profiles"
-
-nix-env -p "$profiles/test" -f ./gc-runtime.nix -i gc-runtime-{program,environ,open}
-
-programPath=$(nix-env -p "$profiles/test" -q --no-name --out-path gc-runtime-program)
-environPath=$(nix-env -p "$profiles/test" -q --no-name --out-path gc-runtime-environ)
-openPath=$(nix-env -p "$profiles/test" -q --no-name --out-path gc-runtime-open)
+programPath=$(nix-build --no-link ./gc-runtime.nix -A program)
+environPath=$(nix-build --no-link ./gc-runtime.nix -A environ)
+openPath=$(nix-build --no-link ./gc-runtime.nix -A open)
 
 fifo="$TEST_ROOT/fifo"
 mkfifo "$fifo"
 
 echo "backgrounding program..."
 export environPath
-"$profiles"/test/program "$openPath"/open "$fifo" &
+"$programPath"/program "$openPath"/open "$fifo" &
 child=$!
 echo PID=$child
 cat "$fifo"
 
 expectStderr 1 nix-store --delete "$openPath" | grepQuiet "Cannot delete path.*because it's referenced by the GC root '/proc/"
-
-nix-env -p "$profiles/test" -e gc-runtime-{program,environ,open}
-nix-env -p "$profiles/test" --delete-generations old
 
 nix-store --gc
 
