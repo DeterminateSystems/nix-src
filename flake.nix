@@ -432,6 +432,8 @@
 
               "nix-cmd" = { };
 
+              "nix-nswrapper" = { };
+
               "nix-cli" = { };
 
               "nix-everything" = { };
