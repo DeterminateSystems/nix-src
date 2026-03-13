@@ -748,7 +748,7 @@ struct CmdFlakeClone : FlakeCommand
 
 struct CmdFlakeArchive : FlakeCommand, MixJSON, MixDryRun, MixNoCheckSigs
 {
-    std::string dstUri;
+    std::optional<StoreReference> dstUri;
 
     SubstituteFlag substitute = NoSubstitute;
 
@@ -758,7 +758,7 @@ struct CmdFlakeArchive : FlakeCommand, MixJSON, MixDryRun, MixNoCheckSigs
             .longName = "to",
             .description = "URI of the destination Nix store",
             .labels = {"store-uri"},
-            .handler = {&dstUri},
+            .handler = {[this](std::string s) { dstUri = StoreReference::parse(s); }},
         });
     }
 
@@ -820,8 +820,8 @@ struct CmdFlakeArchive : FlakeCommand, MixJSON, MixDryRun, MixNoCheckSigs
             traverse(*flake.lockFile.root);
         }
 
-        if (!dryRun && !dstUri.empty()) {
-            ref<Store> dstStore = dstUri.empty() ? openStore() : openStore(dstUri);
+        if (!dryRun && dstUri) {
+            ref<Store> dstStore = openStore(StoreReference{*dstUri});
 
             copyPaths(*store, *dstStore, sources, NoRepair, checkSigs, substitute);
         }
