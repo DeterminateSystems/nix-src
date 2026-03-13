@@ -75,6 +75,8 @@ struct curlMultiError : Error
 
 struct curlFileTransfer : public FileTransfer
 {
+    const FileTransferSettings & settings;
+
     curlMulti curlm;
 
     std::random_device rd;
@@ -480,10 +482,11 @@ struct curlFileTransfer : public FileTransfer
                 req,
                 CURLOPT_USERAGENT,
                 ("curl/" LIBCURL_VERSION " Nix/" + nixVersion + " DeterminateNix/" + determinateNixVersion
-                 + (fileTransferSettings.userAgentSuffix != "" ? " " + fileTransferSettings.userAgentSuffix.get() : ""))
+                 + (fileTransfer.settings.userAgentSuffix != "" ? " " + fileTransfer.settings.userAgentSuffix.get()
+                                                                : ""))
                     .c_str());
             curl_easy_setopt(req, CURLOPT_PIPEWAIT, 1);
-            if (fileTransferSettings.enableHttp2)
+            if (fileTransfer.settings.enableHttp2)
                 curl_easy_setopt(req, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
             else
                 curl_easy_setopt(req, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
@@ -498,9 +501,9 @@ struct curlFileTransfer : public FileTransfer
 
             curl_easy_setopt(req, CURLOPT_HTTPHEADER, requestHeaders.get());
 
-            if (fileTransferSettings.downloadSpeed.get() > 0)
+            if (fileTransfer.settings.downloadSpeed.get() > 0)
                 curl_easy_setopt(
-                    req, CURLOPT_MAX_RECV_SPEED_LARGE, (curl_off_t) (fileTransferSettings.downloadSpeed.get() * 1024));
+                    req, CURLOPT_MAX_RECV_SPEED_LARGE, (curl_off_t) (fileTransfer.settings.downloadSpeed.get() * 1024));
 
             if (request.method == HttpMethod::Head)
                 curl_easy_setopt(req, CURLOPT_NOBODY, 1);
@@ -529,13 +532,13 @@ struct curlFileTransfer : public FileTransfer
                 curl_easy_setopt(req, CURLOPT_SEEKDATA, this);
             }
 
-            if (auto & caFile = fileTransferSettings.caFile.get())
+            if (auto & caFile = fileTransfer.settings.caFile.get())
                 curl_easy_setopt(req, CURLOPT_CAINFO, caFile->c_str());
 
 #if !defined(_WIN32)
             curl_easy_setopt(req, CURLOPT_SOCKOPTFUNCTION, cloexec_callback);
 #endif
-            curl_easy_setopt(req, CURLOPT_CONNECTTIMEOUT, fileTransferSettings.connectTimeout.get());
+            curl_easy_setopt(req, CURLOPT_CONNECTTIMEOUT, fileTransfer.settings.connectTimeout.get());
 
             // Enable TCP keep-alive so that idle connections in curl's reuse pool
             // are not silently dropped by NATs, firewalls, or load balancers.
@@ -544,11 +547,11 @@ struct curlFileTransfer : public FileTransfer
             curl_easy_setopt(req, CURLOPT_TCP_KEEPINTVL, 60L);
 
             curl_easy_setopt(req, CURLOPT_LOW_SPEED_LIMIT, 1L);
-            curl_easy_setopt(req, CURLOPT_LOW_SPEED_TIME, fileTransferSettings.stalledDownloadTimeout.get());
+            curl_easy_setopt(req, CURLOPT_LOW_SPEED_TIME, fileTransfer.settings.stalledDownloadTimeout.get());
 
             /* If no file exist in the specified path, curl continues to work
                anyway as if netrc support was disabled. */
-            curl_easy_setopt(req, CURLOPT_NETRC_FILE, fileTransferSettings.netrcFile.get().c_str());
+            curl_easy_setopt(req, CURLOPT_NETRC_FILE, fileTransfer.settings.netrcFile.get().c_str());
             curl_easy_setopt(req, CURLOPT_NETRC, CURL_NETRC_OPTIONAL);
 
             if (writtenToSink)
@@ -794,13 +797,15 @@ struct curlFileTransfer : public FileTransfer
 
     std::thread workerThread;
 
-    const size_t maxQueueSize =
-        (fileTransferSettings.httpConnections.get() ? fileTransferSettings.httpConnections.get()
-                                                    : std::max(1U, std::thread::hardware_concurrency()))
-        * 5;
+    const size_t maxQueueSize;
 
-    curlFileTransfer()
-        : mt19937(rd())
+    curlFileTransfer(const FileTransferSettings & settings)
+        : settings(settings)
+        , mt19937(rd())
+        , maxQueueSize(
+              (settings.httpConnections.get() ? settings.httpConnections.get()
+                                              : std::max(1U, std::thread::hardware_concurrency()))
+              * 5)
     {
         static std::once_flag globalInit;
         std::call_once(globalInit, curl_global_init, CURL_GLOBAL_ALL);
@@ -808,7 +813,7 @@ struct curlFileTransfer : public FileTransfer
         curlm = curlMulti(curl_multi_init());
 
         curl_multi_setopt(curlm.get(), CURLMOPT_PIPELINING, CURLPIPE_MULTIPLEX);
-        curl_multi_setopt(curlm.get(), CURLMOPT_MAX_TOTAL_CONNECTIONS, fileTransferSettings.httpConnections.get());
+        curl_multi_setopt(curlm.get(), CURLMOPT_MAX_TOTAL_CONNECTIONS, settings.httpConnections.get());
 
         workerThread = std::thread([&]() { workerThreadEntry(); });
     }
@@ -1014,6 +1019,11 @@ struct curlFileTransfer : public FileTransfer
     }
 };
 
+ref<curlFileTransfer> makeCurlFileTransfer(const FileTransferSettings & settings = fileTransferSettings)
+{
+    return make_ref<curlFileTransfer>(settings);
+}
+
 static Sync<std::shared_ptr<curlFileTransfer>> _fileTransfer;
 
 ref<FileTransfer> getFileTransfer()
@@ -1021,14 +1031,9 @@ ref<FileTransfer> getFileTransfer()
     auto fileTransfer(_fileTransfer.lock());
 
     if (!*fileTransfer || (*fileTransfer)->state_.lock()->isQuitting())
-        *fileTransfer = std::make_shared<curlFileTransfer>();
+        *fileTransfer = makeCurlFileTransfer().get_ptr();
 
     return ref<FileTransfer>(*fileTransfer);
-}
-
-ref<FileTransfer> makeFileTransfer()
-{
-    return make_ref<curlFileTransfer>();
 }
 
 std::shared_ptr<FileTransfer> resetFileTransfer()
@@ -1037,6 +1042,11 @@ std::shared_ptr<FileTransfer> resetFileTransfer()
     std::shared_ptr<curlFileTransfer> prev;
     fileTransfer->swap(prev);
     return prev;
+}
+
+ref<FileTransfer> makeFileTransfer(const FileTransferSettings & settings)
+{
+    return makeCurlFileTransfer(settings);
 }
 
 void FileTransferRequest::setupForS3()
