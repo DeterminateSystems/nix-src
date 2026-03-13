@@ -502,7 +502,7 @@ private:
      * Associate source positions of certain AST nodes with their preceding doc comment, if they have one.
      * Grouped by file.
      */
-    SharedSync<boost::unordered_flat_map<SourcePath, ref<DocCommentMap>>> positionToDocComment;
+    const ref<boost::concurrent_flat_map<SourcePath, ref<DocCommentMap>>> positionToDocComment;
 
     LookupPath lookupPath;
 
