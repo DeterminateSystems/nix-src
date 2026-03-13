@@ -69,7 +69,7 @@ bool PosixSourceAccessor::pathExists(const CanonPath & path)
     return nix::pathExists(makeAbsPath(path).string());
 }
 
-using Cache = boost::concurrent_flat_map<Path, std::optional<struct stat>>;
+using Cache = boost::concurrent_flat_map<Path, std::optional<PosixStat>>;
 static Cache cache;
 
 std::optional<PosixStat> PosixSourceAccessor::cachedLstat(const CanonPath & path)
