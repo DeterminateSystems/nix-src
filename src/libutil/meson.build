@@ -156,6 +156,7 @@ sources = [ config_priv_h ] + files(
   'pos-table.cc',
   'position.cc',
   'posix-source-accessor.cc',
+  'processes.cc',
   'provenance.cc',
   'serialise.cc',
   'signature/local-keys.cc',
