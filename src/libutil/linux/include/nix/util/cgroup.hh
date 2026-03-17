@@ -6,12 +6,13 @@
 #include <filesystem>
 
 #include "nix/util/types.hh"
+#include "nix/util/canon-path.hh"
 
 namespace nix {
 
-std::optional<Path> getCgroupFS();
+std::optional<std::filesystem::path> getCgroupFS();
 
-StringMap getCgroups(const Path & cgroupFile);
+StringMap getCgroups(const std::filesystem::path & cgroupFile);
 
 struct CgroupStats
 {
@@ -29,16 +30,16 @@ CgroupStats getCgroupStats(const std::filesystem::path & cgroup);
  * been killed. Also return statistics from the cgroup just before
  * destruction.
  */
-CgroupStats destroyCgroup(const Path & cgroup);
+CgroupStats destroyCgroup(const std::filesystem::path & cgroup);
 
-std::string getCurrentCgroup();
+CanonPath getCurrentCgroup();
 
 /**
  * Get the cgroup that should be used as the parent when creating new
  * sub-cgroups. The first time this is called, the current cgroup will be
  * returned, and then all subsequent calls will return the original cgroup.
  */
-std::string getRootCgroup();
+CanonPath getRootCgroup();
 
 /**
  * Get the PIDs of all processes in the given cgroup.

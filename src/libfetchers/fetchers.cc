@@ -168,7 +168,7 @@ bool Input::isFinal() const
     return maybeGetBoolAttr(attrs, "__final").value_or(false);
 }
 
-std::optional<std::string> Input::isRelative() const
+std::optional<std::filesystem::path> Input::isRelative() const
 {
     assert(scheme);
     return scheme->isRelative(*this);
@@ -334,7 +334,8 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         // input back into the store on every evaluation.
         if (accessor->fingerprint) {
             settings.getCache()->upsert(
-                makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
+                makeSourcePathToHashCacheKey(
+                    *accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, CanonPath::root),
                 {{"hash", store.queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
         }
 
@@ -515,11 +516,11 @@ void InputScheme::clone(
     const Settings & settings, Store & store, const Input & input, const std::filesystem::path & destDir) const
 {
     if (std::filesystem::exists(destDir))
-        throw Error("cannot clone into existing path %s", destDir);
+        throw Error("cannot clone into existing path %s", PathFmt(destDir));
 
     auto [accessor, input2] = getAccessor(settings, store, input);
 
-    Activity act(*logger, lvlTalkative, actUnknown, fmt("copying '%s' to %s...", input2.to_string(), destDir));
+    Activity act(*logger, lvlTalkative, actUnknown, fmt("copying '%s' to %s...", input2.to_string(), PathFmt(destDir)));
 
     RestoreSink sink(/*startFsync=*/false);
     sink.dstPath = destDir;

@@ -18,7 +18,7 @@ namespace nix::fetchers {
 DownloadFileResult downloadFile(
     Store & store,
     const Settings & settings,
-    const std::string & url,
+    const VerbatimURL & url,
     const std::string & name,
     const Headers & headers)
 {
@@ -27,7 +27,7 @@ DownloadFileResult downloadFile(
     Cache::Key key{
         "file",
         {{
-            {"url", url},
+            {"url", url.to_string()},
             {"name", name},
         }}};
 
@@ -45,7 +45,7 @@ DownloadFileResult downloadFile(
     if (cached && !cached->expired)
         return useCached();
 
-    FileTransferRequest request(VerbatimURL{url});
+    FileTransferRequest request(url);
     request.headers = headers;
     if (cached)
         request.expectedETag = getStrAttr(cached->value, "etag");
@@ -54,7 +54,7 @@ DownloadFileResult downloadFile(
         res = getFileTransfer()->download(request);
     } catch (FileTransferError & e) {
         if (cached) {
-            warn("%s; using cached version", e.msg());
+            warn("%s; using cached version", e.message());
             return useCached();
         } else
             throw;
@@ -118,16 +118,23 @@ static DownloadTarballResult downloadTarball_(
     // Namely lets catch when the url is a local file path, but
     // it is not in fact a tarball.
     if (url.scheme == "file") {
-        std::filesystem::path localPath = renderUrlPathEnsureLegal(url.path);
+        std::filesystem::path localPath = urlPathToPath(url.path);
+        if (!localPath.is_absolute()) {
+            throw Error(
+                "tarball '%s' must use an absolute path. "
+                "The 'file' scheme does not support relative paths.",
+                url);
+        }
         if (!exists(localPath)) {
-            throw Error("tarball '%s' does not exist.", localPath);
+            throw Error("tarball %s does not exist.", PathFmt(localPath));
         }
         if (is_directory(localPath)) {
             if (exists(localPath / ".git")) {
                 throw Error(
-                    "tarball '%s' is a git repository, not a tarball. Please use `git+file` as the scheme.", localPath);
+                    "tarball %s is a git repository, not a tarball. Please use `git+file` as the scheme.",
+                    PathFmt(localPath));
             }
-            throw Error("tarball '%s' is a directory, not a file.", localPath);
+            throw Error("tarball %s is a directory, not a file.", PathFmt(localPath));
         }
     }
 
@@ -175,8 +182,9 @@ static DownloadTarballResult downloadTarball_(
            the entire file to disk so libarchive can access it
            in random-access mode. */
         auto [fdTemp, path] = createTempFile("nix-zipfile");
-        cleanupTemp.reset(path);
-        debug("downloading '%s' into '%s'...", url, path);
+        cleanupTemp.cancel();
+        cleanupTemp = {path};
+        debug("downloading '%s' into %s...", url, PathFmt(path));
         {
             FdSink sink(fdTemp.get());
             source->drainInto(sink);

@@ -19,7 +19,7 @@ struct PathInputScheme : InputScheme
 
         Input input{};
         input.attrs.insert_or_assign("type", "path");
-        input.attrs.insert_or_assign("path", renderUrlPathEnsureLegal(url.path));
+        input.attrs.insert_or_assign("path", urlPathToPath(url.path).string());
 
         for (auto & [name, value] : url.query)
             if (name == "rev" || name == "narHash")
@@ -114,10 +114,10 @@ struct PathInputScheme : InputScheme
         writeFile(getAbsPath(input) / path.rel(), contents);
     }
 
-    std::optional<std::string> isRelative(const Input & input) const override
+    std::optional<std::filesystem::path> isRelative(const Input & input) const override
     {
-        auto path = getStrAttr(input.attrs, "path");
-        if (isAbsolute(path))
+        std::filesystem::path path = getStrAttr(input.attrs, "path");
+        if (path.is_absolute())
             return std::nullopt;
         else
             return path;
@@ -130,9 +130,9 @@ struct PathInputScheme : InputScheme
 
     std::filesystem::path getAbsPath(const Input & input) const
     {
-        auto path = getStrAttr(input.attrs, "path");
+        std::filesystem::path path = getStrAttr(input.attrs, "path");
 
-        if (isAbsolute(path))
+        if (path.is_absolute())
             return canonPath(path);
 
         throw Error("cannot fetch input '%s' because it uses a relative path", input.to_string());
@@ -160,7 +160,8 @@ struct PathInputScheme : InputScheme
             if (info) {
                 accessor->fingerprint = fmt("path:%s", info->narHash.to_string(HashFormat::SRI, true));
                 settings.getCache()->upsert(
-                    makeSourcePathToHashCacheKey(*accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, "/"),
+                    makeSourcePathToHashCacheKey(
+                        *accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, CanonPath::root),
                     {{"hash", info->narHash.to_string(HashFormat::SRI, true)}});
             }
         }

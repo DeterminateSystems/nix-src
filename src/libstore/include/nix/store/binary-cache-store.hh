@@ -1,7 +1,7 @@
 #pragma once
 ///@file
 
-#include "nix/util/signature/local-keys.hh"
+#include "nix/util/compression-settings.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/log-store.hh"
 
@@ -18,13 +18,19 @@ struct BinaryCacheStoreConfig : virtual StoreConfig
 {
     using StoreConfig::StoreConfig;
 
-    const Setting<std::string> compression{
-        this, "xz", "compression", "NAR compression method (`xz`, `bzip2`, `gzip`, `zstd`, or `none`)."};
+    Setting<CompressionAlgo> compression{
+        this,
+        CompressionAlgo::xz,
+        "compression",
+        R"(
+          NAR compression method. One of: `xz`, `bzip2`, `gzip`, `zstd`, `none`, `br`, `compress`, `grzip`, `lrzip`, `lz4`, `lzip`, `lzma` or `lzop`.
+          To use a particular compression method Nix has to be built with a version of libarchive that natively supports that compression algorithm.
+        )"};
 
-    const Setting<bool> writeNARListing{
+    Setting<bool> writeNARListing{
         this, false, "write-nar-listing", "Whether to write a JSON file that lists the files in each NAR."};
 
-    const Setting<bool> writeDebugInfo{
+    Setting<bool> writeDebugInfo{
         this,
         false,
         "index-debug-info",
@@ -33,24 +39,25 @@ struct BinaryCacheStoreConfig : virtual StoreConfig
           fetch debug info on demand
         )"};
 
-    const Setting<Path> secretKeyFile{this, "", "secret-key", "Path to the secret key used to sign the binary cache."};
+    Setting<AbsolutePath> secretKeyFile{
+        this, "", "secret-key", "Path to the secret key used to sign the binary cache."};
 
-    const Setting<std::string> secretKeyFiles{
+    Setting<std::string> secretKeyFiles{
         this, "", "secret-keys", "List of comma-separated paths to the secret keys used to sign the binary cache."};
 
-    const Setting<Path> localNarCache{
+    Setting<std::optional<AbsolutePath>> localNarCache{
         this,
-        "",
+        std::nullopt,
         "local-nar-cache",
         "Path to a local cache of NARs fetched from this binary cache, used by commands such as `nix store cat`."};
 
-    const Setting<bool> parallelCompression{
+    Setting<bool> parallelCompression{
         this,
         false,
         "parallel-compression",
         "Enable multi-threaded compression of NARs. This is currently only available for `xz` and `zstd`."};
 
-    const Setting<int> compressionLevel{
+    Setting<int> compressionLevel{
         this,
         -1,
         "compression-level",
@@ -159,10 +166,7 @@ private:
     void writeNarInfo(ref<NarInfo> narInfo);
 
     ref<const ValidPathInfo> addToStoreCommon(
-        Source & narSource,
-        RepairFlag repair,
-        CheckSigsFlag checkSigs,
-        std::function<ValidPathInfo(HashResult)> mkInfo);
+        Source & narSource, RepairFlag repair, CheckSigsFlag checkSigs, fun<ValidPathInfo(HashResult)> mkInfo);
 
     /**
      * Same as `getFSAccessor`, but with a more preceise return type.
@@ -211,7 +215,7 @@ public:
 
     std::shared_ptr<SourceAccessor> getFSAccessor(const StorePath &, bool requireValidPath = true) override;
 
-    void addSignatures(const StorePath & storePath, const StringSet & sigs) override;
+    void addSignatures(const StorePath & storePath, const std::set<Signature> & sigs) override;
 
     std::optional<std::string> getBuildLogExact(const StorePath & path) override;
 

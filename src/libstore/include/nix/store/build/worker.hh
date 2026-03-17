@@ -5,15 +5,18 @@
 #include "nix/store/store-api.hh"
 #include "nix/store/derived-path-map.hh"
 #include "nix/store/build/goal.hh"
+#include "nix/store/build-result.hh"
 #include "nix/store/realisation.hh"
 #include "nix/util/muxable-pipe.hh"
 
+#include <functional>
 #include <future>
 #include <thread>
 
 namespace nix {
 
 /* Forward definition. */
+struct WorkerSettings;
 struct DerivationTrampolineGoal;
 struct DerivationGoal;
 struct DerivationResolutionGoal;
@@ -144,25 +147,9 @@ public:
     const Activity actSubstitutions;
 
     /**
-     * Set if at least one derivation had a BuildError (i.e. permanent
-     * failure).
+     * Tracks different types of build failures for exit status computation.
      */
-    bool permanentFailure;
-
-    /**
-     * Set if at least one derivation had a timeout.
-     */
-    bool timedOut;
-
-    /**
-     * Set if at least one derivation fails with a hash mismatch.
-     */
-    bool hashMismatch;
-
-    /**
-     * Set if at least one derivation is not deterministic in check mode.
-     */
-    bool checkMismatch;
+    ExitStatusFlags exitStatusFlags;
 
 #ifdef _WIN32
     AutoCloseFD ioport;
@@ -170,6 +157,15 @@ public:
 
     Store & store;
     Store & evalStore;
+    const WorkerSettings & settings;
+
+    /**
+     * Function to get the substituters to use for path substitution.
+     *
+     * Defaults to `getDefaultSubstituters`. This allows tests to
+     * inject custom substituters.
+     */
+    fun<std::list<ref<Store>>()> getSubstituters;
 
 #ifndef _WIN32 // TODO Enable building on Windows
     std::unique_ptr<HookInstance> hook;
@@ -286,8 +282,20 @@ public:
      * false if there is no sense in waking up goals that are sleeping
      * because they can't run yet (e.g., there is no free build slot,
      * or the hook would still say `postpone`).
+     *
+     * This overload requires `goal` to point to a fully constructed,
+     * valid goal object, as it calls `goal->jobCategory()`.
      */
     void childTerminated(Goal * goal, bool wakeSleepers = true);
+
+    /**
+     * Unregisters a running child process, like the other overload.
+     *
+     * This overload only uses `goal` as a pointer for comparison with
+     * weak goal references, so it is safe to call from destructors
+     * where the goal object may be partially destroyed.
+     */
+    void childTerminated(Goal * goal, JobCategory jobCategory, bool wakeSleepers = true);
 
     /**
      * Put `goal` to sleep until a build slot becomes available (which
@@ -318,29 +326,6 @@ public:
      * Wait for input to become available.
      */
     void waitForInput();
-
-    /***
-     * The exit status in case of failure.
-     *
-     * In the case of a build failure, returned value follows this
-     * bitmask:
-     *
-     * ```
-     * 0b1100100
-     *      ^^^^
-     *      |||`- timeout
-     *      ||`-- output hash mismatch
-     *      |`--- build failure
-     *      `---- not deterministic
-     * ```
-     *
-     * In other words, the failure code is at least 100 (0b1100100), but
-     * might also be greater.
-     *
-     * Otherwise (no build failure, but some other sort of failure by
-     * assumption), this returned value is 1.
-     */
-    unsigned int failingExitStatus();
 
     /**
      * Check whether the given valid path exists and has the right

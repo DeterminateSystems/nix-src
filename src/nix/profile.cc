@@ -140,7 +140,7 @@ struct ProfileManifest
                 sOriginalUrl = "originalUrl";
                 break;
             default:
-                throw Error("profile manifest '%s' has unsupported version %d", manifestPath, version);
+                throw Error("profile manifest %s has unsupported version %d", PathFmt(manifestPath), version);
             }
 
             auto elems = json["elements"];
@@ -415,7 +415,7 @@ struct CmdProfileAdd : InstallablesCommand, MixDefaultProfile
         }
 
         try {
-            updateProfile(manifest.build(store));
+            updateProfile(*store, manifest.build(store));
         } catch (BuildEnvFileConflictError & conflictError) {
             // FIXME use C++20 std::ranges once macOS has it
             //       See
@@ -424,10 +424,10 @@ struct CmdProfileAdd : InstallablesCommand, MixDefaultProfile
                 for (auto it = begin; it != end; it++) {
                     auto & [name, profileElement] = *it;
                     for (auto & storePath : profileElement.storePaths) {
-                        if (conflictError.fileA.starts_with(store->printStorePath(storePath))) {
+                        if (conflictError.fileA.string().starts_with(store->printStorePath(storePath))) {
                             return std::tuple(conflictError.fileA, name, profileElement.toInstallables(*store));
                         }
-                        if (conflictError.fileB.starts_with(store->printStorePath(storePath))) {
+                        if (conflictError.fileB.string().starts_with(store->printStorePath(storePath))) {
                             return std::tuple(conflictError.fileB, name, profileElement.toInstallables(*store));
                         }
                     }
@@ -465,8 +465,8 @@ struct CmdProfileAdd : InstallablesCommand, MixDefaultProfile
                 "To prioritise the existing package:\n"
                 "\n"
                 "  nix profile add %4% --priority %7%\n",
-                originalConflictingFilePath,
-                newConflictingFilePath,
+                PathFmt(originalConflictingFilePath),
+                PathFmt(newConflictingFilePath),
                 originalEntryName,
                 concatStringsSep(" ", newConflictingRefs),
                 conflictError.priority,
@@ -671,7 +671,7 @@ struct CmdProfileRemove : virtual EvalCommand, MixDefaultProfile, MixProfileElem
         auto removedCount = oldManifest.elements.size() - newManifest.elements.size();
         printInfo("removed %d packages, kept %d packages", removedCount, newManifest.elements.size());
 
-        updateProfile(newManifest.build(store));
+        updateProfile(*store, newManifest.build(store));
     }
 };
 
@@ -780,7 +780,7 @@ struct CmdProfileUpgrade : virtual SourceExprCommand, MixDefaultProfile, MixProf
             element.updateStorePaths(getEvalStore(), store, builtPaths.find(&*installable)->second.first);
         }
 
-        updateProfile(manifest.build(store));
+        updateProfile(*store, manifest.build(store));
     }
 };
 

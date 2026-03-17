@@ -1,6 +1,7 @@
 #include "nix/util/signals.hh"
 #include "nix/util/util.hh"
 #include "nix/util/error.hh"
+#include "nix/util/fun.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/terminal.hh"
 
@@ -39,7 +40,7 @@ struct InterruptCallbacks
     Token nextToken = 0;
 
     /* Used as a list, see InterruptCallbacks comment. */
-    std::map<Token, std::function<void()>> callbacks;
+    std::map<Token, fun<void()>> callbacks;
 };
 
 static Sync<InterruptCallbacks> _interruptCallbacks;
@@ -141,6 +142,16 @@ struct InterruptCallbackImpl : InterruptCallback
 {
     InterruptCallbacks::Token token;
 
+    InterruptCallbackImpl(InterruptCallbacks::Token token)
+        : token(token)
+    {
+    }
+
+    InterruptCallbackImpl(InterruptCallbackImpl &&) = delete;
+    InterruptCallbackImpl(const InterruptCallbackImpl &) = delete;
+    InterruptCallbackImpl & operator=(InterruptCallbackImpl &&) = delete;
+    InterruptCallbackImpl & operator=(const InterruptCallbackImpl &) = delete;
+
     ~InterruptCallbackImpl() override
     {
         auto interruptCallbacks(_interruptCallbacks.lock());
@@ -148,16 +159,12 @@ struct InterruptCallbackImpl : InterruptCallback
     }
 };
 
-std::unique_ptr<InterruptCallback> createInterruptCallback(std::function<void()> callback)
+std::unique_ptr<InterruptCallback> createInterruptCallback(fun<void()> callback)
 {
     auto interruptCallbacks(_interruptCallbacks.lock());
     auto token = interruptCallbacks->nextToken++;
     interruptCallbacks->callbacks.emplace(token, callback);
-
-    std::unique_ptr<InterruptCallbackImpl> res{new InterruptCallbackImpl{}};
-    res->token = token;
-
-    return std::unique_ptr<InterruptCallback>(res.release());
+    return std::make_unique<InterruptCallbackImpl>(token);
 }
 
 } // namespace nix

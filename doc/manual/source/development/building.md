@@ -1,5 +1,9 @@
 # Building Nix
 
+> **Note**
+>
+> When checking out the repo on Windows, make sure you have the git setting `core.symlinks` enabled, before cloning, as there are symlinks in the repo.
+
 To build all dependencies and start a shell in which all environment variables are set up so that those dependencies can be found:
 
 ```console

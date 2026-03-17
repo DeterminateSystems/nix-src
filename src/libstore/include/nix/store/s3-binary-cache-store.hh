@@ -11,9 +11,11 @@ struct S3BinaryCacheStoreConfig : HttpBinaryCacheStoreConfig
 {
     using HttpBinaryCacheStoreConfig::HttpBinaryCacheStoreConfig;
 
-    S3BinaryCacheStoreConfig(std::string_view uriScheme, std::string_view bucketName, const Params & params);
+    S3BinaryCacheStoreConfig(ParsedURL cacheUri, const Params & params);
 
-    const Setting<std::string> profile{
+    S3BinaryCacheStoreConfig(std::string_view bucketName, const Params & params);
+
+    Setting<std::string> profile{
         this,
         "default",
         "profile",
@@ -22,7 +24,7 @@ struct S3BinaryCacheStoreConfig : HttpBinaryCacheStoreConfig
           Nix uses the `default` profile.
         )"};
 
-    const Setting<std::string> region{
+    Setting<std::string> region{
         this,
         "us-east-1",
         "region",
@@ -32,7 +34,7 @@ struct S3BinaryCacheStoreConfig : HttpBinaryCacheStoreConfig
           parameter.
         )"};
 
-    const Setting<std::string> scheme{
+    Setting<std::string> scheme{
         this,
         "https",
         "scheme",
@@ -47,7 +49,7 @@ struct S3BinaryCacheStoreConfig : HttpBinaryCacheStoreConfig
           > information.
         )"};
 
-    const Setting<std::string> endpoint{
+    Setting<std::string> endpoint{
         this,
         "",
         "endpoint",
@@ -71,7 +73,7 @@ struct S3BinaryCacheStoreConfig : HttpBinaryCacheStoreConfig
           contain dots).
         )"};
 
-    const Setting<bool> multipartUpload{
+    Setting<bool> multipartUpload{
         this,
         false,
         "multipart-upload",
@@ -82,7 +84,7 @@ struct S3BinaryCacheStoreConfig : HttpBinaryCacheStoreConfig
           can improve performance and reliability for large uploads.
         )"};
 
-    const Setting<uint64_t> multipartChunkSize{
+    Setting<uint64_t> multipartChunkSize{
         this,
         5 * 1024 * 1024,
         "multipart-chunk-size",
@@ -93,7 +95,7 @@ struct S3BinaryCacheStoreConfig : HttpBinaryCacheStoreConfig
         )",
         {"buffer-size"}};
 
-    const Setting<uint64_t> multipartThreshold{
+    Setting<uint64_t> multipartThreshold{
         this,
         100 * 1024 * 1024,
         "multipart-threshold",
@@ -103,7 +105,7 @@ struct S3BinaryCacheStoreConfig : HttpBinaryCacheStoreConfig
           Default is 100 MiB. Only takes effect when multipart-upload is enabled.
         )"};
 
-    const Setting<std::optional<std::string>> storageClass{
+    Setting<std::optional<std::string>> storageClass{
         this,
         std::nullopt,
         "storage-class",

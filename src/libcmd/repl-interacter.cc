@@ -40,8 +40,8 @@ void sigintHandler(int signo)
 static detail::ReplCompleterMixin * curRepl; // ugly
 
 #if !USE_READLINE
-static char * completionCallback(char * s, int * match)
-{
+static char * completionCallback(char * s, int * match) noexcept
+try {
     auto possible = curRepl->completePrefix(s);
     if (possible.size() == 1) {
         *match = 1;
@@ -73,10 +73,12 @@ static char * completionCallback(char * s, int * match)
 
     *match = 0;
     return nullptr;
+} catch (...) {
+    return nullptr;
 }
 
-static int listPossibleCallback(char * s, char *** avp)
-{
+static int listPossibleCallback(char * s, char *** avp) noexcept
+try {
     auto possible = curRepl->completePrefix(s);
 
     if (possible.size() > (std::numeric_limits<int>::max() / sizeof(char *)))
@@ -105,6 +107,9 @@ static int listPossibleCallback(char * s, char *** avp)
     *avp = vp;
 
     return ac;
+} catch (...) {
+    *avp = nullptr;
+    return 0;
 }
 #endif
 
@@ -113,14 +118,14 @@ ReadlineLikeInteracter::Guard ReadlineLikeInteracter::init(detail::ReplCompleter
     // Allow nix-repl specific settings in .inputrc
     rl_readline_name = "nix-repl";
     try {
-        createDirs(dirOf(historyFile));
+        createDirs(historyFile.parent_path());
     } catch (SystemError & e) {
         logWarning(e.info());
     }
 #if !USE_READLINE
     el_hist_size = 1000;
 #endif
-    read_history(historyFile.c_str());
+    read_history(historyFile.string().c_str());
     auto oldRepl = curRepl;
     curRepl = repl;
     Guard restoreRepl([oldRepl] { curRepl = oldRepl; });
@@ -203,7 +208,7 @@ bool ReadlineLikeInteracter::getLine(std::string & input, ReplPromptType promptT
 
 ReadlineLikeInteracter::~ReadlineLikeInteracter()
 {
-    write_history(historyFile.c_str());
+    write_history(historyFile.string().c_str());
 }
 
 }; // namespace nix

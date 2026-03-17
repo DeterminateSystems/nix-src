@@ -21,7 +21,7 @@ public:
      * Golden test for `T` reading
      */
     template<typename T>
-    void readProtoTest(PathView testStem, const T & expected)
+    void readProtoTest(std::string_view testStem, const T & expected)
     {
         CharacterizationTest::readTest(std::string{testStem + ".bin"}, [&](const auto & encoded) {
             T got = ({
@@ -37,7 +37,7 @@ public:
      * Golden test for `T` write
      */
     template<typename T>
-    void writeProtoTest(PathView testStem, const T & decoded)
+    void writeProtoTest(std::string_view testStem, const T & decoded)
     {
         CharacterizationTest::writeTest(std::string{testStem + ".bin"}, [&]() -> std::string {
             StringSink to;
@@ -47,23 +47,29 @@ public:
     }
 };
 
-#define CHARACTERIZATION_TEST(NAME, STEM, VALUE) \
-    TEST_F(CommonProtoTest, NAME##_read)         \
-    {                                            \
-        readProtoTest(STEM, VALUE);              \
-    }                                            \
-    TEST_F(CommonProtoTest, NAME##_write)        \
-    {                                            \
-        writeProtoTest(STEM, VALUE);             \
-    }                                            \
-    TEST_F(CommonProtoTest, NAME##_json_read)    \
-    {                                            \
-        readJsonTest(STEM, VALUE);               \
-    }                                            \
-    TEST_F(CommonProtoTest, NAME##_json_write)   \
-    {                                            \
-        writeJsonTest(STEM, VALUE);              \
+#define READ_CHARACTERIZATION_TEST(NAME, STEM, VALUE) \
+    TEST_F(CommonProtoTest, NAME##_read)              \
+    {                                                 \
+        readProtoTest(STEM, VALUE);                   \
+    }                                                 \
+    TEST_F(CommonProtoTest, NAME##_json_read)         \
+    {                                                 \
+        readJsonTest(STEM, VALUE);                    \
     }
+
+#define WRITE_CHARACTERIZATION_TEST(NAME, STEM, VALUE) \
+    TEST_F(CommonProtoTest, NAME##_write)              \
+    {                                                  \
+        writeProtoTest(STEM, VALUE);                   \
+    }                                                  \
+    TEST_F(CommonProtoTest, NAME##_json_write)         \
+    {                                                  \
+        writeJsonTest(STEM, VALUE);                    \
+    }
+
+#define CHARACTERIZATION_TEST(NAME, STEM, VALUE)  \
+    READ_CHARACTERIZATION_TEST(NAME, STEM, VALUE) \
+    WRITE_CHARACTERIZATION_TEST(NAME, STEM, VALUE)
 
 CHARACTERIZATION_TEST(
     string,
@@ -132,7 +138,11 @@ CHARACTERIZATION_TEST(
         Realisation{
             {
                 .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
-                .signatures = {"asdf", "qwer"},
+                .signatures =
+                    {
+                        Signature{.keyName = "asdf", .sig = std::string(64, '\0')},
+                        Signature{.keyName = "qwer", .sig = std::string(64, '\0')},
+                    },
             },
             {
                 .drvHash = Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
@@ -141,23 +151,17 @@ CHARACTERIZATION_TEST(
         },
     }))
 
-CHARACTERIZATION_TEST(
+READ_CHARACTERIZATION_TEST(
     realisation_with_deps,
     "realisation-with-deps",
     (std::tuple<Realisation>{
         Realisation{
             {
                 .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
-                .signatures = {"asdf", "qwer"},
-                .dependentRealisations =
+                .signatures =
                     {
-                        {
-                            DrvOutput{
-                                .drvHash = Hash::parseSRI("sha256-b4afnqKCO9oWXgYHb9DeQ2berSwOjS27rSd9TxXDc/U="),
-                                .outputName = "quux",
-                            },
-                            StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
-                        },
+                        Signature{.keyName = "asdf", .sig = std::string(64, '\0')},
+                        Signature{.keyName = "qwer", .sig = std::string(64, '\0')},
                     },
             },
             {
