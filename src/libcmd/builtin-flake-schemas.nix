@@ -87,12 +87,12 @@
         inventory = self.lib.derivationsInventory "package" false;
       };
 
-      dockerImagesSchema = {
+      ociImagesSchema = {
         version = 1;
         doc = ''
-          The `dockerImages` flake output contains derivations that build valid Docker images.
+          The `ociImages` flake output contains derivations that build valid Open Container Initiative images.
         '';
-        inventory = self.lib.derivationsInventory "Docker image" false;
+        inventory = self.lib.derivationsInventory "OCI image" false;
       };
 
       legacyPackagesSchema = {
@@ -258,9 +258,9 @@
                 # flake here. Maybe this schema should be moved to the
                 # nixpkgs flake, where it does have access.
                 if !builtins.isFunction overlay then
-                  throw "overlay is not a function, but a set instead"
+                  throw "Overlay is not a function. It should be structured like: `final: previous: { /* ... */ }`."
                 else
-                  builtins.isAttrs (overlay { } { });
+                  true;
             }) output
           );
       };
@@ -438,7 +438,7 @@
       schemas.homeModules = homeModulesSchema;
       schemas.darwinConfigurations = darwinConfigurationsSchema;
       schemas.darwinModules = darwinModulesSchema;
-      schemas.dockerImages = dockerImagesSchema;
+      schemas.ociImages = ociImagesSchema;
       schemas.bundlers = bundlersSchema;
     };
 }
