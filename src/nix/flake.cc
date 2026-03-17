@@ -384,6 +384,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                 checkAllSystems ? std::optional<std::string>() : localSystem,
                 false, // FIXME: add a --legacy flag?
                 node,
+                flake->flake.provenance,
 
                 [&](const flake_schemas::Leaf & leaf) {
                     try {
@@ -903,6 +904,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 showAllSystems ? std::optional<std::string>() : localSystem,
                 showLegacy,
                 node,
+                flake->flake.provenance,
 
                 [&](const flake_schemas::Leaf & leaf) {
                     if (auto what = leaf.what())
