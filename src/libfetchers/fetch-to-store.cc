@@ -6,10 +6,11 @@
 namespace nix {
 
 fetchers::Cache::Key
-makeSourcePathToHashCacheKey(const std::string & fingerprint, ContentAddressMethod method, const std::string & path)
+makeSourcePathToHashCacheKey(std::string_view fingerprint, ContentAddressMethod method, const CanonPath & path)
 {
     return fetchers::Cache::Key{
-        "sourcePathToHash", {{"fingerprint", fingerprint}, {"method", std::string{method.render()}}, {"path", path}}};
+        "sourcePathToHash",
+        {{"fingerprint", std::string(fingerprint)}, {"method", std::string{method.render()}}, {"path", path.abs()}}};
 }
 
 StorePath fetchToStore(
@@ -41,7 +42,7 @@ std::pair<StorePath, Hash> fetchToStore2(
                                          : path.accessor->getFingerprint(path.path);
 
     if (fingerprint) {
-        cacheKey = makeSourcePathToHashCacheKey(*fingerprint, method, subpath.abs());
+        cacheKey = makeSourcePathToHashCacheKey(*fingerprint, method, subpath);
         if (auto res = settings.getCache()->lookup(*cacheKey)) {
             auto hash = Hash::parseSRI(fetchers::getStrAttr(*res, "hash"));
             auto storePath =
@@ -80,7 +81,7 @@ std::pair<StorePath, Hash> fetchToStore2(
 
     auto [storePath, hash] =
         mode == FetchMode::DryRun
-            ? ({
+            ? [&]() {
                   auto [storePath, hash] =
                       store.computeStorePath(name, path, method, HashAlgorithm::SHA256, {}, filter2);
                   debug(
@@ -88,9 +89,9 @@ std::pair<StorePath, Hash> fetchToStore2(
                       path,
                       store.printStorePath(storePath),
                       hash.to_string(HashFormat::SRI, true));
-                  std::make_pair(storePath, hash);
-              })
-            : ({
+                  return std::make_pair(storePath, hash);
+              }()
+            : [&]() {
                   // FIXME: ideally addToStore() would return the hash
                   // right away (like computeStorePath()).
                   auto storePath = store.addToStore(name, path, method, HashAlgorithm::SHA256, {}, filter2, repair);
@@ -106,8 +107,8 @@ std::pair<StorePath, Hash> fetchToStore2(
                       path,
                       store.printStorePath(storePath),
                       hash.to_string(HashFormat::SRI, true));
-                  std::make_pair(storePath, hash);
-              });
+                  return std::make_pair(storePath, hash);
+              }();
 
     if (cacheKey)
         settings.getCache()->upsert(*cacheKey, {{"hash", hash.to_string(HashFormat::SRI, true)}});

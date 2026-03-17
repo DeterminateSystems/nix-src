@@ -88,7 +88,7 @@ PrimOp getFlake(const Settings & settings)
           (builtins.getFlake "github:edolstra/dwarffs").rev
           ```
         )",
-        .fun = prim_getFlake,
+        .impl = prim_getFlake,
     };
 }
 
@@ -129,7 +129,7 @@ nix::PrimOp parseFlakeRef({
       { dir = "lib"; owner = "NixOS"; ref = "23.05"; repo = "nixpkgs"; type = "github"; }
       ```
     )",
-    .fun = prim_parseFlakeRef,
+    .impl = prim_parseFlakeRef,
 });
 
 static void prim_flakeRefToString(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -192,7 +192,7 @@ nix::PrimOp flakeRefToString({
       "github:NixOS/nixpkgs/23.05?dir=lib"
       ```
     )",
-    .fun = prim_flakeRefToString,
+    .impl = prim_flakeRefToString,
 });
 
 } // namespace nix::flake::primops

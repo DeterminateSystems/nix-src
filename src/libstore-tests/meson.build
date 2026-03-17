@@ -85,6 +85,7 @@ sources = files(
   'store-reference.cc',
   'uds-remote-store.cc',
   'worker-protocol.cc',
+  'worker-substitution.cc',
   'write-derivation.cc',
 )
 
@@ -123,6 +124,7 @@ if get_option('benchmarks')
     'bench-main.cc',
     'derivation-parser-bench.cc',
     'ref-scan-bench.cc',
+    'register-valid-paths-bench.cc',
   )
 
   benchmark_exe = executable(

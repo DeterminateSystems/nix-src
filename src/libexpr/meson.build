@@ -30,7 +30,7 @@ deps_public_maybe_subproject = [
 subdir('nix-meson-build-support/subprojects')
 subdir('nix-meson-build-support/big-objs')
 
-# Check for each of these functions, and create a define like `#define HAVE_LCHOWN 1`.
+# Check for each of these functions, and create a define like `#define HAVE_SYSCONF 1`.
 check_funcs = [
   'sysconf',
 ]
@@ -166,9 +166,11 @@ endforeach
 sources = files(
   'attr-path.cc',
   'attr-set.cc',
+  'diagnose.cc',
   'eval-cache.cc',
   'eval-error.cc',
   'eval-gc.cc',
+  'eval-profiler-settings.cc',
   'eval-profiler.cc',
   'eval-settings.cc',
   'eval.cc',
@@ -228,8 +230,7 @@ parser_library = static_library(
   'nixexpr-parser',
   parser_tab,
   lexer_tab,
-  # Putting eval-profiler-settings.cc here to work around an inscrutable gcc compiler error when doing a unity build.
-  files('eval-profiler-settings.cc', 'lexer-helpers.cc'),
+  files('lexer-helpers.cc'),
   cpp_args : parser_library_cpp_args,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,

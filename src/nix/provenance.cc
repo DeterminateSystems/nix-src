@@ -93,7 +93,7 @@ struct CmdProvenanceShow : StorePathsCommand
                 if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(next)) {
                     FlakeRef flakeRef(
                         fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs)),
-                        Path(flakePath.parent().value_or(CanonPath::root).rel()));
+                        std::string(flakePath.parent().value_or(CanonPath::root).rel()));
                     logger->cout(
                         "← %sinstantiated from %sflake output " ANSI_BOLD "%s#%s" ANSI_NORMAL,
                         flake->pure ? "" : ANSI_RED "impurely" ANSI_NORMAL " ",

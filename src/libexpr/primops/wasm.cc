@@ -703,7 +703,7 @@ static RegisterPrimOp primop_wasm(
       } { x = 42; }
       ```
      )",
-     .fun = prim_wasm,
+     .impl = prim_wasm,
      .experimentalFeature = Xp::WasmBuiltin});
 
 } // namespace nix

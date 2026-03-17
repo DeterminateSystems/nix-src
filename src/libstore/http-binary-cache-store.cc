@@ -2,8 +2,10 @@
 #include "nix/store/filetransfer.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/nar-info-disk-cache.hh"
+#include "nix/store/sqlite.hh"
 #include "nix/util/callback.hh"
 #include "nix/store/store-registration.hh"
+#include "nix/store/globals.hh"
 
 namespace nix {
 
@@ -18,15 +20,13 @@ StringSet HttpBinaryCacheStoreConfig::uriSchemes()
     return ret;
 }
 
-HttpBinaryCacheStoreConfig::HttpBinaryCacheStoreConfig(
-    std::string_view scheme, std::string_view _cacheUri, const Params & params)
+HttpBinaryCacheStoreConfig::HttpBinaryCacheStoreConfig(ParsedURL _cacheUri, const Params & params)
     : StoreConfig(params)
     , BinaryCacheStoreConfig(params)
-    , cacheUri(parseURL(
-          std::string{scheme} + "://"
-          + (!_cacheUri.empty() ? _cacheUri
-                                : throw UsageError("`%s` Store requires a non-empty authority in Store URL", scheme))))
+    , cacheUri(std::move(_cacheUri))
 {
+    if (!uriSchemes().contains("file") && (!cacheUri.authority || cacheUri.authority->host.empty()))
+        throw UsageError("`%s` Store requires a non-empty authority in Store URL", cacheUri.scheme);
     while (!cacheUri.path.empty() && cacheUri.path.back() == "")
         cacheUri.path.pop_back();
 }
@@ -50,12 +50,13 @@ std::string HttpBinaryCacheStoreConfig::doc()
         ;
 }
 
-HttpBinaryCacheStore::HttpBinaryCacheStore(ref<Config> config)
+HttpBinaryCacheStore::HttpBinaryCacheStore(ref<Config> config, ref<FileTransfer> fileTransfer)
     : Store{*config} // TODO it will actually mutate the configuration
     , BinaryCacheStore{*config}
+    , fileTransfer{fileTransfer}
     , config{config}
 {
-    diskCache = getNarInfoDiskCache();
+    diskCache = NarInfoDiskCache::get(settings.getNarInfoDiskCacheSettings(), {.useWAL = settings.useSQLiteWAL});
 }
 
 void HttpBinaryCacheStore::init()
@@ -78,13 +79,13 @@ void HttpBinaryCacheStore::init()
     }
 }
 
-std::optional<std::string> HttpBinaryCacheStore::getCompressionMethod(const std::string & path)
+std::optional<CompressionAlgo> HttpBinaryCacheStore::getCompressionMethod(const std::string & path)
 {
-    if (hasSuffix(path, ".narinfo") && !config->narinfoCompression.get().empty())
+    if (hasSuffix(path, ".narinfo") && config->narinfoCompression.get())
         return config->narinfoCompression;
-    else if (hasSuffix(path, ".ls") && !config->lsCompression.get().empty())
+    else if (hasSuffix(path, ".ls") && config->lsCompression.get())
         return config->lsCompression;
-    else if (hasPrefix(path, "log/") && !config->logCompression.get().empty())
+    else if (hasPrefix(path, "log/") && config->logCompression.get())
         return config->logCompression;
     else
         return std::nullopt;
@@ -93,7 +94,7 @@ std::optional<std::string> HttpBinaryCacheStore::getCompressionMethod(const std:
 void HttpBinaryCacheStore::maybeDisable()
 {
     auto state(_state.lock());
-    if (state->enabled && settings.tryFallback) {
+    if (state->enabled && settings.getWorkerSettings().tryFallback) {
         int t = 60;
         printError("disabling binary cache '%s' for %s seconds", config->getHumanReadableURI(), t);
         state->enabled = false;
@@ -121,7 +122,7 @@ bool HttpBinaryCacheStore::fileExists(const std::string & path)
     try {
         FileTransferRequest request(makeRequest(path));
         request.method = HttpMethod::Head;
-        getFileTransfer()->download(request);
+        fileTransfer->download(request);
         return true;
     } catch (FileTransferError & e) {
         /* S3 buckets return 403 if a file doesn't exist and the
@@ -151,7 +152,7 @@ void HttpBinaryCacheStore::upload(
     req.data = {sizeHint, source};
     req.mimeType = mimeType;
 
-    getFileTransfer()->upload(req);
+    fileTransfer->upload(req);
 }
 
 void HttpBinaryCacheStore::upsertFile(
@@ -160,7 +161,9 @@ void HttpBinaryCacheStore::upsertFile(
     try {
         if (auto compressionMethod = getCompressionMethod(path)) {
             CompressedSource compressed(source, *compressionMethod);
-            Headers headers = {{"Content-Encoding", *compressionMethod}};
+            /* TODO: Validate that this is a valid content encoding. We probably shouldn't set non-standard values here.
+             */
+            Headers headers = {{"Content-Encoding", showCompressionAlgo(*compressionMethod)}};
             upload(path, compressed, compressed.size(), mimeType, std::move(headers));
         } else {
             upload(path, source, sizeHint, mimeType, std::nullopt);
@@ -193,7 +196,23 @@ FileTransferRequest HttpBinaryCacheStore::makeRequest(std::string_view path)
         result.query = config->cacheUri.query;
     }
 
-    return FileTransferRequest(result);
+    FileTransferRequest request(result);
+
+    /* Only use the specified SSL certificate and private key if the resolved URL names the same
+       authority and uses the same protocol. */
+    if (result.scheme == config->cacheUri.scheme && result.authority == config->cacheUri.authority) {
+        if (const auto & cert = config->tlsCert.get()) {
+            debug("using TLS client certificate %s for '%s'", PathFmt(*cert), request.uri);
+            request.tlsCert = *cert;
+        }
+
+        if (const auto & key = config->tlsKey.get()) {
+            debug("using TLS client key '%s' for '%s'", PathFmt(*key), request.uri);
+            request.tlsKey = *key;
+        }
+    }
+
+    return request;
 }
 
 void HttpBinaryCacheStore::getFile(const std::string & path, Sink & sink)
@@ -201,7 +220,7 @@ void HttpBinaryCacheStore::getFile(const std::string & path, Sink & sink)
     checkEnabled();
     auto request(makeRequest(path));
     try {
-        getFileTransfer()->download(std::move(request), sink);
+        fileTransfer->download(std::move(request), sink);
     } catch (FileTransferError & e) {
         if (e.error == FileTransfer::NotFound || e.error == FileTransfer::Forbidden)
             throw NoSuchBinaryCacheFile(
@@ -220,19 +239,19 @@ void HttpBinaryCacheStore::getFile(const std::string & path, Callback<std::optio
 
         auto request(makeRequest(path));
 
-        getFileTransfer()->enqueueFileTransfer(request, {[callbackPtr, this](std::future<FileTransferResult> result) {
-                                                   try {
-                                                       (*callbackPtr)(std::move(result.get().data));
-                                                   } catch (FileTransferError & e) {
-                                                       if (e.error == FileTransfer::NotFound
-                                                           || e.error == FileTransfer::Forbidden)
-                                                           return (*callbackPtr)({});
-                                                       maybeDisable();
-                                                       callbackPtr->rethrow();
-                                                   } catch (...) {
-                                                       callbackPtr->rethrow();
-                                                   }
-                                               }});
+        fileTransfer->enqueueFileTransfer(request, {[callbackPtr, this](std::future<FileTransferResult> result) {
+                                              try {
+                                                  (*callbackPtr)(std::move(result.get().data));
+                                              } catch (FileTransferError & e) {
+                                                  if (e.error == FileTransfer::NotFound
+                                                      || e.error == FileTransfer::Forbidden)
+                                                      return (*callbackPtr)({});
+                                                  maybeDisable();
+                                                  callbackPtr->rethrow();
+                                              } catch (...) {
+                                                  callbackPtr->rethrow();
+                                              }
+                                          }});
 
     } catch (...) {
         callbackPtr->rethrow();
@@ -243,7 +262,7 @@ void HttpBinaryCacheStore::getFile(const std::string & path, Callback<std::optio
 std::optional<std::string> HttpBinaryCacheStore::getNixCacheInfo()
 {
     try {
-        auto result = getFileTransfer()->download(makeRequest(cacheInfoFile));
+        auto result = fileTransfer->download(makeRequest(cacheInfoFile));
         return result.data;
     } catch (FileTransferError & e) {
         if (e.error == FileTransfer::NotFound)
@@ -266,11 +285,17 @@ std::optional<TrustedFlag> HttpBinaryCacheStore::isTrustedClient()
     return std::nullopt;
 }
 
-ref<Store> HttpBinaryCacheStore::Config::openStore() const
+ref<Store> HttpBinaryCacheStore::Config::openStore(ref<FileTransfer> fileTransfer) const
 {
     return make_ref<HttpBinaryCacheStore>(
         ref{// FIXME we shouldn't actually need a mutable config
-            std::const_pointer_cast<HttpBinaryCacheStore::Config>(shared_from_this())});
+            std::const_pointer_cast<HttpBinaryCacheStore::Config>(shared_from_this())},
+        fileTransfer);
+}
+
+ref<Store> HttpBinaryCacheStoreConfig::openStore() const
+{
+    return openStore(getFileTransfer());
 }
 
 static RegisterStoreImplementation<HttpBinaryCacheStore::Config> regHttpBinaryCacheStore;

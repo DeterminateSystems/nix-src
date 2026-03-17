@@ -22,10 +22,6 @@
 
 #include "nix/util/strings.hh"
 
-namespace nix::fs {
-using namespace std::filesystem;
-}
-
 using namespace nix;
 
 struct DevelopSettings : Config
@@ -292,7 +288,7 @@ static StorePath getDerivationEnvironment(ref<Store> store, ref<Store> evalStore
     }
     drv.fillInOutputPaths(*evalStore);
 
-    auto shellDrvPath = writeDerivation(*evalStore, drv);
+    auto shellDrvPath = evalStore->writeDerivation(drv);
 
     /* Build the derivation. */
     store->buildPaths(
@@ -336,7 +332,7 @@ struct Common : InstallableCommand, MixProfile
         "UID",
     };
 
-    std::vector<std::pair<std::string, std::string>> redirects;
+    std::vector<std::pair<std::string, std::filesystem::path>> redirects;
 
     Common()
     {
@@ -344,7 +340,7 @@ struct Common : InstallableCommand, MixProfile
             .longName = "redirect",
             .description = "Redirect a store path to a mutable location.",
             .labels = {"installable", "outputs-dir"},
-            .handler = {[&](std::string installable, std::string outputsDir) {
+            .handler = {[&](std::string installable, std::filesystem::path outputsDir) {
                 redirects.push_back({installable, outputsDir});
             }},
         });
@@ -417,8 +413,8 @@ struct Common : InstallableCommand, MixProfile
                 if (script.find(from) == std::string::npos)
                     warn("'%s' (path '%s') is not used by this build environment", installable->what(), from);
                 else {
-                    printInfo("redirecting '%s' to '%s'", from, dir);
-                    rewrites.insert({from, dir});
+                    printInfo("redirecting '%s' to '%s'", from, PathFmt(dir));
+                    rewrites.insert({from, dir.string()});
                 }
             }
         }
@@ -443,7 +439,7 @@ struct Common : InstallableCommand, MixProfile
      * that's accessible from the interactive shell session.
      */
     void fixupStructuredAttrs(
-        PathViewNG::string_view ext,
+        PathView::string_view ext,
         const std::string & envVar,
         const std::string & content,
         StringMap & rewrites,
@@ -489,7 +485,7 @@ struct Common : InstallableCommand, MixProfile
     {
         auto shellOutPath = getShellOutPath(store, installable);
 
-        updateProfile(shellOutPath);
+        updateProfile(*store, shellOutPath);
 
         debug("reading environment file '%s'", store->printStorePath(shellOutPath));
 
@@ -588,7 +584,7 @@ struct CmdDevelop : Common, MixEnvironment
         if (verbosity >= lvlDebug)
             script += "set -x\n";
 
-        script += fmt("command rm -f '%s'\n", rcFilePath);
+        script += fmt("command rm -f '%s'\n", rcFilePath.string());
 
         if (phase) {
             if (!command.empty())
@@ -625,7 +621,7 @@ struct CmdDevelop : Common, MixEnvironment
         // prevent garbage collection until shell exits
         setEnv("NIX_GCROOT", store->printStorePath(gcroot).c_str());
 
-        Path shell = "bash";
+        std::filesystem::path shell = "bash";
         bool foundInteractive = false;
 
         try {
@@ -668,11 +664,12 @@ struct CmdDevelop : Common, MixEnvironment
 
         // Override SHELL with the one chosen for this environment.
         // This is to make sure the system shell doesn't leak into the build environment.
-        setEnv("SHELL", shell.c_str());
-        // https://github.com/NixOS/nix/issues/5873
-        script += fmt("SHELL=\"%s\"\n", shell);
+        setEnvOs(OS_STR("SHELL"), shell.c_str());
+        /* See: https://github.com/NixOS/nix/issues/5873
+           Format via .string() and not PathFmt intentionally. */
+        script += fmt("SHELL=\"%s\"\n", shell.string());
         if (foundInteractive)
-            script += fmt("PATH=\"%s${PATH:+:$PATH}\"\n", std::filesystem::path(shell).parent_path());
+            script += fmt("PATH=\"%s${PATH:+:$PATH}\"\n", std::filesystem::path(shell).parent_path().string());
         writeFull(rcFileFd.get(), script);
 
 #ifdef _WIN32 // TODO re-enable on Windows
@@ -680,8 +677,8 @@ struct CmdDevelop : Common, MixEnvironment
 #else
         // If running a phase or single command, don't want an interactive shell running after
         // Ctrl-C, so don't pass --rcfile
-        auto args = phase || !command.empty() ? Strings{std::string(baseNameOf(shell)), rcFilePath}
-                                              : Strings{std::string(baseNameOf(shell)), "--rcfile", rcFilePath};
+        auto args = phase || !command.empty() ? Strings{shell.filename().string(), rcFilePath}
+                                              : Strings{shell.filename().string(), "--rcfile", rcFilePath};
 
         // Need to chdir since phases assume in flake directory
         if (phase) {
@@ -691,7 +688,7 @@ struct CmdDevelop : Common, MixEnvironment
                 auto sourcePath = installableFlake->getLockedFlake()->flake.resolvedRef.input.getSourcePath();
                 if (sourcePath) {
                     if (chdir(sourcePath->c_str()) == -1) {
-                        throw SysError("chdir to %s failed", *sourcePath);
+                        throw SysError("chdir to %s failed", PathFmt(*sourcePath));
                     }
                 }
             }

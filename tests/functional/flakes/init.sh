@@ -78,7 +78,7 @@ echo a > "$flakeDir/a"
 createGitRepo "$flakeDir"
 echo b > "$flakeDir/a"
 pushd "$flakeDir"
-(! nix flake init --template "git+file://$templatesDir") |& grep "refusing to overwrite existing file '$flakeDir/a'"
+(! nix flake init --template "git+file://$templatesDir") |& grep "refusing to overwrite existing file \"$flakeDir/a\""
 popd
 git -C "$flakeDir" commit -a -m 'Changed'
 
