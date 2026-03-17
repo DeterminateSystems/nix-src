@@ -161,12 +161,22 @@ void forEachOutput(
 
 void visit(
     std::optional<std::string> system,
+    bool includeLegacy,
     ref<AttrCursor> node,
     std::function<void(const Leaf & leaf)> visitLeaf,
     std::function<void(std::function<void(ForEachChild)>)> visitNonLeaf,
-    std::function<void(ref<AttrCursor> node, const std::vector<std::string> & systems)> visitFiltered)
+    std::function<void(ref<AttrCursor> node, const std::vector<std::string> & systems)> visitFiltered,
+    std::function<void(ref<AttrCursor> node)> visitLegacy)
 {
     Activity act(*logger, lvlInfo, actUnknown, fmt("evaluating '%s'", node->getAttrPathStr()));
+
+    /* Filter out legacy outputs, unless --legacy is enabled. */
+    if (!includeLegacy) {
+        if (auto b = node->maybeGetAttr("isLegacy"); b && b->getBool()) {
+            visitLegacy(node);
+            return;
+        }
+    }
 
     /* Apply the system type filter. */
     if (system) {
@@ -185,7 +195,7 @@ void visit(
                 try {
                     f(attrName, children->getAttr(attrName), i + 1 == attrNames.size());
                 } catch (Error & e) {
-                    // FIXME: make it a flake schema attribute whether to ignore evaluation errors.
+                    // FIXME: use the `isLegacy` attribute.
                     if (node->root->state.symbols[node->getAttrPath()[0]] != "legacyPackages") {
                         e.addTrace(
                             nullptr, "while evaluating the flake output attribute '%s':", node->getAttrPathStr());

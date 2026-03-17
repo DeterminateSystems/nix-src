@@ -172,7 +172,7 @@ void FutureVector::finishAll()
             } catch (...) {
                 if (ex) {
                     if (!getInterrupted())
-                        ignoreExceptionExceptInterrupt();
+                        logExceptionExceptInterrupt();
                 } else
                     ex = std::current_exception();
             }
