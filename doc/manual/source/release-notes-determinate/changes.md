@@ -201,16 +201,6 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 
 <!-- Determinate Nix version 3.17.1 -->
 
-* Fix crash in `nix repl` loading an invalid WASM file twice by @edolstra in [DeterminateSystems/nix-src#378](https://github.com/DeterminateSystems/nix-src/pull/378)
+* Flake inputs are substituted if possible before fetching from the authoritative source, in [DeterminateSystems/nix-src#380](https://github.com/DeterminateSystems/nix-src/pull/380)
 
-* Input::getAccessor(): Try substitution before fetching by @edolstra in [DeterminateSystems/nix-src#380](https://github.com/DeterminateSystems/nix-src/pull/380)
-
-* nix profile upgrade/remove: Implement tab completion by @edolstra in [DeterminateSystems/nix-src#382](https://github.com/DeterminateSystems/nix-src/pull/382)
-
-* Don't crash if SIGINT happens while printing an exception by @edolstra in [DeterminateSystems/nix-src#384](https://github.com/DeterminateSystems/nix-src/pull/384)
-
-* nix-env -i: Wait for the async path writer by @edolstra in [DeterminateSystems/nix-src#385](https://github.com/DeterminateSystems/nix-src/pull/385)
-
-* Add `isLegacy` flake schema output attribute by @edolstra in [DeterminateSystems/nix-src#381](https://github.com/DeterminateSystems/nix-src/pull/381)
-
-* Add tags to BuildProvenance by @edolstra in [DeterminateSystems/nix-src#374](https://github.com/DeterminateSystems/nix-src/pull/374)
+* Provenance now supports additional nix.conf-defined tags, in [DeterminateSystems/nix-src#374](https://github.com/DeterminateSystems/nix-src/pull/374)
