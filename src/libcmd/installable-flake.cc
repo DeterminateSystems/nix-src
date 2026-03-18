@@ -167,8 +167,11 @@ std::vector<AttrPath> InstallableFlake::getAttrPaths(bool useDefaultAttrPath, re
         }
     };
     doSchema("apps");
+    doSchema("defaultApp");
     doSchema("devShells");
+    doSchema("devShell");
     doSchema("packages");
+    doSchema("defaultPackage");
     doSchema("legacyPackages");
     for (auto & schema : schemas)
         if (!schemasSeen.contains(schema.first))
