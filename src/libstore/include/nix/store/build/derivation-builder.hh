@@ -57,6 +57,11 @@ struct DerivationBuilderParams
     /** The path of the derivation. */
     const StorePath & drvPath;
 
+    /**
+     * The provenance of the derivation, if known
+     */
+    const std::shared_ptr<const Provenance> drvProvenance;
+
     BuildResult & buildResult;
 
     /**
@@ -98,6 +103,11 @@ struct DerivationBuilderParams
     StringSet systemFeatures;
 
     DesugaredEnv desugaredEnv;
+
+    /**
+     * The activity corresponding to the build.
+     */
+    std::unique_ptr<Activity> & act;
 };
 
 /**

@@ -35,7 +35,13 @@ class EvalCache : public std::enable_shared_from_this<EvalCache>
     friend struct CachedEvalError;
 
     std::shared_ptr<AttrDb> db;
+
+public:
     EvalState & state;
+
+    std::function<AttrPath(AttrPath &&)> cleanupAttrPath = [](AttrPath && attrPath) { return std::move(attrPath); };
+
+private:
     typedef std::function<Value *()> RootLoader;
     RootLoader rootLoader;
     RootValue value;
@@ -99,7 +105,10 @@ class AttrCursor : public std::enable_shared_from_this<AttrCursor>
     friend class EvalCache;
     friend struct CachedEvalError;
 
+public:
     ref<EvalCache> root;
+
+private:
     using Parent = std::optional<std::pair<ref<AttrCursor>, Symbol>>;
     Parent parent;
     RootValue _value;
@@ -127,7 +136,11 @@ public:
 
     AttrPath getAttrPath() const;
 
+    AttrPath getAttrPathRaw() const;
+
     AttrPath getAttrPath(Symbol name) const;
+
+    AttrPath getAttrPathRaw(Symbol name) const;
 
     std::string getAttrPathStr() const;
 

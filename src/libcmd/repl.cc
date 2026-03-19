@@ -177,7 +177,7 @@ ReplExitStatus NixRepl::mainLoop()
         if (state->debugRepl) {
             debuggerNotice = " debugger";
         }
-        notice("Nix %1%%2%\nType :? for help.", nixVersion, debuggerNotice);
+        notice("Nix %s\nType :? for help.", version(), debuggerNotice);
     }
 
     isFirstRepl = false;
@@ -332,6 +332,7 @@ StorePath NixRepl::getDerivationPath(Value & v)
     auto drvPath = packageInfo->queryDrvPath();
     if (!drvPath)
         throw Error("expression did not evaluate to a valid derivation (no 'drvPath' attribute)");
+    state->waitForPath(*drvPath);
     if (!state->store->isValidPath(*drvPath))
         throw Error("expression evaluated to invalid derivation '%s'", state->store->printStorePath(*drvPath));
     return *drvPath;

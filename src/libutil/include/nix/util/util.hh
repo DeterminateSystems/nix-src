@@ -228,6 +228,11 @@ void ignoreExceptionInDestructor(Verbosity lvl = lvlError);
 void ignoreExceptionExceptInterrupt(Verbosity lvl = lvlError);
 
 /**
+ * Like ignoreExceptionExceptInterrupt(), but specifies the error prefix.
+ */
+void logExceptionExceptInterrupt(std::string_view prefix = "error: ", Verbosity lvl = lvlError);
+
+/**
  * Tree formatting.
  */
 constexpr char treeConn[] = "├───";
@@ -298,9 +303,15 @@ typename T::mapped_type * get(T & map, const K & key)
 template<class T, typename K>
 typename T::mapped_type * get(T && map, const K & key) = delete;
 
-/**
- * Look up a value in a `boost::concurrent_flat_map`.
- */
+template<class T>
+std::optional<typename T::mapped_type> getOptional(const T & map, const typename T::key_type & key)
+{
+    auto i = map.find(key);
+    if (i == map.end())
+        return std::nullopt;
+    return {i->second};
+}
+
 template<class T>
 std::optional<typename T::mapped_type> getConcurrent(const T & map, const typename T::key_type & key)
 {

@@ -65,5 +65,14 @@ endif
 # Darwin ld doesn't like "X.Y.ZpreABCD+W"
 nix_soversion = meson.project_version().split('+')[0].split('pre')[0]
 
+cxx = meson.get_compiler('cpp')
+
+# Clang does not support prelinking on static builds
+if cxx.get_id() == 'clang' and get_option('default_library') == 'static'
+  prelink = false
+else
+  prelink = true
+endif
+
 subdir('assert-fail')
 subdir('asan-options')
