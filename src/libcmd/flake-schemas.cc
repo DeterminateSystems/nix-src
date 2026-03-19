@@ -56,7 +56,8 @@ ref<EvalCache> call(
         lockedDefaultSchemasFlake.getFingerprint(*state.store, state.fetchSettings);
 
     std::optional<Fingerprint> fingerprint2;
-    if (fingerprint && lockedDefaultSchemasFlakeFingerprint)
+    if (allowEvalCache && evalSettings.useEvalCache && evalSettings.pureEval && fingerprint
+        && lockedDefaultSchemasFlakeFingerprint)
         fingerprint2 = hashString(
             HashAlgorithm::SHA256,
             fmt("app:%s:%s:%s",
@@ -64,10 +65,14 @@ ref<EvalCache> call(
                 fingerprint->to_string(HashFormat::Base16, false),
                 lockedDefaultSchemasFlakeFingerprint->to_string(HashFormat::Base16, false)));
 
+    if (fingerprint2) {
+        auto i = state.evalCaches.find(*fingerprint2);
+        if (i != state.evalCaches.end())
+            return i->second;
+    }
+
     auto cache = make_ref<EvalCache>(
-        allowEvalCache && evalSettings.useEvalCache && evalSettings.pureEval ? fingerprint2 : std::nullopt,
-        state,
-        [&state, lockedFlake, callFlakeSchemasNix, lockedDefaultSchemasFlake]() {
+        fingerprint2, state, [&state, lockedFlake, callFlakeSchemasNix, lockedDefaultSchemasFlake]() {
             auto vCallFlakeSchemas = state.allocValue();
             state.eval(
                 state.parseExprFromString(callFlakeSchemasNix, state.rootPath(CanonPath::root)), *vCallFlakeSchemas);
@@ -120,6 +125,9 @@ ref<EvalCache> call(
 
         return res;
     };
+
+    if (fingerprint2)
+        state.evalCaches.emplace(*fingerprint2, cache);
 
     return cache;
 }
