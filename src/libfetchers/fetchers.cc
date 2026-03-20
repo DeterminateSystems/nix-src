@@ -1,6 +1,7 @@
 #include "nix/fetchers/fetchers.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/fs-sink.hh"
+#include "nix/store/build.hh"
 #include "nix/util/source-path.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/json-utils.hh"
@@ -382,7 +383,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
     /* If not, try to substitute the input. */
     if (storePath) {
         try {
-            store.ensurePath(*storePath);
+            store.getBuilder()->ensurePath(*storePath);
             return makeStoreAccessor();
         }
         // Ignore any substitution error.
