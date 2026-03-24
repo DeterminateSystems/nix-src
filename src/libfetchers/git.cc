@@ -813,10 +813,11 @@ struct GitInputScheme : InputScheme
             options.submodules
                 ? [&]() {
                       // Nix < 2.20 used `git checkout` for repos with submodules.
-                      runProgram({.program = "git", .args = {"init", tmpDir}});
+                      runProgram({.program = "git", .args = {"init", tmpDir, "-b", "master"}});
                       runProgram({.program = "git", .args = {"-C", tmpDir, "remote", "add", "origin", repoDir}});
-                      runProgram({.program = "git", .args = {"-C", tmpDir, "fetch", "origin", rev.gitRev()}});
-                      runProgram({.program = "git", .args = {"-C", tmpDir, "checkout", rev.gitRev()}});
+                      runProgram(
+                          {.program = "git", .args = {"-C", tmpDir, "fetch", "--quiet", "origin", rev.gitRev()}});
+                      runProgram({.program = "git", .args = {"-C", tmpDir, "checkout", "--quiet", rev.gitRev()}});
                       PathFilter filter = [&](const Path & path) { return baseNameOf(path) != ".git"; };
                       return store.addToStore(
                           "source",
