@@ -32,12 +32,6 @@ namespace nix::fetchers {
 
 namespace {
 
-// Explicit initial branch of our bare repo to suppress warnings from new version of git.
-// The value itself does not matter, since we always fetch a specific revision or branch.
-// It is set with `-c init.defaultBranch=` instead of `--initial-branch=` to stay compatible with
-// old version of git, which will ignore unrecognized `-c` options.
-const std::string gitInitialBranch = "__nix_dummy_branch";
-
 bool isCacheFileWithinTtl(time_t now, const struct stat & st)
 {
     return st.st_mtime + static_cast<time_t>(settings.tarballTtl) > now;
@@ -118,7 +112,7 @@ std::optional<std::string> readHeadCached(const std::string & actualUrl, bool sh
     std::optional<std::string> cachedRef;
     if (stat(headRefFile.string().c_str(), &st) == 0) {
         cachedRef = readHead(cacheDir);
-        if (cachedRef != std::nullopt && *cachedRef != gitInitialBranch && isCacheFileWithinTtl(now, st)) {
+        if (cachedRef != std::nullopt && isCacheFileWithinTtl(now, st)) {
             debug("using cached HEAD ref '%s' for repo '%s'", *cachedRef, actualUrl);
             return cachedRef;
         }
