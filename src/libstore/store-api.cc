@@ -206,7 +206,8 @@ void Store::addMultipleToStore(Source & source, RepairFlag repair, CheckSigsFlag
                 .version = 16,
             });
         info.ultimate = false;
-        addToStore(info, source, repair, checkSigs);
+        EnsureRead wrapper{source, info.narSize};
+        addToStore(info, wrapper, repair, checkSigs);
     }
 }
 
@@ -920,6 +921,9 @@ std::shared_ptr<const ValidPathInfo> copyStorePath(
     info->ultimate = false;
 
     info->provenance = addCopiedProvenance(info->provenance, srcStore);
+
+    if (getEnv("_NIX_TEST_CONCURRENT_SUBSTITUTION"))
+        std::this_thread::sleep_for(std::chrono::seconds(1));
 
     auto source = sinkToSource(
         [&](Sink & sink) {
