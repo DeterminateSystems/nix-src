@@ -2445,7 +2445,10 @@ BackedStringView EvalState::coerceToString(
         } else {
             auto path = v.path();
             if (path.accessor == rootFS && store->isInStore(path.path.abs())) {
-                context.insert(NixStringContextElem::Path{.storePath = store->toStorePath(path.path.abs()).first});
+                try {
+                    context.insert(NixStringContextElem::Path{.storePath = store->toStorePath(path.path.abs()).first});
+                } catch (Error &) {
+                }
             }
             return std::string(path.path.abs());
         }
