@@ -16,6 +16,14 @@
 using namespace nix;
 
 /**
+ * Check whether a path has a "profiles" component.
+ */
+static bool hasProfilesComponent(const std::filesystem::path & path)
+{
+    return std::ranges::contains(path, OS_STR("profiles"));
+}
+
+/**
  * Settings related to upgrading Nix itself.
  */
 struct UpgradeSettings : Config
