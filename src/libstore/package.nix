@@ -27,7 +27,7 @@
 
   withAWS ?
     # Default is this way because there have been issues building this dependency
-    (lib.meta.availableOn stdenv.hostPlatform aws-c-common),
+    (lib.meta.availableOn stdenv.hostPlatform aws-c-common) && !stdenv.hostPlatform.isStatic,
 
   enableWasm ? !stdenv.hostPlatform.isStatic,
 }:
