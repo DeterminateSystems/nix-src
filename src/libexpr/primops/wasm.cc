@@ -465,11 +465,8 @@ struct NixWasmInstance
     uint32_t read_file(ValueId pathId, uint32_t ptr, uint32_t len)
     {
         auto & pathValue = getValue(pathId);
-        state.forceValue(pathValue, noPos);
-        if (pathValue.type() != nPath)
-            throw Error("read_file expects a path value");
+        auto path = state.realisePath(noPos, pathValue);
 
-        auto path = pathValue.path();
         auto contents = path.readFile();
 
         if (contents.size() > std::numeric_limits<uint32_t>::max())
@@ -536,20 +533,29 @@ static void regFuns(Linker & linker, bool useWasi)
     }
 }
 
+template<typename T>
+struct LazyMakeRef
+{
+    ref<T> p;
+
+    template<typename... Args>
+    LazyMakeRef(Args &&... args)
+        : p(make_ref<T>(std::move(args...)))
+    {
+    }
+};
+
 static NixWasmInstance instantiateWasm(EvalState & state, const SourcePath & wasmPath)
 {
     // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
     // FIXME: move to EvalState?
     // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
-    static boost::concurrent_flat_map<SourcePath, std::shared_ptr<NixWasmInstancePre>> instancesPre;
+    static boost::concurrent_flat_map<SourcePath, LazyMakeRef<NixWasmInstancePre>> instancesPre;
 
     std::shared_ptr<NixWasmInstancePre> instancePre;
 
     instancesPre.try_emplace_and_cvisit(
-        wasmPath,
-        nullptr,
-        [&](auto & i) { instancePre = i.second = std::make_shared<NixWasmInstancePre>(wasmPath); },
-        [&](auto & i) { instancePre = i.second; });
+        wasmPath, wasmPath, [&](auto & i) { instancePre = i.second.p; }, [&](auto & i) { instancePre = i.second.p; });
 
     return NixWasmInstance{state, ref(instancePre)};
 }

@@ -3,6 +3,7 @@
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/memory-source-accessor.hh"
 #include "nix/util/mounted-source-accessor.hh"
+#include "nix/flake/provenance.hh"
 
 namespace nix::flake_schemas {
 
@@ -55,7 +56,8 @@ ref<EvalCache> call(
         lockedDefaultSchemasFlake.getFingerprint(*state.store, state.fetchSettings);
 
     std::optional<Fingerprint> fingerprint2;
-    if (fingerprint && lockedDefaultSchemasFlakeFingerprint)
+    if (allowEvalCache && evalSettings.useEvalCache && evalSettings.pureEval && fingerprint
+        && lockedDefaultSchemasFlakeFingerprint)
         fingerprint2 = hashString(
             HashAlgorithm::SHA256,
             fmt("app:%s:%s:%s",
@@ -63,10 +65,14 @@ ref<EvalCache> call(
                 fingerprint->to_string(HashFormat::Base16, false),
                 lockedDefaultSchemasFlakeFingerprint->to_string(HashFormat::Base16, false)));
 
+    if (fingerprint2) {
+        auto i = state.evalCaches.find(*fingerprint2);
+        if (i != state.evalCaches.end())
+            return i->second;
+    }
+
     auto cache = make_ref<EvalCache>(
-        allowEvalCache && evalSettings.useEvalCache && evalSettings.pureEval ? fingerprint2 : std::nullopt,
-        state,
-        [&state, lockedFlake, callFlakeSchemasNix, lockedDefaultSchemasFlake]() {
+        fingerprint2, state, [&state, lockedFlake, callFlakeSchemasNix, lockedDefaultSchemasFlake]() {
             auto vCallFlakeSchemas = state.allocValue();
             state.eval(
                 state.parseExprFromString(callFlakeSchemasNix, state.rootPath(CanonPath::root)), *vCallFlakeSchemas);
@@ -120,6 +126,9 @@ ref<EvalCache> call(
         return res;
     };
 
+    if (fingerprint2)
+        state.evalCaches.emplace(*fingerprint2, cache);
+
     return cache;
 }
 
@@ -161,12 +170,28 @@ void forEachOutput(
 
 void visit(
     std::optional<std::string> system,
+    bool includeLegacy,
     ref<AttrCursor> node,
+    std::shared_ptr<const Provenance> provenance,
     std::function<void(const Leaf & leaf)> visitLeaf,
     std::function<void(std::function<void(ForEachChild)>)> visitNonLeaf,
-    std::function<void(ref<AttrCursor> node, const std::vector<std::string> & systems)> visitFiltered)
+    std::function<void(ref<AttrCursor> node, const std::vector<std::string> & systems)> visitFiltered,
+    std::function<void(ref<AttrCursor> node)> visitLegacy)
 {
     Activity act(*logger, lvlInfo, actUnknown, fmt("evaluating '%s'", node->getAttrPathStr()));
+
+    PushProvenance pushedProvenance(
+        node->root->state,
+        provenance ? std::make_shared<const FlakeProvenance>(provenance, node->getAttrPathStr(), evalSettings.pureEval)
+                   : nullptr);
+
+    /* Filter out legacy outputs, unless --legacy is enabled. */
+    if (!includeLegacy) {
+        if (auto b = node->maybeGetAttr("isLegacy"); b && b->getBool()) {
+            visitLegacy(node);
+            return;
+        }
+    }
 
     /* Apply the system type filter. */
     if (system) {
@@ -185,7 +210,7 @@ void visit(
                 try {
                     f(attrName, children->getAttr(attrName), i + 1 == attrNames.size());
                 } catch (Error & e) {
-                    // FIXME: make it a flake schema attribute whether to ignore evaluation errors.
+                    // FIXME: use the `isLegacy` attribute.
                     if (node->root->state.symbols[node->getAttrPath()[0]] != "legacyPackages") {
                         e.addTrace(
                             nullptr, "while evaluating the flake output attribute '%s':", node->getAttrPathStr());

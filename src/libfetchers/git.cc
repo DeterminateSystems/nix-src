@@ -873,8 +873,8 @@ struct GitInputScheme : InputScheme
         return ref{accessor};
     }
 
-    std::pair<ref<SourceAccessor>, Input>
-    getAccessorFromCommit(const Settings & settings, Store & store, RepoInfo & repoInfo, Input && input) const
+    std::optional<std::pair<ref<SourceAccessor>, Input>> getAccessorFromCommit(
+        const Settings & settings, Store & store, RepoInfo & repoInfo, Input && input, bool fastOnly) const
     {
         assert(!repoInfo.workdirInfo.isDirty);
 
@@ -942,6 +942,9 @@ struct GitInputScheme : InputScheme
             }
 
             if (doFetch) {
+                if (fastOnly)
+                    return std::nullopt;
+
                 try {
                     auto fetchRef = getAllRefsAttr(input)             ? "refs/*:refs/*"
                                     : input.getRev()                  ? input.getRev()->gitRev()
@@ -1110,7 +1113,7 @@ struct GitInputScheme : InputScheme
 
         assert(!origRev || origRev == rev);
 
-        return {accessor, std::move(input)};
+        return {{accessor, std::move(input)}};
     }
 
     std::pair<ref<SourceAccessor>, Input>
@@ -1197,8 +1200,8 @@ struct GitInputScheme : InputScheme
         return {accessor, std::move(input)};
     }
 
-    std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, Store & store, const Input & _input) const override
+    std::optional<std::pair<ref<SourceAccessor>, Input>>
+    getAccessor(const Settings & settings, Store & store, const Input & _input, bool fastOnly) const override
     {
         Input input(_input);
 
@@ -1213,11 +1216,9 @@ struct GitInputScheme : InputScheme
             throw UnimplementedError("exportIgnore and submodules are not supported together yet");
         }
 
-        auto [accessor, final] = input.getRef() || input.getRev() || !repoInfo.getPath()
-                                     ? getAccessorFromCommit(settings, store, repoInfo, std::move(input))
-                                     : getAccessorFromWorkdir(settings, store, repoInfo, std::move(input));
-
-        return {accessor, std::move(final)};
+        return input.getRef() || input.getRev() || !repoInfo.getPath()
+                   ? getAccessorFromCommit(settings, store, repoInfo, std::move(input), fastOnly)
+                   : std::optional{getAccessorFromWorkdir(settings, store, repoInfo, std::move(input))};
     }
 
     std::optional<std::string> getFingerprint(Store & store, const Input & input) const override

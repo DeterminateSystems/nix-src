@@ -429,6 +429,8 @@ public:
      * Get the options needed for profile directory functions.
      */
     ProfileDirsOptions getProfileDirsOptions() const;
+
+    const ExternalBuilder * findExternalDerivationBuilderIfSupported(const Derivation & drv);
 };
 
 // FIXME: don't use a global variable.

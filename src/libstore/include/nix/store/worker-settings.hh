@@ -376,6 +376,15 @@ public:
         )"};
 
     std::optional<std::string> getHostName();
+
+    JSONSetting<StringMap> buildProvenanceTags{
+        this,
+        {},
+        "build-provenance-tags",
+        R"(
+          Arbitrary name/value pairs that are recorded in the build provenance of store paths built by this machine.
+          This can be used to tag builds with metadata such as the CI job URL, build cluster name, etc.
+        )"};
 };
 
 } // namespace nix

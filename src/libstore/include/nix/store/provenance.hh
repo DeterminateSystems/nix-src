@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nix/util/provenance.hh"
+#include "nix/util/types.hh"
 #include "nix/store/path.hh"
 #include "nix/store/outputs-spec.hh"
 
@@ -24,6 +25,11 @@ struct BuildProvenance : Provenance
     std::optional<std::string> buildHost;
 
     /**
+     * User-defined tags from the build host.
+     */
+    StringMap tags;
+
+    /**
      * The system type of the derivation.
      */
     std::string system;
@@ -39,15 +45,9 @@ struct BuildProvenance : Provenance
         const StorePath & drvPath,
         const OutputName & output,
         std::optional<std::string> buildHost,
+        StringMap tags,
         std::string system,
-        std::shared_ptr<const Provenance> next)
-        : drvPath(drvPath)
-        , output(output)
-        , buildHost(std::move(buildHost))
-        , system(std::move(system))
-        , next(std::move(next))
-    {
-    }
+        std::shared_ptr<const Provenance> next);
 
     nlohmann::json to_json() const override;
 };

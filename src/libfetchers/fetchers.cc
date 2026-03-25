@@ -357,9 +357,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         return makeStoreAccessor();
     }
 
-    try {
-        auto [accessor, result] = scheme->getAccessor(settings, store, *this);
-
+    auto fixupAccessor = [&](ref<SourceAccessor> accessor, Input result) -> std::pair<ref<SourceAccessor>, Input> {
         if (auto fp = accessor->getFingerprint(CanonPath::root).second)
             result.cachedFingerprint = *fp;
         else
@@ -367,26 +365,32 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
 
         accessor->provenance = std::make_shared<TreeProvenance>(result);
 
-        return {accessor, std::move(result)};
-    } catch (Error & e) {
-        if (storePath) {
-            // Fall back to substitution.
-            try {
-                store.ensurePath(*storePath);
-                warn(
-                    "Successfully substituted input '%s' after failing to fetch it from its original location: %s",
-                    to_string(),
-                    e.info().msg);
-                return makeStoreAccessor();
-            }
-            // Ignore any substitution error, rethrow the original error.
-            catch (Error & e2) {
-                debug("substitution of input '%s' failed: %s", to_string(), e2.info().msg);
-            } catch (...) {
-            }
-        }
-        throw;
+        return {accessor, result};
+    };
+
+    /* See if the input is in the cache of the fetcher. */
+    try {
+        if (auto res = scheme->getAccessor(settings, store, *this, true))
+            return fixupAccessor(res->first, std::move(res->second));
+    } catch (...) {
     }
+
+    /* If not, try to substitute the input. */
+    if (storePath) {
+        try {
+            store.ensurePath(*storePath);
+            return makeStoreAccessor();
+        }
+        // Ignore any substitution error.
+        catch (Error & e2) {
+            debug("substitution of input '%s' failed: %s", to_string(), e2.info().msg);
+        } catch (...) {
+        }
+    }
+
+    /* If we can't substitute, then fetch normally. */
+    auto [accessor, result] = scheme->getAccessor(settings, store, *this);
+    return fixupAccessor(accessor, result);
 }
 
 Input Input::applyOverrides(std::optional<std::string> ref, std::optional<Hash> rev) const

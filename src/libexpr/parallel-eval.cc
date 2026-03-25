@@ -17,7 +17,9 @@ thread_local bool Executor::amWorkerThread{false};
 
 unsigned int Executor::getEvalCores(const EvalSettings & evalSettings)
 {
-    return evalSettings.evalCores == 0UL ? Settings::getDefaultCores() : evalSettings.evalCores;
+    return evalSettings.evalProfilerMode != EvalProfilerMode::disabled ? 1
+           : evalSettings.evalCores == 0UL                             ? Settings::getDefaultCores()
+                                                                       : evalSettings.evalCores;
 }
 
 Executor::Executor(const EvalSettings & evalSettings)
@@ -172,7 +174,7 @@ void FutureVector::finishAll()
             } catch (...) {
                 if (ex) {
                     if (!getInterrupted())
-                        ignoreExceptionExceptInterrupt();
+                        logExceptionExceptInterrupt();
                 } else
                     ex = std::current_exception();
             }
@@ -272,7 +274,7 @@ static void prim_parallel(EvalState & state, const PosIdx pos, Value ** args, Va
 {
     state.forceList(*args[0], pos, "while evaluating the first argument passed to builtins.parallel");
 
-    if (state.executor->evalCores > 1) {
+    if (state.executor->enabled) {
         Executor::WorkItems work;
         for (auto value : args[0]->listView())
             if (!value->isFinished())

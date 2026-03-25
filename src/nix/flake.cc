@@ -384,7 +384,9 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
         visit = [&](ref<eval_cache::AttrCursor> node) {
             flake_schemas::visit(
                 checkAllSystems ? std::optional<std::string>() : localSystem,
+                false, // FIXME: add a --legacy flag?
                 node,
+                flake->flake.provenance,
 
                 [&](const flake_schemas::Leaf & leaf) {
                     try {
@@ -454,7 +456,9 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                 [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
                     for (auto & s : systems)
                         omittedSystems.lock()->insert(s);
-                });
+                },
+
+                [&](ref<eval_cache::AttrCursor> node) {});
         };
 
         flake_schemas::forEachOutput(
@@ -907,7 +911,9 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
         visit = [&](ref<eval_cache::AttrCursor> node, nlohmann::json & obj) {
             flake_schemas::visit(
                 showAllSystems ? std::optional<std::string>() : localSystem,
+                showLegacy,
                 node,
+                flake->flake.provenance,
 
                 [&](const flake_schemas::Leaf & leaf) {
                     if (auto what = leaf.what())
@@ -968,7 +974,9 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
 
                 [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
                     obj.emplace("filtered", true);
-                });
+                },
+
+                [&](ref<eval_cache::AttrCursor> node) { obj.emplace("isLegacy", true); });
         };
 
         auto inv = nlohmann::json::object();
@@ -981,9 +989,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 bool isLast) {
                 auto & j = inv.emplace(state->symbols[outputName], nlohmann::json::object()).first.value();
 
-                if (!showLegacy && state->symbols[outputName] == "legacyPackages") {
-                    j.emplace("skipped", true);
-                } else if (output) {
+                if (output) {
                     j.emplace("doc", doc);
                     auto & j2 = j.emplace("output", nlohmann::json::object()).first.value();
                     state->spawn(futures, 1, [&visit, output, &j2]() { visit(ref(output), j2); });
@@ -1005,6 +1011,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
             render = [&](nlohmann::json j, const std::string & headerPrefix, const std::string & nextPrefix) {
                 auto what = j.find("what");
                 auto filtered = j.find("filtered");
+                auto isLegacy = j.find("isLegacy");
                 auto derivation = j.find("derivation");
 
                 auto s = headerPrefix;
@@ -1020,6 +1027,9 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
 
                 if (filtered != j.end() && (bool) *filtered)
                     s += " " ANSI_WARNING "omitted" ANSI_NORMAL " (use '--all-systems' to show)";
+
+                if (isLegacy != j.end() && (bool) *isLegacy)
+                    s += " " ANSI_WARNING "omitted" ANSI_NORMAL " (use '--legacy' to show)";
 
                 logger->cout(s);
 
@@ -1051,8 +1061,6 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                     render(*output, headerPrefix, nextPrefix);
                 else if (child.value().contains("unknown"))
                     logger->cout(headerPrefix + ANSI_WARNING " unknown flake output" ANSI_NORMAL);
-                else if (child.value().contains("skipped"))
-                    logger->cout(headerPrefix + ANSI_WARNING " omitted" ANSI_NORMAL " (use '--legacy' to show)");
             }
         }
     }

@@ -405,6 +405,20 @@ public:
     }
 };
 
+/**
+ * A setting whose value is represented as JSON. The type `T` must be supported by `nlohmann::json`'s `get<T>()`.
+ */
+template<typename T>
+class JSONSetting : public Setting<T>
+{
+public:
+    using Setting<T>::Setting;
+
+    T parse(const std::string & str) const override;
+
+    std::string to_string() const override;
+};
+
 template<>
 void BaseSetting<std::set<std::filesystem::path>>::appendOrSet(std::set<std::filesystem::path> newValue, bool append);
 

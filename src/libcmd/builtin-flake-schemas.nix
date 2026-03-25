@@ -6,7 +6,40 @@
     let
       mapAttrsToList = f: attrs: map (name: f name attrs.${name}) (builtins.attrNames attrs);
 
-      checkModule = module: builtins.isAttrs module || builtins.isFunction module;
+      checkModule =
+        module_:
+        let
+          module = if builtins.isPath module_ then import module_ else module_;
+        in
+        builtins.isAttrs module || builtins.isFunction module;
+
+      mkApp = system: app: {
+        forSystems = [ system ];
+        evalChecks.isValidApp =
+          app ? type
+          && app.type == "app"
+          && app ? program
+          && builtins.isString app.program
+          &&
+            builtins.removeAttrs app [
+              "type"
+              "program"
+              "meta"
+            ] == { };
+        what = "app";
+        shortDescription = app.meta.description or "";
+      };
+
+      mkPackage = isFlakeCheck: what: system: package: {
+        forSystems = [ system ];
+        shortDescription = package.meta.description or "";
+        derivationAttrPath = [ ];
+        inherit what isFlakeCheck;
+      };
+
+      singleDerivationInventory =
+        what: isFlakeCheck: output:
+        self.lib.mkChildren (builtins.mapAttrs (mkPackage isFlakeCheck what) output);
 
       schemasSchema = {
         version = 1;
@@ -41,31 +74,22 @@
         inventory =
           output:
           self.lib.mkChildren (
-            builtins.mapAttrs (
-              system: apps:
-              let
-                forSystems = [ system ];
-              in
-              {
-                inherit forSystems;
-                children = builtins.mapAttrs (appName: app: {
-                  inherit forSystems;
-                  evalChecks.isValidApp =
-                    app ? type
-                    && app.type == "app"
-                    && app ? program
-                    && builtins.isString app.program
-                    &&
-                      builtins.removeAttrs app [
-                        "type"
-                        "program"
-                        "meta"
-                      ] == { };
-                  what = "app";
-                }) apps;
-              }
-            ) output
+            builtins.mapAttrs (system: apps: {
+              forSystems = [ system ];
+              children = builtins.mapAttrs (appName: app: mkApp system app) apps;
+            }) output
           );
+      };
+
+      defaultAppSchema = {
+        version = 1;
+        doc = ''
+          **DEPRECATED**. Use `apps.<system>.default` instead.
+        '';
+        roles.nix-run = { };
+        appendSystem = true;
+        defaultAttrPath = [ ];
+        inventory = output: self.lib.mkChildren (builtins.mapAttrs mkApp output);
       };
 
       packagesSchema = {
@@ -82,12 +106,26 @@
         inventory = self.lib.derivationsInventory "package" false;
       };
 
-      dockerImagesSchema = {
+      defaultPackageSchema = {
         version = 1;
         doc = ''
-          The `dockerImages` flake output contains derivations that build valid Docker images.
+          **DEPRECATED**. Use `packages.<system>.default` instead.
         '';
-        inventory = self.lib.derivationsInventory "Docker image" false;
+        roles.nix-build = { };
+        roles.nix-run = { };
+        roles.nix-develop = { };
+        roles.nix-search = { };
+        appendSystem = true;
+        defaultAttrPath = [ ];
+        inventory = singleDerivationInventory "package" false;
+      };
+
+      ociImagesSchema = {
+        version = 1;
+        doc = ''
+          The `ociImages` flake output contains derivations that build valid Open Container Initiative images.
+        '';
+        inventory = self.lib.derivationsInventory "OCI image" false;
       };
 
       legacyPackagesSchema = {
@@ -105,6 +143,7 @@
           self.lib.mkChildren (
             builtins.mapAttrs (systemType: packagesForSystem: {
               forSystems = [ systemType ];
+              isLegacy = true;
               children =
                 let
                   recurse =
@@ -159,6 +198,17 @@
         appendSystem = true;
         defaultAttrPath = [ "default" ];
         inventory = self.lib.derivationsInventory "development environment" false;
+      };
+
+      devShellSchema = {
+        version = 1;
+        doc = ''
+          **DEPRECATED**. Use `devShells.<system>.default` instead.
+        '';
+        roles.nix-develop = { };
+        appendSystem = true;
+        defaultAttrPath = [ ];
+        inventory = singleDerivationInventory "development environment" false;
       };
 
       formatterSchema = {
@@ -252,9 +302,9 @@
                 # flake here. Maybe this schema should be moved to the
                 # nixpkgs flake, where it does have access.
                 if !builtins.isFunction overlay then
-                  throw "overlay is not a function, but a set instead"
+                  throw "Overlay is not a function. It should be structured like: `final: previous: { /* ... */ }`."
                 else
-                  builtins.isAttrs (overlay { } { });
+                  true;
             }) output
           );
       };
@@ -404,13 +454,9 @@
           self.lib.mkChildren (
             builtins.mapAttrs (systemType: packagesForSystem: {
               forSystems = [ systemType ];
-              children = builtins.mapAttrs (packageName: package: {
-                forSystems = [ systemType ];
-                shortDescription = package.meta.description or "";
-                derivationAttrPath = [ ];
-                inherit what;
-                isFlakeCheck = isFlakeCheck;
-              }) packagesForSystem;
+              children = builtins.mapAttrs (
+                packageName: mkPackage isFlakeCheck what systemType
+              ) packagesForSystem;
             }) output
           );
       };
@@ -418,10 +464,13 @@
       # FIXME: distinguish between available and active schemas?
       schemas.schemas = schemasSchema;
       schemas.apps = appsSchema;
+      schemas.defaultApp = defaultAppSchema;
       schemas.packages = packagesSchema;
+      schemas.defaultPackage = defaultPackageSchema;
       schemas.legacyPackages = legacyPackagesSchema;
       schemas.checks = checksSchema;
       schemas.devShells = devShellsSchema;
+      schemas.devShell = devShellSchema;
       schemas.formatter = formatterSchema;
       schemas.templates = templatesSchema;
       schemas.hydraJobs = hydraJobsSchema;
@@ -432,7 +481,7 @@
       schemas.homeModules = homeModulesSchema;
       schemas.darwinConfigurations = darwinConfigurationsSchema;
       schemas.darwinModules = darwinModulesSchema;
-      schemas.dockerImages = dockerImagesSchema;
+      schemas.ociImages = ociImagesSchema;
       schemas.bundlers = bundlersSchema;
     };
 }

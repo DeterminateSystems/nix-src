@@ -40,6 +40,7 @@ Both leaf and non-leaf nodes can have the following attributes:
 | Attribute    | Description                                                                                                                                                                                                                                                                                                                                            |
 | :----------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `forSystems` | A list of Nix system types (e.g. `["x86_64-linux"]`) supported by this node. This is used by tools to skip nodes that cannot be built on the user's system. Setting this on a non-leaf node allows all the children to be skipped, regardless of the `forSystems` attributes of the children. If this attribute is not set, the node is never skipped. |
+| `isLegacy`   | If set to true, this node is skipped unless the `--legacy` CLI flag is set. |
 
 # Example
 

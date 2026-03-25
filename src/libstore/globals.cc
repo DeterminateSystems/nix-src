@@ -483,6 +483,24 @@ std::string BaseSetting<LocalSettings::ExternalBuilders>::to_string() const
     return nlohmann::json(value).dump();
 }
 
+template<typename T>
+T JSONSetting<T>::parse(const std::string & str) const
+{
+    try {
+        return nlohmann::json::parse(str).template get<T>();
+    } catch (std::exception & e) {
+        throw UsageError("parsing setting '%s': %s", BaseSetting<T>::name, e.what());
+    }
+}
+
+template<typename T>
+std::string JSONSetting<T>::to_string() const
+{
+    return nlohmann::json(BaseSetting<T>::get()).dump();
+}
+
+template class JSONSetting<StringMap>;
+
 template<>
 void BaseSetting<PathsInChroot>::appendOrSet(PathsInChroot newValue, bool append)
 {

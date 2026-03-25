@@ -138,9 +138,11 @@ struct PathInputScheme : InputScheme
         throw Error("cannot fetch input '%s' because it uses a relative path", input.to_string());
     }
 
-    std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, Store & store, const Input & _input) const override
+    std::optional<std::pair<ref<SourceAccessor>, Input>>
+    getAccessor(const Settings & settings, Store & store, const Input & _input, bool fastOnly) const override
     {
+        // Note: fastOnly is ignored because the path fetcher is always fast.
+
         Input input(_input);
 
         auto absPath = getAbsPath(input);
@@ -166,7 +168,7 @@ struct PathInputScheme : InputScheme
             }
         }
 
-        return {accessor, std::move(input)};
+        return {{accessor, std::move(input)}};
     }
 };
 

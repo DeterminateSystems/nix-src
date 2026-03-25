@@ -13,6 +13,7 @@
 #include "nix/store/derivations.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/util/callback.hh"
+#include "nix/util/terminal.hh"
 
 #include <memory>
 #include <string>
@@ -79,6 +80,9 @@ struct CmdProvenanceShow : StorePathsCommand
                     build->output,
                     build->buildHost.value_or("unknown host").c_str(),
                     build->system);
+                for (auto & [tagName, tagValue] : build->tags)
+                    logger->cout(
+                        "  tag " ANSI_BOLD "%s" ANSI_NORMAL ": %s", tagName, filterANSIEscapes(tagValue, true));
                 provenance = build->next;
             }
 
