@@ -9,6 +9,8 @@ case $system in
         skipTest "Not running Linux";
 esac
 
+TODO_NixOS
+
 set -m # enable job control, needed for kill
 
 programPath=$(nix-build --no-link ./gc-runtime.nix -A program)
