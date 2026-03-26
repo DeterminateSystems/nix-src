@@ -111,6 +111,7 @@ struct WorkerProto
 
     static constexpr std::string_view featureQueryActiveBuilds = "queryActiveBuilds";
     static constexpr std::string_view featureProvenance = "provenance";
+    static constexpr std::string_view featureVersionedAddToStoreMultiple = "versionedAddToStoreMultiple";
 
     /**
      * A unidirectional read connection, to be used by the read half of the
