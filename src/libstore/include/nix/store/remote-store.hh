@@ -103,8 +103,6 @@ struct RemoteStore : public virtual Store,
 
     void addToStore(const ValidPathInfo & info, Source & nar, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
-    void addMultipleToStore(Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override;
-
     void
     addMultipleToStore(PathsSource && pathsToCopy, Activity & act, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
