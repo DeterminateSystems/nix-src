@@ -122,7 +122,6 @@ struct WorkerProto
         Source & from;
         const Version & version;
         bool shortStorePaths = false;
-        bool provenance = false;
     };
 
     /**
@@ -134,7 +133,6 @@ struct WorkerProto
         Sink & to;
         const Version & version;
         bool shortStorePaths = false;
-        bool provenance = false;
     };
 
     /**
