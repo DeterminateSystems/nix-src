@@ -521,7 +521,9 @@ static void performOp(
                     *store,
                     WorkerProto::ReadConn{
                         .from = source,
-                        .version = {.number = {.major = 1, .minor = 16}},
+                        .version = conn.protoVersion.features.contains(WorkerProto::featureVersionedAddToStoreMultiple)
+                                       ? conn.protoVersion
+                                       : WorkerProto::Version{.number = {.major = 1, .minor = 16}},
                     });
                 info.ultimate = false;
                 EnsureRead wrapper{source, info.narSize};

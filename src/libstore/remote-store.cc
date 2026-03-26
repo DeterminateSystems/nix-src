@@ -496,7 +496,9 @@ void RemoteStore::addMultipleToStore(
                 *this,
                 WorkerProto::WriteConn{
                     .to = sink,
-                    .version = {.number = {.major = 1, .minor = 16}},
+                    .version = conn->protoVersion.features.contains(WorkerProto::featureVersionedAddToStoreMultiple)
+                                   ? conn->protoVersion
+                                   : WorkerProto::Version{.number = {.major = 1, .minor = 16}},
                 },
                 pathInfo);
             pathSource->drainInto(sink);
