@@ -12,11 +12,9 @@ repo=$TEST_ROOT/./git
 
 export _NIX_FORCE_HTTP=1
 
-rm -rf "$repo" "${repo}"-tmp "$TEST_HOME"/.cache/nix "$TEST_ROOT"/worktree "$TEST_ROOT"/minimal
+rm -rf "${repo}"-tmp "$TEST_HOME"/.cache/nix "$TEST_ROOT"/worktree "$TEST_ROOT"/minimal
 
-git init "$repo"
-git -C "$repo" config user.email "foobar@example.com"
-git -C "$repo" config user.name "Foobar"
+createGitRepo "$repo"
 
 echo utrecht > "$repo"/hello
 touch "$repo"/.gitignore
@@ -213,8 +211,7 @@ path5=$(nix eval --impure --raw --expr "(builtins.fetchGit { url = $repo; ref = 
 
 # Fetching from a repo with only a specific revision and no branches should
 # not fall back to copying files and record correct revision information. See: #5302
-mkdir "$TEST_ROOT"/minimal
-git -C "$TEST_ROOT"/minimal init
+createGitRepo "$TEST_ROOT"/minimal
 git -C "$TEST_ROOT"/minimal fetch "$repo" "$rev2"
 git -C "$TEST_ROOT"/minimal checkout "$rev2"
 [[ $(nix eval --impure --raw --expr "(builtins.fetchGit { url = $TEST_ROOT/minimal; }).rev") = "$rev2" ]]
@@ -267,7 +264,7 @@ rm -rf "$TEST_HOME"/.cache/nix
 (! nix eval --impure --raw --expr "(builtins.fetchGit \"file://$repo\").outPath")
 
 # should succeed for a repo without commits
-git init "$repo"
+initGitRepo "$repo"
 git -C "$repo" add hello # need to add at least one file to cause the root of the repo to be visible
 # shellcheck disable=SC2034
 path10=$(nix eval --impure --raw --expr "(builtins.fetchGit \"file://$repo\").outPath")
@@ -275,9 +272,7 @@ path10=$(nix eval --impure --raw --expr "(builtins.fetchGit \"file://$repo\").ou
 # should succeed for a path with a space
 # regression test for #7707
 repo="$TEST_ROOT/a b"
-git init "$repo"
-git -C "$repo" config user.email "foobar@example.com"
-git -C "$repo" config user.name "Foobar"
+createGitRepo "$repo"
 
 echo utrecht > "$repo/hello"
 touch "$repo/.gitignore"
@@ -289,7 +284,7 @@ path11=$(nix eval --impure --raw --expr "(builtins.fetchGit ./.).outPath")
 
 # Test a workdir with no commits.
 empty="$TEST_ROOT/empty"
-git init "$empty"
+createGitRepo "$empty"
 
 emptyAttrs="{ lastModified = 0; lastModifiedDate = \"19700101000000\"; narHash = \"sha256-pQpattmS9VmO3ZIQUFn66az8GSmB4IvYhTTCFn6SUmo=\"; rev = \"0000000000000000000000000000000000000000\"; revCount = 0; shortRev = \"0000000\"; submodules = false; }"
 result=$(nix eval --impure --expr "builtins.removeAttrs (builtins.fetchGit $empty) [\"outPath\"]")
@@ -314,3 +309,71 @@ git -C "$empty" config user.name "Foobar"
 git -C "$empty" commit --allow-empty --allow-empty-message --message ""
 
 nix eval --impure --expr "let attrs = builtins.fetchGit $empty; in assert attrs.lastModified != 0; assert attrs.rev != \"0000000000000000000000000000000000000000\"; assert attrs.revCount == 1; true"
+
+# Test backward compatibility hack for Nix < 2.20 locks / fetchTree calls that expect Git filters to be applied.
+eol="$TEST_ROOT/git-eol"
+createGitRepo "$eol"
+mkdir -p "$eol/dir"
+printf "Hello\nWorld\n" > "$eol/dir/crlf"
+printf "ignore me" > "$eol/dir/ignored"
+git -C "$eol" add dir/crlf dir/ignored
+git -C "$eol" commit -a -m Initial
+echo "Version: \$Format:%s\$" > "$eol/dir/version"
+printf "crlf text eol=crlf\nignored export-ignore\nversion export-subst\n" > "$eol/dir/.gitattributes"
+git -C "$eol" add dir/.gitattributes dir/version
+git -C "$eol" commit -a -m 'Apply gitattributes'
+
+rev="$(git -C "$eol" rev-parse HEAD)"
+
+export _NIX_TEST_BARF_ON_UNCACHEABLE=1
+
+oldHash="sha256-fccLx4BSC7e/PzQM4JnixstJQnd4dzgm73BqKhV3KRs="
+newHash="sha256-Ns7sLZOvpacagAPNun1+jBovMpo+zM7PUJ9x+lW3cIU="
+
+expectStderr 0 nix eval --expr \
+    "let tree = builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"$oldHash\"; }; in assert builtins.readFile \"\${tree}/dir/crlf\" == \"Hello\r\nWorld\r\n\"; assert !builtins.pathExists \"\${tree}/dir/ignored\"; assert builtins.readFile \"\${tree}/dir/version\" == \"Version: Apply gitattributes\n\"; true" \
+    | grepQuiet "Please update the NAR hash to '$newHash'"
+
+nix eval --expr \
+    "let tree = builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"$newHash\"; }; in assert builtins.readFile \"\${tree}/dir/crlf\" == \"Hello\nWorld\n\"; assert builtins.pathExists \"\${tree}/dir/ignored\"; assert builtins.readFile \"\${tree}/dir/version\" == \"Version: \$Format:%s\$\n\"; true"
+
+expectStderr 102 nix eval --expr \
+    "builtins.fetchTree { type = \"git\"; url = \"file://$eol\"; rev = \"$rev\"; narHash = \"sha256-DLDvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA=\"; }" \
+    | grepQuiet "NAR hash mismatch"
+
+mkdir -p "$TEST_ROOT"/flake
+cat > "$TEST_ROOT"/flake/flake.nix << EOF
+{
+  inputs.eol = { type = "git"; url = "file://$eol"; rev = "$rev"; flake = false; };
+  outputs = { self, eol }: rec {
+    crlf = builtins.readFile "\${eol}/dir/crlf";
+    isLegacy = assert crlf == "Hello\r\nWorld\r\n"; true;
+    isModern = assert crlf == "Hello\nWorld\n"; true;
+  };
+}
+EOF
+
+# Test locking with Nix < 2.20 semantics (i.e. using `git archive`).
+nix eval --nix-219-compat "path:$TEST_ROOT/flake"#isLegacy
+nix eval "path:$TEST_ROOT/flake"#isLegacy
+[[ $(jq -r .nodes.eol.locked.narHash < "$TEST_ROOT"/flake/flake.lock) = "$oldHash" ]]
+
+# Test locking with Nix >= 2.20 semantics (i.e. using libgit2).
+rm "$TEST_ROOT"/flake/flake.lock
+nix eval "path:$TEST_ROOT/flake"#isModern
+nix eval --nix-219-compat "path:$TEST_ROOT/flake"#isModern
+[[ $(jq -r .nodes.eol.locked.narHash < "$TEST_ROOT"/flake/flake.lock) = "$newHash" ]]
+
+
+# Test that builtins.hashString devirtualizes lazy paths (https://github.com/DeterminateSystems/determinate/issues/160).
+hashStringRepo="$TEST_ROOT/hashString"
+createGitRepo "$hashStringRepo"
+echo hello > "$hashStringRepo"/hello
+git -C "$hashStringRepo" add hello
+git -C "$hashStringRepo" commit -m 'Initial'
+hashStringRev=$(git -C "$hashStringRepo" rev-parse HEAD)
+
+hash1=$(nix eval --lazy-trees --raw --expr "builtins.hashString \"sha256\" (toString ((builtins.fetchGit { url = file://$hashStringRepo; rev = \"$hashStringRev\"; })))")
+hash2=$(nix eval --lazy-trees --raw --expr "builtins.hashString \"sha256\" (toString ((builtins.fetchGit { url = file://$hashStringRepo; rev = \"$hashStringRev\"; })))")
+
+[[ "$hash1" = "$hash2" ]]
