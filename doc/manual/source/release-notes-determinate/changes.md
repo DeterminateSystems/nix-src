@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.17.1.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.17.2.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -204,3 +204,19 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 * Flake inputs are substituted if possible before fetching from the authoritative source, in [DeterminateSystems/nix-src#380](https://github.com/DeterminateSystems/nix-src/pull/380)
 
 * Provenance now supports additional nix.conf-defined tags, in [DeterminateSystems/nix-src#374](https://github.com/DeterminateSystems/nix-src/pull/374)
+
+<!-- Determinate Nix version 3.17.2 -->
+
+* Cache getLegacyGitAccessor() by @edolstra in [DeterminateSystems/nix-src#396](https://github.com/DeterminateSystems/nix-src/pull/396)
+
+* Don't destroy windowSize mutex by @edolstra in [DeterminateSystems/nix-src#397](https://github.com/DeterminateSystems/nix-src/pull/397)
+
+* When doing concurrent substitutions of the same path, download only once by @edolstra in [DeterminateSystems/nix-src#398](https://github.com/DeterminateSystems/nix-src/pull/398)
+
+* builtins.getFlake: Handle path:<p> where p has a discarded string context by @edolstra in [DeterminateSystems/nix-src#402](https://github.com/DeterminateSystems/nix-src/pull/402)
+
+* Ensure _interruptCallbacks is alive while signalHandlerThread is running by @edolstra in [DeterminateSystems/nix-src#403](https://github.com/DeterminateSystems/nix-src/pull/403)
+
+* Fix assertion failure in nix::BuiltPath::toRealisedPaths() by @edolstra in [DeterminateSystems/nix-src#401](https://github.com/DeterminateSystems/nix-src/pull/401)
+
+* Make EnsureRead more resilient by @edolstra in [DeterminateSystems/nix-src#400](https://github.com/DeterminateSystems/nix-src/pull/400)
