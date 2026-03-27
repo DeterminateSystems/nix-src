@@ -42,7 +42,9 @@ struct InterruptCallbacks
     std::map<Token, std::function<void()>> callbacks;
 };
 
-static Sync<InterruptCallbacks> _interruptCallbacks;
+// Note: this object intentionally leaks to ensure that it's not deleted while the detached signal handler thread is
+// running.
+static auto _interruptCallbacks = new Sync<InterruptCallbacks>;
 
 static void signalHandlerThread(sigset_t set)
 {
@@ -68,7 +70,7 @@ void unix::triggerInterrupt()
         while (true) {
             std::function<void()> callback;
             {
-                auto interruptCallbacks(_interruptCallbacks.lock());
+                auto interruptCallbacks(_interruptCallbacks->lock());
                 auto lb = interruptCallbacks->callbacks.lower_bound(i);
                 if (lb == interruptCallbacks->callbacks.end())
                     break;
@@ -143,14 +145,14 @@ struct InterruptCallbackImpl : InterruptCallback
 
     ~InterruptCallbackImpl() override
     {
-        auto interruptCallbacks(_interruptCallbacks.lock());
+        auto interruptCallbacks(_interruptCallbacks->lock());
         interruptCallbacks->callbacks.erase(token);
     }
 };
 
 std::unique_ptr<InterruptCallback> createInterruptCallback(std::function<void()> callback)
 {
-    auto interruptCallbacks(_interruptCallbacks.lock());
+    auto interruptCallbacks(_interruptCallbacks->lock());
     auto token = interruptCallbacks->nextToken++;
     interruptCallbacks->callbacks.emplace(token, callback);
 
