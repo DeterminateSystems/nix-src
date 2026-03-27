@@ -1,18 +1,16 @@
-#include "nix/store/globals.hh"
 #include "nix/util/config-global.hh"
 #include "nix/store/build/hook-instance.hh"
-#include "nix/util/file-system.hh"
 #include "nix/store/build/child.hh"
 #include "nix/util/strings.hh"
 #include "nix/util/executable-path.hh"
 
 namespace nix {
 
-HookInstance::HookInstance()
+HookInstance::HookInstance(const Strings & _buildHook)
 {
-    debug("starting build hook '%s'", concatStringsSep(" ", settings.buildHook.get()));
+    debug("starting build hook '%s'", concatStringsSep(" ", _buildHook));
 
-    auto buildHookArgs = settings.buildHook.get();
+    auto buildHookArgs = _buildHook;
 
     if (buildHookArgs.empty())
         throw Error("'build-hook' setting is empty");
@@ -69,7 +67,7 @@ HookInstance::HookInstance()
 
         execv(buildHook.native().c_str(), stringsToCharPtrs(args).data());
 
-        throw SysError("executing '%s'", buildHook);
+        throw SysError("executing %s", PathFmt(buildHook));
     });
 
     pid.setSeparatePG(true);
@@ -88,8 +86,11 @@ HookInstance::~HookInstance()
 {
     try {
         toHook.writeSide = -1;
-        if (pid != -1)
+        if (pid != -1) {
             pid.kill();
+            if (onKillChild)
+                onKillChild();
+        }
     } catch (...) {
         ignoreExceptionInDestructor();
     }

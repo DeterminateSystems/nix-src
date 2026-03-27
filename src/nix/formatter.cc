@@ -140,7 +140,7 @@ struct CmdFormatterBuild : MixFormatter, MixOutLinkByDefault
         auto buildables = unresolvedApp.build(evalStore, store);
         createOutLinksMaybe(buildables, store);
 
-        logger->cout("%s", app.program);
+        logger->cout("%s", app.program.string());
     };
 };
 

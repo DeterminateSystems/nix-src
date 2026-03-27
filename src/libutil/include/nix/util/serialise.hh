@@ -4,6 +4,8 @@
 #include <memory>
 #include <type_traits>
 
+#include "nix/util/compression-algo.hh"
+#include "nix/util/fun.hh"
 #include "nix/util/types.hh"
 #include "nix/util/util.hh"
 #include "nix/util/file-descriptor.hh"
@@ -120,6 +122,8 @@ struct BufferedSource : virtual Source
 
     size_t read(char * data, size_t len) override;
 
+    std::string readLine(bool eofOk = false, char terminator = '\n');
+
     /**
      * Return true if the buffer is not empty.
      */
@@ -159,6 +163,8 @@ struct FdSink : BufferedSink
     }
 
     FdSink(FdSink &&) = default;
+    FdSink(const FdSink &) = delete;
+    FdSink & operator=(const FdSink &) = delete;
 
     FdSink & operator=(FdSink && s)
     {
@@ -200,8 +206,10 @@ struct FdSource : BufferedSource, RestartableSource
     }
 
     FdSource(FdSource &&) = default;
-
     FdSource & operator=(FdSource && s) = default;
+    FdSource(const FdSource &) = delete;
+    FdSource & operator=(const FdSource & s) = delete;
+    ~FdSource() = default;
 
     bool good() override;
     void restart() override;
@@ -284,7 +292,7 @@ struct CompressedSource : RestartableSource
 {
 private:
     std::string compressedData;
-    std::string compressionMethod;
+    CompressionAlgo compressionMethod;
     StringSource stringSource;
 
 public:
@@ -292,9 +300,9 @@ public:
      * Compress a RestartableSource using the specified compression method.
      *
      * @param source The source data to compress
-     * @param compressionMethod The compression method to use (e.g., "xz", "br")
+     * @param compressionMethod The compression method to use
      */
-    CompressedSource(RestartableSource & source, const std::string & compressionMethod);
+    CompressedSource(RestartableSource & source, CompressionAlgo compressionMethod);
 
     size_t read(char * data, size_t len) override
     {
@@ -309,11 +317,6 @@ public:
     uint64_t size() const
     {
         return compressedData.size();
-    }
-
-    std::string_view getCompressionMethod() const
-    {
-        return compressionMethod;
     }
 };
 
@@ -439,8 +442,8 @@ struct LengthSource : Source
  */
 struct LambdaSink : Sink
 {
-    typedef std::function<void(std::string_view data)> data_t;
-    typedef std::function<void()> cleanup_t;
+    typedef fun<void(std::string_view data)> data_t;
+    typedef fun<void()> cleanup_t;
 
     data_t dataFun;
     cleanup_t cleanupFun;
@@ -451,6 +454,11 @@ struct LambdaSink : Sink
         , cleanupFun(cleanupFun)
     {
     }
+
+    LambdaSink(LambdaSink &&) = delete;
+    LambdaSink(const LambdaSink &) = delete;
+    LambdaSink & operator=(LambdaSink &&) = delete;
+    LambdaSink & operator=(const LambdaSink &) = delete;
 
     ~LambdaSink()
     {
@@ -468,7 +476,7 @@ struct LambdaSink : Sink
  */
 struct LambdaSource : Source
 {
-    typedef std::function<size_t(char *, size_t)> lambda_t;
+    typedef fun<size_t(char *, size_t)> lambda_t;
 
     lambda_t lambda;
 
@@ -501,18 +509,39 @@ struct ChainSource : Source
     size_t read(char * data, size_t len) override;
 };
 
-std::unique_ptr<FinishSink> sourceToSink(std::function<void(Source &)> fun);
+std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader);
 
 /**
  * Convert a function that feeds data into a Sink into a Source. The
  * Source executes the function as a coroutine.
  */
-std::unique_ptr<Source> sinkToSource(
-    std::function<void(Sink &)> fun, std::function<void()> eof = []() { throw EndOfFile("coroutine has finished"); });
+std::unique_ptr<Source>
+sinkToSource(fun<void(Sink &)> writer, fun<void()> eof = []() { throw EndOfFile("coroutine has finished"); });
 
 void writePadding(size_t len, Sink & sink);
 void writeString(std::string_view s, Sink & sink);
 
+/**
+ * Write a serialisation of an integer to the sink in little endian order.
+ *
+ * Types other than uint64_t (including signed types) get implicitly converted to uint64_t.A
+ *
+ * Negative number to unsigned conversion is actually well-defined in C++:
+ *
+ * [n4950] 7.3.9 Integral conversions:
+ * the result is the unique value of the destination type that is congruent to the source integer
+ * modulo 2^N, where N is the width of the destination type.
+ *
+ * [n4950] 6.8.2 Fundamental types:
+ * An unsigned integer type has the same object representation, value
+ * representation, and alignment requirements (6.7.6) as the corresponding signed
+ * integer type. For each value x of a signed integer type, the value of the
+ * corresponding unsigned integer type congruent to x modulo 2 N has the same value
+ * of corresponding bits in its value representation.
+ * This is also known as two's complement representation.
+ *
+ * @todo Should we even allow negative values to get serialised?
+ */
 inline Sink & operator<<(Sink & sink, uint64_t n)
 {
     unsigned char buf[8];
@@ -628,6 +657,11 @@ struct FramedSource : Source
     {
     }
 
+    FramedSource(FramedSource &&) = delete;
+    FramedSource(const FramedSource &) = delete;
+    FramedSource & operator=(FramedSource &&) = delete;
+    FramedSource & operator=(const FramedSource &) = delete;
+
     ~FramedSource()
     {
         try {
@@ -677,13 +711,18 @@ struct FramedSource : Source
 struct FramedSink : nix::BufferedSink
 {
     BufferedSink & to;
-    std::function<void()> checkError;
+    fun<void()> checkError;
 
-    FramedSink(BufferedSink & to, std::function<void()> && checkError)
+    FramedSink(BufferedSink & to, fun<void()> && checkError)
         : to(to)
         , checkError(checkError)
     {
     }
+
+    FramedSink(FramedSink &&) = delete;
+    FramedSink(const FramedSink &) = delete;
+    FramedSink & operator=(FramedSink &&) = delete;
+    FramedSink & operator=(const FramedSink &) = delete;
 
     ~FramedSink()
     {

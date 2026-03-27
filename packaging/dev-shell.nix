@@ -131,7 +131,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
     ignoreCrossFile = flags: builtins.filter (flag: !(lib.strings.hasInfix "cross-file" flag)) flags;
 
     availableComponents = lib.filterAttrs (
-      k: v: lib.meta.availableOn pkgs.hostPlatform v
+      k: v: lib.meta.availableOn pkgs.stdenv.hostPlatform v
     ) allComponents;
 
     activeComponents = buildInputsClosureCond isInternal (
@@ -142,7 +142,9 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
     internalDrvs = byDrvPath (
       # Drop the attr names (not present in buildInputs anyway)
       lib.attrValues availableComponents
-      ++ lib.concatMap (c: lib.attrValues c.tests or { }) (lib.attrValues availableComponents)
+      ++ lib.concatMap (c: lib.filter (v: !v.meta.broken) (lib.attrValues (c.tests or { }))) (
+        lib.attrValues availableComponents
+      )
     );
 
     isInternal =
@@ -280,7 +282,6 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
     dontUseCmakeConfigure = true;
 
     mesonFlags = [
-      (lib.mesonBool "kaitai-struct-checks" (isActiveComponent "nix-kaitai-struct-checks"))
       (lib.mesonBool "json-schema-checks" (isActiveComponent "nix-json-schema-checks"))
     ]
     ++ map (transformFlag "libutil") (ignoreCrossFile pkgs.nixComponents2.nix-util.mesonFlags)
@@ -299,7 +300,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
             lib.filter (x: !isInternal x) (
               lib.lists.concatMap (
                 # Nix manual has a build-time dependency on nix, but we
-                # don't want to do a native build just to enter the ross
+                # don't want to do a native build just to enter the cross
                 # dev shell.
                 #
                 # TODO: think of a more principled fix for this.
@@ -322,7 +323,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
             pkgs.buildPackages.shellcheck
             pkgs.buildPackages.include-what-you-use
           ]
-          ++ lib.optional pkgs.hostPlatform.isUnix pkgs.buildPackages.gdb
+          ++ lib.optional stdenv.hostPlatform.isUnix pkgs.buildPackages.gdb
           ++ lib.optional (stdenv.cc.isClang && stdenv.hostPlatform == stdenv.buildPlatform) (
             lib.hiPrio pkgs.buildPackages.clang-tools
           )
@@ -340,7 +341,7 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
 
     buildInputs =
       # TODO change Nixpkgs to mark gbenchmark as building on Windows
-      lib.optional pkgs.hostPlatform.isUnix pkgs.gbenchmark
+      lib.optional stdenv.hostPlatform.isUnix pkgs.gbenchmark
       ++ dedupByString (v: "${v}") (
         lib.filter (x: !isInternal x) (lib.lists.concatMap (c: c.buildInputs) activeComponents)
       )

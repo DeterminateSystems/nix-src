@@ -112,19 +112,13 @@ TEST_P(FixGitURLTestSuite, parsesVariedGitUrls)
     EXPECT_EQ(actual.to_string(), p.expected);
 }
 
-TEST(FixGitURLTestSuite, scpLikeNoUserParsesPoorly)
+TEST(FixGitURLTestSuite, rejectScpLikeNoUser)
 {
-    // SCP-like URL (no user)
-
-    // Cannot "to_string" this because has illegal path not starting
-    // with `/`.
-    EXPECT_EQ(
-        fixGitURL("github.com:owner/repo.git"),
-        (ParsedURL{
-            .scheme = "file",
-            .authority = ParsedURL::Authority{},
-            .path = {"github.com:owner", "repo.git"},
-        }));
+    // SCP-like URL without user. Proper support can be implemented, but this is
+    // a deceptively deep feature - study existing implementations carefully.
+    EXPECT_THAT(
+        []() { fixGitURL("github.com:owner/repo.git"); },
+        ::testing::ThrowsMessage<BadURL>(testing::HasSubstrIgnoreANSIMatcher("SCP-like URL")));
 }
 
 TEST(FixGitURLTestSuite, properlyRejectFileURLWithAuthority)
@@ -136,37 +130,24 @@ TEST(FixGitURLTestSuite, properlyRejectFileURLWithAuthority)
             testing::HasSubstrIgnoreANSIMatcher("file:// URL 'file://var/repos/x' has unexpected authority 'var'")));
 }
 
-TEST(FixGitURLTestSuite, scpLikePathLeadingSlashParsesPoorly)
+TEST(FixGitURLTestSuite, rejectScpLikeNoUserLeadingSlash)
 {
-    // SCP-like URL (no user)
-
-    // Cannot "to_string" this because has illegal path not starting
-    // with `/`.
-    EXPECT_EQ(
-        fixGitURL("github.com:/owner/repo.git"),
-        (ParsedURL{
-            .scheme = "file",
-            .authority = ParsedURL::Authority{},
-            .path = {"github.com:", "owner", "repo.git"},
-        }));
+    EXPECT_THAT(
+        []() { fixGitURL("github.com:/owner/repo.git"); },
+        ::testing::ThrowsMessage<BadURL>(testing::HasSubstrIgnoreANSIMatcher("SCP-like URL")));
 }
 
-TEST(FixGitURLTestSuite, relativePathParsesPoorly)
+TEST(FixGitURLTestSuite, relativePath)
 {
-    // Relative path (becomes file:// absolute)
-
-    // Cannot "to_string" this because has illegal path not starting
-    // with `/`.
+    // Relative path - parsed as file path without authority
+    auto parsed = fixGitURL("relative/repo");
     EXPECT_EQ(
-        fixGitURL("relative/repo"),
+        parsed,
         (ParsedURL{
             .scheme = "file",
-            .authority =
-                ParsedURL::Authority{
-                    .hostType = ParsedURL::Authority::HostType::Name,
-                    .host = "",
-                },
-            .path = {"relative", "repo"}}));
+            .path = {"relative", "repo"},
+        }));
+    EXPECT_EQ(parsed.to_string(), "file:relative/repo");
 }
 
 struct ParseURLSuccessCase
@@ -974,5 +955,109 @@ TEST(nix, isValidSchemeName)
     ASSERT_FALSE(isValidSchemeName("http\n"));
     ASSERT_FALSE(isValidSchemeName("http "));
 }
+
+/* ----------------------------------------------------------------------------
+ * pathToUrlPath / urlPathToPath
+ * --------------------------------------------------------------------------*/
+
+struct UrlPathTestCase
+{
+    std::string_view urlString;
+    ParsedURL urlParsed;
+    std::filesystem::path path;
+    std::string description;
+};
+
+class UrlPathTest : public ::testing::TestWithParam<UrlPathTestCase>
+{};
+
+TEST_P(UrlPathTest, pathToUrlPath)
+{
+    const auto & testCase = GetParam();
+    auto urlPath = pathToUrlPath(testCase.path);
+    EXPECT_EQ(urlPath, testCase.urlParsed.path);
+}
+
+TEST_P(UrlPathTest, urlPathToPath)
+{
+    const auto & testCase = GetParam();
+    auto path = urlPathToPath(testCase.urlParsed.path);
+    EXPECT_EQ(path, testCase.path);
+}
+
+TEST_P(UrlPathTest, urlToString)
+{
+    const auto & testCase = GetParam();
+    EXPECT_EQ(testCase.urlParsed.to_string(), testCase.urlString);
+}
+
+TEST_P(UrlPathTest, stringToUrl)
+{
+    const auto & testCase = GetParam();
+    auto parsed = parseURL(std::string{testCase.urlString});
+    EXPECT_EQ(parsed, testCase.urlParsed);
+}
+
+#ifndef _WIN32
+
+INSTANTIATE_TEST_SUITE_P(
+    Unix,
+    UrlPathTest,
+    ::testing::Values(
+        UrlPathTestCase{
+            .urlString = "file:///foo/bar/baz",
+            .urlParsed =
+                ParsedURL{
+                    .scheme = "file",
+                    .authority = ParsedURL::Authority{},
+                    .path = {"", "foo", "bar", "baz"},
+                },
+            .path = "/foo/bar/baz",
+            .description = "absolute_path",
+        },
+        UrlPathTestCase{
+            .urlString = "file:///",
+            .urlParsed =
+                ParsedURL{
+                    .scheme = "file",
+                    .authority = ParsedURL::Authority{},
+                    .path = {"", ""},
+                },
+            .path = "/",
+            .description = "root_path",
+        }),
+    [](const auto & info) { return info.param.description; });
+
+#else // _WIN32
+
+INSTANTIATE_TEST_SUITE_P(
+    Windows,
+    UrlPathTest,
+    ::testing::Values(
+        UrlPathTestCase{
+            .urlString = "file:///C:/foo/bar/baz",
+            .urlParsed =
+                ParsedURL{
+                    .scheme = "file",
+                    .authority = ParsedURL::Authority{},
+                    .path = {"", "C:", "foo", "bar", "baz"},
+                },
+            .path = L"C:\\foo\\bar\\baz",
+            .description = "absolute_path",
+        },
+        UrlPathTestCase{
+            .urlString = "file:///C:/",
+            .urlParsed =
+                ParsedURL{
+                    .scheme = "file",
+                    .authority = ParsedURL::Authority{},
+                    .path = {"", "C:", ""},
+                },
+            .path = L"C:\\",
+            .description = "drive_root",
+        }),
+    [](const auto & info) { return info.param.description; });
+
+#endif // _WIN32
 
 } // namespace nix

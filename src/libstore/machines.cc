@@ -69,8 +69,8 @@ StoreReference Machine::completeStoreReference() const
     }
 
     if (generic && (generic->scheme == "ssh" || generic->scheme == "ssh-ng")) {
-        if (sshKey != "")
-            storeUri.params["ssh-key"] = sshKey;
+        if (!sshKey.empty())
+            storeUri.params["ssh-key"] = sshKey.string();
         if (sshPublicHostKey != "")
             storeUri.params["base64-ssh-public-host-key"] = sshPublicHostKey;
     }
@@ -111,8 +111,8 @@ static std::vector<std::string> expandBuilderLines(const std::string & builders)
                 std::string text;
                 try {
                     text = readFile(path);
-                } catch (const SysError & e) {
-                    if (e.errNo != ENOENT)
+                } catch (const SystemError & e) {
+                    if (!e.is(std::errc::no_such_file_or_directory))
                         throw;
                     debug("cannot find machines file '%s'", path);
                     continue;
@@ -205,11 +205,6 @@ Machines Machine::parseConfig(const StringSet & defaultSystems, const std::strin
 {
     const auto builderLines = expandBuilderLines(s);
     return parseBuilderLines(defaultSystems, builderLines);
-}
-
-Machines getMachines()
-{
-    return Machine::parseConfig({settings.thisSystem}, settings.builders);
 }
 
 } // namespace nix

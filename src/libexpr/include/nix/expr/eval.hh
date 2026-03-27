@@ -123,7 +123,7 @@ struct PrimOp
     /**
      * Implementation of the primop.
      */
-    std::function<PrimOpFun> fun;
+    fun<PrimOpFun> impl;
 
     /**
      * Optional experimental for this to be gated on.
@@ -309,18 +309,6 @@ struct StaticEvalSymbols
 
 class EvalMemory
 {
-#if NIX_USE_BOEHMGC
-    /**
-     * Allocation cache for GC'd Value objects.
-     */
-    std::shared_ptr<void *> valueAllocCache;
-
-    /**
-     * Allocation cache for size-1 Env objects.
-     */
-    std::shared_ptr<void *> env1AllocCache;
-#endif
-
 public:
     struct Statistics
     {
@@ -555,7 +543,7 @@ public:
     /**
      * Variant which accepts relative paths too.
      */
-    SourcePath rootPath(PathView path);
+    SourcePath rootPath(std::string_view path);
 
     /**
      * Return a `SourcePath` that refers to `path` in the store.
@@ -572,7 +560,7 @@ public:
      * Only for restrict eval: pure eval just whitelist store paths,
      * never arbitrary paths.
      */
-    void allowPathLegacy(const Path & path);
+    void allowPathLegacy(const std::string & path);
 
     /**
      * Allow access to a store path. Note that this gets remapped to
@@ -614,6 +602,18 @@ public:
     Expr *
     parseExprFromString(std::string s, const SourcePath & basePath, const std::shared_ptr<StaticEnv> & staticEnv);
     Expr * parseExprFromString(std::string s, const SourcePath & basePath);
+
+    /**
+     * Parse REPL bindings from the specified string.
+     * Returns ExprAttrs with bindings to add to scope.
+     */
+    ExprAttrs *
+    parseReplBindings(std::string s, const SourcePath & basePath, const std::shared_ptr<StaticEnv> & staticEnv);
+    ExprAttrs * parseReplBindings(
+        std::string s,
+        std::string errorSource,
+        const SourcePath & basePath,
+        const std::shared_ptr<StaticEnv> & staticEnv);
 
     Expr * parseStdin();
 
@@ -668,6 +668,8 @@ public:
     }
 
     void tryFixupBlackHolePos(Value & v, PosIdx pos);
+
+public:
 
     /**
      * Force a value, then recursively force list elements and
@@ -894,6 +896,13 @@ private:
     friend struct ExprLet;
 
     Expr * parse(
+        char * text,
+        size_t length,
+        Pos::Origin origin,
+        const SourcePath & basePath,
+        const std::shared_ptr<StaticEnv> & staticEnv);
+
+    ExprAttrs * parseReplBindings(
         char * text,
         size_t length,
         Pos::Origin origin,

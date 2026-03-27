@@ -3,9 +3,14 @@
 
 #include "nix/util/types.hh"
 #include "nix/util/error.hh"
+#include "nix/util/fun.hh"
 #include "nix/util/file-descriptor.hh"
+#include "nix/util/file-path.hh"
 #include "nix/util/logging.hh"
 #include "nix/util/ansicolor.hh"
+#include "nix/util/os-string.hh"
+
+#include <filesystem>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -35,6 +40,10 @@ class Pid
 #endif
 public:
     Pid();
+    Pid(const Pid &) = delete;
+    Pid(Pid && other) noexcept;
+    Pid & operator=(const Pid &) = delete;
+    Pid & operator=(Pid && other) noexcept;
 #ifndef _WIN32
     Pid(pid_t pid);
     void operator=(pid_t pid);
@@ -44,8 +53,8 @@ public:
     void operator=(AutoCloseFD pid);
 #endif
     ~Pid();
-    int kill();
-    int wait();
+    int kill(bool allowInterrupts = true);
+    int wait(bool allowInterrupts = true);
 
     // TODO: Implement for Windows
 #ifndef _WIN32
@@ -53,6 +62,18 @@ public:
     void setKillSignal(int signal);
     pid_t release();
 #endif
+
+    friend void swap(Pid & lhs, Pid & rhs) noexcept
+    {
+        using std::swap;
+#ifndef _WIN32
+        swap(lhs.pid, rhs.pid);
+        swap(lhs.separatePG, rhs.separatePG);
+        swap(lhs.killSignal, rhs.killSignal);
+#else
+        swap(lhs.pid, rhs.pid);
+#endif
+    }
 };
 
 #ifndef _WIN32
@@ -80,7 +101,7 @@ struct ProcessOptions
 };
 
 #ifndef _WIN32
-pid_t startProcess(std::function<void()> fun, const ProcessOptions & options = ProcessOptions());
+pid_t startProcess(fun<void()> processMain, const ProcessOptions & options = ProcessOptions());
 #endif
 
 /**
@@ -88,23 +109,23 @@ pid_t startProcess(std::function<void()> fun, const ProcessOptions & options = P
  * shell backtick operator).
  */
 std::string runProgram(
-    Path program,
+    std::filesystem::path program,
     bool lookupPath = false,
-    const Strings & args = Strings(),
+    const OsStrings & args = OsStrings(),
     const std::optional<std::string> & input = {},
     bool isInteractive = false);
 
 struct RunOptions
 {
-    Path program;
+    std::filesystem::path program;
     bool lookupPath = true;
-    Strings args;
+    OsStrings args;
 #ifndef _WIN32
     std::optional<uid_t> uid;
     std::optional<uid_t> gid;
 #endif
-    std::optional<Path> chdir;
-    std::optional<StringMap> environment;
+    std::optional<std::filesystem::path> chdir;
+    std::optional<OsStringMap> environment;
     std::optional<std::string> input;
     Source * standardIn = nullptr;
     Sink * standardOut = nullptr;
@@ -116,14 +137,14 @@ std::pair<int, std::string> runProgram(RunOptions && options);
 
 void runProgram2(const RunOptions & options);
 
-class ExecError : public Error
+class ExecError final : public CloneableError<ExecError, Error>
 {
 public:
     int status;
 
     template<typename... Args>
     ExecError(int status, const Args &... args)
-        : Error(args...)
+        : CloneableError(args...)
         , status(status)
     {
     }

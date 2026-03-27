@@ -80,13 +80,7 @@ public:
         subdirs.emplace(baseName, std::move(accessor));
     }
 
-    std::string readFile(const CanonPath & path) override
-    {
-        return callWithAccessorForPath(
-            path, [](SourceAccessor & accessor, const CanonPath & path) { return accessor.readFile(path); });
-    }
-
-    void readFile(const CanonPath & path, Sink & sink, std::function<void(uint64_t)> sizeCallback) override
+    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override
     {
         return callWithAccessorForPath(path, [&](SourceAccessor & accessor, const CanonPath & path) {
             return accessor.readFile(path, sink, sizeCallback);
@@ -123,6 +117,11 @@ public:
 ref<Store> DummyStoreConfig::openStore() const
 {
     return openDummyStore();
+}
+
+bool DummyStoreConfig::getReadOnly() const
+{
+    return readOnly.get() || StoreConfig::getReadOnly();
 }
 
 struct DummyStoreImpl : DummyStore
@@ -307,12 +306,13 @@ struct DummyStoreImpl : DummyStore
     StorePath
     writeDerivation(const Derivation & drv, RepairFlag repair, std::shared_ptr<const Provenance> provenance) override
     {
-        auto drvPath = ::nix::writeDerivation(*this, drv, repair, /*readonly=*/true, provenance);
+        auto drvPath = nix::computeStorePath(*this, drv);
 
         if (!derivations.contains(drvPath) || repair) {
             if (config->readOnly)
                 unsupported("writeDerivation");
             derivations.insert({drvPath, drv});
+            // FIXME: record provenance
         }
 
         return drvPath;
@@ -418,7 +418,7 @@ ref<DummyStoreConfig> adl_serializer<ref<DummyStore::Config>>::from_json(const j
 {
     auto & obj = getObject(json);
     auto cfg = make_ref<DummyStore::Config>(DummyStore::Config::Params{});
-    const_cast<PathSetting &>(cfg->storeDir_).set(getString(valueAt(obj, "store")));
+    cfg->storeDir_.set(getString(valueAt(obj, "store")));
     cfg->readOnly = true;
     return cfg;
 }

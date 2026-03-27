@@ -16,25 +16,31 @@ struct HttpBinaryCacheStoreConfig : std::enable_shared_from_this<HttpBinaryCache
 {
     using BinaryCacheStoreConfig::BinaryCacheStoreConfig;
 
-    HttpBinaryCacheStoreConfig(
-        std::string_view scheme, std::string_view cacheUri, const Store::Config::Params & params);
+    HttpBinaryCacheStoreConfig(ParsedURL cacheUri, const Store::Config::Params & params);
 
     ParsedURL cacheUri;
 
-    const Setting<std::string> narinfoCompression{
-        this, "", "narinfo-compression", "Compression method for `.narinfo` files."};
+    Setting<std::optional<CompressionAlgo>> narinfoCompression{
+        this, std::nullopt, "narinfo-compression", "Compression method for `.narinfo` files."};
 
-    const Setting<std::string> lsCompression{this, "", "ls-compression", "Compression method for `.ls` files."};
+    Setting<std::optional<CompressionAlgo>> lsCompression{
+        this, std::nullopt, "ls-compression", "Compression method for `.ls` files."};
 
-    const Setting<std::string> logCompression{
+    Setting<std::optional<CompressionAlgo>> logCompression{
         this,
-        "",
+        std::nullopt,
         "log-compression",
         R"(
           Compression method for `log/*` files. It is recommended to
           use a compression method supported by most web browsers
           (e.g. `brotli`).
         )"};
+
+    Setting<std::optional<AbsolutePath>> tlsCert{
+        this, std::nullopt, "tls-certificate", "Path to an optional TLS client certificate in PEM format."};
+
+    Setting<std::optional<AbsolutePath>> tlsKey{
+        this, std::nullopt, "tls-private-key", "Path to an optional TLS client certificate private key in PEM format."};
 
     static const std::string name()
     {
@@ -44,6 +50,8 @@ struct HttpBinaryCacheStoreConfig : std::enable_shared_from_this<HttpBinaryCache
     static StringSet uriSchemes();
 
     static std::string doc();
+
+    ref<Store> openStore(ref<FileTransfer> fileTransfer) const;
 
     ref<Store> openStore() const override;
 
@@ -60,19 +68,23 @@ class HttpBinaryCacheStore : public virtual BinaryCacheStore
 
     Sync<State> _state;
 
+protected:
+
+    ref<FileTransfer> fileTransfer;
+
 public:
 
     using Config = HttpBinaryCacheStoreConfig;
 
     ref<Config> config;
 
-    HttpBinaryCacheStore(ref<Config> config);
+    HttpBinaryCacheStore(ref<Config> config, ref<FileTransfer> fileTransfer = getFileTransfer());
 
     void init() override;
 
 protected:
 
-    std::optional<std::string> getCompressionMethod(const std::string & path);
+    std::optional<CompressionAlgo> getCompressionMethod(const std::string & path);
 
     void maybeDisable();
 

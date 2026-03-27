@@ -295,7 +295,7 @@ static RegisterPrimOp r_parallel({
     .doc = R"(
       Start evaluation of the values `xs` in the background and return `x`.
     )",
-    .fun = prim_parallel,
+    .impl = prim_parallel,
     .experimentalFeature = Xp::ParallelEval,
 });
 

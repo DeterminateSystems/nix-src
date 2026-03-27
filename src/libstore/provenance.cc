@@ -16,7 +16,7 @@ BuildProvenance::BuildProvenance(
     const StorePath & drvPath,
     const OutputName & output,
     std::optional<std::string> buildHost,
-    std::map<std::string, std::string> tags,
+    StringMap tags,
     std::string system,
     std::shared_ptr<const Provenance> next)
     : drvPath(drvPath)
@@ -51,9 +51,9 @@ Provenance::Register registerBuildProvenance("build", [](nlohmann::json json) {
     std::optional<std::string> buildHost;
     if (auto p = optionalValueAt(obj, "buildHost"))
         buildHost = p->get<std::optional<std::string>>();
-    std::map<std::string, std::string> tags;
+    StringMap tags;
     if (auto p = optionalValueAt(obj, "tags"); p && !p->is_null())
-        tags = p->get<std::map<std::string, std::string>>();
+        tags = p->get<StringMap>();
     auto buildProv = make_ref<BuildProvenance>(
         StorePath(getString(valueAt(obj, "drv"))),
         getString(valueAt(obj, "output")),

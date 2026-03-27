@@ -1,18 +1,30 @@
 with import ./config.nix;
 
-mkDerivation {
-  name = "gc-runtime";
-  builder =
-    # Test inline source file definitions.
-    builtins.toFile "builder.sh" ''
-      mkdir $out
+{
+  environ = mkDerivation {
+    name = "gc-runtime-environ";
+    buildCommand = "mkdir $out; echo environ > $out/environ";
+  };
 
-      cat > $out/program <<EOF
-      #! ${shell}
-      echo x > \$TEST_ROOT/fifo
-      sleep 10000
-      EOF
+  open = mkDerivation {
+    name = "gc-runtime-open";
+    buildCommand = "mkdir $out; echo open > $out/open";
+  };
 
-      chmod +x $out/program
-    '';
+  program = mkDerivation {
+    name = "gc-runtime-program";
+    builder =
+      # Test inline source file definitions.
+      builtins.toFile "builder.sh" ''
+        mkdir $out
+
+        cat > $out/program << 'EOF'
+        #! ${shell}
+        echo x > "$2"
+        sleep 10000 < "$1"
+        EOF
+
+        chmod +x $out/program
+      '';
+  };
 }

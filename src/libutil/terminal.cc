@@ -163,7 +163,7 @@ std::string filterANSIEscapes(std::string_view s, bool filterAll, unsigned int w
 
 // Note: this object intentionally leaks to avoid a destructor ordering issue (specifically, ~ProgressBar() calling
 // getWindowSize() after windowSize has been destroyed).
-static auto * const windowSize = new Sync<std::pair<unsigned short, unsigned short>>({0, 0});
+static auto * const windowSize = new Sync<std::pair<unsigned short, unsigned short>>{{0, 0}};
 
 void updateWindowSize()
 {
