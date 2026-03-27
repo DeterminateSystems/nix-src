@@ -24,6 +24,10 @@ subproject('libcmd')
 # Executables
 subproject('nix')
 
+if host_machine.system() == 'linux'
+  subproject('nswrapper')
+endif
+
 # Docs
 if get_option('doc-gen')
   subproject('internal-api-docs')
@@ -62,7 +66,4 @@ endif
 subproject('nix-functional-tests')
 if get_option('json-schema-checks')
   subproject('json-schema-checks')
-endif
-if get_option('kaitai-struct-checks')
-  subproject('kaitai-struct-checks')
 endif

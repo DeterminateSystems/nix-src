@@ -11,6 +11,14 @@ namespace nix {
 static const uint32_t exportMagicV1 = 0x4558494e;
 static const uint64_t exportMagicV2 = 0x324f4952414e; // = 'NARIO2'
 
+static WorkerProto::Version exportProtoVersion{
+    .number =
+        {
+            .major = 1,
+            .minor = 16,
+        },
+};
+
 void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, unsigned int version)
 {
     auto sorted = store.topoSortPaths(paths);
@@ -57,7 +65,9 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, unsigne
             auto info = store.queryPathInfo(path);
             // FIXME: move to CommonProto?
             WorkerProto::Serialise<ValidPathInfo>::write(
-                store, WorkerProto::WriteConn{.to = sink, .version = 16, .shortStorePaths = true}, *info);
+                store,
+                WorkerProto::WriteConn{.to = sink, .version = exportProtoVersion, .shortStorePaths = true},
+                *info);
             dumpNar(*info);
         }
 
@@ -144,7 +154,7 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
                 throw Error("input doesn't look like a nario");
 
             auto info = WorkerProto::Serialise<ValidPathInfo>::read(
-                store, WorkerProto::ReadConn{.from = source, .version = 16, .shortStorePaths = true});
+                store, WorkerProto::ReadConn{.from = source, .version = exportProtoVersion, .shortStorePaths = true});
 
             Activity act(
                 *logger, lvlTalkative, actUnknown, fmt("importing path '%s'", store.printStorePath(info.path)));

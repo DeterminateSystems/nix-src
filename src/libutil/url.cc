@@ -321,19 +321,8 @@ std::string encodeQuery(const StringMap & ss)
     return res;
 }
 
-Path renderUrlPathEnsureLegal(const std::vector<std::string> & urlPath)
+std::string renderUrlPathNoPctEncoding(std::span<const std::string> urlPath)
 {
-    for (const auto & comp : urlPath) {
-        /* This is only really valid for UNIX. Windows has more restrictions. */
-        if (comp.contains('/'))
-            throw BadURL("URL path component '%s' contains '/', which is not allowed in file names", comp);
-        if (comp.contains(char(0))) {
-            using namespace std::string_view_literals;
-            auto str = replaceStrings(comp, "\0"sv, "␀"sv);
-            throw BadURL("URL path component '%s' contains NUL byte which is not allowed", str);
-        }
-    }
-
     return concatStringsSep("/", urlPath);
 }
 
@@ -341,7 +330,7 @@ std::string ParsedURL::renderPath(bool encode) const
 {
     if (encode)
         return encodeUrlPath(path);
-    return concatStringsSep("/", path);
+    return renderUrlPathNoPctEncoding(path);
 }
 
 std::string ParsedURL::renderSanitized() const
@@ -426,12 +415,24 @@ ParsedURL fixGitURL(std::string url)
     std::regex scpRegex("([^/]*)@(.*):(.*)");
     if (!hasPrefix(url, "/") && std::regex_match(url, scpRegex))
         url = std::regex_replace(url, scpRegex, "ssh://$1@$2/$3");
-    if (!hasPrefix(url, "file:") && !hasPrefix(url, "git+file:") && url.find("://") == std::string::npos)
-        return ParsedURL{
-            .scheme = "file",
-            .authority = ParsedURL::Authority{},
-            .path = splitString<std::vector<std::string>>(url, "/"),
-        };
+    if (!hasPrefix(url, "file:") && !hasPrefix(url, "git+file:") && url.find("://") == std::string::npos) {
+        auto path = splitString<std::vector<std::string>>(url, "/");
+        // Reject SCP-like URLs without user (e.g., "github.com:path") - colon in first component
+        if (!path.empty() && path[0].find(':') != std::string::npos)
+            throw BadURL("SCP-like URL '%s' is not supported; use SSH URL syntax instead (ssh://...)", url);
+        // Absolute paths get an empty authority (file:///path), relative paths get none (file:path)
+        if (hasPrefix(url, "/"))
+            return ParsedURL{
+                .scheme = "file",
+                .authority = ParsedURL::Authority{},
+                .path = path,
+            };
+        else
+            return ParsedURL{
+                .scheme = "file",
+                .path = path,
+            };
+    }
     auto parsed = parseURL(url);
     // Drop the superfluous "git+" from the scheme.
     auto scheme = parseUrlScheme(parsed.scheme);
@@ -447,6 +448,74 @@ bool isValidSchemeName(std::string_view s)
     static std::regex regex(schemeNameRegex, std::regex::ECMAScript);
 
     return std::regex_match(s.begin(), s.end(), regex, std::regex_constants::match_default);
+}
+
+std::vector<std::string> pathToUrlPath(const std::filesystem::path & path)
+{
+    std::vector<std::string> urlPath;
+
+    // Prepend empty segment for absolute paths (those with a root directory)
+    if (path.has_root_directory())
+        urlPath.push_back("");
+
+    // Handle Windows drive letter (root_name like "C:")
+    if (path.has_root_name())
+        urlPath.push_back(path.root_name().generic_string());
+
+    // Iterate only over the relative path portion
+    for (const auto & component : path.relative_path())
+        urlPath.push_back(component.generic_string());
+
+    // Add trailing empty segment for paths ending with separator (including root-only paths)
+    if (path.filename().empty())
+        urlPath.push_back("");
+
+    return urlPath;
+}
+
+std::filesystem::path urlPathToPath(std::span<const std::string> urlPath)
+{
+    for (const auto & comp : urlPath) {
+        /* This is only really valid for UNIX. Windows has more restrictions. */
+        if (comp.contains('/'))
+            throw BadURL("URL path component '%s' contains '/', which is not allowed in file names", comp);
+        if (comp.contains(char(0))) {
+            using namespace std::string_view_literals;
+            auto str = replaceStrings(comp, "\0"sv, "␀"sv);
+            throw BadURL("URL path component '%s' contains NUL byte which is not allowed", str);
+        }
+    }
+
+    std::filesystem::path result;
+    auto it = urlPath.begin();
+
+    if (it == urlPath.end())
+        return result;
+
+    // Empty first segment means absolute path (leading "/")
+    if (it->empty()) {
+        ++it;
+        result = "/";
+#ifdef _WIN32
+        // On Windows, check if next segment is a drive letter (e.g., "C:").
+        // If it isn't then this is something like a UNC path rather than a
+        // DOS path.
+        if (it != urlPath.end()) {
+            std::filesystem::path segment{*it};
+            if (segment.has_root_name()) {
+                segment /= "/";
+                result = std::move(segment);
+                ++it;
+            }
+        }
+#endif
+    }
+
+    // Append remaining segments
+    for (; it != urlPath.end(); ++it)
+        result /= *it;
+
+    return result;
 }
 
 std::ostream & operator<<(std::ostream & os, const VerbatimURL & url)

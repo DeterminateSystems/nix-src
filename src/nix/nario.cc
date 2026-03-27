@@ -127,7 +127,7 @@ nlohmann::json listNar(Source & source)
             j["entries"] = nlohmann::json::object();
         }
 
-        void createRegularFile(const CanonPath & path, std::function<void(CreateRegularFileSink &)> func) override
+        void createRegularFile(const CanonPath & path, fun<void(CreateRegularFileSink &)> func) override
         {
             struct : CreateRegularFileSink
             {

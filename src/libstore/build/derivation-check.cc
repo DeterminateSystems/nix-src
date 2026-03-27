@@ -15,9 +15,9 @@ void checkOutputs(
     const std::map<std::string, ValidPathInfo> & outputs,
     Activity & act)
 {
-    std::map<Path, const ValidPathInfo &> outputsByPath;
+    std::map<StorePath, const ValidPathInfo &> outputsByPath;
     for (auto & output : outputs)
-        outputsByPath.emplace(store.printStorePath(output.second.path), output.second);
+        outputsByPath.emplace(output.second.path, output.second);
 
     for (auto & pair : outputs) {
         // We can't use auto destructuring here because
@@ -77,7 +77,7 @@ void checkOutputs(
                 if (!pathsDone.insert(path).second)
                     continue;
 
-                auto i = outputsByPath.find(store.printStorePath(path));
+                auto i = outputsByPath.find(path);
                 if (i != outputsByPath.end()) {
                     closureSize += i->second.narSize;
                     for (auto & ref : i->second.references)

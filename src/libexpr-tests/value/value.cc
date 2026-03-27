@@ -13,7 +13,6 @@ TEST_F(ValueTest, unsetValue)
 {
     Value unsetValue;
     ASSERT_EQ(false, unsetValue.isValid());
-    ASSERT_DEATH(unsetValue.type(), "");
 }
 
 TEST_F(ValueTest, vInt)

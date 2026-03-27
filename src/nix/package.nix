@@ -90,18 +90,12 @@ mkMesonExecutable (finalAttrs: {
   # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
   # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
   # Issue: https://github.com/NixOS/nixpkgs/issues/177129
-  NIX_CFLAGS_COMPILE =
-    lib.optionals
-      (
-        stdenv.cc.isClang
-        && stdenv.hostPlatform.isStatic
-        && stdenv.cc.libcxx != null
-        && stdenv.cc.libcxx.isLLVM
-      )
-      [
-        "-rtlib=compiler-rt"
-        "-unwindlib=libunwind"
-      ];
+  NIX_CFLAGS_COMPILE = lib.optionalString (
+    stdenv.cc.isClang
+    && stdenv.hostPlatform.isStatic
+    && stdenv.cc.libcxx != null
+    && stdenv.cc.libcxx.isLLVM
+  ) "-rtlib=compiler-rt -unwindlib=libunwind";
 
   meta = {
     mainProgram = "nix";

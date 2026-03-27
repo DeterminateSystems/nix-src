@@ -11,15 +11,10 @@ struct UDSRemoteStoreConfig : std::enable_shared_from_this<UDSRemoteStoreConfig>
                               virtual LocalFSStoreConfig,
                               virtual RemoteStoreConfig
 {
-    // TODO(fzakaria): Delete this constructor once moved over to the factory pattern
-    // outlined in https://github.com/NixOS/nix/issues/10766
     using LocalFSStoreConfig::LocalFSStoreConfig;
     using RemoteStoreConfig::RemoteStoreConfig;
 
-    /**
-     * @param authority is the socket path.
-     */
-    UDSRemoteStoreConfig(std::string_view scheme, std::string_view authority, const Params & params);
+    UDSRemoteStoreConfig(const std::filesystem::path & path, const Params & params);
 
     UDSRemoteStoreConfig(const Params & params);
 
@@ -36,7 +31,7 @@ struct UDSRemoteStoreConfig : std::enable_shared_from_this<UDSRemoteStoreConfig>
      * The default is `settings.nixDaemonSocketFile`, but we don't write
      * that below, instead putting in the constructor.
      */
-    Path path;
+    std::filesystem::path path;
 
     static StringSet uriSchemes()
     {
@@ -79,7 +74,7 @@ struct UDSRemoteStore : virtual IndirectRootStore, virtual RemoteStore
      * owned managed by the client's user account, and the server makes
      * the indirect symlink.
      */
-    void addIndirectRoot(const Path & path) override;
+    void addIndirectRoot(const std::filesystem::path & path) override;
 
 private:
 

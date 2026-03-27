@@ -102,13 +102,16 @@ ActiveBuild adl_serializer<ActiveBuild>::from_json(const json & j)
     auto type = j.at("type").get<std::string>();
     if (type != "build")
         throw Error("invalid active build JSON: expected type 'build' but got '%s'", type);
+    std::optional<std::filesystem::path> cgroup;
+    if (!j.at("cgroup").is_null())
+        cgroup = j.at("cgroup").get<std::filesystem::path>();
     return ActiveBuild{
         .nixPid = j.at("nixPid").get<pid_t>(),
         .clientPid = j.at("clientPid").get<std::optional<pid_t>>(),
         .clientUid = j.at("clientUid").get<std::optional<uid_t>>(),
         .mainPid = j.at("mainPid").get<pid_t>(),
         .mainUser = j.at("mainUser").get<UserInfo>(),
-        .cgroup = j.at("cgroup").get<std::optional<Path>>(),
+        .cgroup = std::move(cgroup),
         .startTime = (time_t) j.at("startTime").get<double>(),
         .derivation = StorePath{getString(j.at("derivation"))},
     };
@@ -123,7 +126,7 @@ void adl_serializer<ActiveBuild>::to_json(json & j, const ActiveBuild & build)
         {"clientUid", build.clientUid},
         {"mainPid", build.mainPid},
         {"mainUser", build.mainUser},
-        {"cgroup", build.cgroup},
+        {"cgroup", build.cgroup ? nlohmann::json(*build.cgroup) : nlohmann::json(nullptr)},
         {"startTime", (double) build.startTime},
         {"derivation", build.derivation.to_string()},
     };

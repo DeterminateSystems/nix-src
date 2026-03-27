@@ -1,6 +1,7 @@
 #pragma once
 ///@file
 
+#include <filesystem>
 #include <nlohmann/json_fwd.hpp>
 
 #include "nix/store/build-result.hh"
@@ -19,14 +20,14 @@ namespace nix {
  * Denotes a build failure that stemmed from the builder exiting with a
  * failing exist status.
  */
-struct BuilderFailureError : BuildError
+struct BuilderFailureError final : CloneableError<BuilderFailureError, BuildError>
 {
     int builderStatus;
 
     std::string extraMsgAfter;
 
     BuilderFailureError(BuildResult::Failure::Status status, int builderStatus, std::string extraMsgAfter)
-        : BuildError{
+        : CloneableError{
             status,
               /* No message for now, because the caller will make for
                  us, with extra context */
@@ -43,11 +44,11 @@ struct BuilderFailureError : BuildError
  */
 struct ChrootPath
 {
-    Path source;
+    std::filesystem::path source;
     bool optional = false;
 };
 
-typedef std::map<Path, ChrootPath> PathsInChroot; // maps target path to source path
+typedef std::map<std::filesystem::path, ChrootPath> PathsInChroot; // maps target path to source path
 
 /**
  * Parameters by (mostly) `const` reference for `DerivationBuilder`.
@@ -107,7 +108,7 @@ struct DerivationBuilderParams
     /**
      * The activity corresponding to the build.
      */
-    std::unique_ptr<Activity> & act;
+    ref<Activity> act;
 };
 
 /**
@@ -120,7 +121,7 @@ struct DerivationBuilderCallbacks
     /**
      * Open a log file and a pipe to it.
      */
-    virtual Path openLogFile() = 0;
+    virtual void openLogFile() = 0;
 
     /**
      * Close the log file.
@@ -192,10 +193,23 @@ struct DerivationBuilder : RestrictionContext
     virtual bool killChild() = 0;
 };
 
+/**
+ * Run a callback that may change process credentials (setuid, setgid, etc.)
+ * while preserving the parent-death signal.
+ *
+ * The parent-death signal setting is cleared by the Linux kernel upon changes
+ * to EUID, EGID.
+ *
+ * @note Does nothing on non-Linux systems.
+ * @see man PR_SET_PDEATHSIG
+ * @see https://github.com/golang/go/issues/9686
+ */
+void preserveDeathSignal(fun<void()> setCredentials);
+
 struct ExternalBuilder
 {
     StringSet systems;
-    Path program;
+    std::filesystem::path program;
     std::vector<std::string> args;
 };
 

@@ -32,7 +32,7 @@ struct ActiveBuild
 
     pid_t mainPid;
     UserInfo mainUser;
-    std::optional<Path> cgroup;
+    std::optional<std::filesystem::path> cgroup;
 
     time_t startTime;
 
@@ -88,6 +88,8 @@ struct TrackActiveBuildsStore
         }
     };
 
+    virtual ~TrackActiveBuildsStore() = default;
+
     virtual BuildHandle buildStarted(const ActiveBuild & build) = 0;
 
     virtual void buildFinished(const BuildHandle & handle) = 0;
@@ -96,6 +98,8 @@ struct TrackActiveBuildsStore
 struct QueryActiveBuildsStore
 {
     inline static std::string operationName = "Querying active builds";
+
+    virtual ~QueryActiveBuildsStore() = default;
 
     virtual std::vector<ActiveBuildInfo> queryActiveBuilds() = 0;
 };

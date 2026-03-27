@@ -126,7 +126,7 @@ in
       def verify_no_compression(machine, bucket, object_path):
           """Verify S3 object has no compression headers"""
           stat = machine.succeed(f"mc stat minio/{bucket}/{object_path}")
-          if "Content-Encoding" in stat and ("gzip" in stat or "xz" in stat):
+          if "Content-Encoding" in stat and ("gzip" in stat or "br" in stat):
               print(f"mc stat output for {object_path}:")
               print(stat)
               raise Exception(f"Object {object_path} should not have compression Content-Encoding")
@@ -535,20 +535,20 @@ in
 
       @setup_s3()
       def test_compression_mixed(bucket):
-          """Test mixed compression (narinfo=xz, ls=gzip)"""
-          print("\n=== Testing Compression: mixed (narinfo=xz, ls=gzip) ===")
+          """Test mixed compression (narinfo=br, ls=gzip)"""
+          print("\n=== Testing Compression: mixed (narinfo=br, ls=gzip) ===")
 
           store_url = make_s3_url(
               bucket,
-              **{'narinfo-compression': 'xz', 'write-nar-listing': 'true', 'ls-compression': 'gzip'}
+              **{'narinfo-compression': 'br', 'write-nar-listing': 'true', 'ls-compression': 'gzip'}
           )
 
           server.succeed(f"{ENV_WITH_CREDS} nix copy --to '{store_url}' {PKGS['C']}")
 
           pkg_hash = get_package_hash(PKGS['C'])
 
-          # Verify .narinfo has xz compression
-          verify_content_encoding(server, bucket, f"{pkg_hash}.narinfo", "xz")
+          # Verify .narinfo has br compression
+          verify_content_encoding(server, bucket, f"{pkg_hash}.narinfo", "br")
 
           # Verify .ls has gzip compression
           verify_content_encoding(server, bucket, f"{pkg_hash}.ls", "gzip")
@@ -671,7 +671,7 @@ in
           ).strip()
 
           chunk_size = 5 * 1024 * 1024
-          expected_parts = 3  # 10 MB raw becomes ~10.5 MB compressed (NAR + xz overhead)
+          expected_parts = 3  # 10 MB raw becomes ~10.5 MB compressed (NAR + br overhead)
 
           store_url = make_s3_url(
               bucket,
@@ -753,7 +753,7 @@ in
                   "multipart-upload": "true",
                   "multipart-threshold": str(5 * 1024 * 1024),
                   "multipart-chunk-size": str(5 * 1024 * 1024),
-                  "log-compression": "xz",
+                  "log-compression": "br",
               }
           )
 
@@ -953,6 +953,100 @@ in
           )
           verify_packages_in_store(client, PKGS['A'])
 
+      @setup_s3(
+          populate_bucket=[PKGS['A']],
+          profiles={
+              "valid": {"access_key": ACCESS_KEY, "secret_key": SECRET_KEY},
+              "invalid": {"access_key": "INVALIDKEY", "secret_key": "INVALIDSECRET"},
+          }
+      )
+      def test_profile_credentials(bucket):
+          """Test that profile-based credentials work without environment variables"""
+          print("\n=== Testing Profile-Based Credentials ===")
+
+          store_url = make_s3_url(bucket, profile="valid")
+
+          # Verify store info works with profile credentials (no env vars)
+          client.succeed(f"HOME=/root nix store info --store '{store_url}' >&2")
+
+          # Verify we can copy from the store using profile
+          verify_packages_in_store(client, PKGS['A'], should_exist=False)
+          client.succeed(f"HOME=/root nix copy --no-check-sigs --from '{store_url}' {PKGS['A']}")
+          verify_packages_in_store(client, PKGS['A'])
+
+          # Clean up the package we just copied so we can test invalid profile
+          client.succeed(f"nix store delete --ignore-liveness {PKGS['A']}")
+          verify_packages_in_store(client, PKGS['A'], should_exist=False)
+
+          # Verify invalid profile fails when trying to copy
+          invalid_url = make_s3_url(bucket, profile="invalid")
+          client.fail(f"HOME=/root nix copy --no-check-sigs --from '{invalid_url}' {PKGS['A']} 2>&1")
+
+      @setup_s3(
+          populate_bucket=[PKGS['A']],
+          profiles={
+              "wrong": {"access_key": "WRONGKEY", "secret_key": "WRONGSECRET"},
+          }
+      )
+      def test_env_vars_precedence(bucket):
+          """Test that environment variables take precedence over profile credentials"""
+          print("\n=== Testing Environment Variables Precedence ===")
+
+          # Use profile with wrong credentials, but provide correct creds via env vars
+          store_url = make_s3_url(bucket, profile="wrong")
+
+          # Ensure package is not in client store
+          verify_packages_in_store(client, PKGS['A'], should_exist=False)
+
+          # This should succeed because env vars (correct) override profile (wrong)
+          output = client.succeed(
+              f"HOME=/root {ENV_WITH_CREDS} nix copy --no-check-sigs --debug --from '{store_url}' {PKGS['A']} 2>&1"
+          )
+
+          # Verify the credential chain shows Environment provider was added
+          if "Added AWS Environment Credential Provider" not in output:
+              print("Debug output:")
+              print(output)
+              raise Exception("Expected Environment provider to be added to chain")
+
+          # Clean up the package so we can test again without env vars
+          client.succeed(f"nix store delete --ignore-liveness {PKGS['A']}")
+          verify_packages_in_store(client, PKGS['A'], should_exist=False)
+
+          # Without env vars, same URL should fail (proving profile creds are actually wrong)
+          client.fail(f"HOME=/root nix copy --no-check-sigs --from '{store_url}' {PKGS['A']} 2>&1")
+
+      @setup_s3(
+          populate_bucket=[PKGS['A']],
+          profiles={
+              "testprofile": {"access_key": ACCESS_KEY, "secret_key": SECRET_KEY},
+          }
+      )
+      def test_credential_provider_chain(bucket):
+          """Test that debug logging shows which providers are added to the chain"""
+          print("\n=== Testing Credential Provider Chain Logging ===")
+
+          store_url = make_s3_url(bucket, profile="testprofile")
+
+          output = client.succeed(
+              f"HOME=/root nix store info --debug --store '{store_url}' 2>&1"
+          )
+
+          # For a named profile, we expect to see these providers in the chain
+          expected_providers = ["Environment", "Profile", "IMDS"]
+          for provider in expected_providers:
+              msg = f"Added AWS {provider} Credential Provider to chain for profile 'testprofile'"
+              if msg not in output:
+                  print("Debug output:")
+                  print(output)
+                  raise Exception(f"Expected to find: {msg}")
+
+          # SSO should be skipped (no SSO config for this profile)
+          if "Skipped AWS SSO Credential Provider for profile 'testprofile'" not in output:
+              print("Debug output:")
+              print(output)
+              raise Exception("Expected SSO provider to be skipped")
+
       # ============================================================================
       # Main Test Execution
       # ============================================================================
@@ -967,7 +1061,7 @@ in
       server.wait_for_unit("minio")
       server.wait_for_unit("network-addresses-eth1.service")
       server.wait_for_open_port(9000)
-      server.succeed(f"mc config host add minio http://localhost:9000 {ACCESS_KEY} {SECRET_KEY} --api s3v4")
+      server.succeed(f"mc alias set minio http://localhost:9000 {ACCESS_KEY} {SECRET_KEY} --api s3v4")
 
       # Run tests (each gets isolated bucket via decorator)
       test_credential_caching()

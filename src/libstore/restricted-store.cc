@@ -53,7 +53,7 @@ struct RestrictedStore : public virtual IndirectRootStore, public virtual GcStor
     {
     }
 
-    Path getRealStoreDir() override
+    std::filesystem::path getRealStoreDir() override
     {
         return next->config->realStoreDir;
     }
@@ -126,7 +126,7 @@ struct RestrictedStore : public virtual IndirectRootStore, public virtual GcStor
 
     void addTempRoot(const StorePath & path) override {}
 
-    void addIndirectRoot(const Path & path) override {}
+    void addIndirectRoot(const std::filesystem::path & path) override {}
 
     Roots findRoots(bool censor) override
     {
@@ -135,7 +135,7 @@ struct RestrictedStore : public virtual IndirectRootStore, public virtual GcStor
 
     void collectGarbage(const GCOptions & options, GCResults & results) override {}
 
-    void addSignatures(const StorePath & storePath, const StringSet & sigs) override
+    void addSignatures(const StorePath & storePath, const std::set<Signature> & sigs) override
     {
         unsupported("addSignatures");
     }
@@ -259,8 +259,7 @@ void RestrictedStore::buildPaths(
     const std::vector<DerivedPath> & paths, BuildMode buildMode, std::shared_ptr<Store> evalStore)
 {
     for (auto & result : buildPathsWithResults(paths, buildMode, evalStore))
-        if (auto * failureP = result.tryGetFailure())
-            failureP->rethrow();
+        result.tryThrowBuildError();
 }
 
 std::vector<KeyedBuildResult> RestrictedStore::buildPathsWithResults(
@@ -294,7 +293,7 @@ std::vector<KeyedBuildResult> RestrictedStore::buildPathsWithResults(
     next->computeFSClosure(newPaths, closure);
     for (auto & path : closure)
         goal.addDependency(path);
-    for (auto & real : Realisation::closure(*next, newRealisations))
+    for (auto & real : newRealisations)
         goal.addedDrvOutputs.insert(real.id);
 
     return results;

@@ -15,7 +15,7 @@ class NarInfoTestV1 : public CharacterizationTest, public LibStoreTest
 {
     std::filesystem::path unitTestData = getUnitTestData() / "nar-info" / "json-1";
 
-    std::filesystem::path goldenMaster(PathView testStem) const override
+    std::filesystem::path goldenMaster(std::string_view testStem) const override
     {
         return unitTestData / (testStem + ".json");
     }
@@ -25,7 +25,7 @@ class NarInfoTestV2 : public CharacterizationTest, public LibStoreTest
 {
     std::filesystem::path unitTestData = getUnitTestData() / "nar-info" / "json-2";
 
-    std::filesystem::path goldenMaster(PathView testStem) const override
+    std::filesystem::path goldenMaster(std::string_view testStem) const override
     {
         return unitTestData / (testStem + ".json");
     }
@@ -59,7 +59,10 @@ static NarInfo makeNarInfo(const Store & store, bool includeImpureInfo)
         };
         info.registrationTime = 23423;
         info.ultimate = true;
-        info.sigs = {"asdf", "qwer"};
+        info.sigs = {
+            Signature{.keyName = "asdf", .sig = std::string(64, '\0')},
+            Signature{.keyName = "qwer", .sig = std::string(64, '\0')},
+        };
 
         info.url = "nar/1w1fff338fvdw53sqgamddn1b2xgds473pv6y13gizdbqjv4i5p3.nar.xz";
         info.compression = "xz";

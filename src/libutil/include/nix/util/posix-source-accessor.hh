@@ -31,7 +31,9 @@ public:
      */
     time_t mtime = 0;
 
-    void readFile(const CanonPath & path, Sink & sink, std::function<void(uint64_t)> sizeCallback) override;
+    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override;
+
+    using SourceAccessor::readFile;
 
     bool pathExists(const CanonPath & path) override;
 
@@ -87,7 +89,7 @@ private:
      */
     void assertNoSymlinks(CanonPath path);
 
-    std::optional<struct stat> cachedLstat(const CanonPath & path);
+    std::optional<PosixStat> cachedLstat(const CanonPath & path);
 
     std::filesystem::path makeAbsPath(const CanonPath & path);
 };

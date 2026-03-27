@@ -8,6 +8,7 @@
 #include "nix/store/tests/nix_api_store.hh"
 #include "nix/store/globals.hh"
 #include "nix/util/tests/string_callback.hh"
+#include "nix/util/tests/test-data.hh"
 #include "nix/util/url.hh"
 
 #include "store-tests-config.hh"
@@ -298,11 +299,11 @@ public:
         nix_api_store_test_base::SetUp();
 
         nix::experimentalFeatureSettings.set("extra-experimental-features", "ca-derivations");
-        nix::settings.substituters = {};
+        nix::settings.getWorkerSettings().substituters = {};
 
         store = open_local_store();
 
-        std::filesystem::path unitTestData{getenv("_NIX_TEST_UNIT_DATA")};
+        std::filesystem::path unitTestData = nix::getUnitTestData();
         std::ifstream t{unitTestData / "derivation/ca/self-contained.json"};
         std::stringstream buffer;
         buffer << t.rdbuf();
@@ -353,11 +354,11 @@ TEST_F(nix_api_store_test_base, build_from_json)
 {
     // FIXME get rid of these
     nix::experimentalFeatureSettings.set("extra-experimental-features", "ca-derivations");
-    nix::settings.substituters = {};
+    nix::settings.getWorkerSettings().substituters = {};
 
     auto * store = open_local_store();
 
-    std::filesystem::path unitTestData{getenv("_NIX_TEST_UNIT_DATA")};
+    std::filesystem::path unitTestData = nix::getUnitTestData();
 
     std::ifstream t{unitTestData / "derivation/ca/self-contained.json"};
     std::stringstream buffer;
@@ -400,11 +401,11 @@ TEST_F(nix_api_store_test_base, nix_store_realise_invalid_system)
 {
     // Test that nix_store_realise properly reports errors when the system is invalid
     nix::experimentalFeatureSettings.set("extra-experimental-features", "ca-derivations");
-    nix::settings.substituters = {};
+    nix::settings.getWorkerSettings().substituters = {};
 
     auto * store = open_local_store();
 
-    std::filesystem::path unitTestData{getenv("_NIX_TEST_UNIT_DATA")};
+    std::filesystem::path unitTestData = nix::getUnitTestData();
     std::ifstream t{unitTestData / "derivation/ca/self-contained.json"};
     std::stringstream buffer;
     buffer << t.rdbuf();
@@ -445,11 +446,11 @@ TEST_F(nix_api_store_test_base, nix_store_realise_builder_fails)
 {
     // Test that nix_store_realise properly reports errors when the builder fails
     nix::experimentalFeatureSettings.set("extra-experimental-features", "ca-derivations");
-    nix::settings.substituters = {};
+    nix::settings.getWorkerSettings().substituters = {};
 
     auto * store = open_local_store();
 
-    std::filesystem::path unitTestData{getenv("_NIX_TEST_UNIT_DATA")};
+    std::filesystem::path unitTestData = nix::getUnitTestData();
     std::ifstream t{unitTestData / "derivation/ca/self-contained.json"};
     std::stringstream buffer;
     buffer << t.rdbuf();
@@ -490,11 +491,11 @@ TEST_F(nix_api_store_test_base, nix_store_realise_builder_no_output)
 {
     // Test that nix_store_realise properly reports errors when builder succeeds but produces no output
     nix::experimentalFeatureSettings.set("extra-experimental-features", "ca-derivations");
-    nix::settings.substituters = {};
+    nix::settings.getWorkerSettings().substituters = {};
 
     auto * store = open_local_store();
 
-    std::filesystem::path unitTestData{getenv("_NIX_TEST_UNIT_DATA")};
+    std::filesystem::path unitTestData = nix::getUnitTestData();
     std::ifstream t{unitTestData / "derivation/ca/self-contained.json"};
     std::stringstream buffer;
     buffer << t.rdbuf();
@@ -686,7 +687,7 @@ TEST_F(NixApiStoreTestWithRealisedPath, nix_store_realise_output_ordering)
     // This test uses a CA derivation with 10 outputs in randomized input order
     // to verify that the callback order is deterministic and alphabetical.
     nix::experimentalFeatureSettings.set("extra-experimental-features", "ca-derivations");
-    nix::settings.substituters = {};
+    nix::settings.getWorkerSettings().substituters = {};
 
     auto * store = open_local_store();
 
@@ -870,7 +871,7 @@ TEST_F(NixApiStoreTestWithRealisedPath, nix_store_get_fs_closure_error_propagati
  */
 static std::string load_json_from_test_data(const char * filename)
 {
-    std::filesystem::path unitTestData{getenv("_NIX_TEST_UNIT_DATA")};
+    std::filesystem::path unitTestData = nix::getUnitTestData();
     std::ifstream t{unitTestData / filename};
     std::stringstream buffer;
     buffer << t.rdbuf();
@@ -958,7 +959,7 @@ TEST_F(nix_api_store_test, nix_derivation_clone)
 TEST_F(nix_api_store_test, nix_store_build_paths)
 {
     nix::experimentalFeatureSettings.set("extra-experimental-features", "ca-derivations");
-    nix::settings.substituters = {};
+    nix::settings.getWorkerSettings().substituters = {};
 
     auto * store = open_local_store();
 

@@ -2,12 +2,15 @@
 ///@file
 
 #include <cassert>
+#include <filesystem>
 #include <map>
 #include <set>
 
 #include <nlohmann/json_fwd.hpp>
 
+#include "nix/util/json-non-null.hh"
 #include "nix/util/types.hh"
+#include "nix/util/fmt.hh"
 #include "nix/util/experimental-features.hh"
 
 namespace nix {
@@ -217,6 +220,30 @@ protected:
 };
 
 /**
+ * For `Setting<AbsolutePath>`. `parse()` calls `canonPath`,
+ * rejecting empty and relative paths.
+ */
+struct AbsolutePath : std::filesystem::path
+{
+    using path::path;
+    using path::operator=;
+
+    AbsolutePath(const std::filesystem::path & p)
+        : path(p)
+    {
+    }
+
+    AbsolutePath(std::filesystem::path && p)
+        : path(std::move(p))
+    {
+    }
+};
+
+template<>
+struct json_avoids_null<AbsolutePath> : std::true_type
+{};
+
+/**
  * A setting of type T.
  */
 template<typename T>
@@ -380,56 +407,35 @@ public:
 };
 
 /**
- * A special setting for Paths. These are automatically canonicalised
- * (e.g. "/foo//bar/" becomes "/foo/bar").
- *
- * It is mandatory to specify a path; i.e. the empty string is not
- * permitted.
+ * A setting whose value is represented as JSON. The type `T` must be supported by `nlohmann::json`'s `get<T>()`.
  */
-class PathSetting : public BaseSetting<Path>
+template<typename T>
+class JSONSetting : public Setting<T>
 {
 public:
+    using Setting<T>::Setting;
 
-    PathSetting(
-        Config * options,
-        const Path & def,
-        const std::string & name,
-        const std::string & description,
-        const StringSet & aliases = {});
+    T parse(const std::string & str) const override;
 
-    Path parse(const std::string & str) const override;
-
-    Path operator+(const char * p) const
-    {
-        return value + p;
-    }
-
-    void operator=(const Path & v)
-    {
-        this->assign(v);
-    }
+    std::string to_string() const override;
 };
 
-/**
- * Like `PathSetting`, but the absence of a path is also allowed.
- *
- * `std::optional` is used instead of the empty string for clarity.
- */
-class OptionalPathSetting : public BaseSetting<std::optional<Path>>
-{
-public:
+/* Delete these overloads to avoid footguns with implicit quoting of Setting<AbsolutePath> in fmt(). */
 
-    OptionalPathSetting(
-        Config * options,
-        const std::optional<Path> & def,
-        const std::string & name,
-        const std::string & description,
-        const StringSet & aliases = {});
+template<class F, typename... Args>
+inline void formatHelper(F & f, const AbsolutePath & x, const Args &... args) = delete;
 
-    std::optional<Path> parse(const std::string & str) const override;
+template<class F, typename... Args>
+inline void formatHelper(F & f, const AbsolutePath & x) = delete;
 
-    void operator=(const std::optional<Path> & v);
-};
+template<class F, typename... Args>
+inline void formatHelper(F & f, const Setting<AbsolutePath> & x, const Args &... args) = delete;
+
+template<class F, typename... Args>
+inline void formatHelper(F & f, const Setting<AbsolutePath> & x) = delete;
+
+template<>
+void BaseSetting<std::set<std::filesystem::path>>::appendOrSet(std::set<std::filesystem::path> newValue, bool append);
 
 struct ExperimentalFeatureSettings : Config
 {

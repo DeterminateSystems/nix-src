@@ -82,7 +82,7 @@ in
         _NIX_FORCE_HTTP = "1";
       };
     };
-    setupScript = '''';
+    setupScript = "";
     testScript = ''
       start_all();
 
