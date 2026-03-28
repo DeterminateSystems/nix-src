@@ -3,13 +3,13 @@
 {
   lib,
   stdenv,
-  rust_1_89,
+  rust_1_94,
   fetchFromGitHub,
   cmake,
   enableShared ? !stdenv.hostPlatform.isStatic,
   enableStatic ? stdenv.hostPlatform.isStatic,
 }:
-rust_1_89.packages.stable.rustPlatform.buildRustPackage (finalAttrs: {
+rust_1_94.packages.stable.rustPlatform.buildRustPackage (finalAttrs: {
   pname = "wasmtime";
   version = "40.0.2";
 
