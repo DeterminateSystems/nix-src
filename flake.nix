@@ -1,7 +1,7 @@
 {
   description = "The purely functional package manager";
 
-  inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.2505";
+  inputs.determinate-nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.2505";
 
   inputs.nixpkgs-regression.url = "github:NixOS/nixpkgs/215d4d0fd80ca5163643b03a33fde804a29cc1e2";
   inputs.nixpkgs-23-11.url = "github:NixOS/nixpkgs/a62e6edd6d5e1fa0329b8653c801147986f8d446";
@@ -10,21 +10,21 @@
   inputs.flake-parts.url = "https://flakehub.com/f/hercules-ci/flake-parts/0.1";
   inputs.git-hooks-nix.url = "https://flakehub.com/f/cachix/git-hooks.nix/0.1.941";
   # work around https://github.com/NixOS/nix/issues/7730
-  inputs.flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
-  inputs.git-hooks-nix.inputs.nixpkgs.follows = "nixpkgs";
+  inputs.flake-parts.inputs.nixpkgs-lib.follows = "determinate-nixpkgs";
+  inputs.git-hooks-nix.inputs.nixpkgs.follows = "determinate-nixpkgs";
   # work around 7730 and https://github.com/NixOS/nix/issues/7807
   inputs.git-hooks-nix.inputs.gitignore.follows = "";
 
   outputs =
     inputs@{
       self,
-      nixpkgs,
+      determinate-nixpkgs,
       nixpkgs-regression,
       ...
     }:
 
     let
-      inherit (nixpkgs) lib;
+      inherit (determinate-nixpkgs) lib;
 
       officialRelease = true;
 
@@ -94,7 +94,7 @@
             crossSystem:
             forAllStdenvs (
               stdenv:
-              import nixpkgs {
+              import determinate-nixpkgs {
                 localSystem = {
                   inherit system;
                 };
@@ -314,6 +314,7 @@
         system:
         (import ./ci/gha/tests {
           inherit system;
+          nixpkgs = determinate-nixpkgs;
           pkgs = nixpkgsFor.${system}.native;
           nixFlake = self;
         }).topLevel
@@ -569,7 +570,7 @@
 
           ```console
           nix repl> :lf NixOS/nix
-          nix-repl> ps = lib.makeComponents { pkgs = import inputs.nixpkgs { crossSystem = "riscv64-linux"; }; }
+          nix-repl> ps = lib.makeComponents { pkgs = import inputs.determinate-nixpkgs { crossSystem = "riscv64-linux"; }; }
           nix-repl> ps
           {
             appendPatches = «lambda appendPatches @ ...»;
