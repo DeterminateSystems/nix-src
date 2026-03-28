@@ -120,7 +120,7 @@ jobs:
               )
             }}
         run: |
-          nix build .#fallbackPathsNix --out-link fallback
+          nix build .#fallbackPathsNix --out-link fallback --max-jobs 0
           cat fallback > ./artifacts/fallback-paths.nix
 
       - uses: DeterminateSystems/push-artifact-ids@main
