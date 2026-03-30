@@ -1883,24 +1883,16 @@ static void derivationStrictInternal(
         auto & structuredAttrs = drv.structuredAttrs->structuredAttrs;
         auto fromPathIt = structuredAttrs.find("fromPath");
         if (fromPathIt != structuredAttrs.end() && fromPathIt->second.is_string()) {
-            auto parseStorePath = [&](const std::string & pathStr) -> StorePath {
-                if (pathStr.starts_with("/")) {
-                    // Full path provided - validate store prefix
-                    auto storeDir = state.store->storeDir;
-                    if (!pathStr.starts_with(storeDir + "/"))
-                        throw Error("'%s' does not start with the store directory '%s'", pathStr, storeDir);
-                    // Extract just the basename
-                    return state.store->parseStorePath(pathStr);
-                } else {
-                    // Just basename provided
-                    return StorePath(pathStr);
-                }
+            auto toPathIt = structuredAttrs.find("toPath");
+
+            auto getStorePath = [](const std::string & pathStr) -> StorePath {
+                auto lastSlash = pathStr.rfind('/');
+                return StorePath(lastSlash != std::string::npos ? pathStr.substr(lastSlash + 1) : pathStr);
             };
 
-            auto toPathIt = structuredAttrs.find("toPath");
             StorePath outputPath = (toPathIt != structuredAttrs.end() && toPathIt->second.is_string())
-                ? parseStorePath(toPathIt->second.get<std::string>())
-                : parseStorePath(fromPathIt->second.get<std::string>());
+                ? getStorePath(toPathIt->second.get<std::string>())
+                : getStorePath(fromPathIt->second.get<std::string>());
 
             for (auto & [outputName, _] : drv.outputs) {
                 drv.env[outputName] = state.store->printStorePath(outputPath);
