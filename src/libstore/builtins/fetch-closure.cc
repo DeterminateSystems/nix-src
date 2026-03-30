@@ -41,32 +41,18 @@ static void builtinFetchClosure(const BuiltinBuilderContext & ctx)
         fromStoreUrl = it->second.get<std::string>();
     }
 
-    // Extract store directory from output path
-    auto derivationOutputPath = ctx.outputs.at("out");
-    auto lastSlash = derivationOutputPath.rfind('/');
-    if (lastSlash == std::string::npos)
-        throw Error("invalid output path '%s'", derivationOutputPath);
-    std::string storeDir = derivationOutputPath.substr(0, lastSlash);
-
-    auto parseStorePath = [&](const std::string & pathStr) -> StorePath {
-        if (pathStr.starts_with("/")) {
-            // Full path provided - validate store prefix
-            if (!pathStr.starts_with(storeDir + "/"))
-                throw Error("'%s' does not start with the store directory '%s'", pathStr, storeDir);
-            // Extract just the basename
-            return StorePath(pathStr.substr(storeDir.size() + 1));
-        } else {
-            // Just basename provided
-            return StorePath(pathStr);
-        }
-    };
-
     if (auto it = attrs.find("fromPath"); it != attrs.end() && it->second.is_string()) {
-        fromPath = parseStorePath(it->second.get<std::string>());
+        auto pathStr = it->second.get<std::string>();
+        // Extract basename if full path provided
+        auto lastSlash = pathStr.rfind('/');
+        fromPath = StorePath(lastSlash != std::string::npos ? pathStr.substr(lastSlash + 1) : pathStr);
     }
 
     if (auto it = attrs.find("toPath"); it != attrs.end() && it->second.is_string()) {
-        toPath = parseStorePath(it->second.get<std::string>());
+        auto pathStr = it->second.get<std::string>();
+        // Extract basename if full path provided
+        auto lastSlash = pathStr.rfind('/');
+        toPath = StorePath(lastSlash != std::string::npos ? pathStr.substr(lastSlash + 1) : pathStr);
     }
 
     if (auto it = attrs.find("inputAddressed"); it != attrs.end() && it->second.is_boolean()) {
