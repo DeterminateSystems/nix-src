@@ -1,0 +1,208 @@
+#include "nix/store/builtins.hh"
+#include "nix/store/parsed-derivations.hh"
+#include "nix/store/store-open.hh"
+#include "nix/store/realisation.hh"
+#include "nix/store/make-content-addressed.hh"
+#include "nix/store/nar-info-disk-cache.hh"
+#include "nix/store/nar-info.hh"
+#include "nix/store/filetransfer.hh"
+#include "nix/store/globals.hh"
+#include "nix/store/store-dir-config.hh"
+#include "nix/util/url.hh"
+#include "nix/util/archive.hh"
+#include "nix/util/compression.hh"
+#include "nix/util/file-system.hh"
+
+#include <nlohmann/json.hpp>
+#include <filesystem>
+
+namespace nix {
+
+static void builtinFetchClosure(const BuiltinBuilderContext & ctx)
+{
+    experimentalFeatureSettings.require(Xp::FetchClosure);
+
+    auto out = get(ctx.drv.outputs, "out");
+    if (!out)
+        throw Error("'builtin:fetch-closure' requires an 'out' output");
+
+    if (!ctx.drv.structuredAttrs)
+        throw Error("'builtin:fetch-closure' must have '__structuredAttrs = true'");
+
+    auto & attrs = ctx.drv.structuredAttrs->structuredAttrs;
+
+    // Parse attributes
+    std::optional<std::string> fromStoreUrl;
+    std::optional<StorePath> fromPath;
+    std::optional<StorePath> toPath;
+    bool inputAddressed = false;
+
+    if (auto it = attrs.find("fromStore"); it != attrs.end() && it->second.is_string()) {
+        fromStoreUrl = it->second.get<std::string>();
+    }
+
+    // Extract store directory from output path
+    auto derivationOutputPath = ctx.outputs.at("out");
+    auto lastSlash = derivationOutputPath.rfind('/');
+    if (lastSlash == std::string::npos)
+        throw Error("invalid output path '%s'", derivationOutputPath);
+    std::string storeDir = derivationOutputPath.substr(0, lastSlash);
+
+    auto parseStorePath = [&](const std::string & pathStr) -> StorePath {
+        if (pathStr.starts_with("/")) {
+            // Full path provided - validate store prefix
+            if (!pathStr.starts_with(storeDir + "/"))
+                throw Error("'%s' does not start with the store directory '%s'", pathStr, storeDir);
+            // Extract just the basename
+            return StorePath(pathStr.substr(storeDir.size() + 1));
+        } else {
+            // Just basename provided
+            return StorePath(pathStr);
+        }
+    };
+
+    if (auto it = attrs.find("fromPath"); it != attrs.end() && it->second.is_string()) {
+        fromPath = parseStorePath(it->second.get<std::string>());
+    }
+
+    if (auto it = attrs.find("toPath"); it != attrs.end() && it->second.is_string()) {
+        toPath = parseStorePath(it->second.get<std::string>());
+    }
+
+    if (auto it = attrs.find("inputAddressed"); it != attrs.end() && it->second.is_boolean()) {
+        inputAddressed = it->second.get<bool>();
+    }
+
+    if (!fromStoreUrl)
+        throw Error("'builtin:fetch-closure' requires 'fromStore' attribute");
+
+    if (!fromPath)
+        throw Error("'builtin:fetch-closure' requires 'fromPath' attribute");
+
+    // Validate URL
+    auto parsedURL = parseURL(*fromStoreUrl, /*lenient=*/true);
+
+    if (parsedURL.scheme != "http" && parsedURL.scheme != "https")
+        throw Error("'builtin:fetch-closure' only supports http:// and https:// stores");
+
+    if (!parsedURL.query.empty())
+        throw Error("'builtin:fetch-closure' does not support URL query parameters (in '%s')", *fromStoreUrl);
+
+    std::cerr << fmt("fetching closure '%s' from '%s'...\n",
+        fromPath->to_string(), *fromStoreUrl);
+
+    // Create a fresh FileTransfer since we're in a forked process
+    auto fileTransfer = makeFileTransfer();
+
+    // Download and parse .narinfo to get metadata
+    auto narInfoUrl = parsedURL.to_string();
+    if (!hasSuffix(narInfoUrl, "/")) narInfoUrl += "/";
+    narInfoUrl += fromPath->hashPart() + ".narinfo";
+
+    // Use default store directory for parsing .narinfo
+    static const Path defaultStoreDir = "/nix/store";
+    StoreDirConfig storeDirConfig{.storeDir = defaultStoreDir};
+
+    std::shared_ptr<NarInfo> narInfo;
+    try {
+        FileTransferRequest request(VerbatimURL{narInfoUrl});
+        auto result = fileTransfer->download(request);
+        narInfo = std::make_shared<NarInfo>(storeDirConfig, result.data, narInfoUrl);
+
+        // Verify the path matches
+        if (narInfo->path != *fromPath)
+            throw Error("NAR info path mismatch: expected '%s', got '%s'",
+                fromPath->to_string(), narInfo->path.to_string());
+    } catch (FileTransferError & e) {
+        throw Error("failed to fetch NAR info for '%s' from '%s': %s",
+            fromPath->to_string(), *fromStoreUrl, e.what());
+    }
+
+    // Validate content-addressed vs input-addressed
+    bool isCA = narInfo->ca.has_value();
+
+    if (inputAddressed && isCA)
+        throw Error("The store object at '%s' is content-addressed, but 'inputAddressed' is set to 'true'",
+            fromPath->to_string());
+
+    if (!inputAddressed && !isCA)
+        throw Error("The store object at '%s' is input-addressed, but 'inputAddressed' is not set.\n\n"
+            "Add 'inputAddressed = true;' if you intend to fetch an input-addressed store path.",
+            fromPath->to_string());
+
+    // Derive the output path from fromPath (or toPath if rewriting)
+    auto outputStorePath = toPath ? *toPath : *fromPath;
+    std::string outputPath = "/nix/store/" + outputStorePath.to_string();
+
+    // Download and unpack NAR
+    auto narUrl = parsedURL.to_string();
+    if (!hasSuffix(narUrl, "/")) narUrl += "/";
+    narUrl += narInfo->url;
+
+    // If rewriting, we need to unpack to a temporary location first
+    Path unpackPath = outputPath;
+    std::optional<Path> tempPath;
+
+    if (toPath) {
+        // Create temporary directory for unpacking
+        tempPath = outputPath + ".tmp";
+        unpackPath = *tempPath;
+    }
+
+    auto source = sinkToSource([&](Sink & sink) {
+        auto decompressor = makeDecompressionSink(narInfo->compression, sink);
+        FileTransferRequest request(VerbatimURL{narUrl});
+        fileTransfer->download(std::move(request), *decompressor);
+        decompressor->finish();
+    });
+
+    restorePath(unpackPath, *source);
+
+    // Rewrite store path references if toPath is provided
+    if (toPath) {
+        std::cerr << fmt("rewriting references from '%s' to '%s'...\n",
+            fromPath->to_string(), toPath->to_string());
+
+        // Build the rewrite map
+        StringMap rewrites;
+        rewrites[std::string(fromPath->to_string())] = std::string(toPath->to_string());
+
+        // Recursively rewrite all files in the temporary location
+        std::function<void(const Path &)> rewritePath = [&](const Path & path) {
+            for (auto & entry : std::filesystem::directory_iterator(path)) {
+                auto entryPath = entry.path().string();
+                if (entry.is_directory() && !entry.is_symlink()) {
+                    rewritePath(entryPath);
+                } else if (entry.is_regular_file()) {
+                    // Read file content
+                    auto content = readFile(entryPath);
+                    // Rewrite strings
+                    auto newContent = content;
+                    for (auto & [from, to] : rewrites) {
+                        size_t pos = 0;
+                        while ((pos = newContent.find(from, pos)) != std::string::npos) {
+                            newContent.replace(pos, from.length(), to);
+                            pos += to.length();
+                        }
+                    }
+                    // Write back if changed
+                    if (newContent != content) {
+                        writeFile(entryPath, newContent);
+                    }
+                }
+            }
+        };
+
+        rewritePath(unpackPath);
+
+        // Move from temporary location to final output path
+        if (std::filesystem::exists(outputPath)) {
+            std::filesystem::remove_all(outputPath);
+        }
+        std::filesystem::rename(unpackPath, outputPath);
+    }
+}
+
+static RegisterBuiltinBuilder registerFetchClosure("fetch-closure", builtinFetchClosure);
+
+} // namespace nix

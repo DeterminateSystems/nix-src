@@ -1739,6 +1739,7 @@ static void derivationStrictInternal(
         drv.structuredAttrs = std::move(*jsonObject);
     }
 
+
     /* Everything in the context of the strings in the derivation
        attributes should be added as dependencies of the resulting
        derivation. */
@@ -1875,6 +1876,37 @@ static void derivationStrictInternal(
         }
 
         drv.fillInOutputPaths(*state.store);
+    }
+
+    /* Override output paths for builtin:fetch-closure */
+    if (isImpure && drv.builder == "builtin:fetch-closure" && drv.structuredAttrs) {
+        auto & structuredAttrs = drv.structuredAttrs->structuredAttrs;
+        auto fromPathIt = structuredAttrs.find("fromPath");
+        if (fromPathIt != structuredAttrs.end() && fromPathIt->second.is_string()) {
+            auto parseStorePath = [&](const std::string & pathStr) -> StorePath {
+                if (pathStr.starts_with("/")) {
+                    // Full path provided - validate store prefix
+                    auto storeDir = state.store->storeDir;
+                    if (!pathStr.starts_with(storeDir + "/"))
+                        throw Error("'%s' does not start with the store directory '%s'", pathStr, storeDir);
+                    // Extract just the basename
+                    return state.store->parseStorePath(pathStr);
+                } else {
+                    // Just basename provided
+                    return StorePath(pathStr);
+                }
+            };
+
+            auto toPathIt = structuredAttrs.find("toPath");
+            StorePath outputPath = (toPathIt != structuredAttrs.end() && toPathIt->second.is_string())
+                ? parseStorePath(toPathIt->second.get<std::string>())
+                : parseStorePath(fromPathIt->second.get<std::string>());
+
+            for (auto & [outputName, _] : drv.outputs) {
+                drv.env[outputName] = state.store->printStorePath(outputPath);
+                drv.outputs.insert_or_assign(outputName, DerivationOutput::InputAddressed{.path = outputPath});
+            }
+        }
     }
 
     /* Write the resulting term into the Nix store directory. */
