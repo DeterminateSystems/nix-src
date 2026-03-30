@@ -1056,7 +1056,10 @@ struct curlFileTransfer : public FileTransfer
             auto item = make_ref<TransferItem>(*this, std::move(modifiedRequest), std::move(callback));
             try {
                 return enqueueItem(item);
-            } catch (const nix::Error & e) {
+            } catch (const nix::BaseError & e) {
+                // NOTE(cole-h): catches both nix::Error and nix::Interrupted -- enqueueItem calls
+                // writeFull which may throw nix::Interrupted, and the rest of enqueueItem may throw
+                // nix::Error
                 item->fail(e);
                 return ItemHandle(item.get_ptr());
             }
@@ -1065,7 +1068,10 @@ struct curlFileTransfer : public FileTransfer
         auto item = make_ref<TransferItem>(*this, request, std::move(callback));
         try {
             return enqueueItem(item);
-        } catch (const nix::Error & e) {
+        } catch (const nix::BaseError & e) {
+            // NOTE(cole-h): catches both nix::Error and nix::Interrupted -- enqueueItem calls
+            // writeFull which may throw nix::Interrupted, and the rest of enqueueItem may throw
+            // nix::Error
             item->fail(e);
             return ItemHandle(item.get_ptr());
         }
