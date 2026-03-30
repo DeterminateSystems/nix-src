@@ -714,7 +714,7 @@ struct curlFileTransfer : public FileTransfer
         };
 
         std::priority_queue<ref<TransferItem>, std::vector<ref<TransferItem>>, EmbargoComparator> incoming;
-        std::vector<ref<TransferItem>> unpause;
+        std::vector<std::weak_ptr<Item>> unpause;
     private:
         bool quitting = false;
     public:
@@ -919,8 +919,15 @@ struct curlFileTransfer : public FileTransfer
                 return res;
             }();
 
-            for (auto & item : unpause)
-                item->unpause();
+            for (auto & item : unpause) {
+                /* The transfer might have completed (failed) between it getting
+                   enqueued for unpause and by the time the worker thread picked
+                   it up. */
+                auto ptr = item.lock();
+                if (!ptr)
+                    continue;
+                static_cast<TransferItem &>(*ptr).unpause();
+            }
         }
 
         debug("download thread shutting down");
@@ -962,7 +969,7 @@ struct curlFileTransfer : public FileTransfer
         writeFull(wakeupPipe.writeSide.get(), " ");
 #endif
 
-        return ItemHandle(static_cast<Item &>(*item));
+        return ItemHandle(item.get_ptr());
     }
 
     ItemHandle
@@ -978,7 +985,7 @@ struct curlFileTransfer : public FileTransfer
         return enqueueItem(make_ref<TransferItem>(*this, request, std::move(callback)));
     }
 
-    void unpauseTransfer(ref<TransferItem> item)
+    void unpauseTransfer(std::weak_ptr<Item> item)
     {
         auto state(state_.lock());
         state->unpause.push_back(std::move(item));
@@ -989,7 +996,9 @@ struct curlFileTransfer : public FileTransfer
 
     void unpauseTransfer(ItemHandle handle) override
     {
-        unpauseTransfer(ref{static_cast<TransferItem &>(handle.item.get()).shared_from_this()});
+        /* The transfer might have completed (more likely failed) when we want
+           to wake it up. That's why we must use a weak_ptr throughout. */
+        unpauseTransfer(handle.item);
     }
 };
 
