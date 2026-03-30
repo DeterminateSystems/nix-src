@@ -13,6 +13,7 @@
 #include "nix/util/compression.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/util.hh"
+#include "nix/util/environment-variables.hh"
 
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -69,7 +70,8 @@ static void builtinFetchClosure(const BuiltinBuilderContext & ctx)
     // Validate URL
     auto parsedURL = parseURL(*fromStoreUrl, /*lenient=*/true);
 
-    if (parsedURL.scheme != "http" && parsedURL.scheme != "https")
+    if (parsedURL.scheme != "http" && parsedURL.scheme != "https"
+        && !(getEnv("_NIX_IN_TEST").has_value() && parsedURL.scheme == "file"))
         throw Error("'builtin:fetch-closure' only supports http:// and https:// stores");
 
     if (!parsedURL.query.empty())

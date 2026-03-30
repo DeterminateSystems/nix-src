@@ -161,6 +161,7 @@ suites = [
       'suggestions.sh',
       'store-info.sh',
       'fetchClosure.sh',
+      'builtin-fetch-closure.sh',
       'completions.sh',
       'impure-derivations.sh',
       'path-from-hash-part.sh',
