@@ -1884,15 +1884,12 @@ static void derivationStrictInternal(
         auto fromPathIt = structuredAttrs.find("fromPath");
         if (fromPathIt != structuredAttrs.end() && fromPathIt->second.is_string()) {
             auto toPathIt = structuredAttrs.find("toPath");
+            auto pathStr = (toPathIt != structuredAttrs.end() && toPathIt->second.is_string())
+                ? toPathIt->second.get<std::string>()
+                : fromPathIt->second.get<std::string>();
 
-            auto getStorePath = [](const std::string & pathStr) -> StorePath {
-                auto lastSlash = pathStr.rfind('/');
-                return StorePath(lastSlash != std::string::npos ? pathStr.substr(lastSlash + 1) : pathStr);
-            };
-
-            StorePath outputPath = (toPathIt != structuredAttrs.end() && toPathIt->second.is_string())
-                ? getStorePath(toPathIt->second.get<std::string>())
-                : getStorePath(fromPathIt->second.get<std::string>());
+            auto lastSlash = pathStr.rfind('/');
+            StorePath outputPath(lastSlash != std::string::npos ? pathStr.substr(lastSlash + 1) : pathStr);
 
             for (auto & [outputName, _] : drv.outputs) {
                 drv.env[outputName] = state.store->printStorePath(outputPath);

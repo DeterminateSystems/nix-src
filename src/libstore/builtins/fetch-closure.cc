@@ -12,6 +12,7 @@
 #include "nix/util/archive.hh"
 #include "nix/util/compression.hh"
 #include "nix/util/file-system.hh"
+#include "nix/util/util.hh"
 
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -77,6 +78,22 @@ static void builtinFetchClosure(const BuiltinBuilderContext & ctx)
     std::cerr << fmt("fetching closure '%s' from '%s'...\n",
         fromPath->to_string(), *fromStoreUrl);
 
+    // Open the remote store to get its storeDir
+    auto fromStore = openStore(*fromStoreUrl);
+    auto remoteStoreDir = fromStore->storeDir;
+
+    // Extract local store directory from derivation output path
+    auto derivationOutputPath = ctx.outputs.at("out");
+    auto lastSlash = derivationOutputPath.rfind('/');
+    if (lastSlash == std::string::npos)
+        throw Error("invalid output path '%s'", derivationOutputPath);
+    Path localStoreDir = derivationOutputPath.substr(0, lastSlash);
+
+    // Verify store directories match
+    if (remoteStoreDir != localStoreDir)
+        throw Error("store directory mismatch: remote store uses '%s' but local store uses '%s'",
+            remoteStoreDir, localStoreDir);
+
     // Create a fresh FileTransfer since we're in a forked process
     auto fileTransfer = makeFileTransfer();
 
@@ -85,9 +102,7 @@ static void builtinFetchClosure(const BuiltinBuilderContext & ctx)
     if (!hasSuffix(narInfoUrl, "/")) narInfoUrl += "/";
     narInfoUrl += fromPath->hashPart() + ".narinfo";
 
-    // Use default store directory for parsing .narinfo
-    static const Path defaultStoreDir = "/nix/store";
-    StoreDirConfig storeDirConfig{.storeDir = defaultStoreDir};
+    StoreDirConfig storeDirConfig{.storeDir = remoteStoreDir};
 
     std::shared_ptr<NarInfo> narInfo;
     try {
@@ -118,7 +133,7 @@ static void builtinFetchClosure(const BuiltinBuilderContext & ctx)
 
     // Derive the output path from fromPath (or toPath if rewriting)
     auto outputStorePath = toPath ? *toPath : *fromPath;
-    std::string outputPath = "/nix/store/" + outputStorePath.to_string();
+    std::string outputPath = localStoreDir + "/" + outputStorePath.to_string();
 
     // Download and unpack NAR
     auto narUrl = parsedURL.to_string();
@@ -149,42 +164,27 @@ static void builtinFetchClosure(const BuiltinBuilderContext & ctx)
         std::cerr << fmt("rewriting references from '%s' to '%s'...\n",
             fromPath->to_string(), toPath->to_string());
 
-        // Build the rewrite map
         StringMap rewrites;
         rewrites[std::string(fromPath->to_string())] = std::string(toPath->to_string());
 
-        // Recursively rewrite all files in the temporary location
+        // Recursively rewrite all files
         std::function<void(const Path &)> rewritePath = [&](const Path & path) {
             for (auto & entry : std::filesystem::directory_iterator(path)) {
                 auto entryPath = entry.path().string();
                 if (entry.is_directory() && !entry.is_symlink()) {
                     rewritePath(entryPath);
                 } else if (entry.is_regular_file()) {
-                    // Read file content
                     auto content = readFile(entryPath);
-                    // Rewrite strings
-                    auto newContent = content;
-                    for (auto & [from, to] : rewrites) {
-                        size_t pos = 0;
-                        while ((pos = newContent.find(from, pos)) != std::string::npos) {
-                            newContent.replace(pos, from.length(), to);
-                            pos += to.length();
-                        }
-                    }
-                    // Write back if changed
-                    if (newContent != content) {
+                    auto newContent = rewriteStrings(content, rewrites);
+                    if (newContent != content)
                         writeFile(entryPath, newContent);
-                    }
                 }
             }
         };
 
         rewritePath(unpackPath);
 
-        // Move from temporary location to final output path
-        if (std::filesystem::exists(outputPath)) {
-            std::filesystem::remove_all(outputPath);
-        }
+        // Move to final output path
         std::filesystem::rename(unpackPath, outputPath);
     }
 }
