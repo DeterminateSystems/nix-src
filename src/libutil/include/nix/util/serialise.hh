@@ -760,13 +760,17 @@ struct EnsureRead : Source
 
     ~EnsureRead()
     {
-        if (bytesRead < bytesExpected) {
-            try {
-                source.skip(bytesExpected - bytesRead);
-            } catch (...) {
-                ignoreExceptionInDestructor();
-            }
+        try {
+            finish();
+        } catch (...) {
+            ignoreExceptionInDestructor();
         }
+    }
+
+    void finish()
+    {
+        if (bytesRead < bytesExpected)
+            skip(bytesExpected - bytesRead);
     }
 
     size_t read(char * data, size_t len) override

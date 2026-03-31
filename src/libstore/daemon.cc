@@ -945,6 +945,7 @@ static void performOp(
 
             EnsureRead wrapper{*source, info.narSize};
             store->addToStore(info, wrapper, (RepairFlag) repair, dontCheckSigs ? NoCheckSigs : CheckSigs);
+            wrapper.finish();
 
             logger->stopWork();
         }

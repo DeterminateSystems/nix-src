@@ -91,6 +91,10 @@ sources = files(
   'xml-writer.cc',
 )
 
+if have_cxa_throw
+  sources += files('cxa-throw.cc')
+endif
+
 if host_machine.system() != 'windows'
   subdir('unix')
 endif

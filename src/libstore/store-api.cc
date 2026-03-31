@@ -239,6 +239,7 @@ void Store::addMultipleToStore(Source & source, RepairFlag repair, CheckSigsFlag
         info.ultimate = false;
         EnsureRead wrapper{source, info.narSize};
         addToStore(info, wrapper, repair, checkSigs);
+        wrapper.finish();
     }
 }
 
