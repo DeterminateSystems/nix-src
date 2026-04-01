@@ -39,19 +39,19 @@ TEST(fun, moveConstructFromStdFunction)
 TEST(fun, rejectsEmptyStdFunction)
 {
     std::function<int(int)> empty;
-    EXPECT_THROW((fun<int(int)>{empty}), std::invalid_argument);
+    ASSERT_DEATH((fun<int(int)>{empty}), "invalid_argument");
 }
 
 TEST(fun, rejectsEmptyStdFunctionMove)
 {
     std::function<int(int)> empty;
-    EXPECT_THROW((fun<int(int)>{std::move(empty)}), std::invalid_argument);
+    ASSERT_DEATH((fun<int(int)>{std::move(empty)}), "invalid_argument");
 }
 
 TEST(fun, rejectsNullFunctionPointer)
 {
     int (*nullFp)(int) = nullptr;
-    EXPECT_THROW((fun<int(int)>{nullFp}), std::invalid_argument);
+    ASSERT_DEATH((fun<int(int)>{nullFp}), "invalid_argument");
 }
 
 TEST(fun, nullptrDeletedAtCompileTime)
