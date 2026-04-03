@@ -7,6 +7,8 @@ project(
     # TODO(Qyriad): increase the warning level
     'warning_level=1',
     'errorlogs=true', # Please print logs for tests that fail
+    'unity=on',
+    'unity_size=1024',
   ],
   meson_version : '>= 1.1',
   license : 'LGPL-2.1-or-later',
@@ -43,6 +45,7 @@ boost = dependency(
   modules : [
     'container',
     'context',
+    'thread',
   ],
   include_type : 'system',
 )
@@ -62,7 +65,6 @@ bdw_gc = dependency('bdw-gc', required : bdw_gc_required)
 if bdw_gc.found()
   deps_public += bdw_gc
   foreach funcspec : [
-    'pthread_attr_get_np',
     'pthread_getattr_np',
   ]
     define_name = 'HAVE_' + funcspec.underscorify().to_upper()
@@ -76,6 +78,17 @@ if bdw_gc.found()
 endif
 # Used in public header. Affects ABI!
 configdata_pub.set('NIX_USE_BOEHMGC', bdw_gc.found().to_int())
+
+link_args = []
+
+wasmtime_required = get_option('wasm').disable_if(
+  get_option('default_library') == 'static',
+  error_message : 'Building with wasmtime and static linking is not supported',
+)
+
+if wasmtime_required.enabled()
+  link_args += '-lwasmtime'
+endif
 
 toml11 = dependency(
   'toml11',
@@ -156,20 +169,21 @@ sources = files(
   'eval-cache.cc',
   'eval-error.cc',
   'eval-gc.cc',
-  'eval-profiler-settings.cc',
   'eval-profiler.cc',
   'eval-settings.cc',
   'eval.cc',
   'function-trace.cc',
   'get-drvs.cc',
   'json-to-value.cc',
-  'lexer-helpers.cc',
   'nixexpr.cc',
+  'parallel-eval.cc',
   'paths.cc',
   'primops.cc',
   'print-ambiguous.cc',
   'print.cc',
+  'provenance.cc',
   'search-path.cc',
+  'symbol-table.cc',
   'value-to-json.cc',
   'value-to-xml.cc',
   'value.cc',
@@ -214,6 +228,8 @@ parser_library = static_library(
   'nixexpr-parser',
   parser_tab,
   lexer_tab,
+  # Putting eval-profiler-settings.cc here to work around an inscrutable gcc compiler error when doing a unity build.
+  files('eval-profiler-settings.cc', 'lexer-helpers.cc'),
   cpp_args : parser_library_cpp_args,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
@@ -224,6 +240,7 @@ parser_library = static_library(
   override_options : [
     'b_ndebug=@0@'.format(not get_option('debug')),
     'b_lto=@0@'.format(get_option('b_lto') and cxx.get_id() != 'gcc'),
+    'unity=off',
   ],
 )
 
@@ -237,9 +254,9 @@ this_library = library(
   soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
-  link_args : linker_export_flags,
+  link_args : linker_export_flags + link_args,
   link_whole : [ parser_library ],
-  prelink : true, # For C++ static initializers
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )

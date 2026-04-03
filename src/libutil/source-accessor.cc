@@ -1,5 +1,7 @@
 #include <atomic>
+
 #include "nix/util/source-accessor.hh"
+#include "nix/util/provenance.hh"
 
 namespace nix {
 
@@ -124,6 +126,11 @@ CanonPath SourceAccessor::resolveSymlinks(const CanonPath & path, SymlinkResolut
     }
 
     return res;
+}
+
+std::shared_ptr<const Provenance> SourceAccessor::getProvenance(const CanonPath & path)
+{
+    return provenance && !path.isRoot() ? std::make_shared<SubpathProvenance>(provenance, path) : provenance;
 }
 
 } // namespace nix

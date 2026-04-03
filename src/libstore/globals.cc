@@ -15,6 +15,8 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
+#include <limits.h>
+
 #ifndef _WIN32
 #  include <sys/utsname.h>
 #endif
@@ -267,7 +269,23 @@ const ExternalBuilder * Settings::findExternalDerivationBuilderIfSupported(const
     return nullptr;
 }
 
+std::optional<std::string> Settings::getHostName()
+{
+    if (hostName != "")
+        return hostName;
+
+#ifndef _WIN32
+    char hostname[_POSIX_HOST_NAME_MAX + 1];
+    if (gethostname(hostname, sizeof(hostname)) == 0)
+        return std::string(hostname);
+#endif
+
+    return std::nullopt;
+}
+
 std::string nixVersion = PACKAGE_VERSION;
+
+const std::string determinateNixVersion = DETERMINATE_NIX_VERSION;
 
 NLOHMANN_JSON_SERIALIZE_ENUM(
     SandboxMode,
@@ -400,6 +418,22 @@ Settings::ExternalBuilders BaseSetting<Settings::ExternalBuilders>::parse(const 
 
 template<>
 std::string BaseSetting<Settings::ExternalBuilders>::to_string() const
+{
+    return nlohmann::json(value).dump();
+}
+
+template<>
+std::map<std::string, std::string> BaseSetting<std::map<std::string, std::string>>::parse(const std::string & str) const
+{
+    try {
+        return nlohmann::json::parse(str).template get<std::map<std::string, std::string>>();
+    } catch (std::exception & e) {
+        throw UsageError("parsing setting '%s': %s", name, e.what());
+    }
+}
+
+template<>
+std::string BaseSetting<std::map<std::string, std::string>>::to_string() const
 {
     return nlohmann::json(value).dump();
 }

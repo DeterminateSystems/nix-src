@@ -14,6 +14,6 @@ if (host_machine.cpu_family() in [ 'ppc64', 'ppc' ]) and host_machine.endian() =
   nix_system_cpu += 'le'
 elif host_machine.cpu_family() in [ 'mips64', 'mips' ] and host_machine.endian() == 'little'
   nix_system_cpu += 'el'
-elif host_machine.cpu_family() == 'arm'
+elif host_machine.cpu_family() in [ 'arm', 'arm64' ]
   nix_system_cpu = host_machine.cpu()
 endif
