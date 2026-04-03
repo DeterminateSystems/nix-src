@@ -24,6 +24,7 @@ static constexpr Command::Category catHelp = -1;
 static constexpr Command::Category catSecondary = 100;
 static constexpr Command::Category catUtility = 101;
 static constexpr Command::Category catNixInstallation = 102;
+static constexpr Command::Category catUndocumented = 103;
 
 static constexpr auto installablesCategory =
     "Options that change the interpretation of [installables](@docroot@/command-ref/new-cli/nix.md#installables)";

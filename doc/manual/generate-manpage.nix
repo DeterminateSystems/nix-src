@@ -76,7 +76,11 @@ let
       subcommands = if length categories > 1 then listCategories else listSubcommands details.commands;
 
       categories = sort (x: y: x.id < y.id) (
-        unique (map (cmd: { inherit (cmd.category) id description; }) (attrValues details.commands))
+        unique (
+          map (cmd: { inherit (cmd.category) id description; }) (
+            builtins.filter (cmd: cmd.category.id != 103) (attrValues details.commands)
+          )
+        )
       );
 
       listCategories = concatStrings (map showCategory categories);
