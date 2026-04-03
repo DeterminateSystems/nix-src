@@ -714,7 +714,7 @@ struct curlFileTransfer : public FileTransfer
         };
 
         std::priority_queue<ref<TransferItem>, std::vector<ref<TransferItem>>, EmbargoComparator> incoming;
-        std::vector<ref<TransferItem>> unpause;
+        std::vector<std::weak_ptr<Item>> unpause;
     private:
         bool quitting = false;
     public:
@@ -919,8 +919,15 @@ struct curlFileTransfer : public FileTransfer
                 return res;
             }();
 
-            for (auto & item : unpause)
-                item->unpause();
+            for (auto & item : unpause) {
+                /* The transfer might have completed (failed) between it getting
+                   enqueued for unpause and by the time the worker thread picked
+                   it up. */
+                auto ptr = item.lock();
+                if (!ptr)
+                    continue;
+                static_cast<TransferItem &>(*ptr).unpause();
+            }
         }
 
         debug("download thread shutting down");
@@ -962,22 +969,41 @@ struct curlFileTransfer : public FileTransfer
         writeFull(wakeupPipe.writeSide.get(), " ");
 #endif
 
-        return ItemHandle(static_cast<Item &>(*item));
+        return ItemHandle(item.get_ptr());
     }
 
-    ItemHandle enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) override
+    ItemHandle
+    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) noexcept override
     {
         /* Handle s3:// URIs by converting to HTTPS and optionally adding auth */
         if (request.uri.scheme() == "s3") {
             auto modifiedRequest = request;
             modifiedRequest.setupForS3();
-            return enqueueItem(make_ref<TransferItem>(*this, std::move(modifiedRequest), std::move(callback)));
+            auto item = make_ref<TransferItem>(*this, std::move(modifiedRequest), std::move(callback));
+            try {
+                return enqueueItem(item);
+            } catch (const nix::BaseError & e) {
+                // NOTE(cole-h): catches both nix::Error and nix::Interrupted -- enqueueItem calls
+                // writeFull which may throw nix::Interrupted, and the rest of enqueueItem may throw
+                // nix::Error
+                item->fail(e);
+                return ItemHandle(item.get_ptr());
+            }
         }
 
-        return enqueueItem(make_ref<TransferItem>(*this, request, std::move(callback)));
+        auto item = make_ref<TransferItem>(*this, request, std::move(callback));
+        try {
+            return enqueueItem(item);
+        } catch (const nix::BaseError & e) {
+            // NOTE(cole-h): catches both nix::Error and nix::Interrupted -- enqueueItem calls
+            // writeFull which may throw nix::Interrupted, and the rest of enqueueItem may throw
+            // nix::Error
+            item->fail(e);
+            return ItemHandle(item.get_ptr());
+        }
     }
 
-    void unpauseTransfer(ref<TransferItem> item)
+    void unpauseTransfer(std::weak_ptr<Item> item)
     {
         auto state(state_.lock());
         state->unpause.push_back(std::move(item));
@@ -988,7 +1014,9 @@ struct curlFileTransfer : public FileTransfer
 
     void unpauseTransfer(ItemHandle handle) override
     {
-        unpauseTransfer(ref{static_cast<TransferItem &>(handle.item.get()).shared_from_this()});
+        /* The transfer might have completed (more likely failed) when we want
+           to wake it up. That's why we must use a weak_ptr throughout. */
+        unpauseTransfer(handle.item);
     }
 };
 
@@ -1047,7 +1075,7 @@ void FileTransferRequest::setupForS3()
 #endif
 }
 
-std::future<FileTransferResult> FileTransfer::enqueueFileTransfer(const FileTransferRequest & request)
+std::future<FileTransferResult> FileTransfer::enqueueFileTransfer(const FileTransferRequest & request) noexcept
 {
     auto promise = std::make_shared<std::promise<FileTransferResult>>();
     enqueueFileTransfer(request, {[promise](std::future<FileTransferResult> fut) {
