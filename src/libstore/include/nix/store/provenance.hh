@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nix/util/provenance.hh"
+#include "nix/util/types.hh"
 #include "nix/store/path.hh"
 #include "nix/store/outputs-spec.hh"
 
@@ -26,7 +27,7 @@ struct BuildProvenance : Provenance
     /**
      * User-defined tags from the build host.
      */
-    std::map<std::string, std::string> tags;
+    StringMap tags;
 
     /**
      * The system type of the derivation.
@@ -44,7 +45,7 @@ struct BuildProvenance : Provenance
         const StorePath & drvPath,
         const OutputName & output,
         std::optional<std::string> buildHost,
-        std::map<std::string, std::string> tags,
+        StringMap tags,
         std::string system,
         std::shared_ptr<const Provenance> next);
 

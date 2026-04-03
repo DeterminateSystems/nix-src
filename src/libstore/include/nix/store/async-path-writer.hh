@@ -6,12 +6,13 @@ namespace nix {
 
 struct AsyncPathWriter
 {
+    virtual ~AsyncPathWriter() = default;
+
     virtual StorePath addPath(
         std::string contents,
         std::string name,
         StorePathSet references,
         RepairFlag repair,
-        bool readOnly = false,
         std::shared_ptr<const Provenance> provenance = {}) = 0;
 
     virtual void waitForPath(const StorePath & path) = 0;

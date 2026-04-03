@@ -28,21 +28,21 @@ test_tarball() {
 
     nix-build -o "$TEST_ROOT"/result '<foo>' -I foo=file://"$tarball"
 
-    nix-build -o "$TEST_ROOT"/result -E "import (fetchTarball file://$tarball)"
+    nix-build -o "$TEST_ROOT"/result -E "import (fetchTarball \"file://$tarball\")"
     # Do not re-fetch paths already present
-    nix-build  -o "$TEST_ROOT"/result -E "import (fetchTarball { url = file:///does-not-exist/must-remain-unused/$tarball; sha256 = \"$hash\"; })"
+    nix-build  -o "$TEST_ROOT"/result -E "import (fetchTarball { url = \"file:///does-not-exist/must-remain-unused/$tarball\"; sha256 = \"$hash\"; })"
 
-    nix-build  -o "$TEST_ROOT"/result -E "import (fetchTree file://$tarball)"
-    nix-build  -o "$TEST_ROOT"/result -E "import (fetchTree { type = \"tarball\"; url = file://$tarball; })"
-    nix-build  -o "$TEST_ROOT"/result -E "import (fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; })"
+    nix-build  -o "$TEST_ROOT"/result -E "import (fetchTree \"file://$tarball\")"
+    nix-build  -o "$TEST_ROOT"/result -E "import (fetchTree { type = \"tarball\"; url = \"file://$tarball\"; })"
+    nix-build  -o "$TEST_ROOT"/result -E "import (fetchTree { type = \"tarball\"; url = \"file://$tarball\"; narHash = \"$hash\"; })"
 
-    [[ $(nix eval --impure --expr "(fetchTree file://$tarball).lastModified") = 1000000000 ]]
+    [[ $(nix eval --impure --expr "(fetchTree \"file://$tarball\").lastModified") = 1000000000 ]]
 
     # fetchTree with a narHash is implicitly final, so it doesn't return attributes like lastModified.
-    [[ $(nix eval --impure --expr "(fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; }) ? lastModified") = false ]]
+    [[ $(nix eval --impure --expr "(fetchTree { type = \"tarball\"; url = \"file://$tarball\"; narHash = \"$hash\"; }) ? lastModified") = false ]]
 
-    nix-instantiate --strict --eval -E "!((import (fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; })) ? submodules)" >&2
-    nix-instantiate --strict --eval -E "!((import (fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; })) ? submodules)" 2>&1 | grep 'true'
+    nix-instantiate --strict --eval -E "!((import (fetchTree { type = \"tarball\"; url = \"file://$tarball\"; narHash = \"$hash\"; })) ? submodules)" >&2
+    nix-instantiate --strict --eval -E "!((import (fetchTree { type = \"tarball\"; url = \"file://$tarball\"; narHash = \"$hash\"; })) ? submodules)" 2>&1 | grep 'true'
 
     nix-instantiate --eval -E '1 + 2' -I fnord=file:///no-such-tarball.tar"$ext"
     nix-instantiate --eval -E 'with <fnord/xyzzy>; 1 + 2' -I fnord=file:///no-such-tarball"$ext"
@@ -52,7 +52,7 @@ test_tarball() {
 
     # Ensure that the `name` attribute isn’t accepted as that would mess
     # with the content-addressing
-    (! nix-instantiate --eval -E "fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; name = \"foo\"; }")
+    (! nix-instantiate --eval -E "fetchTree { type = \"tarball\"; url = \"file://$tarball\"; narHash = \"$hash\"; name = \"foo\"; }")
 
     store_path=$(nix store prefetch-file --json "file://$tarball" | jq -r .storePath)
     if ! cmp -s "$store_path" "$tarball"; then
@@ -115,3 +115,7 @@ path="$(nix flake prefetch --refresh --json "tarball+file://$TEST_ROOT/tar.tar" 
 [[ $(cat "$path/a/b/xyzzy") = xyzzy ]]
 [[ $(cat "$path/a/b/foo") = foo ]]
 [[ $(cat "$path/bla") = abc ]]
+
+# Test that unpacking an empty file does not segfault (see https://github.com/NixOS/nix/issues/15116).
+touch "$TEST_ROOT/empty"
+expectStderr 1 nix store prefetch-file --unpack "file://$TEST_ROOT/empty" | grepQuiet "archive.*is empty"

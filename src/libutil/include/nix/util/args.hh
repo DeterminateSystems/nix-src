@@ -11,6 +11,7 @@
 
 #include "nix/util/types.hh"
 #include "nix/util/experimental-features.hh"
+#include "nix/util/fun.hh"
 #include "nix/util/ref.hh"
 
 namespace nix {
@@ -60,6 +61,8 @@ public:
      * This only returns the correct value after parseCmdline() has run.
      */
     virtual std::filesystem::path getCommandBaseDir() const;
+
+    virtual ~Args() = default;
 
 protected:
 
@@ -383,7 +386,7 @@ struct Command : virtual public Args
     }
 };
 
-using Commands = std::map<std::string, std::function<ref<Command>()>>;
+using Commands = std::map<std::string, fun<ref<Command>()>>;
 
 /**
  * An argument parser that supports multiple subcommands,
@@ -481,6 +484,8 @@ public:
      * Add a single completion to the collection
      */
     virtual void add(std::string completion, std::string description = "") = 0;
+
+    virtual ~AddCompletions() = default;
 };
 
 Strings parseShebangContent(std::string_view s);

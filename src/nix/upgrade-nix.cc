@@ -1,3 +1,4 @@
+#include "nix/util/os-string.hh"
 #include "nix/util/processes.hh"
 #include "nix/cmd/command.hh"
 #include "nix/main/common-args.hh"
@@ -9,9 +10,41 @@
 #include "nix/store/names.hh"
 #include "nix/util/executable-path.hh"
 #include "nix/store/globals.hh"
+#include "nix/util/config-global.hh"
 #include "self-exe.hh"
 
 using namespace nix;
+
+/**
+ * Check whether a path has a "profiles" component.
+ */
+static bool hasProfilesComponent(const std::filesystem::path & path)
+{
+    return std::ranges::contains(path, OS_STR("profiles"));
+}
+
+/**
+ * Settings related to upgrading Nix itself.
+ */
+struct UpgradeSettings : Config
+{
+    /**
+     * The URL of the file that contains the store paths of the latest Nix release.
+     */
+    Setting<std::string> storePathUrl{
+        this,
+        "",
+        "upgrade-nix-store-path-url",
+        R"(
+          Deprecated. This option was used to configure how `nix upgrade-nix` operated.
+
+          Using this setting has no effect. It will be removed in a future release of Determinate Nix.
+        )"};
+};
+
+UpgradeSettings upgradeSettings;
+
+static GlobalConfig::Register rSettings(&upgradeSettings);
 
 struct CmdUpgradeNix : MixDryRun, StoreCommand
 {
