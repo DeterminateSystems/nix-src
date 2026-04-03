@@ -115,3 +115,17 @@ path="$(nix flake prefetch --refresh --json "tarball+file://$TEST_ROOT/tar.tar" 
 [[ $(cat "$path/a/b/xyzzy") = xyzzy ]]
 [[ $(cat "$path/a/b/foo") = foo ]]
 [[ $(cat "$path/bla") = abc ]]
+
+# Test that concurrent invocations of Nix will fetch the tarball only once.
+clearStore
+rm -rf "$TEST_HOME/.cache"
+nix-store --init # needed because concurrent creation of the store can give SQLite errors
+_NIX_TEST_CONCURRENT_FETCHES=1 _NIX_FORCE_HTTP=1 nix flake prefetch -v "tarball+file://$TEST_ROOT/tar.tar" 2> "$TEST_ROOT/log1" &
+pid1="$!"
+_NIX_TEST_CONCURRENT_FETCHES=1 _NIX_FORCE_HTTP=1 nix flake prefetch -v "tarball+file://$TEST_ROOT/tar.tar" 2> "$TEST_ROOT/log2" &
+pid2="$!"
+wait "$pid1"
+wait "$pid2"
+[[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "Download.*to") -eq 2 ]]
+[[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "downloading.*tar.tar") -eq 1 ]]
+[[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "waiting for another Nix process to finish fetching input") -eq 1 ]]
