@@ -618,6 +618,11 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
 
         if (ExecutablePath::load().findName("git")) {
             auto dir = this->path;
+
+            // Remove shallow.lock left behind by a previously interrupted `git fetch`, as it would prevent `git fetch`
+            // from running. Note that we already have a repository-wide `PathLock` (see git.cc), so this is safe.
+            std::filesystem::remove(dir / "shallow.lock");
+
             Strings gitArgs{"-C", dir.string(), "--git-dir", ".", "fetch", "--progress", "--force"};
             if (shallow)
                 append(gitArgs, {"--depth", "1"});
