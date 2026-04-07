@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env nix
+#!nix shell --inputs-from . nixpkgs#sentry-cli --command python3
 
 import argparse
 import json

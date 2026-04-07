@@ -44,6 +44,9 @@ jobs:
     secrets:
       manual_netlify_auth_token: ${{ secrets.NETLIFY_AUTH_TOKEN }}
       manual_netlify_site_id: ${{ secrets.NETLIFY_SITE_ID }}
+      sentry_auth_token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      sentry_org: ${{ secrets.SENTRY_ORG }}
+      sentry_project: ${{ secrets.SENTRY_PROJECT }}
 
   build_aarch64-linux:
     uses: ./.github/workflows/build.yml
