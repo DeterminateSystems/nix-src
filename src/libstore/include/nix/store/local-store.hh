@@ -464,6 +464,8 @@ private:
 
     friend struct PathSubstitutionGoal;
     friend struct DerivationGoal;
+    /* Only used for createTempDirInStore. */
+    friend class DerivationBuilderImpl;
 
 private:
 
