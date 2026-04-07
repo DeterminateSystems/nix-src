@@ -17,6 +17,7 @@
 
 let
   inherit (lib) fileset;
+  enableSentry = !stdenv.hostPlatform.isStatic;
 in
 
 mkMesonExecutable (finalAttrs: {
@@ -71,16 +72,17 @@ mkMesonExecutable (finalAttrs: {
     nix-expr
     nix-main
     nix-cmd
-    sentry-native
   ]
   ++ lib.optional (
     stdenv.cc.isClang
     && stdenv.hostPlatform.isStatic
     && stdenv.cc.libcxx != null
     && stdenv.cc.libcxx.isLLVM
-  ) llvmPackages.libunwind;
+  ) llvmPackages.libunwind
+  ++ lib.optional enableSentry sentry-native;
 
   mesonFlags = [
+    (lib.mesonEnable "sentry" enableSentry)
   ];
 
   postInstall = lib.optionalString stdenv.hostPlatform.isStatic ''

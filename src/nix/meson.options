@@ -7,3 +7,10 @@ option(
   value : 'etc/profile.d',
   description : 'the path to install shell profile files',
 )
+
+option(
+  'sentry',
+  type : 'feature',
+  value : 'auto',
+  description : 'Enable Sentry crash reporting',
+)

@@ -50,6 +50,9 @@ mandir = get_option('mandir')
 mandir = fs.is_absolute(mandir) ? mandir : prefix / mandir
 configdata.set_quoted('NIX_MAN_DIR', mandir)
 
+sentry_required = get_option('sentry')
+configdata.set('HAVE_SENTRY', sentry_required.enabled().to_int())
+
 config_priv_h = configure_file(
   configuration : configdata,
   output : 'cli-config-private.hh',
@@ -191,7 +194,7 @@ this_exe = executable(
   sources,
   dependencies : deps_private_subproject + deps_private + deps_other,
   include_directories : include_dirs,
-  link_args : linker_export_flags + [ '-lsentry' ],
+  link_args : linker_export_flags + (sentry_required.enabled() ? [ '-lsentry' ] : []),
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )

@@ -29,7 +29,9 @@
 #include <sys/types.h>
 #include <regex>
 #include <nlohmann/json.hpp>
-#include <sentry.h>
+#if HAVE_SENTRY
+#  include <sentry.h>
+#endif
 
 #ifndef _WIN32
 #  include <sys/socket.h>
@@ -381,6 +383,7 @@ void mainWrapped(int argc, char ** argv)
 
     bool sentryEnabled = false;
 
+#if HAVE_SENTRY
     if (getEnv("NIX_DISABLE_SENTRY").value_or("") != "1") {
         sentry_options_t * options = sentry_options_new();
         sentry_options_set_dsn(
@@ -394,6 +397,7 @@ void mainWrapped(int argc, char ** argv)
     }
 
     Finally cleanupSentry([]() { sentry_shutdown(); });
+#endif
 
     if (!sentryEnabled)
         registerCrashHandler();

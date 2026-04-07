@@ -159,7 +159,13 @@ stdenv.mkDerivation (finalAttrs: {
     let
       devPaths = lib.mapAttrsToList (_k: lib.getDev) finalAttrs.finalPackage.libs;
       debugPaths = lib.map (lib.getOutput "debug") (
-        lib.attrValues finalAttrs.finalPackage.libs ++ [ nix-cli curl boehmgc sentry-native ]
+        lib.attrValues finalAttrs.finalPackage.libs
+        ++ [
+          nix-cli
+          curl
+          boehmgc
+          sentry-native
+        ]
       );
     in
     ''
