@@ -208,19 +208,3 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 <!-- Determinate Nix version 3.17.2 -->
 
 <!-- Determinate Nix version 3.17.3 -->
-
-* Abort when throwing std::logic_error by @cole-h in [DeterminateSystems/nix-src#407](https://github.com/DeterminateSystems/nix-src/pull/407)
-
-* tests/functional/stale-file-handle: Skip if the error doesn't happen by @cole-h in [DeterminateSystems/nix-src#409](https://github.com/DeterminateSystems/nix-src/pull/409)
-
-* builtins.wasm: Support WAT, add a test by @edolstra in [DeterminateSystems/nix-src#405](https://github.com/DeterminateSystems/nix-src/pull/405)
-
-* Change `nix provenance` category by @edolstra in [DeterminateSystems/nix-src#411](https://github.com/DeterminateSystems/nix-src/pull/411)
-
-* nix develop: Respect legacyPackages by @edolstra in [DeterminateSystems/nix-src#413](https://github.com/DeterminateSystems/nix-src/pull/413)
-
-* Remove shallow.lock before running git fetch by @edolstra in [DeterminateSystems/nix-src#414](https://github.com/DeterminateSystems/nix-src/pull/414)
-
-* Input::getAccessorUnchecked(): Wrap fetches in a path lock by @edolstra in [DeterminateSystems/nix-src#410](https://github.com/DeterminateSystems/nix-src/pull/410)
-
-* Fix lookupPathResolved thread safety by @edolstra in [DeterminateSystems/nix-src#415](https://github.com/DeterminateSystems/nix-src/pull/415)
