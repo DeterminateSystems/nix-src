@@ -8,6 +8,7 @@
   nix-expr,
   nix-main,
   nix-cmd,
+  sentry-native,
 
   # Configuration Options
 
@@ -70,6 +71,7 @@ mkMesonExecutable (finalAttrs: {
     nix-expr
     nix-main
     nix-cmd
+    sentry-native
   ]
   ++ lib.optional (
     stdenv.cc.isClang

@@ -3,6 +3,9 @@
 # for shellcheck
 : "${test_nix_conf_dir?}" "${test_nix_conf?}"
 
+# Don't upload crashes from tests to Sentry.
+export NIX_DISABLE_SENTRY=1
+
 if isTestOnNixOS; then
 
   mkdir -p "$test_nix_conf_dir" "$TEST_HOME"

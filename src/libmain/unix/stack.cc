@@ -45,7 +45,7 @@ static void sigsegvHandler(int signo, siginfo_t * info, void * ctx)
 
 void detectStackOverflow()
 {
-#if defined(SA_SIGINFO) && defined(SA_ONSTACK)
+#if defined(SA_SIGINFO) && defined(SA_ONSTACK) && 0
     /* Install a SIGSEGV handler to detect stack overflows.  This
        requires an alternative stack, otherwise the signal cannot be
        delivered when we're out of stack space. */
