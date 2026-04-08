@@ -1,5 +1,7 @@
 #include "nix/cmd/command.hh"
 
+#include <bitset>
+
 using namespace nix;
 
 struct CmdCrash : Command
