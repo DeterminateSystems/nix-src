@@ -164,8 +164,8 @@ stdenv.mkDerivation (finalAttrs: {
           nix-cli
           curl
           boehmgc
-          sentry-native
         ]
+        ++ lib.optional (stdenv.hostPlatform.isLinux && !stdenv.hostPlatform.isStatic) sentry-native
       );
     in
     ''
