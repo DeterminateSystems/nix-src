@@ -14,3 +14,10 @@ option(
   value : 'auto',
   description : 'Enable Sentry crash reporting',
 )
+
+option(
+  'crashpad-handler',
+  type : 'string',
+  value : '',
+  description : 'Path to the crashpad_handler binary (required when sentry is enabled)',
+)

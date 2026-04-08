@@ -148,7 +148,7 @@ scope: {
     idnSupport = !stdenv.hostPlatform.isStatic;
   };
 
-  sentry-native = pkgs.sentry-native.override {
+  sentry-native = (pkgs.callPackage ./sentry-native.nix { }).override {
     # Avoid having two curls in our closure.
     inherit (scope) curl;
   };

@@ -384,14 +384,18 @@ void mainWrapped(int argc, char ** argv)
     bool sentryEnabled = false;
 
 #if HAVE_SENTRY
-    if (getEnv("NIX_DISABLE_SENTRY").value_or("") != "1") {
+    auto sentryEndpoint =
+        getEnv("NIX_SENTRY_ENDPOINT")
+            .value_or(
+                "https://ca42fa4b6b08ae1caf3d96b998af6bac@o4506062689927168.ingest.us.sentry.io/4511151087878144");
+    if (sentryEndpoint != "") {
         sentry_options_t * options = sentry_options_new();
-        sentry_options_set_dsn(
-            options, "https://ca42fa4b6b08ae1caf3d96b998af6bac@o4506062689927168.ingest.us.sentry.io/4511151087878144");
+        sentry_options_set_dsn(options, sentryEndpoint.c_str());
         sentry_options_set_database_path(options, (getCacheDir() / "sentry").string().c_str());
         sentry_options_set_release(options, fmt("nix@%s", determinateNixVersion).c_str());
         sentry_options_set_traces_sample_rate(options, 0);
         sentry_options_set_auto_session_tracking(options, false);
+        sentry_options_set_handler_path(options, CRASHPAD_HANDLER_PATH);
         sentry_init(options);
         sentryEnabled = true;
     }

@@ -4,7 +4,7 @@
 : "${test_nix_conf_dir?}" "${test_nix_conf?}"
 
 # Don't upload crashes from tests to Sentry.
-export NIX_DISABLE_SENTRY=1
+export NIX_SENTRY_ENDPOINT=
 
 if isTestOnNixOS; then
 

@@ -2,7 +2,8 @@
 
 source common.sh
 
-unset NIX_DISABLE_SENTRY
+# This doesn't actually work, but it prevents sentry from uploading for real.
+export NIX_SENTRY_ENDPOINT=file://$TEST_ROOT/sentry-endpoint
 
 ulimit -c 0
 
@@ -20,7 +21,7 @@ for type in segfault assert logic-error; do
 
     [[ -e $sentryDir/last_crash ]]
 
-    envelopes=("$sentryDir"/*.run/*.envelope)
+    envelopes=("$sentryDir"/pending/*.dmp)
     if [[ ! -e "${envelopes[0]}" ]]; then
         fail "No crash dump found in $sentryDir after crash"
     fi

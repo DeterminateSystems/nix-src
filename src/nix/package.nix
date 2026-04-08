@@ -83,7 +83,10 @@ mkMesonExecutable (finalAttrs: {
 
   mesonFlags = [
     (lib.mesonEnable "sentry" enableSentry)
-  ];
+  ]
+  ++ lib.optional enableSentry (
+    lib.mesonOption "crashpad-handler" "${sentry-native}/bin/crashpad_handler"
+  );
 
   postInstall = lib.optionalString stdenv.hostPlatform.isStatic ''
     mkdir -p $out/nix-support
