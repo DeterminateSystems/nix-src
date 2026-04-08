@@ -16,7 +16,7 @@ fi
 for type in segfault assert logic-error; do
     rm -rf "$sentryDir"
 
-    (! nix crash "$type")
+    (! nix __crash "$type")
 
     [[ -e $sentryDir/last_crash ]]
 

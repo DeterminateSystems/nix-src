@@ -45,4 +45,4 @@ struct CmdCrash : Command
     }
 };
 
-static auto rCrash = registerCommand<CmdCrash>("crash");
+static auto rCrash = registerCommand<CmdCrash>("__crash");
