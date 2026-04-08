@@ -59,7 +59,9 @@ jobs:
       - run: nix build .#packages.${{ inputs.system }}.default .#packages.${{ inputs.system }}.binaryTarball --no-link -L
       - run: nix build .#packages.${{ inputs.system }}.binaryTarball --out-link tarball
       - run: nix build .#^debug,out
-      - run: ./maintainers/upload-debug-info-to-sentry.py --debug-dir ./result-debug ./result/bin/nix
+      - name: Upload debug info to Sentry
+        run: ./maintainers/upload-debug-info-to-sentry.py --debug-dir ./result-debug ./result/bin/nix
+        if: contains(inputs.system, 'linux') && secrets.sentry_auth_token != ''
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.sentry_auth_token }}
           SENTRY_ORG: ${{ secrets.sentry_org }}
