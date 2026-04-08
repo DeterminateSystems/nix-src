@@ -17,7 +17,7 @@
 
 let
   inherit (lib) fileset;
-  enableSentry = !stdenv.hostPlatform.isStatic;
+  enableSentry = stdenv.hostPlatform.isLinux && !stdenv.hostPlatform.isStatic;
 in
 
 mkMesonExecutable (finalAttrs: {
