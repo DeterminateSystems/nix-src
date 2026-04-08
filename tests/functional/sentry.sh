@@ -10,7 +10,7 @@ sentryDir="$TEST_HOME/.cache/nix/sentry"
 
 nix --version
 if ! [[ -d $sentryDir ]]; then
-    skip "not built with sentry support"
+    skipTest "not built with sentry support"
 fi
 
 for type in segfault assert logic-error; do
