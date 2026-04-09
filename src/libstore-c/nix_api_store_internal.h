@@ -1,5 +1,6 @@
 #ifndef NIX_API_STORE_INTERNAL_H
 #define NIX_API_STORE_INTERNAL_H
+#include "nix/store/async-path-writer.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/derivations.hh"
 
@@ -7,6 +8,7 @@ extern "C" {
 
 struct Store
 {
+    nix::ref<nix::AsyncPathWriter> asyncPathWriter;
     nix::ref<nix::Store> ptr;
 };
 
