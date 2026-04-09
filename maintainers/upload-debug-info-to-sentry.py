@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -16,19 +17,30 @@ DEBUG_INFO_DIR = "/tmp/debug-info"
 
 
 def get_dynamic_libraries(executable: str) -> list[str]:
-    result = subprocess.run(["ldd", executable], capture_output=True, text=True, check=True)
-    libs = []
-    for line in result.stdout.splitlines():
-        # ldd output lines look like:
-        #   libfoo.so.1 => /nix/store/.../libfoo.so.1 (0x...)
-        #   /lib64/ld-linux-x86-64.so.2 (0x...)
-        m = re.search(r"=> (/\S+)", line)
-        if m:
-            libs.append(m.group(1))
-        elif line.strip().startswith("/"):
-            path = line.strip().split()[0]
-            libs.append(path)
-    return libs
+    if platform.system() == "Darwin":
+        result = subprocess.run(["otool", "-L", executable], capture_output=True, text=True, check=True)
+        libs = []
+        for line in result.stdout.splitlines()[1:]:  # skip first line (the binary path itself)
+            # otool -L output lines look like:
+            #   /nix/store/.../libfoo.dylib (compatibility version X.Y.Z, current version A.B.C)
+            m = re.match(r"\s+(\S+)\s+\(", line)
+            if m:
+                libs.append(m.group(1))
+        return libs
+    else:
+        result = subprocess.run(["ldd", executable], capture_output=True, text=True, check=True)
+        libs = []
+        for line in result.stdout.splitlines():
+            # ldd output lines look like:
+            #   libfoo.so.1 => /nix/store/.../libfoo.so.1 (0x...)
+            #   /lib64/ld-linux-x86-64.so.2 (0x...)
+            m = re.search(r"=> (/\S+)", line)
+            if m:
+                libs.append(m.group(1))
+            elif line.strip().startswith("/"):
+                path = line.strip().split()[0]
+                libs.append(path)
+        return libs
 
 
 def get_build_id(path: str) -> str | None:
@@ -96,45 +108,53 @@ def fetch_debuginfo(build_id: str) -> dict | None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Upload ELF debug symbols to Sentry."
+        description="Upload debug symbols to Sentry."
     )
-    parser.add_argument("executable", help="Path to the ELF executable (e.g. ./result/bin/nix)")
+    parser.add_argument("executable", help="Path to the executable (e.g. ./result/bin/nix)")
     parser.add_argument("--project", help="Sentry project ID")
     parser.add_argument("--debug-dir", action="append", default=[], metavar="DIR",
-                        help="Directory to search for debug files (may be repeated)")
+                        help="Directory to search for debug files (may be repeated, Linux only)")
     args = parser.parse_args()
 
-    debug_files = []
-
     libs = [args.executable] + get_dynamic_libraries(args.executable)
-    print("ELF files to process:", file=sys.stderr)
-    for lib in libs:
-        build_id = get_build_id(lib)
-        if build_id is None:
-            print(f"  {lib} (no build ID)", file=sys.stderr)
-            continue
 
-        local = find_debug_file_in_dirs(build_id, args.debug_dir)
-        if local:
-            print(f"  {lib} ({build_id}): found locally at {local}", file=sys.stderr)
-            debug_files.append(local)
-            continue
+    if platform.system() == "Darwin":
+        # On macOS there are no separate debug info files; upload the binaries directly.
+        print("Files to upload:", file=sys.stderr)
+        for lib in libs:
+            print(f"  {lib}", file=sys.stderr)
+        files_to_upload = libs
+    else:
+        debug_files = []
+        print("ELF files to process:", file=sys.stderr)
+        for lib in libs:
+            build_id = get_build_id(lib)
+            if build_id is None:
+                print(f"  {lib} (no build ID)", file=sys.stderr)
+                continue
 
-        debuginfo = fetch_debuginfo(build_id)
-        if debuginfo is None:
-            print(f"  {lib} ({build_id}, no debug info in cache)", file=sys.stderr)
-            continue
-        print(f"  {lib} ({build_id}): member={debuginfo['member']}", file=sys.stderr)
-        nar_path = download_nar(build_id, debuginfo["archive"])
-        debug_file = extract_debug_symbols(nar_path, debuginfo["member"], build_id)
-        debug_files.append(debug_file)
+            local = find_debug_file_in_dirs(build_id, args.debug_dir)
+            if local:
+                print(f"  {lib} ({build_id}): found locally at {local}", file=sys.stderr)
+                debug_files.append(local)
+                continue
 
-    if debug_files:
-        print(f"Uploading {len(debug_files)} debug file(s) to Sentry...", file=sys.stderr)
+            debuginfo = fetch_debuginfo(build_id)
+            if debuginfo is None:
+                print(f"  {lib} ({build_id}, no debug info in cache)", file=sys.stderr)
+                continue
+            print(f"  {lib} ({build_id}): member={debuginfo['member']}", file=sys.stderr)
+            nar_path = download_nar(build_id, debuginfo["archive"])
+            debug_file = extract_debug_symbols(nar_path, debuginfo["member"], build_id)
+            debug_files.append(debug_file)
+        files_to_upload = debug_files
+
+    if files_to_upload:
+        print(f"Uploading {len(files_to_upload)} file(s) to Sentry...", file=sys.stderr)
         cmd = ["sentry-cli", "debug-files", "upload"]
         if args.project:
             cmd += ["--project", args.project]
-        subprocess.run(cmd + debug_files, check=True)
+        subprocess.run(cmd + files_to_upload, check=True)
 
 
 if __name__ == "__main__":

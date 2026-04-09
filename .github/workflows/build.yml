@@ -61,7 +61,7 @@ jobs:
       - run: nix build .#^debug,out
       - name: Upload debug info to Sentry
         run: ./maintainers/upload-debug-info-to-sentry.py --debug-dir ./result-debug ./result/bin/nix
-        if: contains(inputs.system, 'linux') && env.SENTRY_AUTH_TOKEN != ''
+        if: env.SENTRY_AUTH_TOKEN != ''
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.sentry_auth_token }}
           SENTRY_ORG: ${{ secrets.sentry_org }}
