@@ -400,7 +400,10 @@ void mainWrapped(int argc, char ** argv)
         sentryEnabled = true;
     }
 
-    Finally cleanupSentry([]() { sentry_shutdown(); });
+    Finally cleanupSentry([&]() {
+        if (sentryEnabled)
+            sentry_shutdown();
+    });
 #endif
 
     if (!sentryEnabled)
