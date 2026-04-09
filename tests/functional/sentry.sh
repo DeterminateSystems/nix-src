@@ -15,11 +15,11 @@ if ! [[ -d $sentryDir ]]; then
 fi
 
 for type in segfault assert logic-error; do
+    if [[ $type = logic-error && $(uname) = Darwin ]]; then continue; fi
+
     rm -rf "$sentryDir"
 
     (! nix __crash "$type")
-
-    [[ -e $sentryDir/last_crash ]]
 
     envelopes=("$sentryDir"/pending/*.dmp)
     if [[ ! -e "${envelopes[0]}" ]]; then

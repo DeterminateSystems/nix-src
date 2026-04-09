@@ -5,6 +5,8 @@
   cmake,
   curl,
   pkg-config,
+  python3,
+  darwin,
 }:
 
 stdenv.mkDerivation rec {
@@ -18,10 +20,22 @@ stdenv.mkDerivation rec {
     fetchSubmodules = true;
   };
 
+  dontFixCmake = true;
+
   nativeBuildInputs = [
     cmake
     pkg-config
+  ]
+  ++ lib.optionals stdenv.hostPlatform.isDarwin [
+    python3
+    darwin.bootstrap_cmds
   ];
+
+  postPatch = ''
+    # Borrowed from psutil: stick to the old SDK name for now.
+    substituteInPlace external/crashpad/util/mac/mac_util.cc \
+      --replace-fail kIOMainPortDefault kIOMasterPortDefault
+  '';
 
   buildInputs = [
     curl
