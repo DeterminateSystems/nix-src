@@ -24,9 +24,9 @@ can_wrap_assert_fail = cxx.links(
   name : 'linker can wrap __assert_fail',
 )
 
-#if can_wrap_assert_fail
-#  deps_other += declare_dependency(
-#    sources : 'wrap-assert-fail.cc',
-#    link_args : wrap_assert_fail_args,
-#  )
-#endif
+if can_wrap_assert_fail
+  deps_other += declare_dependency(
+    sources : 'wrap-assert-fail.cc',
+    link_args : wrap_assert_fail_args,
+  )
+endif
