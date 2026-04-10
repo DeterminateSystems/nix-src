@@ -388,8 +388,11 @@ void mainWrapped(int argc, char ** argv)
 
     if (!sentryEndpoint && getEnv("DETSYS_IDS_TELEMETRY") != "disabled") {
         try {
-            sentryEndpoint = trim(readFile(settings.nixConfDir / "sentry-endpoint"));
+            auto p = settings.nixConfDir / "sentry-endpoint";
+            if (pathExists(p))
+                sentryEndpoint = trim(readFile(p));
         } catch (...) {
+            ignoreExceptionExceptInterrupt();
         }
     }
 
