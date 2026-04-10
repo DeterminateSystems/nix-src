@@ -1,6 +1,7 @@
 #include "nix/store/build/derivation-builder.hh"
 #include "nix/util/file-system.hh"
 #include "nix/store/local-store.hh"
+#include "nix/store/active-builds.hh"
 #include "nix/util/processes.hh"
 #include "nix/store/builtins.hh"
 #include "nix/store/path-references.hh"
@@ -19,6 +20,7 @@
 #include "nix/store/globals.hh"
 #include "nix/store/build/derivation-env-desugar.hh"
 #include "nix/util/terminal.hh"
+#include "nix/store/provenance.hh"
 
 #include <queue>
 
@@ -82,6 +84,11 @@ protected:
      * The process ID of the builder.
      */
     Pid pid;
+
+    /**
+     * Handles to track active builds for `nix ps`.
+     */
+    std::optional<TrackActiveBuildsStore::BuildHandle> activeBuildHandle;
 
     LocalStore & store;
 
@@ -239,6 +246,11 @@ protected:
     }
 
     /**
+     * Construct the `ActiveBuild` object for `ActiveBuildsTracker`.
+     */
+    virtual ActiveBuild getActiveBuild();
+
+    /**
      * Return the paths that should be made available in the sandbox.
      * This includes:
      *
@@ -283,7 +295,7 @@ protected:
         return Strings({store.printStorePath(drvPath)});
     }
 
-    virtual Path realPathInSandbox(const Path & p)
+    virtual Path realPathInHost(const Path & p)
     {
         return store.toRealPath(p);
     }
@@ -493,6 +505,8 @@ bool DerivationBuilderImpl::killChild()
         killSandbox(true);
 
         pid.wait();
+
+        activeBuildHandle.reset();
     }
     return ret;
 }
@@ -525,6 +539,8 @@ SingleDrvOutputs DerivationBuilderImpl::unprepareBuild()
        open and modifies them after they have been chown'ed to
        root. */
     killSandbox(true);
+
+    activeBuildHandle.reset();
 
     /* Terminate the recursive Nix daemon. */
     stopDaemon();
@@ -839,9 +855,26 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
 
     pid.setSeparatePG(true);
 
+    /* Make the build visible to `nix ps`. */
+    if (auto tracker = dynamic_cast<TrackActiveBuildsStore *>(&store))
+        activeBuildHandle.emplace(tracker->buildStarted(getActiveBuild()));
+
     processSandboxSetupMessages();
 
     return builderOut.get();
+}
+
+ActiveBuild DerivationBuilderImpl::getActiveBuild()
+{
+    return {
+        .nixPid = getpid(),
+        .clientPid = std::nullopt, // FIXME
+        .clientUid = std::nullopt, // FIXME
+        .mainPid = pid,
+        .mainUser = UserInfo::fromUid(buildUser ? buildUser->getUID() : getuid()),
+        .startTime = buildResult.startTime,
+        .derivation = drvPath,
+    };
 }
 
 PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
@@ -849,6 +882,15 @@ PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
     /* Allow a user-configurable set of directories from the
        host file system. */
     PathsInChroot pathsInChroot = defaultPathsInChroot;
+
+    for (auto & p : pathsInChroot)
+        if (!p.second.optional
+#if HAVE_EMBEDDED_SANDBOX_SHELL
+            && p.second.source != SANDBOX_SHELL
+#endif
+            && !maybeLstat(p.second.source))
+            throw SysError(
+                "path '%s' is configured as part of the `sandbox-paths` option, but is inaccessible", p.second.source);
 
     if (hasPrefix(store.storeDir, tmpDirInSandbox())) {
         throw Error("`sandbox-build-dir` must not contain the storeDir");
@@ -1001,7 +1043,7 @@ void DerivationBuilderImpl::processSandboxSetupMessages()
                     "while waiting for the build environment for '%s' to initialize (%s, previous messages: %s)",
                     store.printStorePath(drvPath),
                     statusToString(status),
-                    concatStringsSep("|", msgs));
+                    concatStringsSep("\n", msgs));
                 throw;
             }
         }();
@@ -1415,7 +1457,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
     for (auto & [outputName, _] : drv.outputs) {
         auto scratchOutput = get(scratchOutputs, outputName);
         assert(scratchOutput);
-        auto actualPath = realPathInSandbox(store.printStorePath(*scratchOutput));
+        auto actualPath = realPathInHost(store.printStorePath(*scratchOutput));
 
         outputsToSort.insert(outputName);
 
@@ -1535,7 +1577,14 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
         auto output = get(drv.outputs, outputName);
         auto scratchPath = get(scratchOutputs, outputName);
         assert(output && scratchPath);
-        auto actualPath = realPathInSandbox(store.printStorePath(*scratchPath));
+        auto actualPath = realPathInHost(store.printStorePath(*scratchPath));
+
+        /* An optional file descriptor of a directory used for intermediate
+           operations. */
+        AutoCloseFD tempDirFd;
+        /* RAII cleanup of a temporary directory inside the store that is used
+           for intermediate operations. */
+        std::optional<AutoDelete> delTempDir;
 
         auto finish = [&](StorePath finalStorePath) {
             /* Store the final path */
@@ -1672,6 +1721,25 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
             return newInfo0;
         };
 
+        auto moveOutputToTempDir = [&]() -> void {
+            std::filesystem::path tempDir;
+            std::tie(tempDir, tempDirFd) = store.createTempDirInStore();
+            delTempDir.emplace(tempDir);
+
+            auto tmpOutput = tempDir / "x";
+
+            /* Serialise and create a fresh copy of the output to break
+               any stale writable file descriptors. Copy through the
+               serialisation/deserialisation. TODO: Use copyRecursive here and
+               make use of reflinking. */
+            auto source = sinkToSource([&](Sink & nextSink) { dumpPath(actualPath, nextSink); });
+            restorePath(tmpOutput, *source, settings.fsyncStorePaths);
+            /* This makes it slightly harder to make sense of the control flow. The rule
+               of thumb is that actualPath points to the current location of the stuff
+               that we'll end up registering. */
+            actualPath = std::move(tmpOutput);
+        };
+
         ValidPathInfo newInfo = std::visit(
             overloaded{
 
@@ -1699,14 +1767,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
                 [&](const DerivationOutput::CAFixed & dof) {
                     auto & wanted = dof.ca.hash;
-
-                    // Replace the output by a fresh copy of itself to make sure
-                    // that there's no stale file descriptor pointing to it
-                    Path tmpOutput = actualPath + ".tmp";
-                    copyFile(std::filesystem::path(actualPath), std::filesystem::path(tmpOutput), true);
-
-                    std::filesystem::rename(tmpOutput, actualPath);
-
+                    moveOutputToTempDir();
                     return newInfoFromCA(
                         DerivationOutput::CAFloating{
                             .method = dof.ca.method,
@@ -1723,6 +1784,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
                 },
 
                 [&](const DerivationOutput::Impure & doi) {
+                    moveOutputToTempDir();
                     return newInfoFromCA(
                         DerivationOutput::CAFloating{
                             .method = doi.method,
@@ -1829,6 +1891,14 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
             newInfo.deriver = drvPath;
             newInfo.ultimate = true;
+            if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+                newInfo.provenance = std::make_shared<const BuildProvenance>(
+                    drvPath,
+                    outputName,
+                    settings.getHostName(),
+                    settings.buildProvenanceTags.get(),
+                    drv.platform,
+                    drvProvenance);
             store.signPathInfo(newInfo);
 
             finish(newInfo.path);
@@ -1839,8 +1909,8 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
                This is also good so that if a fixed-output produces the
                wrong path, we still store the result (just don't consider
-               the derivation sucessful, so if someone fixes the problem by
-               just changing the wanted hash, the redownload (or whateer
+               the derivation successful, so if someone fixes the problem by
+               just changing the wanted hash, the redownload (or whatever
                possibly quite slow thing it was) doesn't have to be done
                again. */
             if (newInfo.ca)
@@ -1855,7 +1925,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
     /* Apply output checks. This includes checking of the wanted vs got
        hash of fixed-outputs. */
-    checkOutputs(store, drvPath, drv.outputs, drvOptions.outputChecks, infos);
+    checkOutputs(store, drvPath, drv.outputs, drvOptions.outputChecks, infos, *act);
 
     if (buildMode == bmCheck) {
         return {};
@@ -1963,6 +2033,10 @@ StorePath DerivationBuilderImpl::makeFallbackPath(const StorePath & path)
 #include "darwin-derivation-builder.cc"
 #include "external-derivation-builder.cc"
 
+#if NIX_USE_WASMTIME
+#  include "wasi-derivation-builder.cc"
+#endif
+
 namespace nix {
 
 void DerivationBuilderDeleter::operator()(DerivationBuilder * builder) noexcept
@@ -2005,6 +2079,11 @@ std::unique_ptr<DerivationBuilder, DerivationBuilderDeleter> makeDerivationBuild
             // FIXME: cache derivationType
             useSandbox = params.drv.type().isSandboxed() && !params.drvOptions.noChroot;
     }
+
+#if NIX_USE_WASMTIME
+    if (params.drv.platform == "wasm32-wasip1")
+        return DerivationBuilderUnique(new WasiDerivationBuilder(store, std::move(miscMethods), std::move(params)));
+#endif
 
     if (store.storeDir != store.config->realStoreDir.get()) {
 #ifdef __linux__

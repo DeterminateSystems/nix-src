@@ -19,9 +19,7 @@ namespace nix {
 enum struct ExperimentalFeature {
     CaDerivations,
     ImpureDerivations,
-    Flakes,
     FetchTree,
-    NixCommand,
     GitHashing,
     RecursiveNix,
     NoUrlLiterals,
@@ -39,7 +37,14 @@ enum struct ExperimentalFeature {
     PipeOperators,
     ExternalBuilders,
     BLAKE3Hashes,
+    BuildTimeFetchTree,
+    ParallelEval,
+    WasmBuiltin,
+    WasmDerivations,
+    Provenance,
 };
+
+extern std::set<std::string> stabilizedFeatures;
 
 /**
  * Just because writing `ExperimentalFeature::CaDerivations` is way too long

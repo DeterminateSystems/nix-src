@@ -38,6 +38,9 @@ test_tarball() {
 
     [[ $(nix eval --impure --expr "(fetchTree file://$tarball).lastModified") = 1000000000 ]]
 
+    # fetchTree with a narHash is implicitly final, so it doesn't return attributes like lastModified.
+    [[ $(nix eval --impure --expr "(fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; }) ? lastModified") = false ]]
+
     nix-instantiate --strict --eval -E "!((import (fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; })) ? submodules)" >&2
     nix-instantiate --strict --eval -E "!((import (fetchTree { type = \"tarball\"; url = file://$tarball; narHash = \"$hash\"; })) ? submodules)" 2>&1 | grep 'true'
 
@@ -112,3 +115,17 @@ path="$(nix flake prefetch --refresh --json "tarball+file://$TEST_ROOT/tar.tar" 
 [[ $(cat "$path/a/b/xyzzy") = xyzzy ]]
 [[ $(cat "$path/a/b/foo") = foo ]]
 [[ $(cat "$path/bla") = abc ]]
+
+# Test that concurrent invocations of Nix will fetch the tarball only once.
+rm -rf "$TEST_HOME/.cache"
+store="$TEST_ROOT/prefetch-store"
+nix-store --store "$store" --init # needed because concurrent creation of the store can give SQLite errors
+_NIX_TEST_CONCURRENT_FETCHES=1 _NIX_FORCE_HTTP=1 nix flake prefetch --store "$store" -v "tarball+file://$TEST_ROOT/tar.tar" 2> "$TEST_ROOT/log1" &
+pid1="$!"
+_NIX_TEST_CONCURRENT_FETCHES=1 _NIX_FORCE_HTTP=1 nix flake prefetch --store "$store" -v "tarball+file://$TEST_ROOT/tar.tar" 2> "$TEST_ROOT/log2" &
+pid2="$!"
+wait "$pid1"
+wait "$pid2"
+[[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "Download.*to") -eq 2 ]]
+[[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "downloading.*tar.tar") -eq 1 ]]
+[[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "waiting for another Nix process to finish fetching input") -eq 1 ]]

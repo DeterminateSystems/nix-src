@@ -1,24 +1,18 @@
 {
   description = "The purely functional package manager";
 
-  inputs.nixpkgs.url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
+  inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.2505";
 
   inputs.nixpkgs-regression.url = "github:NixOS/nixpkgs/215d4d0fd80ca5163643b03a33fde804a29cc1e2";
   inputs.nixpkgs-23-11.url = "github:NixOS/nixpkgs/a62e6edd6d5e1fa0329b8653c801147986f8d446";
-  inputs.flake-compat = {
-    url = "github:edolstra/flake-compat";
-    flake = false;
-  };
 
   # dev tooling
-  inputs.flake-parts.url = "github:hercules-ci/flake-parts";
-  inputs.git-hooks-nix.url = "github:cachix/git-hooks.nix";
+  inputs.flake-parts.url = "https://flakehub.com/f/hercules-ci/flake-parts/0.1";
+  inputs.git-hooks-nix.url = "https://flakehub.com/f/cachix/git-hooks.nix/0.1.941";
   # work around https://github.com/NixOS/nix/issues/7730
   inputs.flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
   inputs.git-hooks-nix.inputs.nixpkgs.follows = "nixpkgs";
-  inputs.git-hooks-nix.inputs.nixpkgs-stable.follows = "nixpkgs";
   # work around 7730 and https://github.com/NixOS/nix/issues/7807
-  inputs.git-hooks-nix.inputs.flake-compat.follows = "";
   inputs.git-hooks-nix.inputs.gitignore.follows = "";
 
   outputs =
@@ -34,26 +28,24 @@
 
       officialRelease = true;
 
-      linux32BitSystems = [ "i686-linux" ];
+      linux32BitSystems = [ ];
       linux64BitSystems = [
         "x86_64-linux"
         "aarch64-linux"
       ];
       linuxSystems = linux32BitSystems ++ linux64BitSystems;
       darwinSystems = [
-        "x86_64-darwin"
         "aarch64-darwin"
       ];
       systems = linuxSystems ++ darwinSystems;
 
       crossSystems = [
-        "armv6l-unknown-linux-gnueabihf"
-        "armv7l-unknown-linux-gnueabihf"
-        "riscv64-unknown-linux-gnu"
+        #"armv6l-unknown-linux-gnueabihf"
+        #"armv7l-unknown-linux-gnueabihf"
+        #"riscv64-unknown-linux-gnu"
         # Disabled because of https://github.com/NixOS/nixpkgs/issues/344423
         # "x86_64-unknown-netbsd"
-        "x86_64-unknown-freebsd"
-        "x86_64-w64-mingw32"
+        #"x86_64-unknown-freebsd"
       ];
 
       stdenvs = [
@@ -372,6 +364,40 @@
           nix-manual-manpages-only = nixpkgsFor.${system}.native.nixComponents2.nix-manual-manpages-only;
           nix-internal-api-docs = nixpkgsFor.${system}.native.nixComponents2.nix-internal-api-docs;
           nix-external-api-docs = nixpkgsFor.${system}.native.nixComponents2.nix-external-api-docs;
+
+          fallbackPathsNix =
+            let
+              pkgs = nixpkgsFor.${system}.native;
+
+              closures = forAllSystems (system: self.packages.${system}.default.outPath);
+
+              closures_json =
+                pkgs.runCommand "versions.json"
+                  {
+                    buildInputs = [ pkgs.jq ];
+                    passAsFile = [ "json" ];
+                    json = builtins.toJSON closures;
+                  }
+                  ''
+                    cat "$jsonPath" | jq . > $out
+                  '';
+
+              closures_nix =
+                pkgs.runCommand "versions.nix"
+                  {
+                    buildInputs = [ pkgs.jq ];
+                    passAsFile = [ "template" ];
+                    jsonPath = closures_json;
+                    template = ''
+                      builtins.fromJSON('''@closures@''')
+                    '';
+                  }
+                  ''
+                    export closures=$(cat "$jsonPath");
+                    substituteAll "$templatePath" "$out"
+                  '';
+            in
+            closures_nix;
         }
         # We need to flatten recursive attribute sets of derivations to pass `flake check`.
         //
@@ -434,8 +460,6 @@
               {
                 # These attributes go right into `packages.<system>`.
                 "${pkgName}" = nixpkgsFor.${system}.native.nixComponents2.${pkgName};
-                "${pkgName}-static" = nixpkgsFor.${system}.native.pkgsStatic.nixComponents2.${pkgName};
-                "${pkgName}-llvm" = nixpkgsFor.${system}.native.pkgsLLVM.nixComponents2.${pkgName};
               }
               // lib.optionalAttrs supportsCross (
                 flatMapAttrs (lib.genAttrs crossSystems (_: { })) (
@@ -446,6 +470,9 @@
                     "${pkgName}-${crossSystem}" = nixpkgsFor.${system}.cross.${crossSystem}.nixComponents2.${pkgName};
                   }
                 )
+                // {
+                  "${pkgName}-static" = nixpkgsFor.${system}.native.pkgsStatic.nixComponents2.${pkgName};
+                }
               )
               // flatMapAttrs (lib.genAttrs stdenvs (_: { })) (
                 stdenvName:
@@ -454,6 +481,10 @@
                   # These attributes go right into `packages.<system>`.
                   "${pkgName}-${stdenvName}" =
                     nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.nixComponents2.${pkgName};
+                }
+                // lib.optionalAttrs supportsCross {
+                  "${pkgName}-${stdenvName}-static" =
+                    nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.pkgsStatic.nixComponents2.${pkgName};
                 }
               )
             )
@@ -510,32 +541,6 @@
               makeShell {
                 pkgs = nixpkgsFor.${system}.nativeForStdenv.${stdenvName};
               }
-            )
-          )
-          // lib.optionalAttrs (!nixpkgsFor.${system}.native.stdenv.isDarwin) (
-            prefixAttrs "static" (
-              forAllStdenvs (
-                stdenvName:
-                makeShell {
-                  pkgs = nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.pkgsStatic;
-                }
-              )
-            )
-            // prefixAttrs "llvm" (
-              forAllStdenvs (
-                stdenvName:
-                makeShell {
-                  pkgs = nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.pkgsLLVM;
-                }
-              )
-            )
-            // prefixAttrs "cross" (
-              forAllCrossSystems (
-                crossSystem:
-                makeShell {
-                  pkgs = nixpkgsFor.${system}.cross.${crossSystem};
-                }
-              )
             )
           )
           // {

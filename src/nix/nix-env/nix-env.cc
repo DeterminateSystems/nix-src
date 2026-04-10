@@ -462,6 +462,7 @@ static void printMissing(EvalState & state, PackageInfos & elems)
     std::vector<DerivedPath> targets;
     for (auto & i : elems)
         if (auto drvPath = i.queryDrvPath()) {
+            state.waitForPath(*drvPath);
             auto path = DerivedPath::Built{
                 .drvPath = makeConstantStorePathRef(*drvPath),
                 .outputs = OutputsSpec::All{},
@@ -1062,7 +1063,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
                 continue;
 
             /* For table output. */
-            std::vector<std::string> columns;
+            TableRow columns;
 
             /* For XML output. */
             XMLAttrs attrs;

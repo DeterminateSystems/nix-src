@@ -440,6 +440,11 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
 
     actLock.reset();
 
+    /* Get the provenance of the derivation, if available. */
+    std::shared_ptr<const Provenance> provenance;
+    if (auto info = worker.evalStore.maybeQueryPathInfo(drvPath))
+        provenance = info->provenance;
+
     if (useHook) {
         buildResult.startTime = time(0); // inexact
         started();
@@ -522,7 +527,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
         outputLocks.setDeletion(true);
         outputLocks.unlock();
 
-        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs));
+        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs), provenance);
     }
 
     co_await yield();
@@ -618,6 +623,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
 
             DerivationBuilderParams params{
                 .drvPath = drvPath,
+                .drvProvenance = provenance,
                 .buildResult = buildResult,
                 .drv = *drv,
                 .drvOptions = drvOptions,
@@ -627,6 +633,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
                 .defaultPathsInChroot = std::move(defaultPathsInChroot),
                 .systemFeatures = worker.store.config.systemFeatures.get(),
                 .desugaredEnv = std::move(desugaredEnv),
+                .act = act,
             };
 
             /* If we have to wait and retry (see below), then `builder` will
@@ -723,7 +730,7 @@ Goal::Co DerivationBuildingGoal::tryToBuild()
            (unlinked) lock files. */
         outputLocks.setDeletion(true);
         outputLocks.unlock();
-        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs));
+        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs), provenance);
     }
 #endif
 }
@@ -811,7 +818,7 @@ BuildError DerivationBuildingGoal::fixupBuilderFailureErrorMessage(BuilderFailur
             msg += line;
             msg += "\n";
         }
-        auto nixLogCommand = experimentalFeatureSettings.isEnabled(Xp::NixCommand) ? "nix log" : "nix-store -l";
+        auto nixLogCommand = "nix log";
         // The command is on a separate line for easy copying, such as with triple click.
         // This message will be indented elsewhere, so removing the indentation before the
         // command will not put it at the start of the line unfortunately.
@@ -1173,7 +1180,8 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
     return {allValid, validOutputs};
 }
 
-Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status status, SingleDrvOutputs builtOutputs)
+Goal::Done DerivationBuildingGoal::doneSuccess(
+    BuildResult::Success::Status status, SingleDrvOutputs builtOutputs, std::shared_ptr<const Provenance> provenance)
 {
     mcRunningBuilds.reset();
 
@@ -1182,11 +1190,21 @@ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status stat
 
     worker.updateProgress();
 
-    return Goal::doneSuccess(
+    auto res = Goal::doneSuccess(
         BuildResult::Success{
             .status = status,
             .builtOutputs = std::move(builtOutputs),
+            .provenance = provenance,
         });
+
+    logger->result(
+        act ? act->id : getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
+    return res;
 }
 
 Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
@@ -1202,13 +1220,22 @@ Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
 
     worker.updateProgress();
 
-    return Goal::doneFailure(
+    auto res = Goal::doneFailure(
         ecFailed,
         BuildResult::Failure{
             .status = ex.status,
             .errorMsg = fmt("%s", Uncolored(ex.info().msg)),
         },
         std::move(ex));
+
+    logger->result(
+        act ? act->id : getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
+    return res;
 }
 
 } // namespace nix
