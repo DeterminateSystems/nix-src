@@ -384,13 +384,18 @@ void mainWrapped(int argc, char ** argv)
     bool sentryEnabled = false;
 
 #if HAVE_SENTRY
-    auto sentryEndpoint =
-        getEnv("NIX_SENTRY_ENDPOINT")
-            .value_or(
-                "https://ca42fa4b6b08ae1caf3d96b998af6bac@o4506062689927168.ingest.us.sentry.io/4511151087878144");
-    if (sentryEndpoint != "") {
+    auto sentryEndpoint = getEnv("NIX_SENTRY_ENDPOINT");
+
+    if (!sentryEndpoint && getEnv("DETSYS_IDS_TELEMETRY") != "disabled") {
+        try {
+            sentryEndpoint = trim(readFile(settings.nixConfDir / "sentry-endpoint"));
+        } catch (...) {
+        }
+    }
+
+    if (sentryEndpoint && sentryEndpoint != "") {
         sentry_options_t * options = sentry_options_new();
-        sentry_options_set_dsn(options, sentryEndpoint.c_str());
+        sentry_options_set_dsn(options, sentryEndpoint->c_str());
         sentry_options_set_database_path(options, (getCacheDir() / "sentry").string().c_str());
         sentry_options_set_release(options, fmt("nix@%s", determinateNixVersion).c_str());
         sentry_options_set_traces_sample_rate(options, 0);

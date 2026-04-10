@@ -2,8 +2,9 @@
 
 source common.sh
 
-# This doesn't actually work, but it prevents sentry from uploading for real.
-export NIX_SENTRY_ENDPOINT=file://$TEST_ROOT/sentry-endpoint
+# Enable sentry with a fake endpoint.
+unset NIX_SENTRY_ENDPOINT
+echo -n "file://$TEST_ROOT/sentry-endpoint" > "$NIX_CONF_DIR/sentry-endpoint"
 
 ulimit -c 0
 
