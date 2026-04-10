@@ -310,6 +310,7 @@ sources = files(
   'build/substitution-goal.cc',
   'build/worker.cc',
   'builtins/buildenv.cc',
+  'builtins/fetch-closure.cc',
   'builtins/fetchurl.cc',
   'builtins/unpack-channel.cc',
   'common-protocol.cc',

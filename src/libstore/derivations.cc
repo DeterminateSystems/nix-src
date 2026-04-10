@@ -1313,6 +1313,11 @@ static void processDerivationOutputPaths(Store & store, auto && drv, std::string
                     if (outputVariant.path == outPath) {
                         return; // Correct case
                     }
+                    /* Special case: builtin:fetch-closure can have arbitrary output paths */
+                    if (drv.isBuiltin() && drv.builder == "builtin:fetch-closure") {
+                        envHasRightPath(outputVariant.path);
+                        return;
+                    }
                     /* Error case, an explicitly wrong path is
                        always an error. */
                     throw Error(
