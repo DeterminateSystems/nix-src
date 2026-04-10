@@ -30,6 +30,7 @@
 #include "nix/util/source-path.hh"
 #include "nix/util/types.hh"
 #include "nix/util/util.hh"
+#include "nix/util/mounted-source-accessor.hh"
 
 namespace nix::flake::primops {
 
@@ -74,14 +75,11 @@ PrimOp getFlake(const Settings & settings)
                 if (auto sourcePath = flakeRef.input.getSourcePath();
                     sourcePath && state.store->isInStore(sourcePath->string())) {
                     auto [storePath, subPath] = state.store->toStorePath(sourcePath->string());
-                    for (auto & c : context) {
-                        if (auto p = std::get_if<NixStringContextElem::Path>(&c.raw); p && p->storePath == storePath) {
-                            auto path = state.storePath(storePath) / CanonPath(subPath);
-                            if (!flakeRef.subdir.empty())
-                                path = path / flakeRef.subdir;
-                            callFlake(state, lockFlake(settings, state, path, lockFlags), v);
-                            return;
-                        }
+                    if (auto mount = state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath)))) {
+                        auto path = state.storePath(storePath) / CanonPath(subPath);
+                        if (!flakeRef.subdir.empty())
+                            path = path / flakeRef.subdir;
+                        return callFlake(state, lockFlake(settings, state, path, lockFlags), v);
                     }
                 }
             }
