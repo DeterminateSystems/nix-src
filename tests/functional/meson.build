@@ -176,6 +176,7 @@ suites = [
       'symlinks.sh',
       'external-builders.sh',
       'wasm.sh',
+      'sentry.sh',
     ],
     'workdir' : meson.current_source_dir(),
   },

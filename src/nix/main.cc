@@ -29,6 +29,9 @@
 #include <sys/types.h>
 #include <regex>
 #include <nlohmann/json.hpp>
+#if HAVE_SENTRY
+#  include <sentry.h>
+#endif
 
 #ifndef _WIN32
 #  include <sys/socket.h>
@@ -121,6 +124,7 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
         categories[catSecondary] = "Infrequently used commands";
         categories[catUtility] = "Utility/scripting commands";
         categories[catNixInstallation] = "Commands for upgrading or troubleshooting your Nix installation";
+        categories[catUndocumented] = "Undocumented commands";
 
         addFlag({
             .longName = "help",
@@ -377,7 +381,41 @@ void mainWrapped(int argc, char ** argv)
 {
     savedArgv = argv;
 
-    registerCrashHandler();
+    bool sentryEnabled = false;
+
+#if HAVE_SENTRY
+    auto sentryEndpoint = getEnv("NIX_SENTRY_ENDPOINT");
+
+    if (!sentryEndpoint && getEnv("DETSYS_IDS_TELEMETRY") != "disabled") {
+        try {
+            auto p = settings.nixConfDir / "sentry-endpoint";
+            if (pathExists(p))
+                sentryEndpoint = trim(readFile(p));
+        } catch (...) {
+            ignoreExceptionExceptInterrupt();
+        }
+    }
+
+    if (sentryEndpoint && sentryEndpoint != "") {
+        sentry_options_t * options = sentry_options_new();
+        sentry_options_set_dsn(options, sentryEndpoint->c_str());
+        sentry_options_set_database_path(options, (getCacheDir() / "sentry").string().c_str());
+        sentry_options_set_release(options, fmt("nix@%s", determinateNixVersion).c_str());
+        sentry_options_set_traces_sample_rate(options, 0);
+        sentry_options_set_auto_session_tracking(options, false);
+        sentry_options_set_handler_path(options, CRASHPAD_HANDLER_PATH);
+        sentry_init(options);
+        sentryEnabled = true;
+    }
+
+    Finally cleanupSentry([&]() {
+        if (sentryEnabled)
+            sentry_shutdown();
+    });
+#endif
+
+    if (!sentryEnabled)
+        registerCrashHandler();
 
     /* The chroot helper needs to be run before any threads have been
        started. */

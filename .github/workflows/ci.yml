@@ -44,6 +44,9 @@ jobs:
     secrets:
       manual_netlify_auth_token: ${{ secrets.NETLIFY_AUTH_TOKEN }}
       manual_netlify_site_id: ${{ secrets.NETLIFY_SITE_ID }}
+      sentry_auth_token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      sentry_org: ${{ secrets.SENTRY_ORG }}
+      sentry_project: ${{ secrets.SENTRY_PROJECT }}
 
   build_aarch64-linux:
     uses: ./.github/workflows/build.yml
@@ -62,6 +65,10 @@ jobs:
       runner: UbuntuLatest32Cores128GArm
       runner_for_virt: UbuntuLatest32Cores128GArm
       runner_small: UbuntuLatest32Cores128GArm
+    secrets:
+      sentry_auth_token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      sentry_org: ${{ secrets.SENTRY_ORG }}
+      sentry_project: ${{ secrets.SENTRY_PROJECT }}
 
   build_aarch64-darwin:
     uses: ./.github/workflows/build.yml
@@ -70,6 +77,10 @@ jobs:
       runner: namespace-profile-mac-m2-12c28g
       runner_for_virt: namespace-profile-mac-m2-12c28g
       runner_small: macos-latest-xlarge
+    secrets:
+      sentry_auth_token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      sentry_org: ${{ secrets.SENTRY_ORG }}
+      sentry_project: ${{ secrets.SENTRY_PROJECT }}
 
   success:
     runs-on: ubuntu-latest

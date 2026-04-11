@@ -632,7 +632,7 @@ MultiCommand::MultiCommand(std::string_view commandName, const Commands & comman
          }},
          .completer = {[&](AddCompletions & completions, size_t, std::string_view prefix) {
              for (auto & [name, command] : commands)
-                 if (hasPrefix(name, prefix))
+                 if (hasPrefix(name, prefix) && !hasPrefix(name, "__"))
                      completions.add(name);
          }}});
 

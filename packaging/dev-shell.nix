@@ -290,7 +290,8 @@ pkgs.nixComponents2.nix-util.overrideAttrs (
       map (transformFlag "perl") (ignoreCrossFile pkgs.nixComponents2.nix-perl-bindings.mesonFlags)
     )
     ++ map (transformFlag "libexpr") (ignoreCrossFile pkgs.nixComponents2.nix-expr.mesonFlags)
-    ++ map (transformFlag "libcmd") (ignoreCrossFile pkgs.nixComponents2.nix-cmd.mesonFlags);
+    ++ map (transformFlag "libcmd") (ignoreCrossFile pkgs.nixComponents2.nix-cmd.mesonFlags)
+    ++ map (transformFlag "nix") (ignoreCrossFile pkgs.nixComponents2.nix-cli.mesonFlags);
 
     nativeBuildInputs =
       let
