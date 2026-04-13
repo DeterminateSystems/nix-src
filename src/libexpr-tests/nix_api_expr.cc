@@ -577,6 +577,7 @@ struct DeploymentResourceState
     bool vm_created = false;
 };
 
+#if 0
 static void primop_load_resource_input(
     void * user_data, nix_c_context * context, EvalState * state, nix_value ** args, nix_value * ret)
 {
@@ -605,7 +606,6 @@ static void primop_load_resource_input(
     }
 }
 
-#if 0
 TEST_F(nix_api_expr_test, nix_expr_thunk_re_evaluation_after_deployment)
 {
     // This test demonstrates NixOps4's requirement: a thunk calling a primop should be
