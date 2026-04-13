@@ -76,7 +76,7 @@ let
       subcommands = if length categories > 1 then listCategories else listSubcommands details.commands;
 
       categories = sort (x: y: x.id < y.id) (
-        unique (map (cmd: cmd.category) (attrValues details.commands))
+        unique (map (cmd: { inherit (cmd.category) id description; }) (attrValues details.commands))
       );
 
       listCategories = concatStrings (map showCategory categories);
@@ -84,7 +84,7 @@ let
       showCategory = cat: ''
         **${toString cat.description}:**
 
-        ${listSubcommands (filterAttrs (n: v: v.category == cat) details.commands)}
+        ${listSubcommands (filterAttrs (n: v: v.category.id == cat.id) details.commands)}
       '';
 
       listSubcommands = cmds: concatStrings (attrValues (mapAttrs showSubcommand cmds));

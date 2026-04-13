@@ -44,7 +44,7 @@ struct CmdProvenance : NixMultiCommand
 
     Category category() override
     {
-        return catUtility;
+        return catSecondary;
     }
 };
 

@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.17.2.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.17.3.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -206,3 +206,5 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 * Provenance now supports additional nix.conf-defined tags, in [DeterminateSystems/nix-src#374](https://github.com/DeterminateSystems/nix-src/pull/374)
 
 <!-- Determinate Nix version 3.17.2 -->
+
+<!-- Determinate Nix version 3.17.3 -->

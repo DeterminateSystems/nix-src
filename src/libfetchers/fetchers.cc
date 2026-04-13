@@ -8,6 +8,9 @@
 #include "nix/util/url.hh"
 #include "nix/util/forwarding-source-accessor.hh"
 #include "nix/util/archive.hh"
+#include "nix/util/users.hh"
+#include "nix/store/pathlocks.hh"
+#include "nix/util/environment-variables.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -367,6 +370,18 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
 
         return {accessor, result};
     };
+
+    /* Acquire a path lock on this input. Note that fetching the same input in parallel is supposed to be safe (it's up
+     * to the fetchers to guarantee this), so this is merely intended to avoid work duplication. */
+    auto lockFilePath =
+        getCacheDir() / "fetcher-locks"
+        / hashString(HashAlgorithm::SHA256, attrsToJSON(toAttrs()).dump()).to_string(HashFormat::Base16, false);
+    std::filesystem::create_directories(lockFilePath.parent_path());
+    PathLocks lock(
+        {lockFilePath.string()}, fmt("waiting for another Nix process to finish fetching input '%s'...", to_string()));
+
+    if (getEnv("_NIX_TEST_CONCURRENT_FETCHES"))
+        std::this_thread::sleep_for(std::chrono::seconds(1));
 
     /* See if the input is in the cache of the fetcher. */
     try {
