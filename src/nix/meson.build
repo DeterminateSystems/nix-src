@@ -34,6 +34,9 @@ subdir('nix-meson-build-support/subprojects')
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
 
+libmicrohttpd = dependency('libmicrohttpd')
+deps_private += libmicrohttpd
+
 configdata = configuration_data()
 
 # The CLI has a more detailed version string than the libraries; see `nixVersion`
@@ -114,6 +117,7 @@ nix_sources = [ config_priv_h ] + files(
   'run.cc',
   'search.cc',
   'self-exe.cc',
+  'serve.cc',
   'sigs.cc',
   'store-copy-log.cc',
   'store-delete.cc',
