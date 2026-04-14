@@ -121,10 +121,10 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
         categories.clear();
         categories[catHelp] = "Help commands";
         categories[Command::catDefault] = "Main commands";
+        categories[Command::catUndocumented] = "Undocumented commands";
         categories[catSecondary] = "Infrequently used commands";
         categories[catUtility] = "Utility/scripting commands";
         categories[catNixInstallation] = "Commands for upgrading or troubleshooting your Nix installation";
-        categories[catUndocumented] = "Undocumented commands";
 
         addFlag({
             .longName = "help",

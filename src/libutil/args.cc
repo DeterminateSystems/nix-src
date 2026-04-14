@@ -671,6 +671,8 @@ nlohmann::json MultiCommand::toJSON()
         auto command = commandFun();
         auto j = command->toJSON();
         auto cat = nlohmann::json::object();
+        if (command->category() == Command::catUndocumented)
+            continue;
         cat["id"] = command->category();
         cat["description"] = trim(categories[command->category()]);
         cat["experimental-feature"] = command->experimentalFeature();
