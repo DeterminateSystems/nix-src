@@ -4,7 +4,7 @@ source common.sh
 
 # Enable sentry with a fake endpoint.
 unset NIX_SENTRY_ENDPOINT
-echo -n "file://$TEST_ROOT/sentry-endpoint" > "$NIX_CONF_DIR/sentry-endpoint"
+echo -n "file://$TEST_ROOT/sentry-endpoint" > "$test_nix_conf_dir/sentry-endpoint"
 
 ulimit -c 0
 
