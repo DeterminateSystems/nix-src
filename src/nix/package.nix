@@ -8,6 +8,7 @@
   nix-expr,
   nix-main,
   nix-cmd,
+  sentry-native,
 
   # Configuration Options
 
@@ -16,6 +17,7 @@
 
 let
   inherit (lib) fileset;
+  enableSentry = !stdenv.hostPlatform.isStatic;
 in
 
 mkMesonExecutable (finalAttrs: {
@@ -76,10 +78,15 @@ mkMesonExecutable (finalAttrs: {
     && stdenv.hostPlatform.isStatic
     && stdenv.cc.libcxx != null
     && stdenv.cc.libcxx.isLLVM
-  ) llvmPackages.libunwind;
+  ) llvmPackages.libunwind
+  ++ lib.optional enableSentry sentry-native;
 
   mesonFlags = [
-  ];
+    (lib.mesonEnable "sentry" enableSentry)
+  ]
+  ++ lib.optional enableSentry (
+    lib.mesonOption "crashpad-handler" "${sentry-native}/bin/crashpad_handler"
+  );
 
   postInstall = lib.optionalString stdenv.hostPlatform.isStatic ''
     mkdir -p $out/nix-support

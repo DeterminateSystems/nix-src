@@ -13,6 +13,7 @@
 #include "nix/util/environment-variables.hh"
 
 #include <nlohmann/json.hpp>
+#include <thread>
 
 namespace nix::fetchers {
 

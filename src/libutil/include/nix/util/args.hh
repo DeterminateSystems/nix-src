@@ -374,6 +374,7 @@ struct Command : virtual public Args
     using Category = int;
 
     static constexpr Category catDefault = 0;
+    static constexpr Category catUndocumented = 1;
 
     virtual std::optional<ExperimentalFeature> experimentalFeature();
 
