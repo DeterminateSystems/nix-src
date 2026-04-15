@@ -1081,10 +1081,24 @@ public:
           captured by the derivation model itself and are too variable between
           different versions of the same system to be hard-coded into nix.
 
-          The hook is passed the derivation path and, if sandboxes are
-          enabled, the sandbox directory. It can then modify the sandbox and
-          send a series of commands to modify various settings to stdout. The
-          currently recognized commands are:
+          The hook receives the derivation to be built as JSON in the file
+          pointed to by the environment variable `NIX_DERIVATION_V4`. See
+          [@docroot@/protocols/json/derivation/index.md](@docroot@/protocols/json/derivation/index.md)
+          for the format. For example, to read the `requiredSystemFeatures`
+          attribute:
+
+          ```sh
+          jq -r '.env.requiredSystemFeatures' < "$NIX_DERIVATION_V4"
+          ```
+
+          > **Deprecated**
+          > Using the derivation store path passed as `argv[1]` to inspect the
+          > derivation is deprecated and not recommended. This path may not
+          > exist when Nix is invoked as a remote builder.
+
+          If sandboxes are enabled, the hook also receives the sandbox
+          directory as `argv[2]`. It can send a series of commands to modify
+          various settings to stdout. The currently recognized commands are:
 
             - `extra-sandbox-paths`\
               Pass a list of files and directories to be included in the
