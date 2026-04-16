@@ -17,8 +17,10 @@ thread_local bool Executor::amWorkerThread{false};
 
 unsigned int Executor::getEvalCores(const EvalSettings & evalSettings)
 {
+    /* Note: the default number of cores is currently limited to 32
+       due to scalability bottlenecks. */
     return evalSettings.evalProfilerMode != EvalProfilerMode::disabled ? 1
-           : evalSettings.evalCores == 0UL                             ? Settings::getDefaultCores()
+           : evalSettings.evalCores == 0UL                             ? std::min(32U, Settings::getDefaultCores())
                                                                        : evalSettings.evalCores;
 }
 
