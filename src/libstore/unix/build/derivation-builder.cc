@@ -22,6 +22,7 @@
 #include "nix/util/terminal.hh"
 #include "nix/store/provenance.hh"
 
+#include <nlohmann/json.hpp>
 #include <queue>
 
 #include <sys/un.h>
@@ -932,8 +933,27 @@ PathsInChroot DerivationBuilderImpl::getPathsInSandbox()
 
         enum BuildHookState { stBegin, stExtraChrootDirs };
 
+        nlohmann::json drvJson = drv;
+
+        auto [tmpFd, drvJsonPath] = createTempFile("nix-drv-json");
+        writeFile(drvJsonPath, drvJson.dump());
+        AutoDelete drvJsonFile(drvJsonPath, false);
+
+        auto hookEnv = getEnv();
+        static_assert(expectedJsonVersionDerivation == 4);
+        hookEnv["NIX_DERIVATION_V4"] = drvJsonPath;
+
+        auto [hookStatus, lines] = runProgram(
+            RunOptions{
+                .program = settings.preBuildHook,
+                .lookupPath = false,
+                .args = getPreBuildHookArgs(),
+                .environment = std::move(hookEnv),
+            });
+        if (!statusOk(hookStatus))
+            throw ExecError(hookStatus, "pre-build hook '%1%' %2%", settings.preBuildHook, statusToString(hookStatus));
+
         auto state = stBegin;
-        auto lines = runProgram(settings.preBuildHook, false, getPreBuildHookArgs());
         auto lastPos = std::string::size_type{0};
         for (auto nlPos = lines.find('\n'); nlPos != std::string::npos; nlPos = lines.find('\n', lastPos)) {
             auto line = lines.substr(lastPos, nlPos - lastPos);
