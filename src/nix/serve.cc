@@ -1,7 +1,7 @@
 #include "nix/cmd/command.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/signals.hh"
-#include "nix/fetchers/git-utils.hh" // for Deleter
+#include "nix/util/deleter.hh"
 #include "nix/store/nar-info.hh"
 
 #include <future>
