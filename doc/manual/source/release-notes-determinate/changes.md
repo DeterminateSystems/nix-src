@@ -182,4 +182,4 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 
 * Determinate Nix can upload crash info to Sentry. [DeterminateSystems/nix-src#418](https://github.com/DeterminateSystems/nix-src/pull/418)
 
-* Determinate Nix provide the pre-build hook with a JSON serialization of the derivation. [DeterminateSystems/nix-src#424](https://github.com/DeterminateSystems/nix-src/pull/424)
+* Determinate Nix provides the pre-build hook with a JSON serialization of the derivation. [DeterminateSystems/nix-src#424](https://github.com/DeterminateSystems/nix-src/pull/424)
