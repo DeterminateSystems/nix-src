@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.17.3.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.18.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -153,42 +153,15 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 
 <!-- Determinate Nix version 3.15.2 -->
 
-* Path inputs are now lazy [DeterminateSystems/nix-src#312](https://github.com/DeterminateSystems/nix-src/pull/312)
-
-* Improved performance when fetching a lot of dependencies with curl [DeterminateSystems/nix-src#315](https://github.com/DeterminateSystems/nix-src/pull/315)
-
 <!-- Determinate Nix version 3.16.0 -->
 
-* Wasm support [DeterminateSystems/nix-src#309](https://github.com/DeterminateSystems/nix-src/pull/309)
+* Determinate Nix has an experimental builtin `builtins.wasm` that allows the Nix language to be extended using any language that compiles to Wasm. [DeterminateSystems/nix-src#309](https://github.com/DeterminateSystems/nix-src/pull/309)
 
-* Fix hung downloads when `http-connections = 0` [DeterminateSystems/nix-src#327](https://github.com/DeterminateSystems/nix-src/pull/327)
+* `builtins.getFlake` supports path values. [DeterminateSystems/nix-src#338](https://github.com/DeterminateSystems/nix-src/pull/338)
 
-* Support .gitattributes in subdirectories [DeterminateSystems/nix-src#335](https://github.com/DeterminateSystems/nix-src/pull/335)
-
-* builtins.getFlake fixes [DeterminateSystems/nix-src#337](https://github.com/DeterminateSystems/nix-src/pull/337)
-
-* builtins.getFlake: Support path values [DeterminateSystems/nix-src#338](https://github.com/DeterminateSystems/nix-src/pull/338)
-
-* Provenance [DeterminateSystems/nix-src#321](https://github.com/DeterminateSystems/nix-src/pull/321)
-
-* Add subcommand 'nix provenance show' [DeterminateSystems/nix-src#340](https://github.com/DeterminateSystems/nix-src/pull/340)
-
-* Increase the open file soft limit to the hard limit [DeterminateSystems/nix-src#347](https://github.com/DeterminateSystems/nix-src/pull/347)
+* Determinate Nix has support for keeping track of the provenance of store paths. [DeterminateSystems/nix-src#321](https://github.com/DeterminateSystems/nix-src/pull/321)
 
 <!-- Determinate Nix version 3.16.1 -->
-
-
-* Record provenance for unlocked inputs and impure evaluations in [DeterminateSystems/nix-src#354](https://github.com/DeterminateSystems/nix-src/pull/354)
-
-* Add setting narinfo-cache-meta-ttl in [DeterminateSystems/nix-src#355](https://github.com/DeterminateSystems/nix-src/pull/355)
-
-* Add derivationWithMeta builtin in [DeterminateSystems/nix-src#357](https://github.com/DeterminateSystems/nix-src/pull/357)
-
-* Add builtins.wasi in [DeterminateSystems/nix-src#359](https://github.com/DeterminateSystems/nix-src/pull/359)
-
-* Add `nix provenance verify` command in [DeterminateSystems/nix-src#356](https://github.com/DeterminateSystems/nix-src/pull/356)
-
-* builtins.hashString: Devirtualize lazy paths, and re-enable lazy trees tests in [DeterminateSystems/nix-src#360](https://github.com/DeterminateSystems/nix-src/pull/360)
 
 <!-- Determinate Nix version 3.16.2 -->
 
@@ -201,10 +174,12 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 
 <!-- Determinate Nix version 3.17.1 -->
 
-* Flake inputs are substituted if possible before fetching from the authoritative source, in [DeterminateSystems/nix-src#380](https://github.com/DeterminateSystems/nix-src/pull/380)
-
-* Provenance now supports additional nix.conf-defined tags, in [DeterminateSystems/nix-src#374](https://github.com/DeterminateSystems/nix-src/pull/374)
-
 <!-- Determinate Nix version 3.17.2 -->
 
 <!-- Determinate Nix version 3.17.3 -->
+
+<!-- Determinate Nix version 3.18.0 -->
+
+* Determinate Nix can upload crash info to Sentry. [DeterminateSystems/nix-src#418](https://github.com/DeterminateSystems/nix-src/pull/418)
+
+* Determinate Nix provides the pre-build hook with a JSON serialization of the derivation. [DeterminateSystems/nix-src#424](https://github.com/DeterminateSystems/nix-src/pull/424)
