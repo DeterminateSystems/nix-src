@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.17.3.<!-- differences -->
+This section lists the differences between upstream Nix 2.33 and Determinate Nix 3.18.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -208,3 +208,19 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 <!-- Determinate Nix version 3.17.2 -->
 
 <!-- Determinate Nix version 3.17.3 -->
+
+<!-- Determinate Nix version 3.18.0 -->
+
+* CI: Do the static build in a separate job by @edolstra in [DeterminateSystems/nix-src#419](https://github.com/DeterminateSystems/nix-src/pull/419)
+
+* Backward compatibility hack for getFlake applied to unsafeDiscardStringContext by @edolstra in [DeterminateSystems/nix-src#422](https://github.com/DeterminateSystems/nix-src/pull/422)
+
+* LocalStore::addToStore(): Show hash mismatches in SRI format by @edolstra in [DeterminateSystems/nix-src#423](https://github.com/DeterminateSystems/nix-src/pull/423)
+
+* Upload crash info to Sentry by @edolstra in [DeterminateSystems/nix-src#418](https://github.com/DeterminateSystems/nix-src/pull/418)
+
+* boost::thread_resource_error improvements by @edolstra in [DeterminateSystems/nix-src#427](https://github.com/DeterminateSystems/nix-src/pull/427)
+
+* getLegacyGitAccessor(): Don't ignore errors by @edolstra in [DeterminateSystems/nix-src#425](https://github.com/DeterminateSystems/nix-src/pull/425)
+
+* Provide the pre-build hook with a JSON serialization of the derivation by @edolstra in [DeterminateSystems/nix-src#424](https://github.com/DeterminateSystems/nix-src/pull/424)
