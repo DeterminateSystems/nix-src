@@ -36,15 +36,16 @@ deps_private += gtest
 gmock = dependency('gmock')
 deps_private += gmock
 
+subdir('nix-meson-build-support/common')
+
 configdata = configuration_data()
 configdata.set_quoted('PACKAGE_VERSION', meson.project_version())
+configdata.set('HAVE_CXA_THROW', have_cxa_throw.to_int())
 
 config_priv_h = configure_file(
   configuration : configdata,
   output : 'util-tests-config.hh',
 )
-
-subdir('nix-meson-build-support/common')
 
 sources = files(
   'alignment.cc',
