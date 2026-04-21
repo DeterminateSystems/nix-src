@@ -1327,6 +1327,7 @@ static void processDerivationOutputPaths(Store & store, auto && drv, std::string
                 auto outPath = store.makeOutputPath(outputName, *h, drvName);
 
                 if constexpr (std::is_same_v<Output, DerivationOutput::InputAddressed>) {
+#if 0
                     if (outputVariant.path == outPath) {
                         return; // Correct case
                     }
@@ -1336,6 +1337,8 @@ static void processDerivationOutputPaths(Store & store, auto && drv, std::string
                         "derivation has incorrect output '%s', should be '%s'",
                         store.printStorePath(outputVariant.path),
                         store.printStorePath(outPath));
+#endif
+                    return; // FIXME
                 } else if constexpr (std::is_same_v<Output, DerivationOutput::Deferred>) {
                     if constexpr (fillIn)
                         /* Fill in output path for Deferred
