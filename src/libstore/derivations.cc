@@ -1540,7 +1540,7 @@ adl_serializer<DerivationOutput>::from_json(const json & _json, const Experiment
     }
 }
 
-void adl_serializer<Derivation>::to_json(json & res, const Derivation & d)
+void adl_serializer<BasicDerivation>::to_json(json & res, const BasicDerivation & d)
 {
     res = nlohmann::json::object();
 
@@ -1566,24 +1566,6 @@ void adl_serializer<Derivation>::to_json(json & res, const Derivation & d)
             for (auto & input : d.inputSrcs)
                 inputsList.emplace_back(input);
         }
-
-        auto doInput = [&](this const auto & doInput, const auto & inputNode) -> nlohmann::json {
-            auto value = nlohmann::json::object();
-            value["outputs"] = inputNode.value;
-            {
-                auto next = nlohmann::json::object();
-                for (auto & [outputId, childNode] : inputNode.childMap)
-                    next[outputId] = doInput(childNode);
-                value["dynamicOutputs"] = std::move(next);
-            }
-            return value;
-        };
-
-        auto & inputDrvsObj = inputsObj["drvs"];
-        inputDrvsObj = nlohmann::json::object();
-        for (auto & [inputDrv, inputNode] : d.inputDrvs.map) {
-            inputDrvsObj[inputDrv.to_string()] = doInput(inputNode);
-        }
     }
 
     res["system"] = d.platform;
@@ -1593,6 +1575,28 @@ void adl_serializer<Derivation>::to_json(json & res, const Derivation & d)
 
     if (d.structuredAttrs)
         res["structuredAttrs"] = d.structuredAttrs->structuredAttrs;
+}
+
+void adl_serializer<Derivation>::to_json(json & res, const Derivation & d)
+{
+    adl_serializer<BasicDerivation>::to_json(res, static_cast<const BasicDerivation &>(d));
+
+    auto doInput = [&](this const auto & doInput, const auto & inputNode) -> nlohmann::json {
+        auto value = nlohmann::json::object();
+        value["outputs"] = inputNode.value;
+        {
+            auto next = nlohmann::json::object();
+            for (auto & [outputId, childNode] : inputNode.childMap)
+                next[outputId] = doInput(childNode);
+            value["dynamicOutputs"] = std::move(next);
+        }
+        return value;
+    };
+
+    auto & inputDrvsObj = res["inputs"]["drvs"];
+    inputDrvsObj = nlohmann::json::object();
+    for (auto & [inputDrv, inputNode] : d.inputDrvs.map)
+        inputDrvsObj[inputDrv.to_string()] = doInput(inputNode);
 }
 
 Derivation adl_serializer<Derivation>::from_json(const json & _json, const ExperimentalFeatureSettings & xpSettings)

@@ -17,8 +17,10 @@ thread_local bool Executor::amWorkerThread{false};
 
 unsigned int Executor::getEvalCores(const EvalSettings & evalSettings)
 {
+    /* Note: the default number of cores is currently limited to 32
+       due to scalability bottlenecks. */
     return evalSettings.evalProfilerMode != EvalProfilerMode::disabled ? 1
-           : evalSettings.evalCores == 0UL                             ? Settings::getDefaultCores()
+           : evalSettings.evalCores == 0UL                             ? std::min(32U, Settings::getDefaultCores())
                                                                        : evalSettings.evalCores;
 }
 
@@ -32,8 +34,16 @@ Executor::Executor(const EvalSettings & evalSettings)
 {
     debug("executor using %d threads", evalCores);
     auto state(state_.lock());
+    // FIXME: create worker threads on demand?
     for (size_t n = 0; n < evalCores; ++n)
-        createWorker(*state);
+        try {
+            createWorker(*state);
+        } catch (boost::thread_resource_error & e) {
+            if (n == 0)
+                throw Error("could not create any evaluator worker threads: %s", e.what());
+            warn("could only create %d evaluator worker threads: %s", n, e.what());
+            break;
+        }
 }
 
 Executor::~Executor()
