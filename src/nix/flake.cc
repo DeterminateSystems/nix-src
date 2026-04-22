@@ -840,38 +840,34 @@ struct CmdFlakeArchive : FlakeCommand, MixJSON, MixDryRun, MixNoCheckSigs
 
 struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
 {
-    bool showLegacy = false;
-    bool showAllSystems = false;
-    bool showOutputPaths = false;
-    bool showDrvPaths = false;
-    bool showDrvNames = false;
+    flake_schemas::FlakeInventoryOptions options;
 
     CmdFlakeShow()
     {
         addFlag({
             .longName = "legacy",
             .description = "Show the contents of the `legacyPackages` output.",
-            .handler = {&showLegacy, true},
+            .handler = {&options.showLegacy, true},
         });
         addFlag({
             .longName = "all-systems",
             .description = "Show the contents of outputs for all systems.",
-            .handler = {&showAllSystems, true},
+            .handler = {&options.showAllSystems, true},
         });
         addFlag({
             .longName = "output-paths",
             .description = "Include the store paths of derivation outputs in the JSON output.",
-            .handler = {&showOutputPaths, true},
+            .handler = {&options.showOutputPaths, true},
         });
         addFlag({
             .longName = "drv-paths",
             .description = "Include the store paths of derivations in the JSON output.",
-            .handler = {&showDrvPaths, true},
+            .handler = {&options.showDrvPaths, true},
         });
         addFlag({
             .longName = "drv-names",
             .description = "Show the names and versions of derivations.",
-            .handler = {&showDrvNames, true},
+            .handler = {&options.showDrvNames, true},
         });
     }
 
@@ -889,115 +885,18 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
 
     void run(nix::ref<nix::Store> store) override
     {
-        if (showOutputPaths && !json)
+        if (options.showOutputPaths && !json)
             throw UsageError("The '--output-paths' flag requires '--json'.");
 
-        if (showDrvPaths && !json)
+        if (options.showDrvPaths && !json)
             throw UsageError("The '--drv-paths' flag requires '--json'.");
 
         auto state = getEvalState();
         auto flake = make_ref<LockedFlake>(lockFlake());
-        auto localSystem = std::string(settings.thisSystem.get());
 
         auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas());
 
-        auto inventory = cache->getRoot()->getAttr("inventory");
-        auto outputs = cache->getRoot()->getAttr("outputs");
-
-        FutureVector futures(*state->executor);
-
-        std::function<void(ref<eval_cache::AttrCursor> node, nlohmann::json & obj)> visit;
-
-        visit = [&](ref<eval_cache::AttrCursor> node, nlohmann::json & obj) {
-            flake_schemas::visit(
-                showAllSystems ? std::optional<std::string>() : localSystem,
-                showLegacy,
-                node,
-                flake->flake.provenance,
-
-                [&](const flake_schemas::Leaf & leaf) {
-                    if (auto what = leaf.what())
-                        obj.emplace("what", *what);
-
-                    if (auto shortDescription = leaf.shortDescription())
-                        obj.emplace("shortDescription", *shortDescription);
-
-                    if (auto drv = leaf.derivation(outputs)) {
-                        auto drvObj = nlohmann::json::object();
-
-                        if (json || showDrvNames)
-                            drvObj.emplace("name", drv->getAttr(state->s.name)->getString());
-
-                        if (showDrvPaths) {
-                            auto drvPath = drv->forceDerivation();
-                            drvObj.emplace("path", store->printStorePath(drvPath));
-                        }
-
-                        if (showOutputPaths) {
-                            auto outputs = nlohmann::json::object();
-                            auto drvPath = drv->forceDerivation();
-                            auto drv = getEvalStore()->derivationFromPath(drvPath);
-                            for (auto & i : drv.outputsAndOptPaths(*store)) {
-                                if (auto outPath = i.second.second)
-                                    outputs.emplace(i.first, store->printStorePath(*outPath));
-                                else
-                                    outputs.emplace(i.first, nullptr);
-                            }
-                            drvObj.emplace("outputs", std::move(outputs));
-                        }
-
-                        obj.emplace("derivation", std::move(drvObj));
-                    }
-
-                    if (auto forSystems = leaf.forSystems())
-                        obj.emplace("forSystems", *forSystems);
-                },
-
-                [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
-                    auto children = nlohmann::json::object();
-                    forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
-                        auto & j = children.emplace(state->symbols[attrName], nlohmann::json::object()).first.value();
-                        state->spawn(futures, 1, [&visit, &j, node]() {
-                            try {
-                                visit(node, j);
-                            } catch (EvalError & e) {
-                                // FIXME: make it a flake schema attribute whether to ignore evaluation errors.
-                                if (node->root->state.symbols[node->getAttrPath()[0]] == "legacyPackages")
-                                    j.emplace("failed", true);
-                                else
-                                    throw;
-                            }
-                        });
-                    });
-                    obj.emplace("children", std::move(children));
-                },
-
-                [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
-                    obj.emplace("filtered", true);
-                },
-
-                [&](ref<eval_cache::AttrCursor> node) { obj.emplace("isLegacy", true); });
-        };
-
-        auto inv = nlohmann::json::object();
-
-        flake_schemas::forEachOutput(
-            inventory,
-            [&](Symbol outputName,
-                std::shared_ptr<eval_cache::AttrCursor> output,
-                const std::string & doc,
-                bool isLast) {
-                auto & j = inv.emplace(state->symbols[outputName], nlohmann::json::object()).first.value();
-
-                if (output) {
-                    j.emplace("doc", doc);
-                    auto & j2 = j.emplace("output", nlohmann::json::object()).first.value();
-                    state->spawn(futures, 1, [&visit, output, &j2]() { visit(ref(output), j2); });
-                } else
-                    j.emplace("unknown", true);
-            });
-
-        futures.finishAll();
+        auto inv = flake_schemas::getFlakeInventory(*state, *getEvalStore(), *flake, cache, options);
 
         if (json) {
             auto res = nlohmann::json{{"version", 2}, {"inventory", std::move(inv)}};
