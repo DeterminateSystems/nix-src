@@ -381,6 +381,15 @@ void mainWrapped(int argc, char ** argv)
 {
     savedArgv = argv;
 
+    /* The chroot helper needs to be run before any threads have been
+       started (including Sentry's worker thread). */
+#ifndef _WIN32
+    if (argc > 0 && argv[0] == chrootHelperName) {
+        chrootHelper(argc, argv);
+        return;
+    }
+#endif
+
     bool sentryEnabled = false;
 
 #if HAVE_SENTRY
@@ -416,15 +425,6 @@ void mainWrapped(int argc, char ** argv)
 
     if (!sentryEnabled)
         registerCrashHandler();
-
-    /* The chroot helper needs to be run before any threads have been
-       started. */
-#ifndef _WIN32
-    if (argc > 0 && argv[0] == chrootHelperName) {
-        chrootHelper(argc, argv);
-        return;
-    }
-#endif
 
     initNix();
     initGC();
