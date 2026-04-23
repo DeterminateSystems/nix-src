@@ -414,6 +414,7 @@ void mainWrapped(int argc, char ** argv)
         sentry_options_set_auto_session_tracking(options, false);
         sentry_options_set_handler_path(options, CRASHPAD_HANDLER_PATH);
         sentry_init(options);
+        sentry_set_tag("nix_command", argc > 0 ? std::string(baseNameOf(argv[0])).c_str() : "");
         sentryEnabled = true;
     }
 
@@ -569,16 +570,17 @@ void mainWrapped(int argc, char ** argv)
 
     printTalkative("Nix %s", version());
 
+    std::vector<std::string> subcommand;
+    MultiCommand * command = &args;
+    while (command) {
+        if (command && command->command) {
+            subcommand.push_back(command->command->first);
+            command = dynamic_cast<MultiCommand *>(&*command->command->second);
+        } else
+            break;
+    }
+
     if (args.helpRequested) {
-        std::vector<std::string> subcommand;
-        MultiCommand * command = &args;
-        while (command) {
-            if (command && command->command) {
-                subcommand.push_back(command->command->first);
-                command = dynamic_cast<MultiCommand *>(&*command->command->second);
-            } else
-                break;
-        }
         showHelp(subcommand, args);
         return;
     }
@@ -614,6 +616,11 @@ void mainWrapped(int argc, char ** argv)
     if (args.command->second->forceImpureByDefault() && !evalSettings.pureEval.overridden) {
         evalSettings.pureEval = false;
     }
+
+#if HAVE_SENTRY
+    if (sentryEnabled)
+        sentry_set_tag("nix_subcommand", concatStringsSep(" ", subcommand).c_str());
+#endif
 
     try {
         args.command->second->run();
