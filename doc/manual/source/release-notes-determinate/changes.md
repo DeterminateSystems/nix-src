@@ -186,12 +186,3 @@ This section lists the differences between upstream Nix 2.33 and Determinate Nix
 
 <!-- Determinate Nix version 3.18.1 -->
 
-* Fix chroot helper with Sentry by @edolstra in [DeterminateSystems/nix-src#433](https://github.com/DeterminateSystems/nix-src/pull/433)
-
-* upload-debug-info-to-sentry.py: Add missing dependencies by @edolstra in [DeterminateSystems/nix-src#434](https://github.com/DeterminateSystems/nix-src/pull/434)
-
-* restoreProcessContext(): Reset Mach exception ports by @edolstra in [DeterminateSystems/nix-src#432](https://github.com/DeterminateSystems/nix-src/pull/432)
-
-* Sync with upstream 2.33.4 by @edolstra in [DeterminateSystems/nix-src#435](https://github.com/DeterminateSystems/nix-src/pull/435)
-
-* sentry: Log the Nix command / subcommand by @edolstra in [DeterminateSystems/nix-src#436](https://github.com/DeterminateSystems/nix-src/pull/436)
