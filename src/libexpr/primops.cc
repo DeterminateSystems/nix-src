@@ -1739,6 +1739,7 @@ static void derivationStrictInternal(
         drv.structuredAttrs = std::move(*jsonObject);
     }
 
+
     /* Everything in the context of the strings in the derivation
        attributes should be added as dependencies of the resulting
        derivation. */
@@ -1875,6 +1876,26 @@ static void derivationStrictInternal(
         }
 
         drv.fillInOutputPaths(*state.store);
+    }
+
+    /* Override output paths for builtin:fetch-closure */
+    if (isImpure && drv.builder == "builtin:fetch-closure" && drv.structuredAttrs) {
+        auto & structuredAttrs = drv.structuredAttrs->structuredAttrs;
+        auto fromPathIt = structuredAttrs.find("fromPath");
+        if (fromPathIt != structuredAttrs.end() && fromPathIt->second.is_string()) {
+            auto toPathIt = structuredAttrs.find("toPath");
+            auto pathStr = (toPathIt != structuredAttrs.end() && toPathIt->second.is_string())
+                ? toPathIt->second.get<std::string>()
+                : fromPathIt->second.get<std::string>();
+
+            auto lastSlash = pathStr.rfind('/');
+            StorePath outputPath(lastSlash != std::string::npos ? pathStr.substr(lastSlash + 1) : pathStr);
+
+            for (auto & [outputName, _] : drv.outputs) {
+                drv.env[outputName] = state.store->printStorePath(outputPath);
+                drv.outputs.insert_or_assign(outputName, DerivationOutput::InputAddressed{.path = outputPath});
+            }
+        }
     }
 
     /* Write the resulting term into the Nix store directory. */
