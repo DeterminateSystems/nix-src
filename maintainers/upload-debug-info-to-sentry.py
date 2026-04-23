@@ -130,7 +130,8 @@ def main():
         for lib in libs:
             build_id = get_build_id(lib)
             if build_id is None:
-                print(f"  {lib} (no build ID)", file=sys.stderr)
+                print(f"  {lib} (no build ID, uploading binary)", file=sys.stderr)
+                debug_files.append(lib)
                 continue
 
             local = find_debug_file_in_dirs(build_id, args.debug_dir)
@@ -141,7 +142,8 @@ def main():
 
             debuginfo = fetch_debuginfo(build_id)
             if debuginfo is None:
-                print(f"  {lib} ({build_id}, no debug info in cache)", file=sys.stderr)
+                print(f"  {lib} ({build_id}): no separate debug info, uploading binary", file=sys.stderr)
+                debug_files.append(lib)
                 continue
             print(f"  {lib} ({build_id}): member={debuginfo['member']}", file=sys.stderr)
             nar_path = download_nar(build_id, debuginfo["archive"])

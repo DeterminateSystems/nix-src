@@ -49,4 +49,6 @@ stdenv.mkDerivation rec {
     "out"
     "dev"
   ];
+
+  separateDebugInfo = true;
 }
