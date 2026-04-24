@@ -101,7 +101,7 @@ nix-sandbox-build symlink-derivation.nix -A test_sandbox_paths \
 # shellcheck disable=SC2016
 expectStderr 1 nix-sandbox-build --option extra-sandbox-paths '/does-not-exist' \
     -E 'with import '"${config_nix}"'; mkDerivation { name = "trivial"; buildCommand = "echo > $out"; }' |
-    grepQuiet "path '/does-not-exist' is configured as part of the \`sandbox-paths\` option, but is inaccessible"
+    grepQuiet "path \"/does-not-exist\" is configured as part of the \`sandbox-paths\` option, but is inaccessible"
 
 # Test pre-build-hook.
 DEST="$TEST_ROOT/hook-output"

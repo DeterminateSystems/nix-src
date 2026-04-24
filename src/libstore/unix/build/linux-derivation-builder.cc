@@ -2,10 +2,13 @@
 
 #  include "store-config-private.hh"
 
+#  include "nix/store/globals.hh"
 #  include "nix/store/personality.hh"
+#  include "nix/store/filetransfer.hh"
 #  include "nix/util/cgroup.hh"
 #  include "nix/util/linux-namespaces.hh"
 #  include "nix/util/logging.hh"
+#  include "nix/util/serialise.hh"
 #  include "linux/fchmodat2-compat.hh"
 
 #  include <algorithm>
@@ -34,9 +37,9 @@
 
 namespace nix {
 
-static void setupSeccomp()
+static void setupSeccomp(const LocalSettings & localSettings)
 {
-    if (!settings.filterSyscalls)
+    if (!localSettings.filterSyscalls)
         return;
 
 #  if HAVE_SECCOMP
@@ -121,7 +124,7 @@ static void setupSeccomp()
         || seccomp_rule_add(ctx, SCMP_ACT_ERRNO(ENOTSUP), SCMP_SYS(fsetxattr), 0) != 0)
         throw SysError("unable to add seccomp rule");
 
-    if (seccomp_attr_set(ctx, SCMP_FLTATR_CTL_NNP, settings.allowNewPrivileges ? 0 : 1) != 0)
+    if (seccomp_attr_set(ctx, SCMP_FLTATR_CTL_NNP, localSettings.allowNewPrivileges ? 0 : 1) != 0)
         throw SysError("unable to set 'no new privileges' seccomp attribute");
 
     if (seccomp_load(ctx) != 0)
@@ -204,13 +207,13 @@ static void setupLandlock()
 
 #  endif
 
-static void doBind(const Path & source, const Path & target, bool optional = false)
+static void doBind(const std::filesystem::path & source, const std::filesystem::path & target, bool optional = false)
 {
-    debug("bind mounting '%1%' to '%2%'", source, target);
+    debug("bind mounting %1% to %2%", PathFmt(source), PathFmt(target));
 
     auto bindMount = [&]() {
         if (mount(source.c_str(), target.c_str(), "", MS_BIND | MS_REC, 0) == -1)
-            throw SysError("bind mount from '%1%' to '%2%' failed", source, target);
+            throw SysError("bind mount from %1% to %2% failed", PathFmt(source), PathFmt(target));
     };
 
     auto maybeSt = maybeLstat(source);
@@ -218,7 +221,7 @@ static void doBind(const Path & source, const Path & target, bool optional = fal
         if (optional)
             return;
         else
-            throw SysError("getting attributes of path '%1%'", source);
+            throw SysError("getting attributes of path %1%", PathFmt(source));
     }
     auto st = *maybeSt;
 
@@ -227,10 +230,10 @@ static void doBind(const Path & source, const Path & target, bool optional = fal
         bindMount();
     } else if (S_ISLNK(st.st_mode)) {
         // Symlinks can (apparently) not be bind-mounted, so just copy it
-        createDirs(dirOf(target));
-        copyFile(std::filesystem::path(source), std::filesystem::path(target), false);
+        createDirs(target.parent_path());
+        copyFile(source, target, false);
     } else {
-        createDirs(dirOf(target));
+        createDirs(target.parent_path());
         writeFile(target, "");
         bindMount();
     }
@@ -242,14 +245,16 @@ struct LinuxDerivationBuilder : virtual DerivationBuilderImpl
 
     void enterChroot() override
     {
+        auto & localSettings = store.config->getLocalSettings();
+
         /* Set the NO_NEW_PRIVS before doing seccomp/landlock setup.
            landlock_restrict_self requires either NO_NEW_PRIVS or CAP_SYS_ADMIN.
            With user namespaces we do get CAP_SYS_ADMIN. */
-        if (!settings.allowNewPrivileges)
+        if (!localSettings.allowNewPrivileges)
             if (::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1)
                 throw SysError("failed to set PR_SET_NO_NEW_PRIVS");
 
-        setupSeccomp();
+        setupSeccomp(localSettings);
 
 #  if DO_LANDLOCK
         try {
@@ -263,9 +268,14 @@ struct LinuxDerivationBuilder : virtual DerivationBuilderImpl
         }
 #  endif
 
-        linux::setPersonality(drv.platform);
+        linux::setPersonality({
+            .system = drv.platform,
+            .impersonateLinux26 = localSettings.impersonateLinux26,
+        });
     }
 };
+
+static const std::filesystem::path procPath = "/proc";
 
 struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBuilder
 {
@@ -290,7 +300,7 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
     /**
      * The cgroup of the builder, if any.
      */
-    std::optional<Path> cgroup;
+    std::optional<std::filesystem::path> cgroup;
 
     ChrootLinuxDerivationBuilder(
         LocalStore & store, std::unique_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
@@ -313,47 +323,48 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
 
     std::unique_ptr<UserLock> getBuildUser() override
     {
-        return acquireUserLock(drvOptions.useUidRange(drv) ? 65536 : 1, true);
+        return acquireUserLock(
+            settings.nixStateDir, store.config->getLocalSettings(), drvOptions.useUidRange(drv) ? 65536 : 1, true);
     }
 
     void prepareUser() override
     {
-        if ((buildUser && buildUser->getUIDCount() != 1) || settings.useCgroups) {
+        if ((buildUser && buildUser->getUIDCount() != 1) || store.config->getLocalSettings().useCgroups) {
             experimentalFeatureSettings.require(Xp::Cgroups);
 
             /* If we're running from the daemon, then this will return the
                root cgroup of the service. Otherwise, it will return the
                current cgroup. */
-            auto rootCgroup = getRootCgroup();
             auto cgroupFS = getCgroupFS();
             if (!cgroupFS)
                 throw Error("cannot determine the cgroups file system");
-            auto rootCgroupPath = canonPath(*cgroupFS + "/" + rootCgroup);
+            auto rootCgroupPath = *cgroupFS / getRootCgroup().rel();
             if (!pathExists(rootCgroupPath))
-                throw Error("expected cgroup directory '%s'", rootCgroupPath);
+                throw Error("expected cgroup directory %s", PathFmt(rootCgroupPath));
 
             static std::atomic<unsigned int> counter{0};
 
-            cgroup = buildUser ? fmt("%s/nix-build-uid-%d", rootCgroupPath, buildUser->getUID())
-                               : fmt("%s/nix-build-pid-%d-%d", rootCgroupPath, getpid(), counter++);
+            cgroup = rootCgroupPath
+                     / (buildUser ? fmt("nix-build-uid-%d", buildUser->getUID())
+                                  : fmt("nix-build-pid-%d-%d", getpid(), counter++));
 
-            debug("using cgroup '%s'", *cgroup);
+            debug("using cgroup %s", PathFmt(*cgroup));
 
             /* When using a build user, record the cgroup we used for that
                user so that if we got interrupted previously, we can kill
                any left-over cgroup first. */
             if (buildUser) {
-                auto cgroupsDir = settings.nixStateDir + "/cgroups";
+                auto cgroupsDir = std::filesystem::path{settings.nixStateDir} / "cgroups";
                 createDirs(cgroupsDir);
 
-                auto cgroupFile = fmt("%s/%d", cgroupsDir, buildUser->getUID());
+                auto cgroupFile = cgroupsDir / std::to_string(buildUser->getUID());
 
                 if (pathExists(cgroupFile)) {
                     auto prevCgroup = readFile(cgroupFile);
                     destroyCgroup(prevCgroup);
                 }
 
-                writeFile(cgroupFile, *cgroup);
+                writeFile(cgroupFile, cgroup->native());
             }
         }
 
@@ -367,11 +378,11 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
 
         if (cgroup) {
             if (mkdir(cgroup->c_str(), 0755) != 0)
-                throw SysError("creating cgroup '%s'", *cgroup);
+                throw SysError("creating cgroup %s", PathFmt(*cgroup));
             chownToBuilder(*cgroup);
-            chownToBuilder(*cgroup + "/cgroup.procs");
-            chownToBuilder(*cgroup + "/cgroup.threads");
-            // chownToBuilder(*cgroup + "/cgroup.subtree_control");
+            chownToBuilder(*cgroup / "cgroup.procs");
+            chownToBuilder(*cgroup / "cgroup.threads");
+            // chownToBuilder(*cgroup / "cgroup.subtree_control");
         }
     }
 
@@ -438,7 +449,7 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
                 if (setgroups(0, 0) == -1) {
                     if (errno != EPERM)
                         throw SysError("setgroups failed");
-                    if (settings.requireDropSupplementaryGroups)
+                    if (store.config->getLocalSettings().requireDropSupplementaryGroups)
                         throw Error(
                             "setgroups failed. Set the require-drop-supplementary-groups option to false to skip this step.");
                 }
@@ -462,10 +473,10 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
 
         sendPid.writeSide.close();
 
-        if (helper.wait() != 0) {
+        if (auto status = helper.wait(); !statusOk(status)) {
             processSandboxSetupMessages();
             // Only reached if the child process didn't send an exception.
-            throw Error("unable to start build process");
+            throw Error("unable to start build process: %s", statusToString(status));
         }
 
         userNamespaceSync.readSide = -1;
@@ -486,9 +497,11 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
             userNamespaceSync.writeSide = -1;
         });
 
-        auto ss = tokenizeString<std::vector<std::string>>(readLine(sendPid.readSide.get()));
+        FdSource sendPidSource(sendPid.readSide.get());
+        auto ss = tokenizeString<std::vector<std::string>>(sendPidSource.readLine());
         assert(ss.size() == 1);
         pid = string2Int<pid_t>(ss[0]).value();
+        auto thisProcPath = procPath / std::to_string(static_cast<pid_t>(pid));
 
         if (usingUserNamespace) {
             /* Set the UID/GID mapping of the builder's user namespace
@@ -498,12 +511,12 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
             uid_t hostGid = buildUser ? buildUser->getGID() : getgid();
             uid_t nrIds = buildUser ? buildUser->getUIDCount() : 1;
 
-            writeFile("/proc/" + std::to_string(pid) + "/uid_map", fmt("%d %d %d", sandboxUid(), hostUid, nrIds));
+            writeFile(thisProcPath / "uid_map", fmt("%d %d %d", sandboxUid(), hostUid, nrIds));
 
             if (!buildUser || buildUser->getUIDCount() == 1)
-                writeFile("/proc/" + std::to_string(pid) + "/setgroups", "deny");
+                writeFile(thisProcPath / "setgroups", "deny");
 
-            writeFile("/proc/" + std::to_string(pid) + "/gid_map", fmt("%d %d %d", sandboxGid(), hostGid, nrIds));
+            writeFile(thisProcPath / "gid_map", fmt("%d %d %d", sandboxGid(), hostGid, nrIds));
         } else {
             debug("note: not using a user namespace");
             if (!buildUser)
@@ -511,32 +524,40 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
                     "cannot perform a sandboxed build because user namespaces are not enabled; check /proc/sys/user/max_user_namespaces");
         }
 
-        /* Now that we now the sandbox uid, we can write
-           /etc/passwd. */
+        /* Now that we know the sandbox uid/gid, we can write
+           /etc/passwd and /etc/group. */
         writeFile(
-            chrootRootDir + "/etc/passwd",
+            chrootRootDir / "etc" / "passwd",
             fmt("root:x:0:0:Nix build user:%3%:/noshell\n"
                 "nixbld:x:%1%:%2%:Nix build user:%3%:/noshell\n"
                 "nobody:x:65534:65534:Nobody:/:/noshell\n",
                 sandboxUid(),
                 sandboxGid(),
-                settings.sandboxBuildDir));
+                store.config->getLocalSettings().sandboxBuildDir.get().native()));
+
+        writeFile(
+            chrootRootDir / "etc" / "group",
+            fmt("root:x:0:\n"
+                "nixbld:!:%1%:\n"
+                "nogroup:x:65534:\n",
+                sandboxGid()));
 
         /* Save the mount- and user namespace of the child. We have to do this
          *before* the child does a chroot. */
-        sandboxMountNamespace = open(fmt("/proc/%d/ns/mnt", (pid_t) pid).c_str(), O_RDONLY);
+        auto sandboxPath = thisProcPath / "ns";
+        sandboxMountNamespace = open((sandboxPath / "mnt").c_str(), O_RDONLY);
         if (sandboxMountNamespace.get() == -1)
             throw SysError("getting sandbox mount namespace");
 
         if (usingUserNamespace) {
-            sandboxUserNamespace = open(fmt("/proc/%d/ns/user", (pid_t) pid).c_str(), O_RDONLY);
+            sandboxUserNamespace = open((sandboxPath / "user").c_str(), O_RDONLY);
             if (sandboxUserNamespace.get() == -1)
                 throw SysError("getting sandbox user namespace");
         }
 
         /* Move the child into its own cgroup. */
         if (cgroup)
-            writeFile(*cgroup + "/cgroup.procs", fmt("%d", (pid_t) pid));
+            writeFile(*cgroup / "cgroup.procs", fmt("%d", (pid_t) pid));
 
         /* Signal the builder that we've updated its user namespace. */
         writeFull(userNamespaceSync.writeSide.get(), "1\n");
@@ -588,7 +609,7 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
         /* Bind-mount chroot directory to itself, to treat it as a
            different filesystem from /, as needed for pivot_root. */
         if (mount(chrootRootDir.c_str(), chrootRootDir.c_str(), 0, MS_BIND, 0) == -1)
-            throw SysError("unable to bind mount '%1%'", chrootRootDir);
+            throw SysError("unable to bind mount %1%", PathFmt(chrootRootDir));
 
         /* Bind-mount the sandbox's Nix store onto itself so that
            we can mark it as a "shared" subtree, allowing bind
@@ -598,20 +619,20 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
 
            Marking chrootRootDir as MS_SHARED causes pivot_root()
            to fail with EINVAL. Don't know why. */
-        Path chrootStoreDir = chrootRootDir + store.storeDir;
+        std::filesystem::path chrootStoreDir = chrootRootDir / std::filesystem::path(store.storeDir).relative_path();
 
         if (mount(chrootStoreDir.c_str(), chrootStoreDir.c_str(), 0, MS_BIND, 0) == -1)
-            throw SysError("unable to bind mount the Nix store", chrootStoreDir);
+            throw SysError("unable to bind mount the Nix store at %1%", PathFmt(chrootStoreDir));
 
         if (mount(0, chrootStoreDir.c_str(), 0, MS_SHARED, 0) == -1)
-            throw SysError("unable to make '%s' shared", chrootStoreDir);
+            throw SysError("unable to make %s shared", PathFmt(chrootStoreDir));
 
         /* Set up a nearly empty /dev, unless the user asked to
            bind-mount the host /dev. */
         Strings ss;
         if (pathsInChroot.find("/dev") == pathsInChroot.end()) {
-            createDirs(chrootRootDir + "/dev/shm");
-            createDirs(chrootRootDir + "/dev/pts");
+            createDirs(chrootRootDir / "dev" / "shm");
+            createDirs(chrootRootDir / "dev" / "pts");
             ss.push_back("/dev/full");
             if (systemFeatures.count("kvm")) {
                 if (pathExists("/dev/kvm")) {
@@ -628,10 +649,10 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
             ss.push_back("/dev/tty");
             ss.push_back("/dev/urandom");
             ss.push_back("/dev/zero");
-            createSymlink("/proc/self/fd", chrootRootDir + "/dev/fd");
-            createSymlink("/proc/self/fd/0", chrootRootDir + "/dev/stdin");
-            createSymlink("/proc/self/fd/1", chrootRootDir + "/dev/stdout");
-            createSymlink("/proc/self/fd/2", chrootRootDir + "/dev/stderr");
+            createSymlink("/proc/self/fd", chrootRootDir / "dev" / "fd");
+            createSymlink("/proc/self/fd/0", chrootRootDir / "dev" / "stdin");
+            createSymlink("/proc/self/fd/1", chrootRootDir / "dev" / "stdout");
+            createSymlink("/proc/self/fd/2", chrootRootDir / "dev" / "stderr");
         }
 
         /* Fixed-output derivations typically need to access the
@@ -642,7 +663,7 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
             // services. Don’t use it for anything else that may
             // be configured for this system. This limits the
             // potential impurities introduced in fixed-outputs.
-            writeFile(chrootRootDir + "/etc/nsswitch.conf", "hosts: files dns\nservices: files\n");
+            writeFile(chrootRootDir / "etc" / "nsswitch.conf", "hosts: files dns\nservices: files\n");
 
             /* N.B. it is realistic that these paths might not exist. It
                happens when testing Nix building fixed-output derivations
@@ -651,10 +672,10 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
                 if (pathExists(path))
                     ss.push_back(path);
 
-            if (settings.caFile != "") {
-                Path caFile = settings.caFile;
-                if (pathExists(caFile))
-                    pathsInChroot.try_emplace("/etc/ssl/certs/ca-certificates.crt", canonPath(caFile, true), true);
+            if (auto & caFile = fileTransferSettings.caFile.get()) {
+                if (pathExists(*caFile))
+                    pathsInChroot.try_emplace(
+                        "/etc/ssl/certs/ca-certificates.crt", canonPath(caFile->native(), true), true);
             }
         }
 
@@ -677,26 +698,26 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
                 static unsigned char sh[] = {
 #    include "embedded-sandbox-shell.gen.hh"
                 };
-                auto dst = chrootRootDir + i.first;
-                createDirs(dirOf(dst));
+                auto dst = chrootRootDir / i.first.relative_path();
+                createDirs(dst.parent_path());
                 writeFile(dst, std::string_view((const char *) sh, sizeof(sh)));
-                chmod_(dst, 0555);
+                chmod(dst, 0555);
             } else
 #  endif
             {
-                doBind(i.second.source, chrootRootDir + i.first, i.second.optional);
+                doBind(i.second.source, chrootRootDir / i.first.relative_path(), i.second.optional);
             }
         }
 
         /* Bind a new instance of procfs on /proc. */
-        createDirs(chrootRootDir + "/proc");
-        if (mount("none", (chrootRootDir + "/proc").c_str(), "proc", 0, 0) == -1)
+        createDirs(chrootRootDir / "proc");
+        if (mount("none", (chrootRootDir / "proc").c_str(), "proc", 0, 0) == -1)
             throw SysError("mounting /proc");
 
         /* Mount sysfs on /sys. */
         if (buildUser && buildUser->getUIDCount() != 1) {
-            createDirs(chrootRootDir + "/sys");
-            if (mount("none", (chrootRootDir + "/sys").c_str(), "sysfs", 0, 0) == -1)
+            createDirs(chrootRootDir / "sys");
+            if (mount("none", (chrootRootDir / "sys").c_str(), "sysfs", 0, 0) == -1)
                 throw SysError("mounting /sys");
         }
 
@@ -705,10 +726,10 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
         if (pathExists("/dev/shm")
             && mount(
                    "none",
-                   (chrootRootDir + "/dev/shm").c_str(),
+                   (chrootRootDir / "dev" / "shm").c_str(),
                    "tmpfs",
                    0,
-                   fmt("size=%s", settings.sandboxShmSize).c_str())
+                   fmt("size=%s", store.config->getLocalSettings().sandboxShmSize).c_str())
                    == -1)
             throw SysError("mounting /dev/shm");
 
@@ -716,25 +737,25 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
            requires the kernel to be compiled with
            CONFIG_DEVPTS_MULTIPLE_INSTANCES=y (which is the case
            if /dev/ptx/ptmx exists). */
-        if (pathExists("/dev/pts/ptmx") && !pathExists(chrootRootDir + "/dev/ptmx")
+        if (pathExists("/dev/pts/ptmx") && !pathExists(chrootRootDir / "dev" / "ptmx")
             && !pathsInChroot.count("/dev/pts")) {
-            if (mount("none", (chrootRootDir + "/dev/pts").c_str(), "devpts", 0, "newinstance,mode=0620") == 0) {
-                createSymlink("/dev/pts/ptmx", chrootRootDir + "/dev/ptmx");
+            if (mount("none", (chrootRootDir / "dev" / "pts").c_str(), "devpts", 0, "newinstance,mode=0620") == 0) {
+                createSymlink("/dev/pts/ptmx", chrootRootDir / "dev" / "ptmx");
 
                 /* Make sure /dev/pts/ptmx is world-writable.  With some
                    Linux versions, it is created with permissions 0.  */
-                chmod_(chrootRootDir + "/dev/pts/ptmx", 0666);
+                chmod(chrootRootDir / "dev" / "pts" / "ptmx", 0666);
             } else {
                 if (errno != EINVAL)
                     throw SysError("mounting /dev/pts");
-                doBind("/dev/pts", chrootRootDir + "/dev/pts");
-                doBind("/dev/ptmx", chrootRootDir + "/dev/ptmx");
+                doBind("/dev/pts", chrootRootDir / "dev" / "pts");
+                doBind("/dev/ptmx", chrootRootDir / "dev" / "ptmx");
             }
         }
 
         /* Make /etc unwritable */
         if (!drvOptions.useUidRange(drv))
-            chmod_(chrootRootDir + "/etc", 0555);
+            chmod(chrootRootDir / "etc", 0555);
 
         /* Unshare this mount namespace. This is necessary because
            pivot_root() below changes the root of the mount
@@ -757,16 +778,16 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
 
         /* Do the chroot(). */
         if (chdir(chrootRootDir.c_str()) == -1)
-            throw SysError("cannot change directory to '%1%'", chrootRootDir);
+            throw SysError("cannot change directory to %1%", PathFmt(chrootRootDir));
 
         if (mkdir("real-root", 0500) == -1)
             throw SysError("cannot create real-root directory");
 
         if (pivot_root(".", "real-root") == -1)
-            throw SysError("cannot pivot old root directory onto '%1%'", (chrootRootDir + "/real-root"));
+            throw SysError("cannot pivot old root directory onto %1%", PathFmt(chrootRootDir / "real-root"));
 
         if (chroot(".") == -1)
-            throw SysError("cannot change root directory to '%1%'", chrootRootDir);
+            throw SysError("cannot change root directory to %1%", PathFmt(chrootRootDir));
 
         if (umount2("real-root", MNT_DETACH) == -1)
             throw SysError("cannot unmount real root filesystem");
@@ -779,13 +800,15 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
 
     void setUser() override
     {
-        /* Switch to the sandbox uid/gid in the user namespace,
-           which corresponds to the build user or calling user in
-           the parent namespace. */
-        if (setgid(sandboxGid()) == -1)
-            throw SysError("setgid failed");
-        if (setuid(sandboxUid()) == -1)
-            throw SysError("setuid failed");
+        preserveDeathSignal([this]() {
+            /* Switch to the sandbox uid/gid in the user namespace,
+               which corresponds to the build user or calling user in
+               the parent namespace. */
+            if (setgid(sandboxGid()) == -1)
+                throw SysError("setgid failed");
+            if (setuid(sandboxUid()) == -1)
+                throw SysError("setuid failed");
+        });
     }
 
     SingleDrvOutputs unprepareBuild() override
@@ -822,10 +845,10 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
            in multithreaded programs. So we do this in a
            child process.*/
         Pid child(startProcess([&]() {
-            if (usingUserNamespace && (setns(sandboxUserNamespace.get(), 0) == -1))
+            if (usingUserNamespace && (setns(sandboxUserNamespace.get(), CLONE_NEWUSER) == -1))
                 throw SysError("entering sandbox user namespace");
 
-            if (setns(sandboxMountNamespace.get(), 0) == -1)
+            if (setns(sandboxMountNamespace.get(), CLONE_NEWNS) == -1)
                 throw SysError("entering sandbox mount namespace");
 
             doBind(source, target);
@@ -834,8 +857,8 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
         }));
 
         int status = child.wait();
-        if (status != 0)
-            throw Error("could not add path '%s' to sandbox", store.printStorePath(path));
+        if (!statusOk(status))
+            throw Error("could not add path '%s' to sandbox: %s", store.printStorePath(path), statusToString(status));
     }
 
     ActiveBuild getActiveBuild() override

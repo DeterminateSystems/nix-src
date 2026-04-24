@@ -21,8 +21,8 @@ error:
             8|       x ? y,
 
        error: infinite recursion encountered
-       at /pwd/lang/eval-fail-scope-5.nix:13:3:
+       at /pwd/lang/eval-fail-scope-5.nix:11:5:
+           10|     }:
+           11|     x + y;
+             |     ^
            12|
-           13|   body = f { };
-             |   ^
-           14|

@@ -33,15 +33,19 @@ deps_private += rapidcheck
 gtest = dependency('gtest', main : true)
 deps_private += gtest
 
+gmock = dependency('gmock')
+deps_private += gmock
+
+subdir('nix-meson-build-support/common')
+
 configdata = configuration_data()
 configdata.set_quoted('PACKAGE_VERSION', meson.project_version())
+configdata.set('HAVE_CXA_THROW', have_cxa_throw.to_int())
 
 config_priv_h = configure_file(
   configuration : configdata,
   output : 'util-tests-config.hh',
 )
-
-subdir('nix-meson-build-support/common')
 
 sources = files(
   'alignment.cc',
@@ -56,7 +60,10 @@ sources = files(
   'config.cc',
   'executable-path.cc',
   'file-content-address.cc',
+  'file-descriptor.cc',
+  'file-system-at.cc',
   'file-system.cc',
+  'fun.cc',
   'git.cc',
   'hash.cc',
   'hilite.cc',
@@ -71,7 +78,10 @@ sources = files(
   'pool.cc',
   'position.cc',
   'processes.cc',
+  'ref.cc',
+  'serialise.cc',
   'sort.cc',
+  'source-accessor.cc',
   'spawn.cc',
   'strings.cc',
   'suggestions.cc',
@@ -84,6 +94,10 @@ sources = files(
 
 if have_cxa_throw
   sources += files('cxa-throw.cc')
+endif
+
+if host_machine.system() != 'windows'
+  subdir('unix')
 endif
 
 include_dirs = [ include_directories('.') ]

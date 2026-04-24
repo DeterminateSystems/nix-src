@@ -107,7 +107,7 @@ bool BasicDerivation::isBuiltin() const
     return builder.substr(0, 8) == "builtin:";
 }
 
-static auto infoForDerivation(Store & store, const Derivation & drv)
+static auto infoForDerivation(const StoreDirConfig & store, const Derivation & drv)
 {
     auto references = drv.inputSrcs;
     for (auto & i : drv.inputDrvs.map)
@@ -127,18 +127,10 @@ static auto infoForDerivation(Store & store, const Derivation & drv)
     };
 }
 
-StorePath writeDerivation(
-    Store & store,
-    const Derivation & drv,
-    RepairFlag repair,
-    bool readOnly,
-    std::shared_ptr<const Provenance> provenance)
+StorePath computeStorePath(const StoreDirConfig & store, const Derivation & drv)
 {
-    if (readOnly || settings.readOnlyMode) {
-        auto [_x, _y, _z, path] = infoForDerivation(store, drv);
-        return path;
-    } else
-        return store.writeDerivation(drv, repair, provenance);
+    auto [_suffix, _contents, _references, path] = infoForDerivation(store, drv);
+    return path;
 }
 
 StorePath
@@ -170,24 +162,17 @@ Store::writeDerivation(const Derivation & drv, RepairFlag repair, std::shared_pt
     return path;
 }
 
-StorePath writeDerivation(
-    Store & store,
+StorePath Store::writeDerivation(
     AsyncPathWriter & asyncPathWriter,
     const Derivation & drv,
     RepairFlag repair,
-    bool readOnly,
     std::shared_ptr<const Provenance> provenance)
 {
     auto references = drv.inputSrcs;
     for (auto & i : drv.inputDrvs.map)
         references.insert(i.first);
     return asyncPathWriter.addPath(
-        drv.unparse(store, false),
-        std::string(drv.name) + drvExtension,
-        references,
-        repair,
-        readOnly || settings.readOnlyMode,
-        provenance);
+        drv.unparse(*this, false), std::string(drv.name) + drvExtension, references, repair, provenance);
 }
 
 namespace {
@@ -557,7 +542,6 @@ Derivation parseDerivation(
  */
 static void printString(std::string & res, std::string_view s)
 {
-    res.reserve(res.size() + s.size() * 2 + 2);
     res += '"';
     static constexpr auto chunkSize = 1024;
     std::array<char, 2 * chunkSize + 2> buffer;
@@ -1154,6 +1138,39 @@ static void rewriteDerivation(Store & store, BasicDerivation & drv, const String
     }
 }
 
+bool Derivation::shouldResolve() const
+{
+    /* No input drvs means nothing to resolve. */
+    if (inputDrvs.map.empty())
+        return false;
+
+    auto drvType = type();
+
+    bool typeNeedsResolve = std::visit(
+        overloaded{
+            [&](const DerivationType::InputAddressed & ia) {
+                /* Must resolve if deferred. */
+                return ia.deferred;
+            },
+            [&](const DerivationType::ContentAddressed & ca) {
+                return ca.fixed
+                           /* Can optionally resolve if fixed, which is good
+                              for avoiding unnecessary rebuilds. */
+                           ? experimentalFeatureSettings.isEnabled(Xp::CaDerivations)
+                           /* Must resolve if floating. */
+                           : true;
+            },
+            [&](const DerivationType::Impure &) { return true; },
+        },
+        drvType.raw);
+
+    /* Also need to resolve if any inputs are outputs of dynamic derivations. */
+    bool hasDynamicInputs = std::ranges::any_of(
+        inputDrvs.map.begin(), inputDrvs.map.end(), [](auto & pair) { return !pair.second.childMap.empty(); });
+
+    return typeNeedsResolve || hasDynamicInputs;
+}
+
 std::optional<BasicDerivation> Derivation::tryResolve(Store & store, Store * evalStore) const
 {
     return tryResolve(
@@ -1173,7 +1190,7 @@ static bool tryResolveInput(
     const DownstreamPlaceholder * placeholderOpt,
     ref<const SingleDerivedPath> drvPath,
     const DerivedPathMap<StringSet>::ChildNode & inputNode,
-    std::function<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
+    fun<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
         queryResolutionChain)
 {
     auto getPlaceholder = [&](const std::string & outputName) {
@@ -1213,7 +1230,7 @@ static bool tryResolveInput(
 
 std::optional<BasicDerivation> Derivation::tryResolve(
     Store & store,
-    std::function<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
+    fun<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
         queryResolutionChain) const
 {
     BasicDerivation resolved{*this};

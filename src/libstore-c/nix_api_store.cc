@@ -9,6 +9,7 @@
 #include "nix/store/path.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/store-open.hh"
+#include "nix/store/store-reference.hh"
 #include "nix/store/build-result.hh"
 #include "nix/store/local-fs-store.hh"
 #include "nix/util/base-nix-32.hh"
@@ -47,14 +48,14 @@ Store * nix_store_open(nix_c_context * context, const char * uri, const char ***
         if (uri_str.empty())
             return new Store{nix::openStore()};
 
-        if (!params)
-            return new Store{nix::openStore(uri_str)};
+        auto storeRef = nix::StoreReference::parse(uri_str);
 
-        nix::Store::Config::Params params_map;
-        for (size_t i = 0; params[i] != nullptr; i++) {
-            params_map[params[i][0]] = params[i][1];
+        if (params) {
+            for (size_t i = 0; params[i] != nullptr; i++) {
+                storeRef.params[params[i][0]] = params[i][1];
+            }
         }
-        return new Store{nix::openStore(uri_str, params_map)};
+        return new Store{nix::openStore(std::move(storeRef))};
     }
     NIXC_CATCH_ERRS_NULL
 }
@@ -115,7 +116,7 @@ nix_err nix_store_real_path(
         context->last_err_code = NIX_OK;
     try {
         auto store2 = store->ptr.dynamic_pointer_cast<nix::LocalFSStore>();
-        auto res = store2 ? store2->toRealPath(path->path) : store->ptr->printStorePath(path->path);
+        auto res = store2 ? store2->toRealPath(path->path).string() : store->ptr->printStorePath(path->path);
         return call_nix_get_string_callback(res, callback, user_data);
     }
     NIXC_CATCH_ERRS
@@ -182,10 +183,8 @@ nix_err nix_store_realise(
         assert(results.size() == 1);
 
         // Check if any builds failed
-        for (auto & result : results) {
-            if (auto * failureP = result.tryGetFailure())
-                failureP->rethrow();
-        }
+        for (auto & result : results)
+            result.tryThrowBuildError();
 
         if (callback) {
             for (const auto & result : results) {
@@ -301,14 +300,12 @@ nix_err nix_derivation_make_outputs(
         context->last_err_code = NIX_OK;
     try {
         auto drv = nix::Derivation::parseJsonAndValidate(*store->ptr, nlohmann::json::parse(json));
-        auto hashesModulo = hashDerivationModulo(*store->ptr, drv, true);
 
         for (auto & output : drv.outputs) {
-            nix::Hash h = hashesModulo.hashes.at(output.first);
-            auto outPath = store->ptr->makeOutputPath(output.first, h, drv.name);
+            auto outPath = output.second.path(*store->ptr, drv.name, output.first);
 
-            if (callback) {
-                callback(userdata, output.first.c_str(), store->ptr->printStorePath(outPath).c_str());
+            if (callback && outPath) {
+                callback(userdata, output.first.c_str(), store->ptr->printStorePath(*outPath).c_str());
             }
         }
     }
@@ -334,7 +331,12 @@ StorePath * nix_add_derivation(nix_c_context * context, Store * store, nix_deriv
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        auto ret = nix::writeDerivation(*store->ptr, derivation->drv, nix::NoRepair);
+        /* Quite dubious that users would want this to silently suceed
+           without actually writing the derivation if this setting is
+           set, but it was that way already, so we are doing this for
+           back-compat for now. */
+        auto ret = nix::settings.readOnlyMode ? nix::computeStorePath(*store->ptr, derivation->drv)
+                                              : store->ptr->writeDerivation(derivation->drv, nix::NoRepair);
 
         return new StorePath{ret};
     }

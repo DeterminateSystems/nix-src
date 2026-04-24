@@ -1,7 +1,9 @@
 #include "nix/store/globals.hh"
 #include "nix/util/current-process.hh"
+#include "nix/util/executable-path.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/store-open.hh"
 #include "nix/store/gc-store.hh"
 #include "nix/main/loggers.hh"
 #include "nix/main/progress-bar.hh"
@@ -15,9 +17,12 @@
 #include <cstdlib>
 #include <sys/time.h>
 #include <sys/stat.h>
-#include <sys/resource.h>
 #include <unistd.h>
 #include <signal.h>
+
+#ifndef _WIN32
+#  include <sys/resource.h>
+#endif
 #ifdef __linux__
 #  include <features.h>
 #endif
@@ -130,7 +135,14 @@ void bumpFileLimit()
         return;
 
     if (limit.rlim_cur < limit.rlim_max) {
-        limit.rlim_cur = limit.rlim_max;
+        // Some software misbehaves really bad when we try to raise the
+        // limit to RLIM_INFINITY, so cap the limit at the 1048576 limit used
+        // by the daemon.
+        //
+        // GNU patch < 2.8 crashes with **** out of memory, which breaks in nixpkgs darwin bootstrap tools.
+        // This was fixed in:
+        // https://cgit.git.savannah.gnu.org/cgit/patch.git/commit/?id=61d7788b83b302207a67b82786f4fd79e3538f30
+        limit.rlim_cur = std::min(limit.rlim_max, rlim_t(1048576));
         // Ignore errors, this is best effort.
         setrlimit(RLIMIT_NOFILE, &limit);
     }
@@ -209,8 +221,7 @@ void initNix(bool loadConfig)
 }
 
 LegacyArgs::LegacyArgs(
-    const std::string & programName,
-    std::function<bool(Strings::iterator & arg, const Strings::iterator & end)> parseArg)
+    const std::string & programName, fun<bool(Strings::iterator & arg, const Strings::iterator & end)> parseArg)
     : MixCommonArgs(programName)
     , parseArg(parseArg)
 {
@@ -232,13 +243,13 @@ LegacyArgs::LegacyArgs(
         .longName = "keep-going",
         .shortName = 'k',
         .description = "Keep going after a build fails.",
-        .handler = {&(bool &) settings.keepGoing, true},
+        .handler = {&(bool &) settings.getWorkerSettings().keepGoing, true},
     });
 
     addFlag({
         .longName = "fallback",
         .description = "Build from source if substitution fails.",
-        .handler = {&(bool &) settings.tryFallback, true},
+        .handler = {&(bool &) settings.getWorkerSettings().tryFallback, true},
     });
 
     auto intSettingAlias =
@@ -275,7 +286,7 @@ LegacyArgs::LegacyArgs(
         .longName = "store",
         .description = "The URL of the Nix store to use.",
         .labels = {"store-uri"},
-        .handler = {&(std::string &) settings.storeUri},
+        .handler = {[](std::string s) { settings.storeUri = StoreReference::parse(s); }},
     });
 }
 
@@ -301,8 +312,7 @@ bool LegacyArgs::processArgs(const Strings & args, bool finish)
     return true;
 }
 
-void parseCmdLine(
-    int argc, char ** argv, std::function<bool(Strings::iterator & arg, const Strings::iterator & end)> parseArg)
+void parseCmdLine(int argc, char ** argv, fun<bool(Strings::iterator & arg, const Strings::iterator & end)> parseArg)
 {
     parseCmdLine(std::string(baseNameOf(argv[0])), argvToStrings(argc, argv), parseArg);
 }
@@ -310,7 +320,7 @@ void parseCmdLine(
 void parseCmdLine(
     const std::string & programName,
     const Strings & args,
-    std::function<bool(Strings::iterator & arg, const Strings::iterator & end)> parseArg)
+    fun<bool(Strings::iterator & arg, const Strings::iterator & end)> parseArg)
 {
     LegacyArgs(programName, parseArg).parseCmdline(args);
 }
@@ -332,50 +342,14 @@ void printVersion(const std::string & programName)
         std::cout << "System type: " << settings.thisSystem << "\n";
         std::cout << "Additional system types: " << concatStringsSep(", ", settings.extraPlatforms.get()) << "\n";
         std::cout << "Features: " << concatStringsSep(", ", cfg) << "\n";
-        std::cout << "System configuration file: " << (settings.nixConfDir / "nix.conf") << "\n";
-        std::cout << "User configuration files: " << concatStringsSep(":", settings.nixUserConfFiles) << "\n";
-        std::cout << "Store directory: " << settings.nixStore << "\n";
+        std::cout << "System configuration file: " << nixConfFile() << "\n";
+        std::cout << "User configuration files: "
+                  << os_string_to_string(ExecutablePath{.directories = nixUserConfFiles()}.render()) << "\n";
+        std::cout << "Store directory: " << resolveStoreConfig(StoreReference{settings.storeUri.get()})->storeDir
+                  << "\n";
         std::cout << "State directory: " << settings.nixStateDir << "\n";
-        std::cout << "Data directory: " << settings.nixDataDir << "\n";
     }
     throw Exit();
-}
-
-int handleExceptions(const std::string & programName, std::function<void()> fun)
-{
-    ReceiveInterrupts receiveInterrupts; // FIXME: need better place for this
-
-    ErrorInfo::programName = baseNameOf(programName);
-
-    auto doLog = [&](BaseError & e) {
-        try {
-            logError(e.info());
-        } catch (...) {
-            printError(ANSI_RED "error:" ANSI_NORMAL " Exception while printing an exception.");
-        }
-    };
-
-    std::string error = ANSI_RED "error:" ANSI_NORMAL " ";
-    try {
-        fun();
-    } catch (Exit & e) {
-        return e.status;
-    } catch (UsageError & e) {
-        doLog(e);
-        printError("\nTry '%1% --help' for more information.", programName);
-        return 1;
-    } catch (BaseError & e) {
-        doLog(e);
-        return e.info().status;
-    } catch (std::bad_alloc & e) {
-        printError(error + "out of memory");
-        return 1;
-    } catch (std::exception & e) {
-        printError(error + e.what());
-        return 1;
-    }
-
-    return 0;
 }
 
 RunPager::RunPager()
@@ -432,9 +406,12 @@ RunPager::~RunPager()
     }
 }
 
-PrintFreed::~PrintFreed()
+void printFreed(bool dryRun, const GCResults & results)
 {
-    if (show)
+    /* bytesFreed cannot be reliably computed without actually deleting store paths because of hardlinking. */
+    if (dryRun)
+        std::cout << fmt("%d store paths would be deleted\n", results.paths.size());
+    else
         std::cout << fmt("%d store paths deleted, %s freed\n", results.paths.size(), renderSize(results.bytesFreed));
 }
 

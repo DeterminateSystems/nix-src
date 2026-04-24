@@ -19,8 +19,16 @@
 
 namespace nix {
 
+const std::filesystem::path & nixConfDir();
+
 struct FileTransferSettings : Config
 {
+private:
+    static std::filesystem::path getDefaultSSLCertFile();
+
+public:
+    FileTransferSettings();
+
     Setting<bool> enableHttp2{this, true, "http2", "Whether to enable HTTP/2 support."};
 
     Setting<std::string> userAgentSuffix{
@@ -77,6 +85,64 @@ struct FileTransferSettings : Config
           not processed quickly enough to exceed the size of this buffer, downloads may stall.
           The default is 1048576 (1 MiB).
         )"};
+
+    Setting<unsigned int> downloadSpeed{
+        this,
+        0,
+        "download-speed",
+        R"(
+          Specify the maximum transfer rate in kilobytes per second you want
+          Nix to use for downloads.
+        )"};
+
+    Setting<AbsolutePath> netrcFile{
+        this,
+        nixConfDir() / "netrc",
+        "netrc-file",
+        R"(
+          If set to an absolute path to a `netrc` file, Nix uses the HTTP
+          authentication credentials in this file when trying to download from
+          a remote host through HTTP or HTTPS. Defaults to
+          `$NIX_CONF_DIR/netrc`.
+
+          The `netrc` file consists of a list of accounts in the following
+          format:
+
+              machine my-machine
+              login my-username
+              password my-password
+
+          For the exact syntax, see [the `curl`
+          documentation](https://ec.haxx.se/usingcurl-netrc.html).
+
+          > **Note**
+          >
+          > This must be an absolute path, and `~` is not resolved. For
+          > example, `~/.netrc` won't resolve to your home directory's
+          > `.netrc`.
+        )"};
+
+    Setting<std::optional<AbsolutePath>> caFile{
+        this,
+        getDefaultSSLCertFile(),
+        "ssl-cert-file",
+        R"(
+          The path of a file containing CA certificates used to
+          authenticate `https://` downloads. Nix by default uses
+          the first of the following files that exists:
+
+          1. `/etc/ssl/certs/ca-certificates.crt`
+          2. `/nix/var/nix/profiles/default/etc/ssl/certs/ca-bundle.crt`
+
+          The path can be overridden by the following environment
+          variables, in order of precedence:
+
+          1. `NIX_SSL_CERT_FILE`
+          2. `SSL_CERT_FILE`
+        )",
+        {},
+        // Don't document the machine-specific default value
+        false};
 };
 
 extern FileTransferSettings fileTransferSettings;
@@ -116,10 +182,19 @@ struct FileTransferRequest
     Headers headers;
     std::string expectedETag;
     HttpMethod method = HttpMethod::Get;
-    size_t tries = fileTransferSettings.tries;
     unsigned int baseRetryTimeMs = RETRY_TIME_MS_DEFAULT;
     ActivityId parentAct;
     bool decompress = true;
+
+    /**
+     * Optional path to the client certificate in "PEM" format. Only used for TLS-based protocols.
+     */
+    std::optional<std::filesystem::path> tlsCert;
+
+    /**
+     * Optional path to the client private key in "PEM" format. Only used for TLS-based protocols.
+     */
+    std::optional<std::filesystem::path> tlsKey;
 
     struct UploadData
     {
@@ -262,10 +337,10 @@ public:
      */
     struct ItemHandle
     {
-        std::reference_wrapper<Item> item;
+        std::weak_ptr<Item> item;
         friend struct FileTransfer;
 
-        ItemHandle(Item & item)
+        explicit ItemHandle(std::weak_ptr<Item> item)
             : item(item)
         {
         }
@@ -326,11 +401,11 @@ ref<FileTransfer> getFileTransfer();
  *
  * Prefer getFileTransfer() to this; see its docs for why.
  */
-ref<FileTransfer> makeFileTransfer();
+ref<FileTransfer> makeFileTransfer(const FileTransferSettings & settings = fileTransferSettings);
 
 std::shared_ptr<FileTransfer> resetFileTransfer();
 
-class FileTransferError : public Error
+class FileTransferError final : public CloneableError<FileTransferError, Error>
 {
 public:
     FileTransfer::Error error;

@@ -1,4 +1,5 @@
 #include "nix/store/derivations.hh"
+#include "nix/util/fun.hh"
 #include "nix/store/parsed-derivations.hh"
 #include "nix/store/derivation-options.hh"
 #include "nix/store/globals.hh"
@@ -66,7 +67,7 @@ void Store::computeFSClosure(
         paths_,
         [&](const StorePath & path, std::function<void(std::promise<std::set<StorePath>> &)> processEdges) {
             std::promise<std::set<StorePath>> promise;
-            std::function<void(std::future<ref<const ValidPathInfo>>)> getDependencies =
+            fun<void(std::future<ref<const ValidPathInfo>>)> getDependencies =
                 [&](std::future<ref<const ValidPathInfo>> fut) {
                     try {
                         promise.set_value(queryDeps(path, fut));
@@ -125,7 +126,7 @@ MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
 
     Sync<State> state_;
 
-    std::function<void(DerivedPath)> doPath;
+    fun<void(DerivedPath)> doPath = [&](const DerivedPath &) { unreachable(); };
 
     auto enqueueDerivedPaths = [&](this auto self,
                                    ref<SingleDerivedPath> inputDrv,
@@ -236,7 +237,8 @@ MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
                         throw;
                     }
 
-                    if (!knownOutputPaths && settings.useSubstitutes && drvOptions.substitutesAllowed()) {
+                    if (!knownOutputPaths && settings.getWorkerSettings().useSubstitutes
+                        && drvOptions.substitutesAllowed(settings.getWorkerSettings())) {
                         experimentalFeatureSettings.require(Xp::CaDerivations);
 
                         // If there are unknown output paths, attempt to find if the
@@ -266,7 +268,8 @@ MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
                         }
                     }
 
-                    if (knownOutputPaths && settings.useSubstitutes && drvOptions.substitutesAllowed()) {
+                    if (knownOutputPaths && settings.getWorkerSettings().useSubstitutes
+                        && drvOptions.substitutesAllowed(settings.getWorkerSettings())) {
                         auto drvState = make_ref<Sync<DrvState>>(DrvState(invalid.size()));
                         for (auto & output : invalid)
                             pool.enqueue(std::bind(checkOutput, drvPath, drv, output, drvState));
@@ -332,65 +335,6 @@ StorePaths Store::topoSortPaths(const StorePathSet & paths)
             },
             [](const auto & sorted) { return sorted; }},
         result);
-}
-
-std::map<DrvOutput, StorePath>
-drvOutputReferences(const std::set<Realisation> & inputRealisations, const StorePathSet & pathReferences)
-{
-    std::map<DrvOutput, StorePath> res;
-
-    for (const auto & input : inputRealisations) {
-        if (pathReferences.count(input.outPath)) {
-            res.insert({input.id, input.outPath});
-        }
-    }
-
-    return res;
-}
-
-std::map<DrvOutput, StorePath>
-drvOutputReferences(Store & store, const Derivation & drv, const StorePath & outputPath, Store * evalStore_)
-{
-    auto & evalStore = evalStore_ ? *evalStore_ : store;
-
-    std::set<Realisation> inputRealisations;
-
-    auto accumRealisations = [&](this auto & self,
-                                 const StorePath & inputDrv,
-                                 const DerivedPathMap<StringSet>::ChildNode & inputNode) -> void {
-        if (!inputNode.value.empty()) {
-            auto outputHashes = staticOutputHashes(evalStore, evalStore.readDerivation(inputDrv));
-            for (const auto & outputName : inputNode.value) {
-                auto outputHash = get(outputHashes, outputName);
-                if (!outputHash)
-                    throw Error(
-                        "output '%s' of derivation '%s' isn't realised", outputName, store.printStorePath(inputDrv));
-                DrvOutput key{*outputHash, outputName};
-                auto thisRealisation = store.queryRealisation(key);
-                if (!thisRealisation)
-                    throw Error(
-                        "output '%s' of derivation '%s' isn’t built", outputName, store.printStorePath(inputDrv));
-                inputRealisations.insert({*thisRealisation, std::move(key)});
-            }
-        }
-        if (!inputNode.value.empty()) {
-            auto d = makeConstantStorePathRef(inputDrv);
-            for (const auto & [outputName, childNode] : inputNode.childMap) {
-                SingleDerivedPath next = SingleDerivedPath::Built{d, outputName};
-                self(
-                    // TODO deep resolutions for dynamic derivations, issue #8947, would go here.
-                    resolveDerivedPath(store, next, evalStore_),
-                    childNode);
-            }
-        }
-    };
-
-    for (const auto & [inputDrv, inputNode] : drv.inputDrvs.map)
-        accumRealisations(inputDrv, inputNode);
-
-    auto info = store.queryPathInfo(outputPath);
-
-    return drvOutputReferences(Realisation::closure(store, inputRealisations), info->references);
 }
 
 OutputPathMap resolveDerivedPath(Store & store, const DerivedPath::Built & bfd, Store * evalStore_)

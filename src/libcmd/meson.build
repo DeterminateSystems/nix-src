@@ -80,6 +80,7 @@ sources = files(
   'common-eval-args.cc',
   'editor-for.cc',
   'flake-schemas.cc',
+  'get-build-log.cc',
   'installable-attr-path.cc',
   'installable-derived-path.cc',
   'installable-flake.cc',
@@ -91,6 +92,12 @@ sources = files(
   'repl-interacter.cc',
   'repl.cc',
 )
+
+if host_machine.system() != 'windows'
+  sources += files(
+    'unix/unix-socket-server.cc',
+  )
+endif
 
 sources += [
   gen_header.process('call-flake-schemas.nix'),

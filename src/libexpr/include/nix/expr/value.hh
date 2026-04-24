@@ -8,6 +8,7 @@
 #include <cstring>
 #include <memory>
 #include <memory_resource>
+#include <exception>
 #include <span>
 #include <string_view>
 #include <type_traits>
@@ -171,7 +172,7 @@ public:
     virtual bool operator==(const ExternalValueBase & b) const noexcept;
 
     /**
-     * Print the value as JSON. Defaults to unconvertable, i.e. throws an error
+     * Print the value as JSON. Defaults to unconvertible, i.e. throws an error
      */
     virtual nlohmann::json
     printValueAsJSON(EvalState & state, bool strict, NixStringContext & context, bool copyToStore = true) const;
@@ -185,7 +186,7 @@ public:
         bool location,
         XMLWriter & doc,
         NixStringContext & context,
-        PathSet & drvsSeen,
+        StringSet & drvsSeen,
         const PosIdx pos) const;
 
     virtual ~ExternalValueBase() {};
@@ -201,14 +202,17 @@ public:
     Value ** elems;
     ListBuilder(EvalMemory & mem, size_t size);
 
-    // NOTE: Can be noexcept because we are just copying integral values and
-    // raw pointers.
     ListBuilder(ListBuilder && x) noexcept
         : size(x.size)
         , inlineElems{x.inlineElems[0], x.inlineElems[1]}
         , elems(size <= 2 ? inlineElems : x.elems)
     {
     }
+
+    ListBuilder(const ListBuilder &) = delete;
+    ListBuilder & operator=(ListBuilder &&) = delete;
+    ListBuilder & operator=(const ListBuilder &) = delete;
+    ~ListBuilder() = default;
 
     Value *& operator[](size_t n)
     {
@@ -573,8 +577,8 @@ inline constexpr bool useBitPackedValueStorage = (ptrSize == 8) && (__STDCPP_DEF
  * Packs discriminator bits into the pointer alignment niches.
  */
 template<std::size_t ptrSize>
-class alignas(16) ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptrSize>>>
-    : public detail::ValueBase
+class alignas(16)
+    ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptrSize>>> : public detail::ValueBase
 {
     /* Needs a dependent type name in order for member functions (and
      * potentially ill-formed bit casts) to be SFINAE'd out.
@@ -767,7 +771,7 @@ protected:
         case pdPath:
             return static_cast<InternalType>(tListN + (pd - pdListN));
         [[unlikely]] default:
-            unreachable();
+            nixUnreachableWhenHardened();
         }
     }
 
@@ -1202,7 +1206,7 @@ private:
     T getStorage() const noexcept
     {
         if (getInternalType() != detail::payloadTypeToInternalType<T>) [[unlikely]]
-            unreachable();
+            nixUnreachableWhenHardened();
         T out;
         ValueStorage::getStorage(out);
         return out;
@@ -1270,41 +1274,31 @@ public:
      */
     inline ValueType type() const
     {
-        switch (getInternalType()) {
-        case tUninitialized:
-            break;
-        case tInt:
-            return nInt;
-        case tBool:
-            return nBool;
-        case tString:
-            return nString;
-        case tPath:
-            return nPath;
-        case tNull:
-            return nNull;
-        case tAttrs:
-            return nAttrs;
-        case tListSmall:
-        case tListN:
-            return nList;
-        case tLambda:
-        case tPrimOp:
-        case tPrimOpApp:
-            return nFunction;
-        case tExternal:
-            return nExternal;
-        case tFloat:
-            return nFloat;
-        case tFailed:
-            return nFailed;
-        case tThunk:
-        case tApp:
-        case tPending:
-        case tAwaited:
-            return nThunk;
-        }
-        unreachable();
+        /* Explicit lookup table. switch() might compile down (and it does at least with GCC 14)
+           to a jump table. Let's help the compiler a bit here. */
+        static constexpr auto table = [] {
+            std::array<ValueType, 72> t{};
+            t[tUninitialized] = nThunk;
+            t[tInt] = nInt;
+            t[tBool] = nBool;
+            t[tNull] = nNull;
+            t[tFloat] = nFloat;
+            t[tFailed] = nFailed;
+            t[tExternal] = nExternal;
+            t[tAttrs] = nAttrs;
+            t[tPrimOp] = nFunction;
+            t[tLambda] = nFunction;
+            t[tPrimOpApp] = nFunction;
+            t[tApp] = nThunk;
+            t[tThunk] = nThunk;
+            t[tListSmall] = nList;
+            t[tListN] = nList;
+            t[tString] = nString;
+            t[tPath] = nPath;
+            return t;
+        }();
+
+        return table[getInternalType()];
     }
 
     /**

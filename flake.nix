@@ -1,7 +1,7 @@
 {
   description = "The purely functional package manager";
 
-  inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.2505";
+  inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.2511";
 
   inputs.nixpkgs-regression.url = "github:NixOS/nixpkgs/215d4d0fd80ca5163643b03a33fde804a29cc1e2";
   inputs.nixpkgs-23-11.url = "github:NixOS/nixpkgs/a62e6edd6d5e1fa0329b8653c801147986f8d446";
@@ -107,6 +107,9 @@
                     }
                     // lib.optionalAttrs (crossSystem == "x86_64-unknown-freebsd13") {
                       useLLVM = true;
+                    }
+                    // lib.optionalAttrs (crossSystem == "x86_64-w64-mingw32") {
+                      emulator = pkgs: "${pkgs.buildPackages.wineWow64Packages.stable_11}/bin/wine";
                     };
                 overlays = [
                   (overlayFor (pkgs: pkgs.${stdenv}))
@@ -432,6 +435,10 @@
 
               "nix-cmd" = { };
 
+              "nix-nswrapper" = {
+                linuxOnly = true;
+              };
+
               "nix-cli" = { };
 
               "nix-everything" = { };
@@ -444,10 +451,6 @@
                 supportsCross = false;
               };
 
-              "nix-kaitai-struct-checks" = {
-                supportsCross = false;
-              };
-
               "nix-perl-bindings" = {
                 supportsCross = false;
               };
@@ -456,36 +459,35 @@
               pkgName:
               {
                 supportsCross ? true,
+                linuxOnly ? false,
               }:
-              {
-                # These attributes go right into `packages.<system>`.
-                "${pkgName}" = nixpkgsFor.${system}.native.nixComponents2.${pkgName};
-              }
+              lib.optionalAttrs (linuxOnly -> nixpkgsFor.${system}.native.stdenv.hostPlatform.isLinux) (
+                {
+                  # These attributes go right into `packages.<system>`.
+                  "${pkgName}" = nixpkgsFor.${system}.native.nixComponents2.${pkgName};
+                  "${pkgName}-static" = nixpkgsFor.${system}.native.pkgsStatic.nixComponents2.${pkgName};
+                }
+                // flatMapAttrs (lib.genAttrs stdenvs (_: { })) (
+                  stdenvName:
+                  { }:
+                  {
+                    # These attributes go right into `packages.<system>`.
+                    "${pkgName}-${stdenvName}" =
+                      nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.nixComponents2.${pkgName};
+                  }
+                )
+              )
               // lib.optionalAttrs supportsCross (
                 flatMapAttrs (lib.genAttrs crossSystems (_: { })) (
                   crossSystem:
                   { }:
-                  {
-                    # These attributes go right into `packages.<system>`.
-                    "${pkgName}-${crossSystem}" = nixpkgsFor.${system}.cross.${crossSystem}.nixComponents2.${pkgName};
-                  }
+                  lib.optionalAttrs
+                    (linuxOnly -> nixpkgsFor.${system}.cross.${crossSystem}.stdenv.hostPlatform.isLinux)
+                    {
+                      # These attributes go right into `packages.<system>`.
+                      "${pkgName}-${crossSystem}" = nixpkgsFor.${system}.cross.${crossSystem}.nixComponents2.${pkgName};
+                    }
                 )
-                // {
-                  "${pkgName}-static" = nixpkgsFor.${system}.native.pkgsStatic.nixComponents2.${pkgName};
-                }
-              )
-              // flatMapAttrs (lib.genAttrs stdenvs (_: { })) (
-                stdenvName:
-                { }:
-                {
-                  # These attributes go right into `packages.<system>`.
-                  "${pkgName}-${stdenvName}" =
-                    nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.nixComponents2.${pkgName};
-                }
-                // lib.optionalAttrs supportsCross {
-                  "${pkgName}-${stdenvName}-static" =
-                    nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.pkgsStatic.nixComponents2.${pkgName};
-                }
               )
             )
         // lib.optionalAttrs (builtins.elem system linux64BitSystems) {

@@ -17,7 +17,6 @@
 namespace nix {
 
 struct StoreDirConfig;
-struct AsyncPathWriter;
 struct Provenance;
 
 /* Abstract syntax of derivations. */
@@ -276,7 +275,10 @@ struct BasicDerivation
      */
     StorePathSet inputSrcs;
     std::string platform;
-    Path builder;
+    /**
+     * Probably should be an absolute path in the path format that `platform` uses
+     */
+    std::string builder;
     Strings args;
     /**
      * Must not contain the key `__json`, at least in order to serialize to ATerm.
@@ -343,6 +345,19 @@ struct Derivation : BasicDerivation
         DerivedPathMap<StringSet>::ChildNode::Map * actualInputs = nullptr) const;
 
     /**
+     * Determine whether this derivation should be resolved before building.
+     *
+     * Resolution is needed when:
+     * - Input-addressed derivations are deferred (depend on CA derivations)
+     * - Content-addressed derivations have input drvs and are either:
+     *   - Floating (non-fixed), which must always be resolved
+     *   - Fixed, which can optionally be resolved when ca-derivations is enabled
+     * - Impure derivations always need resolution
+     * - Any input derivations have outputs from dynamic derivations
+     */
+    bool shouldResolve() const;
+
+    /**
      * Return the underlying basic derivation but with these changes:
      *
      * 1. Input drvs are emptied, but the outputs of them that were used
@@ -360,7 +375,7 @@ struct Derivation : BasicDerivation
      */
     std::optional<BasicDerivation> tryResolve(
         Store & store,
-        std::function<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
+        fun<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
             queryResolutionChain) const;
 
     /**
@@ -455,25 +470,11 @@ struct Derivation : BasicDerivation
 class Store;
 
 /**
- * Write a derivation to the Nix store, and return its path.
+ * Compute the store path that would be used for a derivation without writing it.
+ *
+ * This is a pure computation based on the derivation content and store directory.
  */
-StorePath writeDerivation(
-    Store & store,
-    const Derivation & drv,
-    RepairFlag repair = NoRepair,
-    bool readOnly = false,
-    std::shared_ptr<const Provenance> provenance = nullptr);
-
-/**
- * Asynchronously write a derivation to the Nix store, and return its path.
- */
-StorePath writeDerivation(
-    Store & store,
-    AsyncPathWriter & asyncPathWriter,
-    const Derivation & drv,
-    RepairFlag repair = NoRepair,
-    bool readOnly = false,
-    std::shared_ptr<const Provenance> provenance = nullptr);
+StorePath computeStorePath(const StoreDirConfig & store, const Derivation & drv);
 
 /**
  * Read a derivation from a file.

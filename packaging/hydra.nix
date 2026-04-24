@@ -57,6 +57,7 @@ let
         "nix-flake"
         "nix-flake-c"
         "nix-flake-tests"
+        "nix-nswrapper"
         "nix-main"
         "nix-main-c"
         "nix-cmd"
@@ -72,7 +73,6 @@ let
         "nix-manual-manpages-only"
         "nix-internal-api-docs"
         "nix-external-api-docs"
-        "nix-kaitai-struct-checks"
       ]
     );
 in
@@ -115,7 +115,11 @@ rec {
 
   # Binary package for various platforms.
   build = forAllPackages (
-    pkgName: forAllSystems (system: nixpkgsFor.${system}.native.nixComponents2.${pkgName})
+    pkgName:
+    lib.filterAttrs (
+      system: _do_not_touch:
+      pkgName == "nix-nswrapper" -> nixpkgsFor.${system}.native.stdenv.hostPlatform.isLinux
+    ) (forAllSystems (system: nixpkgsFor.${system}.native.nixComponents2.${pkgName}))
   );
 
   shellInputs = removeAttrs (forAllSystems (

@@ -77,6 +77,7 @@ rec {
   topLevel = {
     installerScriptForGHA = hydraJobs.installerScriptForGHA.${system};
     nixpkgsLibTests = hydraJobs.tests.nixpkgsLibTests.${system};
+    nixpkgsLibTestsLazy = hydraJobs.tests.nixpkgsLibTestsLazy.${system};
     rl-next = pkgs.buildPackages.runCommand "test-rl-next-release-notes" { } ''
       LANG=C.UTF-8 ${pkgs.changelog-d}/bin/changelog-d ${../../../doc/manual/rl-next} >$out
     '';
