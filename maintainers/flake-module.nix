@@ -114,6 +114,7 @@
               # Don't format vendored code
               ''^doc/manual/redirects\.js$''
               ''^doc/manual/theme/highlight\.js$''
+              ''^src/libfetchers/builtin-flake-registry\.json$''
             ];
           };
           shellcheck = {

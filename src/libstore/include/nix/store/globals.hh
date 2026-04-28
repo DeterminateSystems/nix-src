@@ -15,6 +15,16 @@
 
 namespace nix {
 
+template<>
+StoreReference BaseSetting<StoreReference>::parse(const std::string & str) const;
+template<>
+std::string BaseSetting<StoreReference>::to_string() const;
+
+template<>
+std::set<StoreReference> BaseSetting<std::set<StoreReference>>::parse(const std::string & str) const;
+template<>
+std::string BaseSetting<std::set<StoreReference>>::to_string() const;
+
 struct ProfileDirsOptions;
 
 struct LogFileSettings : public virtual Config
@@ -218,12 +228,8 @@ public:
           The following system types are widely used, as Nix is actively supported on these platforms:
 
           - `x86_64-linux`
-          - `x86_64-darwin`
-          - `i686-linux`
           - `aarch64-linux`
           - `aarch64-darwin`
-          - `armv6l-linux`
-          - `armv7l-linux`
 
           In general, you do not have to modify this setting.
           While you can force Nix to run a Darwin-specific `builder` executable on a Linux machine, the result would obviously be wrong.
@@ -423,6 +429,8 @@ public:
      * Get the options needed for profile directory functions.
      */
     ProfileDirsOptions getProfileDirsOptions() const;
+
+    const ExternalBuilder * findExternalDerivationBuilderIfSupported(const Derivation & drv);
 };
 
 // FIXME: don't use a global variable.
@@ -445,6 +453,8 @@ void loadConfFile(AbstractConfig & config);
  * not affected by the change.
  */
 extern std::string nixVersion;
+
+extern const std::string determinateNixVersion;
 
 /**
  * @param loadConfig Whether to load configuration from `nix.conf`, `NIX_CONFIG`, etc. May be disabled for unit tests.

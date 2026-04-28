@@ -65,11 +65,6 @@ std::vector<KeyedBuildResult> Store::buildPathsWithResults(
     results.reserve(state.size());
 
     for (auto & [req, goalPtr] : state) {
-        /* Goals that were never started or were cancelled have exitCode
-           ecBusy and a default buildResult with empty errorMsg. Skip them
-           to avoid reporting spurious failures with empty messages. */
-        if (goalPtr->exitCode == Goal::ecBusy)
-            continue;
         results.emplace_back(
             KeyedBuildResult{
                 goalPtr->buildResult,

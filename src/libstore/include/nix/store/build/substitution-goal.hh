@@ -70,6 +70,8 @@ public:
     {
         return JobCategory::Substitution;
     };
+
+    Done doneFailure(ExitCode result, BuildResult::Failure failure);
 };
 
 } // namespace nix

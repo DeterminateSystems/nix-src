@@ -348,8 +348,8 @@ Goal::Co DerivationBuildingGoal::tryToBuild(StorePathSet inputPaths)
 
         WrongLocalStore wrongStore;
 
-        if (drv->platform != settings.thisSystem.get() && !settings.extraPlatforms.get().count(drv->platform)
-            && !drv->isBuiltin())
+        if (drv->platform != settings.thisSystem.get() && drv->platform != "wasm32-wasip1"
+            && !settings.extraPlatforms.get().count(drv->platform) && !drv->isBuiltin())
             wrongStore.badPlatform = WrongLocalStore::Pair<std::string>{drv->platform, settings.thisSystem.get()};
 
         {
@@ -634,7 +634,7 @@ Goal::Co DerivationBuildingGoal::buildWithHook(
 
     std::unique_ptr<BuildLog> buildLog = std::make_unique<BuildLog>(
         worker.settings.logLines,
-        std::make_unique<Activity>(
+        make_ref<Activity>(
             *logger,
             lvlInfo,
             actBuild,
@@ -787,6 +787,13 @@ Goal::Co DerivationBuildingGoal::buildLocally(
 #ifdef _WIN32 // TODO enable `DerivationBuilder` on Windows
     throw UnimplementedError("building derivations is not yet implemented on Windows");
 #else
+    auto msg =
+        fmt(buildMode == bmRepair  ? "repairing outputs of '%s'"
+            : buildMode == bmCheck ? "checking outputs of '%s'"
+                                   : "building '%s'",
+            worker.store.printStorePath(drvPath));
+    auto act = make_ref<Activity>(
+        *logger, lvlInfo, actBuild, msg, Logger::Fields{worker.store.printStorePath(drvPath), "", 1, 1});
     std::unique_ptr<BuildLog> buildLog;
     std::unique_ptr<LogFile> logFile;
 
@@ -797,15 +804,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
     auto closeLogFile = [&]() { logFile.reset(); };
 
     auto started = [&]() {
-        auto msg =
-            fmt(buildMode == bmRepair  ? "repairing outputs of '%s'"
-                : buildMode == bmCheck ? "checking outputs of '%s'"
-                                       : "building '%s'",
-                worker.store.printStorePath(drvPath));
-        buildLog = std::make_unique<BuildLog>(
-            worker.settings.logLines,
-            std::make_unique<Activity>(
-                *logger, lvlInfo, actBuild, msg, Logger::Fields{worker.store.printStorePath(drvPath), "", 1, 1}));
+        buildLog = std::make_unique<BuildLog>(worker.settings.logLines, act);
         mcRunningBuilds = std::make_unique<MaintainCount<uint64_t>>(worker.runningBuilds);
         worker.updateProgress();
     };
@@ -813,6 +812,11 @@ Goal::Co DerivationBuildingGoal::buildLocally(
     std::unique_ptr<Activity> actLock;
     DerivationBuilderUnique builder;
     Descriptor builderOut;
+
+    /* Get the provenance of the derivation, if available. */
+    std::shared_ptr<const Provenance> provenance;
+    if (auto info = worker.evalStore.maybeQueryPathInfo(drvPath))
+        provenance = info->provenance;
 
     // Will continue here while waiting for a build user below
     while (true) {
@@ -891,6 +895,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
 
             DerivationBuilderParams params{
                 .drvPath = drvPath,
+                .drvProvenance = provenance,
                 .buildResult = buildResult,
                 .drv = *drv,
                 .drvOptions = drvOptions,
@@ -900,6 +905,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
                 .defaultPathsInChroot = std::move(defaultPathsInChroot),
                 .systemFeatures = worker.store.config.systemFeatures.get(),
                 .desugaredEnv = std::move(desugaredEnv),
+                .act = act,
             };
 
             /* If we have to wait and retry (see below), then `builder` will
@@ -1000,7 +1006,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
            (unlinked) lock files. */
         outputLocks.setDeletion(true);
         outputLocks.unlock();
-        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs));
+        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs), provenance);
     }
 #endif
 }
@@ -1094,7 +1100,7 @@ BuildError DerivationBuildingGoal::fixupBuilderFailureErrorMessage(BuilderFailur
             msg += line;
             msg += "\n";
         }
-        auto nixLogCommand = experimentalFeatureSettings.isEnabled(Xp::NixCommand) ? "nix log" : "nix-store -l";
+        auto nixLogCommand = "nix log";
         // The command is on a separate line for easy copying, such as with triple click.
         // This message will be indented elsewhere, so removing the indentation before the
         // command will not put it at the start of the line unfortunately.
@@ -1319,7 +1325,8 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
     return {allValid, validOutputs};
 }
 
-Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status status, SingleDrvOutputs builtOutputs)
+Goal::Done DerivationBuildingGoal::doneSuccess(
+    BuildResult::Success::Status status, SingleDrvOutputs builtOutputs, std::shared_ptr<const Provenance> provenance)
 {
     mcRunningBuilds.reset();
 
@@ -1328,11 +1335,21 @@ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status stat
 
     worker.updateProgress();
 
-    return Goal::doneSuccess(
+    auto res = Goal::doneSuccess(
         BuildResult::Success{
             .status = status,
             .builtOutputs = std::move(builtOutputs),
+            .provenance = provenance,
         });
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
+    return res;
 }
 
 Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
@@ -1344,6 +1361,12 @@ Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
         worker.failedBuilds++;
 
     worker.updateProgress();
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            {ex}, DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
     return Goal::doneFailure(ecFailed, std::move(ex));
 }

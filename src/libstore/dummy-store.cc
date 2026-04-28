@@ -215,7 +215,9 @@ struct DummyStoreImpl : DummyStore
         if (info.path.isDerivation()) {
             warn("back compat supporting `addToStore` for inserting derivations in dummy store");
             writeDerivation(
-                parseDerivation(*this, accessor->readFile(CanonPath::root), Derivation::nameFromPath(info.path)));
+                parseDerivation(*this, accessor->readFile(CanonPath::root), Derivation::nameFromPath(info.path)),
+                repair,
+                info.provenance);
             return;
         }
 
@@ -232,11 +234,12 @@ struct DummyStoreImpl : DummyStore
     StorePath addToStoreFromDump(
         Source & source,
         std::string_view name,
-        FileSerialisationMethod dumpMethod = FileSerialisationMethod::NixArchive,
-        ContentAddressMethod hashMethod = FileIngestionMethod::NixArchive,
-        HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
-        const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) override
+        FileSerialisationMethod dumpMethod,
+        ContentAddressMethod hashMethod,
+        HashAlgorithm hashAlgo,
+        const StorePathSet & references,
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override
     {
         if (isDerivation(name))
             throw Error("Do not insert derivation into dummy store with `addToStoreFromDump`");
@@ -284,6 +287,7 @@ struct DummyStoreImpl : DummyStore
             std::move(narHash.first));
 
         info.narSize = narHash.second.value();
+        info.provenance = provenance;
 
         auto path = info.path;
         auto accessor = make_ref<MemorySourceAccessor>(std::move(*temp));
@@ -299,7 +303,8 @@ struct DummyStoreImpl : DummyStore
         return path;
     }
 
-    StorePath writeDerivation(const Derivation & drv, RepairFlag repair = NoRepair) override
+    StorePath
+    writeDerivation(const Derivation & drv, RepairFlag repair, std::shared_ptr<const Provenance> provenance) override
     {
         auto drvPath = nix::computeStorePath(*this, drv);
 
@@ -307,6 +312,7 @@ struct DummyStoreImpl : DummyStore
             if (config->readOnly)
                 unsupported("writeDerivation");
             derivations.insert({drvPath, drv});
+            // FIXME: record provenance
         }
 
         return drvPath;

@@ -19,6 +19,8 @@
 #include "nix/util/git.hh"
 #include "nix/util/logging.hh"
 #include "nix/store/globals.hh"
+#include "nix/store/active-builds.hh"
+#include "nix/util/provenance.hh"
 
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
 #  include "nix/util/monitor-fd.hh"
@@ -423,6 +425,9 @@ static void performOp(
             bool repairBool;
             conn.from >> repairBool;
             auto repair = RepairFlag{repairBool};
+            auto provenance = conn.protoVersion.features.contains(WorkerProto::featureProvenance)
+                                  ? Provenance::from_json_str_optional(readString(conn.from))
+                                  : nullptr;
 
             logger->startWork();
             auto pathInfo = [&]() {
@@ -448,8 +453,8 @@ static void performOp(
                     assert(false);
                 }
                 // TODO these two steps are essentially RemoteStore::addCAToStore. Move it up to Store.
-                auto path =
-                    store->addToStoreFromDump(source, name, dumpMethod, contentAddressMethod, hashAlgo, refs, repair);
+                auto path = store->addToStoreFromDump(
+                    source, name, dumpMethod, contentAddressMethod, hashAlgo, refs, repair, provenance);
                 return store->queryPathInfo(path);
             }();
             logger->stopWork();
@@ -510,7 +515,21 @@ static void performOp(
         logger->startWork();
         {
             FramedSource source(conn.from);
-            store->addMultipleToStore(source, RepairFlag{repair}, dontCheckSigs ? NoCheckSigs : CheckSigs);
+            auto expected = readNum<uint64_t>(source);
+            for (uint64_t i = 0; i < expected; ++i) {
+                auto info = WorkerProto::Serialise<ValidPathInfo>::read(
+                    *store,
+                    WorkerProto::ReadConn{
+                        .from = source,
+                        .version = conn.protoVersion.features.contains(WorkerProto::featureVersionedAddToStoreMultiple)
+                                       ? conn.protoVersion
+                                       : WorkerProto::Version{.number = {.major = 1, .minor = 16}},
+                    });
+                info.ultimate = false;
+                EnsureRead wrapper{source, info.narSize};
+                store->addToStore(info, wrapper, RepairFlag{repair}, dontCheckSigs ? NoCheckSigs : CheckSigs);
+                wrapper.finish();
+            }
         }
         logger->stopWork();
         break;
@@ -737,6 +756,7 @@ static void performOp(
         options.action = WorkerProto::Serialise<GCOptions::GCAction>::read(*store, rconn);
         options.pathsToDelete = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
         conn.from >> options.ignoreLiveness >> options.maxFreed;
+        options.censor = !trusted;
         // obsolete fields
         readInt(conn.from);
         readInt(conn.from);
@@ -745,7 +765,7 @@ static void performOp(
         GCResults results;
 
         logger->startWork();
-        if (options.ignoreLiveness)
+        if (options.ignoreLiveness && !getEnv("_NIX_IN_TEST").has_value())
             throw Error("you are not allowed to ignore liveness");
         auto & gcStore = require<GcStore>(*store);
         gcStore.collectGarbage(options, results);
@@ -905,6 +925,9 @@ static void performOp(
         conn.from >> info.registrationTime >> info.narSize >> info.ultimate;
         info.sigs = WorkerProto::Serialise<std::set<Signature>>::read(*store, rconn);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
+        info.provenance = conn.protoVersion.features.contains(WorkerProto::featureProvenance)
+                              ? Provenance::from_json_str_optional(readString(conn.from))
+                              : nullptr;
         conn.from >> repair >> dontCheckSigs;
         if (!trusted && dontCheckSigs)
             dontCheckSigs = false;
@@ -934,8 +957,9 @@ static void performOp(
 
             logger->startWork();
 
-            // FIXME: race if addToStore doesn't read source?
-            store->addToStore(info, *source, (RepairFlag) repair, dontCheckSigs ? NoCheckSigs : CheckSigs);
+            EnsureRead wrapper{*source, info.narSize};
+            store->addToStore(info, wrapper, (RepairFlag) repair, dontCheckSigs ? NoCheckSigs : CheckSigs);
+            wrapper.finish();
 
             logger->stopWork();
         }
@@ -1005,6 +1029,15 @@ static void performOp(
         break;
     }
 
+    case WorkerProto::Op::QueryActiveBuilds: {
+        logger->startWork();
+        auto & activeBuildsStore = require<QueryActiveBuildsStore>(*store);
+        auto activeBuilds = activeBuildsStore.queryActiveBuilds();
+        logger->stopWork();
+        conn.to << nlohmann::json(activeBuilds).dump();
+        break;
+    }
+
     default:
         throw Error("invalid operation %1%", op);
     }
@@ -1030,7 +1063,10 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
 
     /* Exchange the greeting. */
     WorkerProto::BasicServerConnection conn;
-    conn.protoVersion = WorkerProto::BasicServerConnection::handshake(to, from, WorkerProto::latest);
+    auto version = WorkerProto::latest;
+    if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        version.features.erase(std::string(WorkerProto::featureProvenance));
+    conn.protoVersion = WorkerProto::BasicServerConnection::handshake(to, from, version);
 
     if (conn.protoVersion.number < WorkerProto::minimum.number)
         throw Error("the Nix client version is too old");

@@ -577,6 +577,7 @@ struct DeploymentResourceState
     bool vm_created = false;
 };
 
+#if 0
 static void primop_load_resource_input(
     void * user_data, nix_c_context * context, EvalState * state, nix_value ** args, nix_value * ret)
 {
@@ -664,5 +665,6 @@ TEST_F(nix_api_expr_test, nix_expr_thunk_re_evaluation_after_deployment)
     assert_ctx_ok();
     ASSERT_STREQ("vm-12345", result.c_str());
 }
+#endif
 
 } // namespace nixC

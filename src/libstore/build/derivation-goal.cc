@@ -472,7 +472,7 @@ Goal::Done DerivationGoal::doneSuccess(BuildResult::Success::Status status, Unke
 
     worker.updateProgress();
 
-    return Goal::doneSuccess(
+    auto res = Goal::doneSuccess(
         BuildResult::Success{
             .status = status,
             .builtOutputs = {{
@@ -486,6 +486,15 @@ Goal::Done DerivationGoal::doneSuccess(BuildResult::Success::Status status, Unke
                 },
             }},
         });
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
+    return res;
 }
 
 Goal::Done DerivationGoal::doneFailure(BuildError ex)
@@ -497,6 +506,12 @@ Goal::Done DerivationGoal::doneFailure(BuildError ex)
         worker.failedBuilds++;
 
     worker.updateProgress();
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            {ex}, DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
     return Goal::doneFailure(ecFailed, std::move(ex));
 }

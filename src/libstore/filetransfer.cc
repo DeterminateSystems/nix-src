@@ -499,7 +499,7 @@ struct curlFileTransfer : public FileTransfer
             curl_easy_setopt(
                 req,
                 CURLOPT_USERAGENT,
-                ("curl/" LIBCURL_VERSION " Nix/" + nixVersion
+                ("curl/" LIBCURL_VERSION " Nix/" + nixVersion + " DeterminateNix/" + determinateNixVersion
                  + (fileTransfer.settings.userAgentSuffix != "" ? " " + fileTransfer.settings.userAgentSuffix.get()
                                                                 : ""))
                     .c_str());
@@ -865,8 +865,13 @@ struct curlFileTransfer : public FileTransfer
 
     void workerThreadMain()
     {
+        /* NOTE(cole-h): the maxQueueSize needs to be >0 or else things will hang */
+        assert(maxQueueSize > 0);
+
 /* Cause this thread to be notified on SIGINT. */
-#ifndef _WIN32 // TODO need graceful async exit support on Windows?
+#if !defined(_WIN32) && !defined(IS_STATIC) // TODO need graceful async exit support on Windows?
+        // FIXME(RossComputerGuy): this causes issues on static builds.
+        // In particular, it causes a segfault to happen at the end of the program running.
         auto callback = createInterruptCallback([&]() { stopWorkerThread(); });
 #endif
 
@@ -1050,14 +1055,24 @@ ref<curlFileTransfer> makeCurlFileTransfer(const FileTransferSettings & settings
     return make_ref<curlFileTransfer>(settings);
 }
 
+static Sync<std::shared_ptr<curlFileTransfer>> _fileTransfer;
+
 ref<FileTransfer> getFileTransfer()
 {
-    static ref<curlFileTransfer> fileTransfer = makeCurlFileTransfer();
+    auto fileTransfer(_fileTransfer.lock());
 
-    if (fileTransfer->state_.lock()->isQuitting())
-        fileTransfer = makeCurlFileTransfer();
+    if (!*fileTransfer || (*fileTransfer)->state_.lock()->isQuitting())
+        *fileTransfer = makeCurlFileTransfer().get_ptr();
 
-    return fileTransfer;
+    return ref<FileTransfer>(*fileTransfer);
+}
+
+std::shared_ptr<FileTransfer> resetFileTransfer()
+{
+    auto fileTransfer(_fileTransfer.lock());
+    std::shared_ptr<curlFileTransfer> prev;
+    fileTransfer->swap(prev);
+    return prev;
 }
 
 ref<FileTransfer> makeFileTransfer(const FileTransferSettings & settings)

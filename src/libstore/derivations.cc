@@ -9,6 +9,7 @@
 #include "nix/store/common-protocol-impl.hh"
 #include "nix/util/strings-inline.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/store/async-path-writer.hh"
 
 #include <boost/container/small_vector.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
@@ -132,7 +133,8 @@ StorePath computeStorePath(const StoreDirConfig & store, const Derivation & drv)
     return path;
 }
 
-StorePath Store::writeDerivation(const Derivation & drv, RepairFlag repair)
+StorePath
+Store::writeDerivation(const Derivation & drv, RepairFlag repair, std::shared_ptr<const Provenance> provenance)
 {
     auto [suffix, contents, references, path] = infoForDerivation(*this, drv);
 
@@ -153,10 +155,24 @@ StorePath Store::writeDerivation(const Derivation & drv, RepairFlag repair)
         ContentAddressMethod::Raw::Text,
         HashAlgorithm::SHA256,
         references,
-        repair);
+        repair,
+        provenance);
     assert(path2 == path);
 
     return path;
+}
+
+StorePath Store::writeDerivation(
+    AsyncPathWriter & asyncPathWriter,
+    const Derivation & drv,
+    RepairFlag repair,
+    std::shared_ptr<const Provenance> provenance)
+{
+    auto references = drv.inputSrcs;
+    for (auto & i : drv.inputDrvs.map)
+        references.insert(i.first);
+    return asyncPathWriter.addPath(
+        drv.unparse(*this, false), std::string(drv.name) + drvExtension, references, repair, provenance);
 }
 
 namespace {
@@ -1524,7 +1540,7 @@ adl_serializer<DerivationOutput>::from_json(const json & _json, const Experiment
     }
 }
 
-void adl_serializer<Derivation>::to_json(json & res, const Derivation & d)
+void adl_serializer<BasicDerivation>::to_json(json & res, const BasicDerivation & d)
 {
     res = nlohmann::json::object();
 
@@ -1550,24 +1566,6 @@ void adl_serializer<Derivation>::to_json(json & res, const Derivation & d)
             for (auto & input : d.inputSrcs)
                 inputsList.emplace_back(input);
         }
-
-        auto doInput = [&](this const auto & doInput, const auto & inputNode) -> nlohmann::json {
-            auto value = nlohmann::json::object();
-            value["outputs"] = inputNode.value;
-            {
-                auto next = nlohmann::json::object();
-                for (auto & [outputId, childNode] : inputNode.childMap)
-                    next[outputId] = doInput(childNode);
-                value["dynamicOutputs"] = std::move(next);
-            }
-            return value;
-        };
-
-        auto & inputDrvsObj = inputsObj["drvs"];
-        inputDrvsObj = nlohmann::json::object();
-        for (auto & [inputDrv, inputNode] : d.inputDrvs.map) {
-            inputDrvsObj[inputDrv.to_string()] = doInput(inputNode);
-        }
     }
 
     res["system"] = d.platform;
@@ -1577,6 +1575,28 @@ void adl_serializer<Derivation>::to_json(json & res, const Derivation & d)
 
     if (d.structuredAttrs)
         res["structuredAttrs"] = d.structuredAttrs->structuredAttrs;
+}
+
+void adl_serializer<Derivation>::to_json(json & res, const Derivation & d)
+{
+    adl_serializer<BasicDerivation>::to_json(res, static_cast<const BasicDerivation &>(d));
+
+    auto doInput = [&](this const auto & doInput, const auto & inputNode) -> nlohmann::json {
+        auto value = nlohmann::json::object();
+        value["outputs"] = inputNode.value;
+        {
+            auto next = nlohmann::json::object();
+            for (auto & [outputId, childNode] : inputNode.childMap)
+                next[outputId] = doInput(childNode);
+            value["dynamicOutputs"] = std::move(next);
+        }
+        return value;
+    };
+
+    auto & inputDrvsObj = res["inputs"]["drvs"];
+    inputDrvsObj = nlohmann::json::object();
+    for (auto & [inputDrv, inputNode] : d.inputDrvs.map)
+        inputDrvsObj[inputDrv.to_string()] = doInput(inputNode);
 }
 
 Derivation adl_serializer<Derivation>::from_json(const json & _json, const ExperimentalFeatureSettings & xpSettings)

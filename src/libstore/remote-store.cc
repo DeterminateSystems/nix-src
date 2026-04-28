@@ -19,6 +19,7 @@
 #include "nix/store/filetransfer.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/socket.hh"
+#include "nix/util/provenance.hh"
 
 #ifndef _WIN32
 #  include <sys/socket.h>
@@ -83,7 +84,10 @@ void RemoteStore::initConnection(Connection & conn)
         StringSink saved;
         TeeSource tee(conn.from, saved);
         try {
-            conn.protoVersion = WorkerProto::BasicClientConnection::handshake(conn.to, tee, WorkerProto::latest);
+            auto version = WorkerProto::latest;
+            if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
+                version.features.erase(std::string(WorkerProto::featureProvenance));
+            conn.protoVersion = WorkerProto::BasicClientConnection::handshake(conn.to, tee, version);
             if (conn.protoVersion.number < WorkerProto::minimum.number)
                 throw Error("the Nix daemon version is too old");
         } catch (SerialisationError & e) {
@@ -321,7 +325,8 @@ ref<const ValidPathInfo> RemoteStore::addCAToStore(
     ContentAddressMethod caMethod,
     HashAlgorithm hashAlgo,
     const StorePathSet & references,
-    RepairFlag repair)
+    RepairFlag repair,
+    std::shared_ptr<const Provenance> provenance)
 {
     std::optional<ConnectionHandle> conn_(getConnection());
     auto & conn = *conn_;
@@ -331,6 +336,8 @@ ref<const ValidPathInfo> RemoteStore::addCAToStore(
         conn->to << WorkerProto::Op::AddToStore << name << caMethod.renderWithAlgo(hashAlgo);
         WorkerProto::write(*this, *conn, references);
         conn->to << repair;
+        if (conn->protoVersion.features.contains(WorkerProto::featureProvenance))
+            conn->to << (provenance ? provenance->to_json_str() : "");
 
         // The dump source may invoke the store, so we need to make some room.
         connections->incCapacity();
@@ -408,7 +415,8 @@ StorePath RemoteStore::addToStoreFromDump(
     ContentAddressMethod hashMethod,
     HashAlgorithm hashAlgo,
     const StorePathSet & references,
-    RepairFlag repair)
+    RepairFlag repair,
+    std::shared_ptr<const Provenance> provenance)
 {
     FileSerialisationMethod fsm;
     switch (hashMethod.getFileIngestionMethod()) {
@@ -427,7 +435,7 @@ StorePath RemoteStore::addToStoreFromDump(
     }
     if (fsm != dumpMethod)
         unsupported("RemoteStore::addToStoreFromDump doesn't support this `dumpMethod` `hashMethod` combination");
-    auto storePath = addCAToStore(dump, name, hashMethod, hashAlgo, references, repair)->path;
+    auto storePath = addCAToStore(dump, name, hashMethod, hashAlgo, references, repair, provenance)->path;
     invalidatePathInfoCacheFor(storePath);
     return storePath;
 }
@@ -443,7 +451,10 @@ void RemoteStore::addToStore(const ValidPathInfo & info, Source & source, Repair
     WorkerProto::write(*this, *conn, info.references);
     conn->to << info.registrationTime << info.narSize << info.ultimate;
     WorkerProto::write(*this, *conn, info.sigs);
-    conn->to << renderContentAddress(info.ca) << repair << !checkSigs;
+    conn->to << renderContentAddress(info.ca);
+    if (conn->protoVersion.features.contains(WorkerProto::featureProvenance))
+        conn->to << (info.provenance ? info.provenance->to_json_str() : "");
+    conn->to << repair << !checkSigs;
 
     if (conn->protoVersion >= WorkerProto::Version{.number = {1, 23}}) {
         conn.withFramedSink([&](Sink & sink) { copyNAR(source, sink); });
@@ -458,6 +469,13 @@ void RemoteStore::addToStore(const ValidPathInfo & info, Source & source, Repair
 void RemoteStore::addMultipleToStore(
     PathsSource && pathsToCopy, Activity & act, RepairFlag repair, CheckSigsFlag checkSigs)
 {
+    if (getConnection()->protoVersion.number < WorkerProto::Version::Number{1, 32}) {
+        Store::addMultipleToStore(std::move(pathsToCopy), act, repair, checkSigs);
+        return;
+    }
+
+    auto conn(getConnection());
+
     // `addMultipleToStore` is single threaded
     size_t bytesExpected = 0;
     for (auto & [pathInfo, _] : pathsToCopy) {
@@ -478,7 +496,9 @@ void RemoteStore::addMultipleToStore(
                 *this,
                 WorkerProto::WriteConn{
                     .to = sink,
-                    .version = {.number = {.major = 1, .minor = 16}},
+                    .version = conn->protoVersion.features.contains(WorkerProto::featureVersionedAddToStoreMultiple)
+                                   ? conn->protoVersion
+                                   : WorkerProto::Version{.number = {.major = 1, .minor = 16}},
                 },
                 pathInfo);
             pathSource->drainInto(sink);
@@ -486,17 +506,8 @@ void RemoteStore::addMultipleToStore(
         }
     });
 
-    addMultipleToStore(*source, repair, checkSigs);
-}
-
-void RemoteStore::addMultipleToStore(Source & source, RepairFlag repair, CheckSigsFlag checkSigs)
-{
-    if (getConnection()->protoVersion >= WorkerProto::Version{.number = {1, 32}}) {
-        auto conn(getConnection());
-        conn->to << WorkerProto::Op::AddMultipleToStore << repair << !checkSigs;
-        conn.withFramedSink([&](Sink & sink) { source.drainInto(sink); });
-    } else
-        Store::addMultipleToStore(source, repair, checkSigs);
+    conn->to << WorkerProto::Op::AddMultipleToStore << repair << !checkSigs;
+    conn.withFramedSink([&](Sink & sink) { source->drainInto(sink); });
 }
 
 void RemoteStore::registerDrvOutput(const Realisation & info)
@@ -778,6 +789,16 @@ void RemoteStore::addBuildLog(const StorePath & drvPath, std::string_view log)
     StringSource source(log);
     conn.withFramedSink([&](Sink & sink) { source.drainInto(sink); });
     readInt(conn->from);
+}
+
+std::vector<ActiveBuildInfo> RemoteStore::queryActiveBuilds()
+{
+    auto conn(getConnection());
+    if (!conn->protoVersion.features.count(WorkerProto::featureQueryActiveBuilds))
+        throw Error("remote store does not support querying active builds");
+    conn->to << WorkerProto::Op::QueryActiveBuilds;
+    conn.processStderr();
+    return nlohmann::json::parse(readString(conn->from)).get<std::vector<ActiveBuildInfo>>();
 }
 
 std::optional<std::string> RemoteStore::getVersion()

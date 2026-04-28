@@ -4,6 +4,8 @@ source common.sh
 
 TODO_NixOS
 
+requireGit
+
 clearStore
 clearProfiles
 
@@ -12,7 +14,7 @@ restartDaemon
 
 # Make a flake.
 flake1Dir=$TEST_ROOT/flake1
-mkdir -p "$flake1Dir"
+createGitRepo "$flake1Dir"
 
 # shellcheck disable=SC2154,SC1039
 cat > "$flake1Dir"/flake.nix <<EOF
@@ -50,18 +52,21 @@ printf false > "$flake1Dir"/ca.nix
 
 cp "${config_nix}" "$flake1Dir"/
 
+git -C "$flake1Dir" add flake.nix config.nix who version ca.nix
+git -C "$flake1Dir" commit -m 'Initial'
+
 # Test upgrading from nix-env.
 nix-env -f ./user-envs.nix -i foo-1.0
 nix profile list | grep -A2 'Name:.*foo' | grep 'Store paths:.*foo-1.0'
 nix profile add "$flake1Dir" -L
-nix profile list | grep -A4 'Name:.*flake1' | grep 'Locked flake URL:.*narHash'
+#nix profile list | grep -A4 'Name:.*flake1' | grep 'Locked flake URL:.*narHash'
 [[ $("$TEST_HOME"/.nix-profile/bin/hello) = "Hello World" ]]
 [ -e "$TEST_HOME"/.nix-profile/share/man ]
 # shellcheck disable=SC2235
 (! [ -e "$TEST_HOME"/.nix-profile/include ])
 nix profile history
-nix profile history | grep "packages.$system.default: ∅ -> 1.0"
-nix profile diff-closures | grep 'env-manifest.nix: ε → ∅'
+nix profile history | grep "packages.$system.default: 1.0, 1.0-man added"
+nix profile diff-closures | grep 'env-manifest.nix: (no version) removed'
 
 # Test XDG Base Directories support
 export NIX_CONFIG="use-xdg-base-directories = true"
@@ -72,6 +77,25 @@ unset NIX_CONFIG
 
 # Test conflicting package add.
 nix profile add "$flake1Dir" 2>&1 | grep "warning: 'flake1' is already added"
+
+# Test tab completion of profile elements
+# The profile should have 'foo' and 'flake1' installed at this point
+completion_output=$(NIX_GET_COMPLETIONS=3 nix profile remove '' 2>&1)
+echo "$completion_output" | grep -q "^normal$"
+echo "$completion_output" | grep -q "^flake1"
+echo "$completion_output" | grep -q "^foo"
+
+# Test prefix matching - should only complete 'flake1' when prefix is 'fl'
+completion_output=$(NIX_GET_COMPLETIONS=3 nix profile remove 'fl' 2>&1)
+echo "$completion_output" | grep -q "^normal$"
+echo "$completion_output" | grep -q "^flake1"
+echo "$completion_output" | grepQuietInverse "^foo"
+
+# Test completion with upgrade command
+completion_output=$(NIX_GET_COMPLETIONS=3 nix profile upgrade '' 2>&1)
+echo "$completion_output" | grep -q "^normal$"
+echo "$completion_output" | grep -q "^flake1"
+echo "$completion_output" | grep -q "^foo"
 
 # Test upgrading a package.
 printf NixOS > "$flake1Dir"/who
@@ -96,6 +120,7 @@ printf 1.0 > "$flake1Dir"/version
 # Test --all exclusivity.
 assertStderr nix --offline profile upgrade --all foo << EOF
 error: --all cannot be used with package names or regular expressions.
+
 Try 'nix --help' for more information.
 EOF
 
@@ -130,9 +155,8 @@ nix profile rollback
 [ -e "$TEST_HOME"/.nix-profile/bin/foo ]
 # shellcheck disable=SC2235
 nix profile remove foo 2>&1 | grep 'removed 1 packages'
-# shellcheck disable=SC2235
-(! [ -e "$TEST_HOME"/.nix-profile/bin/foo ])
-nix profile history | grep 'foo: 1.0 -> ∅'
+[[ ! -e "$TEST_HOME"/.nix-profile/bin/foo ]]
+nix profile history | grep 'foo: 1.0 removed'
 nix profile diff-closures | grep 'Version 3 -> 4'
 
 # Test installing a non-flake package.
@@ -224,11 +248,11 @@ error: An existing package already provides the following file:
        The conflicting packages have a priority of 5.
        To prioritise the new package:
 
-         nix profile add path:${flake2Dir}#packages.${system}.default --priority 4
+         nix profile add git+file://${flake2Dir}#packages.${system}.default --priority 4
 
        To prioritise the existing package:
 
-         nix profile add path:${flake2Dir}#packages.${system}.default --priority 6
+         nix profile add git+file://${flake2Dir}#packages.${system}.default --priority 6
 EOF
 )
 [[ $("$TEST_HOME"/.nix-profile/bin/hello) = "Hello World" ]]

@@ -12,6 +12,7 @@
 
 #ifdef __APPLE__
 #  include <mach-o/dyld.h>
+#  include <mach/mach.h>
 #endif
 
 #ifdef __linux__
@@ -115,6 +116,15 @@ void restoreProcessContext(bool restoreMounts)
             setrlimit(RLIMIT_STACK, &limit);
         }
     }
+#endif
+
+#ifdef __APPLE__
+    /* Reset the Mach exception ports. Otherwise, if a crashpad_handler is attached to this process, it will be
+       inherited across execve() and receive spurious crash reports from unrelated programs (e.g. in `nix run`).
+       FIXME: it would be better to have Sentry tell crashpad_handler to quit, but it doesn't appear to have an API for
+       that. */
+    task_set_exception_ports(
+        mach_task_self(), EXC_MASK_ALL | EXC_MASK_CRASH, MACH_PORT_NULL, EXCEPTION_DEFAULT, THREAD_STATE_NONE);
 #endif
 }
 

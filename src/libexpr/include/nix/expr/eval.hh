@@ -51,6 +51,9 @@ struct SingleDerivedPath;
 enum RepairFlag : bool;
 struct MemorySourceAccessor;
 struct MountedSourceAccessor;
+struct AsyncPathWriter;
+struct Provenance;
+struct Executor;
 
 namespace eval_cache {
 class EvalCache;
@@ -225,7 +228,7 @@ struct StaticEvalSymbols
         line, column, functor, toString, right, wrong, structuredAttrs, json, allowedReferences, allowedRequisites,
         disallowedReferences, disallowedRequisites, maxSize, maxClosureSize, builder, args, contentAddressed, impure,
         outputHash, outputHashAlgo, outputHashMode, recurseForDerivations, description, self, epsilon, startSet,
-        operator_, key, path, prefix, outputSpecified;
+        operator_, key, path, prefix, outputSpecified, __meta;
 
     Expr::AstSymbols exprSymbols;
 
@@ -278,6 +281,7 @@ struct StaticEvalSymbols
             .path = alloc.create("path"),
             .prefix = alloc.create("prefix"),
             .outputSpecified = alloc.create("outputSpecified"),
+            .__meta = alloc.create("__meta"),
             .exprSymbols = {
                 .sub = alloc.create("__sub"),
                 .lessThan = alloc.create("__lessThan"),
@@ -420,6 +424,8 @@ public:
     std::list<DebugTrace> debugTraces;
     boost::unordered_flat_map<const Expr *, const std::shared_ptr<const StaticEnv>> exprEnvs;
 
+    ref<AsyncPathWriter> asyncPathWriter;
+
     const std::shared_ptr<const StaticEnv> getStaticEnv(const Expr & expr) const
     {
         auto i = exprEnvs.find(&expr);
@@ -484,11 +490,11 @@ private:
      * Associate source positions of certain AST nodes with their preceding doc comment, if they have one.
      * Grouped by file.
      */
-    boost::unordered_flat_map<SourcePath, DocCommentMap> positionToDocComment;
+    const ref<boost::concurrent_flat_map<SourcePath, ref<DocCommentMap>>> positionToDocComment;
 
     LookupPath lookupPath;
 
-    boost::unordered_flat_map<std::string, std::optional<SourcePath>, StringViewHash, std::equal_to<>>
+    const ref<boost::concurrent_flat_map<std::string, std::optional<SourcePath>, StringViewHash, std::equal_to<>>>
         lookupPathResolved;
 
     /**
@@ -576,7 +582,12 @@ public:
     /**
      * Mount an input on the Nix store.
      */
-    StorePath mountInput(fetchers::Input & input, const fetchers::Input & originalInput, ref<SourceAccessor> accessor);
+    StorePath mountInput(
+        fetchers::Input & input,
+        const fetchers::Input & originalInput,
+        ref<SourceAccessor> accessor,
+        bool requireLockable,
+        bool forceNarHash = false);
 
     /**
      * Parse a Nix expression from the specified file.
@@ -650,25 +661,10 @@ public:
      * application, call the function and overwrite `v` with the
      * result.  Otherwise, this is a no-op.
      */
-    inline void forceValue(Value & v, const PosIdx pos);
-
-private:
-
-    /**
-     * Internal support function for forceValue
-     *
-     * This code is factored out so that it's not in the heavily inlined hot path.
-     */
-    void handleEvalExceptionForThunk(Env * env, Expr * expr, Value & v, const PosIdx pos);
-
-    /**
-     * Internal support function for forceValue
-     *
-     * This code is factored out so that it's not in the heavily inlined hot path.
-     */
-    void handleEvalExceptionForApp(Value & v, const Value & savedApp);
-
-    void handleEvalFailed(Value & v, PosIdx pos);
+    inline void forceValue(Value & v, const PosIdx pos)
+    {
+        v.force(*this, pos);
+    }
 
     void tryFixupBlackHolePos(Value & v, PosIdx pos);
 
@@ -728,6 +724,12 @@ public:
     std::optional<std::string> tryAttrsToString(
         const PosIdx pos, Value & v, NixStringContext & context, bool coerceMore = false, bool copyToStore = true);
 
+    StorePath devirtualize(const StorePath & path, StringMap * rewrites = nullptr);
+
+    SingleDerivedPath devirtualize(const SingleDerivedPath & path, StringMap * rewrites = nullptr);
+
+    std::string devirtualize(std::string_view s, const NixStringContext & context);
+
     /**
      * String coercion.
      *
@@ -745,7 +747,19 @@ public:
         bool copyToStore = true,
         bool canonicalizePath = true);
 
-    StorePath copyPathToStore(NixStringContext & context, const SourcePath & path);
+    StorePath copyPathToStore(NixStringContext & context, const SourcePath & path, PosIdx pos);
+
+    /**
+     * Compute the base name for a `SourcePath`. For non-store paths,
+     * this is just `SourcePath::baseName()`. But for store paths, for
+     * backwards compatibility, it needs to be `<hash>-source`,
+     * i.e. as if the path were copied to the Nix store. This results
+     * in a "double-copied" store path like
+     * `/nix/store/<hash1>-<hash2>-source`. We don't need to
+     * materialize /nix/store/<hash2>-source though. Still, this
+     * requires reading/hashing the path twice.
+     */
+    std::string computeBaseName(const SourcePath & path, PosIdx pos);
 
     /**
      * Path coercion.
@@ -895,10 +909,11 @@ private:
         const std::shared_ptr<StaticEnv> & staticEnv);
 
     /**
-     * Current Nix call stack depth, used with `max-call-depth` setting to throw stack overflow hopefully before we run
-     * out of system stack.
+     * Current Nix call stack depth, used with `max-call-depth`
+     * setting to throw stack overflow hopefully before we run out of
+     * system stack.
      */
-    size_t callDepth = 0;
+    thread_local static size_t callDepth;
 
 public:
 
@@ -1051,6 +1066,10 @@ public:
 
     DocComment getDocCommentForPos(PosIdx pos);
 
+    void waitForPath(const StorePath & path);
+    void waitForPath(const SingleDerivedPath & path);
+    void waitForAllPaths();
+
 private:
 
     /**
@@ -1076,8 +1095,18 @@ private:
     Counter nrPrimOpCalls;
     Counter nrFunctionCalls;
 
+public:
+    Counter nrThunksAwaited;
+    Counter nrThunksAwaitedSlow;
+    Counter microsecondsWaiting;
+    Counter currentlyWaiting;
+    Counter maxWaiting;
+    Counter nrSpuriousWakeups;
+
+private:
     bool countCalls;
 
+    // FIXME: make thread-safe.
     typedef boost::unordered_flat_map<std::string, size_t, StringViewHash, std::equal_to<>> PrimOpCalls;
     PrimOpCalls primOpCalls;
 
@@ -1089,6 +1118,7 @@ private:
 
     void incrFunctionCall(ExprLambda * fun);
 
+    // FIXME: make thread-safe.
     typedef boost::unordered_flat_map<PosIdx, size_t, std::hash<PosIdx>> AttrSelects;
     AttrSelects attrSelects;
 
@@ -1106,6 +1136,56 @@ private:
 
     friend struct Value;
     friend class ListBuilder;
+
+public:
+
+    /**
+     * Per-thread evaluation context. This context is propagated to worker threads when a value is evaluated
+     * asynchronously.
+     */
+    struct EvalContext
+    {
+        std::shared_ptr<const Provenance> provenance;
+    };
+
+    thread_local static EvalContext evalContext;
+
+    /**
+     * Create a work item that propagates the current evaluation context.
+     */
+    template<typename T>
+    auto makeWork(T && t)
+    {
+        return [this, t{std::move(t)}, evalContext(evalContext)]() {
+            this->evalContext = evalContext;
+            t();
+        };
+    }
+
+    /**
+     * Add a work item to the given work vector that propagates the current evaluation context.
+     */
+    template<typename WorkItems, typename T>
+    void addWork(WorkItems & work, uint8_t priority, T && t)
+    {
+        work.emplace_back(makeWork(std::move(t)), priority);
+    }
+
+    template<typename FuturesVector, typename T>
+    void spawn(FuturesVector & futures, uint8_t priority, T && t)
+    {
+        futures.spawn(priority, makeWork(std::move(t)));
+    }
+
+    /**
+     * Worker threads manager.
+     *
+     * Note: keep this last to ensure that it's destroyed first, so we
+     * don't have any background work items (e.g. from
+     * `builtins.parallel`) referring to a partially destroyed
+     * `EvalState`.
+     */
+    ref<Executor> executor;
 };
 
 struct DebugTraceStacker
@@ -1141,6 +1221,24 @@ SourcePath resolveExprPath(SourcePath path, bool addDefaultNix = true);
  * Whether a URI is allowed, assuming restrictEval is enabled
  */
 bool isAllowedURI(std::string_view uri, const Strings & allowedPaths);
+
+struct PushProvenance
+{
+    EvalState & state;
+    std::shared_ptr<const Provenance> prev;
+
+    PushProvenance(EvalState & state, std::shared_ptr<const Provenance> prov)
+        : state(state)
+    {
+        state.evalContext.provenance.swap(prev);
+        state.evalContext.provenance.swap(prov);
+    }
+
+    ~PushProvenance()
+    {
+        state.evalContext.provenance.swap(prev);
+    }
+};
 
 } // namespace nix
 

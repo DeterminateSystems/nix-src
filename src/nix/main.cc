@@ -30,6 +30,9 @@
 
 #include <sys/types.h>
 #include <nlohmann/json.hpp>
+#if HAVE_SENTRY
+#  include <sentry.h>
+#endif
 
 #ifndef _WIN32
 #  include <sys/socket.h>
@@ -87,6 +90,22 @@ static bool haveInternet()
 #endif
 }
 
+static void disableNet()
+{
+    // FIXME: should check for command line overrides only.
+    if (!settings.getWorkerSettings().useSubstitutes.overridden)
+        // FIXME: should not disable local substituters (like file:///).
+        settings.getWorkerSettings().useSubstitutes = false;
+    if (!fetchSettings.tarballTtl.overridden)
+        fetchSettings.tarballTtl = std::numeric_limits<unsigned int>::max();
+    if (!settings.getNarInfoDiskCacheSettings().ttlMeta.overridden)
+        settings.getNarInfoDiskCacheSettings().ttlMeta = std::numeric_limits<unsigned int>::max();
+    if (!fileTransferSettings.tries.overridden)
+        fileTransferSettings.tries = 0;
+    if (!fileTransferSettings.connectTimeout.overridden)
+        fileTransferSettings.connectTimeout = 1;
+}
+
 std::string programPath;
 
 struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
@@ -103,6 +122,7 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
         categories.clear();
         categories[catHelp] = "Help commands";
         categories[Command::catDefault] = "Main commands";
+        categories[Command::catUndocumented] = "Undocumented commands";
         categories[catSecondary] = "Infrequently used commands";
         categories[catUtility] = "Utility/scripting commands";
         categories[catNixInstallation] = "Commands for upgrading or troubleshooting your Nix installation";
@@ -120,7 +140,6 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             .description = "Print full build logs on standard error.",
             .category = loggingCategory,
             .handler = {[&]() { logger->setPrintBuildLogs(true); }},
-            .experimentalFeature = Xp::NixCommand,
         });
 
         addFlag({
@@ -136,7 +155,6 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             .description = "Disable substituters and consider all previously downloaded files up-to-date.",
             .category = miscCategory,
             .handler = {[&]() { useNet = false; }},
-            .experimentalFeature = Xp::NixCommand,
         });
 
         addFlag({
@@ -144,7 +162,6 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             .description = "Consider all previously downloaded files out-of-date.",
             .category = miscCategory,
             .handler = {[&]() { refresh = true; }},
-            .experimentalFeature = Xp::NixCommand,
         });
 
         aliases = {
@@ -370,16 +387,51 @@ void mainWrapped(int argc, char ** argv)
 {
     savedArgv = argv;
 
-    registerCrashHandler();
-
     /* The chroot helper needs to be run before any threads have been
-       started. */
+       started (including Sentry's worker thread). */
 #ifndef _WIN32
     if (argc > 0 && argv[0] == chrootHelperName) {
         chrootHelper(argc, argv);
         return;
     }
 #endif
+
+    bool sentryEnabled = false;
+
+#if HAVE_SENTRY
+    auto sentryEndpoint = getEnv("NIX_SENTRY_ENDPOINT");
+
+    if (!sentryEndpoint && getEnv("DETSYS_IDS_TELEMETRY") != "disabled") {
+        try {
+            auto p = nixConfDir() / "sentry-endpoint";
+            if (pathExists(p))
+                sentryEndpoint = trim(readFile(p));
+        } catch (...) {
+            ignoreExceptionExceptInterrupt();
+        }
+    }
+
+    if (sentryEndpoint && sentryEndpoint != "") {
+        sentry_options_t * options = sentry_options_new();
+        sentry_options_set_dsn(options, sentryEndpoint->c_str());
+        sentry_options_set_database_path(options, (getCacheDir() / "sentry").string().c_str());
+        sentry_options_set_release(options, fmt("nix@%s", determinateNixVersion).c_str());
+        sentry_options_set_traces_sample_rate(options, 0);
+        sentry_options_set_auto_session_tracking(options, false);
+        sentry_options_set_handler_path(options, CRASHPAD_HANDLER_PATH);
+        sentry_init(options);
+        sentry_set_tag("nix_command", argc > 0 ? std::string(baseNameOf(argv[0])).c_str() : "");
+        sentryEnabled = true;
+    }
+
+    Finally cleanupSentry([&]() {
+        if (sentryEnabled)
+            sentry_shutdown();
+    });
+#endif
+
+    if (!sentryEnabled)
+        registerCrashHandler();
 
     /* Set the build hook location
 
@@ -448,7 +500,6 @@ void mainWrapped(int argc, char ** argv)
 
     if (argc == 2 && std::string(argv[1]) == "__dump-language") {
         experimentalFeatureSettings.experimentalFeatures = {
-            Xp::Flakes,
             Xp::FetchClosure,
             Xp::DynamicDerivations,
             Xp::FetchTree,
@@ -512,6 +563,12 @@ void mainWrapped(int argc, char ** argv)
         }
     });
 
+    if (getEnv("NIX_GET_COMPLETIONS"))
+        /* Avoid fetching stuff during tab completion. We have to this
+           early because we haven't checked `haveInternet()` yet
+           (below). */
+        disableNet();
+
     try {
         auto isNixCommand = programName.ends_with("nix");
         auto allowShebang = isNixCommand && argc > 1;
@@ -523,16 +580,19 @@ void mainWrapped(int argc, char ** argv)
 
     applyJSONLogger();
 
+    printTalkative("Nix %s", version());
+
+    std::vector<std::string> subcommand;
+    MultiCommand * command = &args;
+    while (command) {
+        if (command && command->command) {
+            subcommand.push_back(command->command->first);
+            command = dynamic_cast<MultiCommand *>(&*command->command->second);
+        } else
+            break;
+    }
+
     if (args.helpRequested) {
-        std::vector<std::string> subcommand;
-        MultiCommand * command = &args;
-        while (command) {
-            if (command && command->command) {
-                subcommand.push_back(command->command->first);
-                command = dynamic_cast<MultiCommand *>(&*command->command->second);
-            } else
-                break;
-        }
         showHelp(subcommand, args);
         return;
     }
@@ -555,20 +615,8 @@ void mainWrapped(int argc, char ** argv)
         args.useNet = false;
     }
 
-    if (!args.useNet) {
-        // FIXME: should check for command line overrides only.
-        if (!settings.getWorkerSettings().useSubstitutes.overridden)
-            settings.getWorkerSettings().useSubstitutes = false;
-        if (!fetchSettings.tarballTtl.overridden)
-            fetchSettings.tarballTtl = std::numeric_limits<unsigned int>::max();
-        if (!fileTransferSettings.tries.overridden)
-            fileTransferSettings.tries = 0;
-        if (!fileTransferSettings.connectTimeout.overridden)
-            fileTransferSettings.connectTimeout = 1;
-        auto & ttlMeta = settings.getNarInfoDiskCacheSettings().ttlMeta;
-        if (!ttlMeta.overridden)
-            ttlMeta = std::numeric_limits<unsigned int>::max();
-    }
+    if (!args.useNet)
+        disableNet();
 
     if (args.refresh) {
         fetchSettings.tarballTtl = 0;
@@ -580,6 +628,11 @@ void mainWrapped(int argc, char ** argv)
     if (args.command->second->forceImpureByDefault() && !evalSettings.pureEval.overridden) {
         evalSettings.pureEval = false;
     }
+
+#if HAVE_SENTRY
+    if (sentryEnabled)
+        sentry_set_tag("nix_subcommand", concatStringsSep(" ", subcommand).c_str());
+#endif
 
     try {
         args.command->second->run();
@@ -595,15 +648,15 @@ void mainWrapped(int argc, char ** argv)
 
 int main(int argc, char ** argv)
 {
+    using namespace nix;
+
     // The CLI has a more detailed version than the libraries; see nixVersion.
-    nix::nixVersion = NIX_CLI_VERSION;
+    nixVersion = NIX_CLI_VERSION;
 #ifndef _WIN32
     // Increase the default stack size for the evaluator and for
     // libstdc++'s std::regex.
-    // This used to be 64 MiB, but macOS as deployed on GitHub Actions has a
-    // hard limit slightly under that, so we round it down a bit.
-    nix::setStackSize(60 * 1024 * 1024);
+    setStackSize(evalStackSize);
 #endif
 
-    return nix::handleExceptions(argv[0], [&]() { nix::mainWrapped(argc, argv); });
+    return handleExceptions(argv[0], [&]() { mainWrapped(argc, argv); });
 }

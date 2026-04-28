@@ -27,13 +27,13 @@ void CommonProto::Serialise<std::string>::write(
 
 StorePath CommonProto::Serialise<StorePath>::read(const StoreDirConfig & store, CommonProto::ReadConn conn)
 {
-    return store.parseStorePath(readString(conn.from));
+    return conn.shortStorePaths ? StorePath(readString(conn.from)) : store.parseStorePath(readString(conn.from));
 }
 
 void CommonProto::Serialise<StorePath>::write(
     const StoreDirConfig & store, CommonProto::WriteConn conn, const StorePath & storePath)
 {
-    conn.to << store.printStorePath(storePath);
+    conn.to << (conn.shortStorePaths ? storePath.to_string() : store.printStorePath(storePath));
 }
 
 ContentAddress CommonProto::Serialise<ContentAddress>::read(const StoreDirConfig & store, CommonProto::ReadConn conn)
@@ -79,13 +79,15 @@ std::optional<StorePath>
 CommonProto::Serialise<std::optional<StorePath>>::read(const StoreDirConfig & store, CommonProto::ReadConn conn)
 {
     auto s = readString(conn.from);
-    return s == "" ? std::optional<StorePath>{} : store.parseStorePath(s);
+    return s == "" ? std::optional<StorePath>{} : conn.shortStorePaths ? StorePath(s) : store.parseStorePath(s);
 }
 
 void CommonProto::Serialise<std::optional<StorePath>>::write(
     const StoreDirConfig & store, CommonProto::WriteConn conn, const std::optional<StorePath> & storePathOpt)
 {
-    conn.to << (storePathOpt ? store.printStorePath(*storePathOpt) : "");
+    conn.to
+        << (storePathOpt ? (conn.shortStorePaths ? storePathOpt->to_string() : store.printStorePath(*storePathOpt))
+                         : "");
 }
 
 std::optional<ContentAddress>
@@ -134,6 +136,8 @@ constexpr static BuildResultStatus buildResultStatusTable[] = {
     BuildResultFailureStatus::NotDeterministic,       // 12
     BuildResultSuccessStatus::ResolvesToAlreadyValid, // 13
     BuildResultFailureStatus::NoSubstituters,         // 14
+    BuildResultFailureStatus::HashMismatch,           // 15
+    BuildResultFailureStatus::Cancelled,              // 16
 };
 
 BuildResultStatus
