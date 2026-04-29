@@ -35,11 +35,17 @@ if isDaemonNewer "2.26"; then
 fi
 
 # Test json-log-path.
-if [[ "$NIX_REMOTE" != "daemon" ]]; then
-    clearStore
-    nix build -vv --file dependencies.nix --no-link --json-log-path "$TEST_ROOT/log.json" 2>&1 | grepQuiet 'building.*dependencies-top.drv'
-    jq < "$TEST_ROOT/log.json"
-    grep '{"action":"start","fields":\[".*-dependencies-top.drv","",1,1\],"id":.*,"level":3,"parent":0' "$TEST_ROOT/log.json" >&2
-    grep -E '{"action":"result","id":[^,]+,"payload":{"builtOutputs":{"out":{"dependentRealisations":\{\},"id":"[^"]+","outPath":"[^-]+-dependencies-top".*"status":"Built".*"success":true' "$TEST_ROOT/log.json" >&2
-    (( $(grep -c '{"action":"msg","level":5,"msg":"executing builder .*"}' "$TEST_ROOT/log.json" ) == 5 ))
-fi
+clearStore
+nix build -vv --file dependencies.nix --no-link --json-log-path "$TEST_ROOT/log.json" 2>&1 | grepQuiet 'building.*dependencies-top.drv'
+grep '{"action":"start","fields":\[".*-dependencies-top.drv","",1,1\],"id":.*,"level":3,"parent":0' "$TEST_ROOT/log.json" >&2
+grep -E '{"action":"result","id":[^,]+,"payload":{"builtOutputs":{"out":{"dependentRealisations":\{\},"id":"[^"]+","outPath":"[^-]+-dependencies-top".*"status":"Built".*"success":true' "$TEST_ROOT/log.json" >&2
+(( $(grep -c '{"action":"msg","level":5,"msg":"executing builder .*"}' "$TEST_ROOT/log.json" ) == 5 ))
+
+# Check that all log entries have the same session ID.
+sid=$(head -n1 < "$TEST_ROOT/log.json" | jq -r '.sid')
+[[ -n "$sid" && "$sid" != "null" ]]
+(( $(jq -s --arg sid "$sid" '[.[] | select(.sid != $sid)] | length' < "$TEST_ROOT/log.json") == 0 ))
+
+# Test whether setting an explicit session ID works.
+nix store info --json-log-path "$TEST_ROOT/log2.json" --session-id "foo"
+(( $(jq -s --arg sid foo '[.[] | select(.sid != $sid)] | length' < "$TEST_ROOT/log2.json") == 0 ))

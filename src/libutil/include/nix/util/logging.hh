@@ -68,6 +68,15 @@ struct LoggerSettings : Config
           Concurrent writes to the same file by multiple Nix processes are not supported and
           may result in interleaved or corrupted log records.
         )"};
+
+    Setting<std::string> sessionId{
+        this,
+        "",
+        "session-id",
+        R"(
+          An identifier for the current Nix session, which is included in JSON log output to
+          allow grouping of log messages from the same session. This defaults to a random UUID.
+        )"};
 };
 
 extern LoggerSettings loggerSettings;
