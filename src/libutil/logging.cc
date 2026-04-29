@@ -14,6 +14,10 @@
 #include <nlohmann/json.hpp>
 #include <iostream>
 
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
+
 namespace nix {
 
 LoggerSettings loggerSettings;
@@ -211,6 +215,16 @@ void to_json(nlohmann::json & json, std::shared_ptr<const Pos> pos)
     }
 }
 
+static std::string getSessionId()
+{
+    if (!loggerSettings.sessionId.get().empty())
+        return loggerSettings.sessionId.get();
+
+    // Generate a random UUID as the session ID.
+    static std::string uuid = boost::uuids::to_string(boost::uuids::random_generator()());
+    return uuid;
+}
+
 struct JSONLogger : Logger
 {
     Descriptor fd;
@@ -248,8 +262,10 @@ struct JSONLogger : Logger
 
     Sync<State> _state;
 
-    void write(const nlohmann::json & json)
+    void write(nlohmann::json json)
     {
+        json["sid"] = getSessionId();
+
         auto line = (includeNixPrefix ? "@nix " : "")
                     + json.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 
@@ -275,7 +291,7 @@ struct JSONLogger : Logger
         json["action"] = "msg";
         json["level"] = lvl;
         json["msg"] = s;
-        write(json);
+        write(std::move(json));
     }
 
     void logEI(const ErrorInfo & ei) override
@@ -302,7 +318,7 @@ struct JSONLogger : Logger
             json["trace"] = traces;
         }
 
-        write(json);
+        write(std::move(json));
     }
 
     void startActivity(
@@ -321,7 +337,7 @@ struct JSONLogger : Logger
         json["text"] = s;
         json["parent"] = parent;
         addFields(json, fields);
-        write(json);
+        write(std::move(json));
     }
 
     void stopActivity(ActivityId act) override
@@ -329,7 +345,7 @@ struct JSONLogger : Logger
         nlohmann::json json;
         json["action"] = "stop";
         json["id"] = act;
-        write(json);
+        write(std::move(json));
     }
 
     void result(ActivityId act, ResultType type, const Fields & fields) override
@@ -339,7 +355,7 @@ struct JSONLogger : Logger
         json["id"] = act;
         json["type"] = type;
         addFields(json, fields);
-        write(json);
+        write(std::move(json));
     }
 
     void result(ActivityId act, ResultType type, const nlohmann::json & j) override
@@ -349,7 +365,7 @@ struct JSONLogger : Logger
         json["id"] = act;
         json["type"] = type;
         json["payload"] = j;
-        write(json);
+        write(std::move(json));
     }
 };
 
