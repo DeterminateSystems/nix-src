@@ -27,6 +27,13 @@ for path in "${paths[@]}"; do
         || [[ "$path" =~ -dependencies-top$ ]]
 done
 
+echo foobar > "$TEST_ROOT/big-file"
+for ((i = 0; i < 16; i++)); do
+    cat "$TEST_ROOT/big-file" "$TEST_ROOT/big-file" > "$TEST_ROOT/big-file.tmp"
+    mv "$TEST_ROOT/big-file.tmp" "$TEST_ROOT/big-file"
+done
+bigFile="$(nix store add-file --store "file://$cacheDir" "$TEST_ROOT/big-file")"
+
 # Test copying build logs to the binary cache.
 expect 1 nix log --store "file://$cacheDir" "$outPath" 2>&1 | grep 'is not available'
 nix store copy-log --to "file://$cacheDir" "$outPath"
@@ -120,8 +127,11 @@ basicDownloadTests "file://$cacheDir"
 
 # Test HttpBinaryCacheStore.
 restartNixServe
-nix store info --store "$httpBinaryCacheUrl"
 basicDownloadTests "$httpBinaryCacheUrl"
+
+# Regression test: queryMissing() should cache narinfos.
+nix path-info -vvvv --store "$httpBinaryCacheUrl" "$bigFile" 2> "$TEST_ROOT/log"
+[[ $(grep -c "downloading.*narinfo'" "$TEST_ROOT/log") -eq 1 ]]
 
 
 # Test that multiple concurrent substitutions do only one download.
@@ -134,7 +144,7 @@ pid2="$!"
 wait "$pid1"
 wait "$pid2"
 [[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "copying path ") -eq 2 ]]
-[[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "downloading.*nar") -eq 1 ]]
+[[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "downloading.*nar'") -eq 1 ]]
 
 
 # Test whether Nix notices if the NAR doesn't match the hash in the NAR info.
