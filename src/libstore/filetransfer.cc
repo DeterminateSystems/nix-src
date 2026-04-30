@@ -127,10 +127,16 @@ struct curlFileTransfer : public FileTransfer
         bool acceptRanges:1 = false;
 
         /**
+         * When retrying, whether to request a range.
+         */
+        bool requestRange:1 = false;
+
+        /**
          * Whether the response has a non-trivial (not "identity") Content-Encoding.
          */
         bool hasContentEncoding:1 = false;
 
+        curl_off_t bytesReceived = 0;
         curl_off_t writtenToSink = 0;
 
         std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
@@ -175,6 +181,18 @@ struct curlFileTransfer : public FileTransfer
                     /* Only write data to the sink if this is a
                        successful response. */
                     if (successfulStatuses.count(httpStatus)) {
+
+                        auto prevReceived = bytesReceived;
+                        bytesReceived += data.size();
+
+                        /* Discard data that we've already received and sent to the sink in a previous try. */
+                        if (prevReceived < writtenToSink) {
+                            if (writtenToSink - prevReceived >= (curl_off_t) data.size()) {
+                                return;
+                            }
+                            data = data.substr(writtenToSink - prevReceived);
+                        }
+
                         writtenToSink += data.size();
                         PauseTransfer needsPause = this->request.dataCallback(data);
                         if (needsPause == PauseTransfer::Yes) {
@@ -299,6 +317,7 @@ struct curlFileTransfer : public FileTransfer
                 statusMsg = trim(match.str(1));
                 acceptRanges = false;
                 hasContentEncoding = false;
+                bytesReceived = 0;
                 appendCurrentUrl();
             } else {
 
@@ -488,7 +507,7 @@ struct curlFileTransfer : public FileTransfer
                Skip for uploads (Accept-Encoding is meaningless when sending data)
                and when resuming from an offset (byte ranges don't work with
                compressed content). */
-            if (writtenToSink == 0 && !request.data)
+            if (requestRange && !request.data)
                 /* Empty string means to enable all supported (that libcurl has
                    been linked to support) encodings. */
                 curl_easy_setopt(req, CURLOPT_ACCEPT_ENCODING, "");
@@ -566,7 +585,7 @@ struct curlFileTransfer : public FileTransfer
             curl_easy_setopt(req, CURLOPT_NETRC_FILE, fileTransfer.settings.netrcFile.get().c_str());
             curl_easy_setopt(req, CURLOPT_NETRC, CURL_NETRC_OPTIONAL);
 
-            if (writtenToSink)
+            if (requestRange)
                 curl_easy_setopt(req, CURLOPT_RESUME_FROM_LARGE, writtenToSink);
 
             /* Note that the underlying strings get copied by libcurl, so the path -> string conversion is ok:
@@ -745,12 +764,14 @@ struct curlFileTransfer : public FileTransfer
                    sink, we can only retry if the server supports
                    ranged requests. */
                 if (err == Transient && attempt < fileTransfer.settings.tries
-                    && (!this->request.dataCallback || writtenToSink == 0 || (acceptRanges && !hasContentEncoding))) {
+                    && !(this->request.dataCallback && hasContentEncoding)) {
                     int ms = retryTimeMs
                              * std::pow(
                                  2.0f, attempt - 1 + std::uniform_real_distribution<>(0.0, 0.5)(fileTransfer.mt19937));
 
                     if (writtenToSink) {
+                        if (acceptRanges)
+                            requestRange = true;
                         warn(
                             "%s; retrying from offset %d in %d ms (attempt %d/%d)",
                             exc.message(),
