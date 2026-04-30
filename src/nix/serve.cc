@@ -1,5 +1,6 @@
 #include "nix/cmd/command.hh"
 #include "nix/util/file-system.hh"
+#include "nix/util/serialise.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/deleter.hh"
 #include "nix/store/nar-info.hh"
@@ -126,14 +127,53 @@ struct CmdServe : StoreCommand
             if (info->narHash.to_string(HashFormat::Nix32, false) != expectedNarHash)
                 return notFound();
 
+            struct State
+            {
+                std::unique_ptr<Source> source;
+                std::optional<char> firstByte;
+            };
+
+            auto state = std::make_unique<State>();
+
+            state->source = sinkToSource([&store, p = *path](Sink & sink) { store.narFromPath(p, sink); });
+
+            // Read the first byte so we can return a 404 if the store path / NAR doesn't exist anymore.
             try {
-                StringSink sink;
-                store.narFromPath(*path, sink);
-                response.reset(MHD_create_response_from_buffer(sink.s.size(), sink.s.data(), MHD_RESPMEM_MUST_COPY));
-                MHD_add_response_header(response.get(), "Content-Type", "application/x-nix-nar");
-            } catch (SubstituteGone & e) {
+                char firstByte;
+                if (state->source->read(&firstByte, 1))
+                    state->firstByte = firstByte;
+            } catch (InvalidPath &) {
                 return notFound();
+            } catch (SubstituteGone &) {
+                return notFound();
+            } catch (EndOfFile &) {
             }
+
+            // Stream the NAR.
+            auto reader = [](void * cls, uint64_t pos, char * buf, size_t max) -> ssize_t {
+                auto & state = *static_cast<State *>(cls);
+                size_t read = 0;
+                if (pos == 0 && state.firstByte) {
+                    *buf++ = *state.firstByte;
+                    pos++;
+                    max--;
+                    read++;
+                    state.firstByte.reset();
+                }
+                try {
+                    read += state.source->read(buf, max);
+                    return read;
+                } catch (EndOfFile &) {
+                    return MHD_CONTENT_READER_END_OF_STREAM;
+                } catch (...) {
+                    return MHD_CONTENT_READER_END_WITH_ERROR;
+                }
+            };
+
+            auto freeCb = [](void * cls) { delete static_cast<State *>(cls); };
+
+            response.reset(MHD_create_response_from_callback(MHD_SIZE_UNKNOWN, 65536, reader, state.release(), freeCb));
+            MHD_add_response_header(response.get(), "Content-Type", "application/x-nix-nar");
         } else
             return notFound();
 
