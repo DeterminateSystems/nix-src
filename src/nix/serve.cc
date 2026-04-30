@@ -18,6 +18,7 @@ using Response = std::unique_ptr<MHD_Response, Deleter<MHD_destroy_response>>;
 struct CmdServe : StoreCommand
 {
     uint16_t port = 8080;
+    std::string listenAddress = "127.0.0.1";
     std::optional<int> priority;
     std::optional<std::filesystem::path> portFile;
 
@@ -29,6 +30,13 @@ struct CmdServe : StoreCommand
             .description = "Port to listen on (default: 8080). Use 0 to dynamically allocate a free port.",
             .labels = {"port"},
             .handler = {&port},
+        });
+        addFlag({
+            .longName = "listen-address",
+            .description = "IP address to listen on (default: `127.0.0.1`). "
+                           "Use `0.0.0.0` or `::` to listen on all interfaces.",
+            .labels = {"address"},
+            .handler = {&listenAddress},
         });
         addFlag({
             .longName = "port-file",
@@ -163,21 +171,32 @@ struct CmdServe : StoreCommand
             return cmd.handleRequest(store, connection, std::string(url), method);
         };
 
+        sockaddr_in addr4{};
+        sockaddr_in6 addr6{};
+        const sockaddr * sockAddr = nullptr;
+        unsigned int flags = MHD_USE_INTERNAL_POLLING_THREAD;
+
+        if (inet_pton(AF_INET, listenAddress.c_str(), &addr4.sin_addr) == 1) {
+            addr4.sin_family = AF_INET;
+            addr4.sin_port = htons(port);
+            sockAddr = (const sockaddr *) &addr4;
+        } else if (inet_pton(AF_INET6, listenAddress.c_str(), &addr6.sin6_addr) == 1) {
+            addr6.sin6_family = AF_INET6;
+            addr6.sin6_port = htons(port);
+            sockAddr = (const sockaddr *) &addr6;
+            flags |= MHD_USE_IPv6;
+        } else
+            throw Error("invalid listen address '%s'", listenAddress);
+
         auto * daemon = MHD_start_daemon(
-            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_DUAL_STACK,
-            port,
-            nullptr,
-            nullptr,
-            handler,
-            &ctx,
-            MHD_OPTION_END);
+            flags, port, nullptr, nullptr, handler, &ctx, MHD_OPTION_SOCK_ADDR, sockAddr, MHD_OPTION_END);
 
         if (!daemon)
-            throw Error("failed to start HTTP daemon on port %d", port);
+            throw Error("failed to start HTTP daemon on %s:%d", listenAddress, port);
 
         auto * info = MHD_get_daemon_info(daemon, MHD_DAEMON_INFO_BIND_PORT);
         uint16_t boundPort = info ? info->port : port;
-        notice("Listening on http://[::]:%d/", boundPort);
+        notice("Listening on http://%s:%d/", listenAddress, boundPort);
 
         if (portFile)
             writeFile(*portFile, std::to_string(boundPort) + "\n");
