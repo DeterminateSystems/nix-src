@@ -3,6 +3,7 @@
 #include "nix/util/signals.hh"
 #include "nix/util/deleter.hh"
 #include "nix/store/nar-info.hh"
+#include "nix/store/binary-cache-store.hh"
 
 #include <future>
 #include <regex>
@@ -117,11 +118,14 @@ struct CmdServe : StoreCommand
             if (info->narHash.to_string(HashFormat::Nix32, false) != expectedNarHash)
                 return notFound();
 
-            StringSink sink;
-            store.narFromPath(*path, sink);
-            response.reset(MHD_create_response_from_buffer(sink.s.size(), sink.s.data(), MHD_RESPMEM_MUST_COPY));
-            MHD_add_response_header(response.get(), "Content-Type", "application/x-nix-nar");
-
+            try {
+                StringSink sink;
+                store.narFromPath(*path, sink);
+                response.reset(MHD_create_response_from_buffer(sink.s.size(), sink.s.data(), MHD_RESPMEM_MUST_COPY));
+                MHD_add_response_header(response.get(), "Content-Type", "application/x-nix-nar");
+            } catch (SubstituteGone & e) {
+                return notFound();
+            }
         } else
             return notFound();
 
