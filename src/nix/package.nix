@@ -10,6 +10,8 @@
   nix-cmd,
   sentry-native,
 
+  libmicrohttpd,
+
   # Configuration Options
 
   version,
@@ -72,6 +74,7 @@ mkMesonExecutable (finalAttrs: {
     nix-expr
     nix-main
     nix-cmd
+    libmicrohttpd
   ]
   ++ lib.optional (
     stdenv.cc.isClang

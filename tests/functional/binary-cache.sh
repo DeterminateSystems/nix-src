@@ -27,6 +27,13 @@ for path in "${paths[@]}"; do
         || [[ "$path" =~ -dependencies-top$ ]]
 done
 
+echo foobar > "$TEST_ROOT/big-file"
+for ((i = 0; i < 16; i++)); do
+    cat "$TEST_ROOT/big-file" "$TEST_ROOT/big-file" > "$TEST_ROOT/big-file.tmp"
+    mv "$TEST_ROOT/big-file.tmp" "$TEST_ROOT/big-file"
+done
+bigFile="$(nix store add-file --store "file://$cacheDir" "$TEST_ROOT/big-file")"
+
 # Test copying build logs to the binary cache.
 expect 1 nix log --store "file://$cacheDir" "$outPath" 2>&1 | grep 'is not available'
 nix store copy-log --to "file://$cacheDir" "$outPath"
@@ -43,33 +50,69 @@ nix log "$outPath" | grep FOO
 cacheDir2="$TEST_ROOT/binary+cache"
 nix copy --to "file://$cacheDir2" "$outPath" && [[ -d "$cacheDir2" ]]
 
+nixServePid=
+
+stopNixServe() {
+    if [[ -n "$nixServePid" ]]; then
+        kill "$nixServePid"
+        wait "$nixServePid"
+        unset nixServePid
+    fi
+}
+
+startNixServe() {
+    local portFile="$TEST_ROOT/nix-serve-port"
+    rm -f "$portFile"
+    nix serve --port 0 --port-file "$portFile" "$@" &
+    nixServePid="$!"
+    while [[ ! -e "$portFile" ]]; do
+        if ! kill -0 "$nixServePid" 2>/dev/null; then
+            echo "nix serve exited before writing $portFile" >&2
+            return 1
+        fi
+        sleep 0.1
+    done
+    nixServePort=$(cat "$portFile")
+    httpBinaryCacheUrl="http://localhost:$nixServePort"
+    trap "stopNixServe" EXIT
+}
+
+restartNixServe() {
+    stopNixServe
+    startNixServe --store "file://$cacheDir"
+}
+
 basicDownloadTests() {
-    # No uploading tests bcause upload with force HTTP doesn't work.
+    binaryCache="$1"
+
+    # No uploading tests because upload with force HTTP doesn't work.
 
     # By default, a binary cache doesn't support "nix-env -qas", but does
     # support installation.
     clearStore
     clearCacheCache
 
-    nix-env --substituters "file://$cacheDir" -f dependencies.nix -qas \* | grep -- "---"
+    nix-env --substituters "$binaryCache" -f dependencies.nix -qas \* | grep -- "---"
 
-    nix-store --substituters "file://$cacheDir" --no-require-sigs -r "$outPath"
+    nix-store --substituters "$binaryCache" --no-require-sigs -r "$outPath"
 
     [ -x "$outPath/program" ]
 
 
     # But with the right configuration, "nix-env -qas" should also work.
-    clearStore
-    clearCacheCache
-    echo "WantMassQuery: 1" >> "$cacheDir/nix-cache-info"
+    if [[ "$binaryCache" == file:// ]]; then
+      clearStore
+      clearCacheCache
+      echo "WantMassQuery: 1" >> "$cacheDir/nix-cache-info"
 
-    nix-env --substituters "file://$cacheDir" -f dependencies.nix -qas \* | grep -- "--S"
-    nix-env --substituters "file://$cacheDir" -f dependencies.nix -qas \* | grep -- "--S"
+      nix-env --substituters "$binaryCache" -f dependencies.nix -qas \* | grep -- "--S"
+      nix-env --substituters "$binaryCache" -f dependencies.nix -qas \* | grep -- "--S"
 
-    x=$(nix-env -f dependencies.nix -qas \* --prebuilt-only)
-    [ -z "$x" ]
+      x=$(nix-env -f dependencies.nix -qas \* --prebuilt-only)
+      [ -z "$x" ]
+    fi
 
-    nix-store --substituters "file://$cacheDir" --no-require-sigs -r "$outPath"
+    nix-store --substituters "$binaryCache" --no-require-sigs -r "$outPath"
 
     nix-store --check-validity "$outPath"
     nix-store -qR "$outPath" | grep input-2
@@ -79,25 +122,40 @@ basicDownloadTests() {
 
 
 # Test LocalBinaryCacheStore.
-basicDownloadTests
+basicDownloadTests "file://$cacheDir"
 
 
 # Test HttpBinaryCacheStore.
-export _NIX_FORCE_HTTP=1
-basicDownloadTests
+restartNixServe
+basicDownloadTests "$httpBinaryCacheUrl"
+
+
+# Test whether resuming from a binary cache that doesn't support ranged requests works.
+export _NIX_TEST_NIX_SERVE_TRUNCATE_NAR=1
+restartNixServe
+clearStore
+nix-store -r "$bigFile" --substituters "$httpBinaryCacheUrl" 2>&1 | tee "$TEST_ROOT/log"
+[[ $(grep -c "curl error: Transferred a partial file" "$TEST_ROOT/log") -eq 2 ]]
+unset _NIX_TEST_NIX_SERVE_TRUNCATE_NAR
+
+
+# Regression test: queryMissing() should cache narinfos.
+restartNixServe
+nix path-info -vvvv --store "$httpBinaryCacheUrl" "$bigFile" 2> "$TEST_ROOT/log"
+[[ $(grep -c "downloading.*narinfo'" "$TEST_ROOT/log") -eq 1 ]]
 
 
 # Test that multiple concurrent substitutions do only one download.
 clearStore
 nix-store --init # needed because concurrent creation of the store can give SQLite errors
-_NIX_TEST_CONCURRENT_SUBSTITUTION=1 nix-store -r "$depPath" --substituters "file://$cacheDir" --no-require-sigs -vvvv 2> "$TEST_ROOT/log1" &
+_NIX_TEST_CONCURRENT_SUBSTITUTION=1 nix-store -r "$depPath" --substituters "$httpBinaryCacheUrl" --no-require-sigs -vvvv 2> "$TEST_ROOT/log1" &
 pid1="$!"
-_NIX_TEST_CONCURRENT_SUBSTITUTION=1 nix-store -r "$depPath" --substituters "file://$cacheDir" --no-require-sigs -vvvv 2> "$TEST_ROOT/log2" &
+_NIX_TEST_CONCURRENT_SUBSTITUTION=1 nix-store -r "$depPath" --substituters "$httpBinaryCacheUrl" --no-require-sigs -vvvv 2> "$TEST_ROOT/log2" &
 pid2="$!"
 wait "$pid1"
 wait "$pid2"
 [[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "copying path ") -eq 2 ]]
-[[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "downloading.*nar.xz") -eq 1 ]]
+[[ $(cat "$TEST_ROOT/log1" "$TEST_ROOT/log2" | grep -c "downloading.*nar'") -eq 1 ]]
 
 
 # Test whether Nix notices if the NAR doesn't match the hash in the NAR info.
@@ -108,7 +166,7 @@ mv "$nar" "$nar".good
 mkdir -p "$TEST_ROOT/empty"
 nix-store --dump "$TEST_ROOT/empty" | xz > "$nar"
 
-expect 1 nix-build --substituters "file://$cacheDir" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" 2>&1 | tee "$TEST_ROOT/log"
+expect 1 nix-build --substituters "$httpBinaryCacheUrl" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" 2>&1 | tee "$TEST_ROOT/log"
 grepQuiet "hash mismatch" "$TEST_ROOT/log"
 
 mv "$nar".good "$nar"
@@ -118,7 +176,7 @@ mv "$nar".good "$nar"
 clearStore
 clearCacheCache
 
-if nix-store --substituters "file://$cacheDir" -r "$outPath"; then
+if nix-store --substituters "$httpBinaryCacheUrl" -r "$outPath"; then
     echo "unsigned binary cache incorrectly accepted"
     exit 1
 fi
@@ -129,7 +187,7 @@ clearStore
 
 mv "$cacheDir/nar" "$cacheDir/nar2"
 
-nix-build --substituters "file://$cacheDir" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" 2>&1 | tee "$TEST_ROOT/log"
+nix-build --substituters "$httpBinaryCacheUrl" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" 2>&1 | tee "$TEST_ROOT/log"
 
 # Verify that missing NARs produce warnings, not errors
 # The build should succeed despite the warnings
@@ -147,9 +205,9 @@ mv "$cacheDir/nar" "$cacheDir/nar2"
 mkdir "$cacheDir/nar"
 for i in $(cd "$cacheDir/nar2" && echo *); do touch "$cacheDir"/nar/"$i"; done
 
-(! nix-build --substituters "file://$cacheDir" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result")
+(! nix-build --substituters "$httpBinaryCacheUrl" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result")
 
-nix-build --substituters "file://$cacheDir" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" --fallback
+nix-build --substituters "$httpBinaryCacheUrl" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" --fallback
 
 rm -rf "$cacheDir/nar"
 mv "$cacheDir/nar2" "$cacheDir/nar"
@@ -161,7 +219,7 @@ clearStore
 
 rm -v "$(grep -l "StorePath:.*dependencies-input-2" "$cacheDir"/*.narinfo)"
 
-nix-build --substituters "file://$cacheDir" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" 2>&1 | tee "$TEST_ROOT/log"
+nix-build --substituters "$httpBinaryCacheUrl" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" 2>&1 | tee "$TEST_ROOT/log"
 grepQuiet "copying path.*input-0" "$TEST_ROOT/log"
 grepQuiet "copying path.*input-2" "$TEST_ROOT/log"
 grepQuiet "copying path.*top" "$TEST_ROOT/log"
@@ -170,8 +228,9 @@ grepQuiet "copying path.*top" "$TEST_ROOT/log"
 # Idem, but without cached .narinfo.
 clearStore
 clearCacheCache
+restartNixServe
 
-nix-build --substituters "file://$cacheDir" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" 2>&1 | tee "$TEST_ROOT/log"
+nix-build --substituters "$httpBinaryCacheUrl" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" 2>&1 | tee "$TEST_ROOT/log"
 grepQuiet "don't know how to build" "$TEST_ROOT/log"
 grepQuiet "building.*input-1" "$TEST_ROOT/log"
 grepQuiet "building.*input-2" "$TEST_ROOT/log"
@@ -195,25 +254,26 @@ badKey=$(nix key convert-secret-to-public < "$TEST_ROOT/sk2")
 nix key generate-secret --key-name foo.nixos.org-1 > "$TEST_ROOT/sk3"
 otherKey=$(nix key convert-secret-to-public < "$TEST_ROOT/sk3")
 
-_NIX_FORCE_HTTP='' nix copy --to "file://$cacheDir"?secret-key="$TEST_ROOT"/sk1 "$outPath"
+nix copy --to "file://$cacheDir"?secret-key="$TEST_ROOT"/sk1 "$outPath"
 
 
 # Downloading should fail if we don't provide a key.
 clearStore
 clearCacheCache
+restartNixServe
 
-(! nix-store -r "$outPath" --substituters "file://$cacheDir")
+(! nix-store -r "$outPath" --substituters "$httpBinaryCacheUrl")
 
 
 # And it should fail if we provide an incorrect key.
 clearStore
 clearCacheCache
 
-(! nix-store -r "$outPath" --substituters "file://$cacheDir" --trusted-public-keys "$badKey")
+(! nix-store -r "$outPath" --substituters "$httpBinaryCacheUrl" --trusted-public-keys "$badKey")
 
 
 # It should succeed if we provide the correct key.
-nix-store -r "$outPath" --substituters "file://$cacheDir" --trusted-public-keys "$otherKey $publicKey"
+nix-store -r "$outPath" --substituters "$httpBinaryCacheUrl" --trusted-public-keys "$otherKey $publicKey"
 
 
 # It should fail if we corrupt the .narinfo.
@@ -234,7 +294,7 @@ clearCacheCache
 
 # If we provide a bad and a good binary cache, it should succeed.
 
-nix-store -r "$outPath" --substituters "file://$cacheDir2 file://$cacheDir" --trusted-public-keys "$publicKey"
+nix-store -r "$outPath" --substituters "file://$cacheDir2 $httpBinaryCacheUrl" --trusted-public-keys "$publicKey"
 
 
 unset _NIX_FORCE_HTTP
