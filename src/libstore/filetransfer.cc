@@ -1055,11 +1055,11 @@ ref<curlFileTransfer> makeCurlFileTransfer(const FileTransferSettings & settings
     return make_ref<curlFileTransfer>(settings);
 }
 
-static Sync<std::shared_ptr<curlFileTransfer>> _fileTransfer;
+static auto * const _fileTransfer = new Sync<std::shared_ptr<curlFileTransfer>>;
 
 ref<FileTransfer> getFileTransfer()
 {
-    auto fileTransfer(_fileTransfer.lock());
+    auto fileTransfer(_fileTransfer->lock());
 
     if (!*fileTransfer || (*fileTransfer)->state_.lock()->isQuitting())
         *fileTransfer = makeCurlFileTransfer().get_ptr();
@@ -1069,7 +1069,7 @@ ref<FileTransfer> getFileTransfer()
 
 std::shared_ptr<FileTransfer> resetFileTransfer()
 {
-    auto fileTransfer(_fileTransfer.lock());
+    auto fileTransfer(_fileTransfer->lock());
     std::shared_ptr<curlFileTransfer> prev;
     fileTransfer->swap(prev);
     return prev;
