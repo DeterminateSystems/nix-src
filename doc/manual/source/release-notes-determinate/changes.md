@@ -190,9 +190,3 @@ This section lists the differences between upstream Nix 2.34 and Determinate Nix
 <!-- Determinate Nix version 3.19.0 -->
 
 <!-- Determinate Nix version 3.19.1 -->
-
-* Sync with upstream 2.34.6 by @edolstra in [DeterminateSystems/nix-src#386](https://github.com/DeterminateSystems/nix-src/pull/386)
-
-* Preserve provenance while copying paths to the daemon by @edolstra in [DeterminateSystems/nix-src#399](https://github.com/DeterminateSystems/nix-src/pull/399)
-
-* Release v3.19.0 by @github-actions[bot] in [DeterminateSystems/nix-src#438](https://github.com/DeterminateSystems/nix-src/pull/438)
