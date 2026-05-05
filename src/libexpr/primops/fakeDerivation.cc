@@ -100,7 +100,6 @@ static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** ar
     drv.builder = "builtin:substitute";
 
     for (auto & [outName, out] : outputs) {
-#if 0
         if (out.narHash)
             drv.outputs.insert_or_assign(
                 outName,
@@ -112,8 +111,7 @@ static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** ar
                         },
                 });
         else
-#endif
-        drv.outputs.insert_or_assign(outName, DerivationOutput::InputAddressed{.path = out.path});
+            drv.outputs.insert_or_assign(outName, DerivationOutput::InputAddressed{.path = out.path});
     }
 
     auto drvPath = state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair);
