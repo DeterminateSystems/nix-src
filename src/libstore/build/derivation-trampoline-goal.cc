@@ -145,9 +145,9 @@ Goal::Co DerivationTrampolineGoal::haveDerivation(StorePath drvPath, Derivation 
         },
         wantedOutputs.raw);
 
-    /* Short-circuit fake derivations. Since these are never actually built, just create substitution goals for the
+    /* Short-circuit `builtin:substitute`. Since these are never actually built, just create substitution goals for the
      * outputs. */
-    if (drv.builder == "builtin:fake-derivation") {
+    if (drv.builder == "builtin:substitute") {
         std::vector<std::pair<StorePath, GoalPtr>> outputGoals;
         Goals waitees;
         for (auto & outputName : resolvedWantedOutputs) {

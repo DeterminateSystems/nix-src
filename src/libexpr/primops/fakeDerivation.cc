@@ -97,7 +97,7 @@ static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** ar
     Derivation drv;
     drv.name = *name;
     drv.platform = "builtin";
-    drv.builder = "builtin:fake-derivation";
+    drv.builder = "builtin:substitute";
 
     for (auto & [outName, out] : outputs) {
 #if 0
