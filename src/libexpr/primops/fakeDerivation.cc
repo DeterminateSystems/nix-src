@@ -116,7 +116,7 @@ static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** ar
         drv.outputs.insert_or_assign(outName, DerivationOutput::InputAddressed{.path = out.path});
     }
 
-    auto drvPath = writeDerivation(*state.store, *state.asyncPathWriter, drv, state.repair);
+    auto drvPath = state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair);
 
     // FIXME
     state.waitForPath(drvPath);
@@ -130,7 +130,7 @@ static RegisterPrimOp primop_fakeDerivation({
     .doc = R"(
         Placeholder.
     )",
-    .fun = prim_fakeDerivation,
+    .impl = prim_fakeDerivation,
 });
 
 } // namespace nix
