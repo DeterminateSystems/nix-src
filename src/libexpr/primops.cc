@@ -309,6 +309,10 @@ static void import(EvalState & state, const PosIdx pos, Value & vPath, Value * v
         if (!state.store->isStorePath(path2))
             return std::nullopt;
         auto storePath = state.store->parseStorePath(path2);
+        /* Add a temp root before checking validity or reading the
+           derivation, to prevent GC from deleting the path between
+           our validity check and the subsequent readDerivation(). */
+        state.store->addTempRoot(storePath);
         state.waitForPath(storePath);
         if (!(state.store->isValidPath(storePath) && isDerivation(path2)))
             return std::nullopt;
@@ -1760,9 +1764,14 @@ static void derivationStrictInternal(
                     /* !!! This doesn't work if readOnlyMode is set. */
                     StorePathSet refs;
                     // FIXME: don't need to wait, we only need the references.
+                    state.store->addTempRoot(d.drvPath);
                     state.waitForPath(d.drvPath);
                     state.store->computeFSClosure(d.drvPath, refs);
                     for (auto & j : refs) {
+                        /* Prevent GC from deleting derivations in the
+                           closure before we can read them. */
+                        if (j.isDerivation())
+                            state.store->addTempRoot(j);
                         drv.inputSrcs.insert(j);
                         if (j.isDerivation()) {
                             drv.inputDrvs.map[j].value = state.store->readDerivation(j).outputNames();

@@ -1041,6 +1041,7 @@ std::string EvalState::mkSingleDerivedPathStringRaw(const SingleDerivedPath & p)
                 auto optStaticOutputPath = std::visit(
                     overloaded{
                         [&](const SingleDerivedPath::Opaque & o) {
+                            store->addTempRoot(o.path);
                             waitForPath(o.path);
                             auto drv = store->readDerivation(o.path);
                             auto i = drv.outputs.find(b.output);

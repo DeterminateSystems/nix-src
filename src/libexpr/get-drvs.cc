@@ -25,6 +25,9 @@ PackageInfo::PackageInfo(EvalState & state, ref<Store> store, const std::string 
 
     this->drvPath = drvPath;
 
+    /* Prevent GC from deleting the .drv between now and when the
+       build phase adds its own temp root. */
+    store->addTempRoot(drvPath);
     auto drv = store->derivationFromPath(drvPath);
 
     name = drvPath.name();
