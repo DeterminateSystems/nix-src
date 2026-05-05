@@ -54,6 +54,7 @@ bool DerivationType::isCA() const
             [](const InputAddressed & ia) { return false; },
             [](const ContentAddressed & ca) { return true; },
             [](const Impure &) { return true; },
+            [](const Substituted &) { return false; },
         },
         raw);
 }
@@ -65,6 +66,7 @@ bool DerivationType::isFixed() const
             [](const InputAddressed & ia) { return false; },
             [](const ContentAddressed & ca) { return ca.fixed; },
             [](const Impure &) { return false; },
+            [](const Substituted &) { return false; },
         },
         raw);
 }
@@ -76,6 +78,7 @@ bool DerivationType::hasKnownOutputPaths() const
             [](const InputAddressed & ia) { return !ia.deferred; },
             [](const ContentAddressed & ca) { return ca.fixed; },
             [](const Impure &) { return false; },
+            [](const Substituted &) { return true; },
         },
         raw);
 }
@@ -87,6 +90,7 @@ bool DerivationType::isSandboxed() const
             [](const InputAddressed & ia) { return true; },
             [](const ContentAddressed & ca) { return ca.sandboxed; },
             [](const Impure &) { return false; },
+            [](const Substituted &) { return true; },
         },
         raw);
 }
@@ -98,6 +102,7 @@ bool DerivationType::isImpure() const
             [](const InputAddressed & ia) { return false; },
             [](const ContentAddressed & ca) { return false; },
             [](const Impure &) { return true; },
+            [](const Substituted &) { return false; },
         },
         raw);
 }
@@ -866,6 +871,12 @@ DerivationType BasicDerivation::type() const
     if (!ty)
         throw Error("must have at least one output");
 
+    if (builder == "builtin:substitute") {
+        if (!std::holds_alternative<DerivationType::InputAddressed>(ty.value().raw))
+            throw Error("'builtin:substitute' derivation must have input-addressed outputs");
+        return DerivationType::Substituted{};
+    }
+
     return ty.value();
 }
 
@@ -930,14 +941,15 @@ DrvHash hashDerivationModulo(Store & store, const Derivation & drv, bool maskOut
     auto kind = std::visit(
         overloaded{
             [](const DerivationType::InputAddressed & ia) {
-                /* This might be a "pesimistically" deferred output, so we don't
+                /* This might be a "pessimistically" deferred output, so we don't
                    "taint" the kind yet. */
                 return DrvHash::Kind::Regular;
             },
             [](const DerivationType::ContentAddressed & ca) {
                 return ca.fixed ? DrvHash::Kind::Regular : DrvHash::Kind::Deferred;
             },
-            [](const DerivationType::Impure &) -> DrvHash::Kind { return DrvHash::Kind::Deferred; }},
+            [](const DerivationType::Impure &) -> DrvHash::Kind { return DrvHash::Kind::Deferred; },
+            [](const DerivationType::Substituted &) -> DrvHash::Kind { return DrvHash::Kind::Regular; }},
         drv.type().raw);
 
     DerivedPathMap<StringSet>::ChildNode::Map inputs2;
@@ -1161,6 +1173,7 @@ bool Derivation::shouldResolve() const
                            : true;
             },
             [&](const DerivationType::Impure &) { return true; },
+            [&](const DerivationType::Substituted &) { return false; },
         },
         drvType.raw);
 
@@ -1278,6 +1291,18 @@ std::optional<BasicDerivation> Derivation::tryResolve(
 template<bool fillIn>
 static void processDerivationOutputPaths(Store & store, auto && drv, std::string_view drvName)
 {
+    if (drv.builder == "builtin:substitute") {
+        if (drv.platform != "builtin")
+            throw Error("'builtin:substitute' derivation must be a builtin");
+        if (!drv.args.empty())
+            throw Error("'builtin:substitute' derivation must have no arguments");
+        if (!drv.env.empty())
+            throw Error("'builtin:substitute' derivation must have no environment variables");
+        if (!drv.inputSrcs.empty())
+            throw Error("'builtin:substitute' derivation must have no inputs");
+        return;
+    }
+
     std::optional<DrvHash> hashesModulo;
 
     for (auto & [outputName, output] : drv.outputs) {
@@ -1327,7 +1352,6 @@ static void processDerivationOutputPaths(Store & store, auto && drv, std::string
                 auto outPath = store.makeOutputPath(outputName, *h, drvName);
 
                 if constexpr (std::is_same_v<Output, DerivationOutput::InputAddressed>) {
-#if 0
                     if (outputVariant.path == outPath) {
                         return; // Correct case
                     }
@@ -1337,8 +1361,6 @@ static void processDerivationOutputPaths(Store & store, auto && drv, std::string
                         "derivation has incorrect output '%s', should be '%s'",
                         store.printStorePath(outputVariant.path),
                         store.printStorePath(outPath));
-#endif
-                    return; // FIXME
                 } else if constexpr (std::is_same_v<Output, DerivationOutput::Deferred>) {
                     if constexpr (fillIn)
                         /* Fill in output path for Deferred
