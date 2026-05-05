@@ -142,6 +142,7 @@ nix_sources += [
   gen_header.process('get-env.sh'),
   gen_header.process('profiles.md'),
   gen_header.process('help-stores.md'),
+  gen_header.process('baked-flake.nix'),
 ]
 
 # The rest of the subdirectories aren't separate components,
