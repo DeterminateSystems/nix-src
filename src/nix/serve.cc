@@ -234,6 +234,11 @@ struct CmdServe : StoreCommand
         if (!daemon)
             throw Error("failed to start HTTP daemon on %s:%d", listenAddress, port);
 
+        Finally _stopDaemon{[&] {
+            notice("Shutting down...");
+            MHD_stop_daemon(daemon);
+        }};
+
         auto * info = MHD_get_daemon_info(daemon, MHD_DAEMON_INFO_BIND_PORT);
         uint16_t boundPort = info ? info->port : port;
         notice("Listening on http://%s:%d/", listenAddress, boundPort);
@@ -246,9 +251,6 @@ struct CmdServe : StoreCommand
         std::future<void> interruptFuture = interruptPromise.get_future();
         auto callback = createInterruptCallback([&]() { interruptPromise.set_value(); });
         interruptFuture.get();
-
-        notice("Shutting down...");
-        MHD_stop_daemon(daemon);
     }
 };
 
