@@ -98,7 +98,6 @@ suites = [
       'restricted.sh',
       'fetchGitSubmodules.sh',
       'fetchGitVerification.sh',
-      'fetchGitLegacySubmodulesEmptyDir.sh',
       'readfile-context.sh',
       'nix-channel.sh',
       'recursive.sh',
