@@ -891,6 +891,9 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
         if (options.showDrvPaths && !json)
             throw UsageError("The '--drv-paths' flag requires '--json'.");
 
+        if (json)
+            options.showDrvNames = true;
+
         auto state = getEvalState();
         auto flake = make_ref<LockedFlake>(lockFlake());
 
