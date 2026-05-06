@@ -15,7 +15,7 @@
 #include <iostream>
 
 #include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/time_generator_v7.hpp>
 #include <boost/uuid/uuid_io.hpp>
 
 namespace nix {
@@ -220,8 +220,8 @@ static std::string getSessionId()
     if (!loggerSettings.sessionId.get().empty())
         return loggerSettings.sessionId.get();
 
-    // Generate a random UUID as the session ID.
-    static std::string uuid = boost::uuids::to_string(boost::uuids::random_generator()());
+    // Generate a UUIDv7 as the session ID.
+    static std::string uuid = boost::uuids::to_string(boost::uuids::time_generator_v7()());
     return uuid;
 }
 
