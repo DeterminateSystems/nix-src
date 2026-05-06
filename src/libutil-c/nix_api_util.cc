@@ -1,14 +1,85 @@
 #include "nix_api_util.h"
 #include "nix/util/config-global.hh"
 #include "nix/util/error.hh"
+#include "nix/util/logging.hh"
 #include "nix_api_util_internal.h"
 #include "nix/util/signals.hh"
 #include "nix/util/util.hh"
 
 #include <cxxabi.h>
+#include <sstream>
 #include <typeinfo>
 
 #include "nix_api_util_config.h"
+
+/**
+ * Logger that delegates every supported method to a C callback vtable.
+ */
+class CallbackLogger : public nix::Logger
+{
+public:
+    nix_logger vtable;
+    void * userdata;
+
+    CallbackLogger(const nix_logger & vtable, void * userdata)
+        : vtable(vtable)
+        , userdata(userdata)
+    {
+    }
+
+    ~CallbackLogger() override
+    {
+        if (vtable.destroy)
+            vtable.destroy(userdata);
+    }
+
+    void log(nix::Verbosity lvl, std::string_view s) override
+    {
+        if (!vtable.log)
+            return;
+        std::string buf(s);
+        vtable.log(userdata, static_cast<nix_verbosity>(lvl), buf.c_str());
+    }
+
+    void logEI(const nix::ErrorInfo & ei) override
+    {
+        if (!vtable.log)
+            return;
+        std::ostringstream oss;
+        nix::showErrorInfo(oss, ei, nix::loggerSettings.showTrace.get());
+        auto formatted = oss.str();
+        vtable.log(userdata, static_cast<nix_verbosity>(ei.level), formatted.c_str());
+    }
+
+    void startActivity(
+        nix::ActivityId act,
+        nix::Verbosity lvl,
+        nix::ActivityType type,
+        const std::string & s,
+        const Fields & /*fields*/,
+        nix::ActivityId parent) override
+    {
+        if (!vtable.start_activity)
+            return;
+        vtable.start_activity(
+            userdata, act, static_cast<nix_verbosity>(lvl), static_cast<nix_activity_type>(type), s.c_str(), parent);
+    }
+
+    void stopActivity(nix::ActivityId act) override
+    {
+        if (vtable.stop_activity)
+            vtable.stop_activity(userdata, act);
+    }
+
+    void result(nix::ActivityId act, nix::ResultType type, const Fields & fields) override
+    {
+        if (!vtable.result_string)
+            return;
+        if (fields.empty() || fields[0].type != nix::Logger::Field::tString)
+            return;
+        vtable.result_string(userdata, act, static_cast<nix_result_type>(type), fields[0].s.c_str());
+    }
+};
 
 extern "C" {
 
@@ -175,6 +246,18 @@ nix_err nix_set_verbosity(nix_c_context * context, nix_verbosity level)
         return nix_set_err_msg(context, NIX_ERR_UNKNOWN, "Invalid verbosity level");
     try {
         nix::verbosity = static_cast<nix::Verbosity>(level);
+    }
+    NIXC_CATCH_ERRS
+}
+
+nix_err nix_set_logger(nix_c_context * context, const nix_logger * vtable, void * userdata)
+{
+    if (context)
+        context->last_err_code = NIX_OK;
+    if (vtable == nullptr)
+        return nix_set_err_msg(context, NIX_ERR_UNKNOWN, "logger vtable is null");
+    try {
+        nix::logger = std::make_unique<CallbackLogger>(*vtable, userdata);
     }
     NIXC_CATCH_ERRS
 }
