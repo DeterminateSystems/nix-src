@@ -299,7 +299,7 @@ struct ClientSettings
                     trusted || name == settings.getWorkerSettings().buildTimeout.name
                     || name == settings.getWorkerSettings().maxSilentTime.name
                     || name == settings.getWorkerSettings().pollInterval.name || name == "connect-timeout"
-                    || (name == "builders" && value == "")) {
+                    || name == loggerSettings.sessionId.name || (name == "builders" && value == "")) {
                     settings.set(name, value);
                     fileTransferSettings.set(name, value);
                 } else if (setSubstituters(settings.getWorkerSettings().substituters))
