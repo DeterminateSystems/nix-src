@@ -7,6 +7,10 @@
 #include <unistd.h>
 #include <span>
 
+#if defined(__linux__) || defined(__FreeBSD__)
+#  include <sys/syscall.h>
+#endif
+
 #include "util-config-private.hh"
 #include "util-unix-config-private.hh"
 
