@@ -150,7 +150,7 @@ wait "$pid2"
 # Test whether Nix notices if the NAR doesn't match the hash in the NAR info.
 clearStore
 
-nar=$(find "$cacheDir/nar/" -type f -name "*.nar.xz" | head -n1)
+nar=$cacheDir/$(nix path-info --json --store "file://$cacheDir" "$depPath" | jq -r .[].url)
 mv "$nar" "$nar".good
 mkdir -p "$TEST_ROOT/empty"
 nix-store --dump "$TEST_ROOT/empty" | xz > "$nar"
