@@ -41,6 +41,10 @@ grep '{"action":"start","fields":\[".*-dependencies-top.drv","",1,1\],"id":.*,"l
 grep -E '{"action":"result","id":[^,]+,"payload":{"builtOutputs":{"out":{"dependentRealisations":\{\},"id":"[^"]+","outPath":"[^-]+-dependencies-top".*"status":"Built".*"success":true' "$TEST_ROOT/log.json" >&2
 (( $(grep -c '{"action":"msg","level":5,"msg":"executing builder .*"}' "$TEST_ROOT/log.json" ) == 5 ))
 
+rm "$TEST_ROOT/log.json"
+expect 1 nix build -vv --file timeout.nix silent --timeout 1 --no-link --json-log-path "$TEST_ROOT/log.json"
+grep -E '{"action":"result","id":[^,]+,"payload":{"errorMsg":"timed out.*",.*"startTime":[1-9][0-9]*,"status":"TimedOut","stopTime":0,"success":false,' "$TEST_ROOT/log.json" >&2
+
 # Check that all log entries have the same session ID.
 sid=$(head -n1 < "$TEST_ROOT/log.json" | jq -r '.sid')
 [[ -n "$sid" && "$sid" != "null" ]]
