@@ -193,8 +193,6 @@ This section lists the differences between upstream Nix 2.34 and Determinate Nix
 
 <!-- Determinate Nix version 3.20.0 -->
 
-* C API: add logger bindings by @RossComputerGuy in [DeterminateSystems/nix-src#448](https://github.com/DeterminateSystems/nix-src/pull/448)
+* Support resuming from binary caches that don't support ranged requests [DeterminateSystems/nix-src#445](https://github.com/DeterminateSystems/nix-src/pull/445)
 
-* Support resuming from binary caches that don't support ranged requests by @edolstra in [DeterminateSystems/nix-src#445](https://github.com/DeterminateSystems/nix-src/pull/445)
-
-* Add a session ID to JSON log messages by @edolstra in [DeterminateSystems/nix-src#440](https://github.com/DeterminateSystems/nix-src/pull/440)
+* Add a session ID to JSON log messages [DeterminateSystems/nix-src#440](https://github.com/DeterminateSystems/nix-src/pull/440)
