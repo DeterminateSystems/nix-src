@@ -147,4 +147,9 @@ scope: {
     # Avoid having two curls in our closure.
     inherit (scope) curl;
   };
+
+  libmicrohttpd = pkgs.libmicrohttpd.overrideDerivation (old: {
+    # Don't pull in gnutls since it's pretty big and we don't need it.
+    configureFlags = old.configureFlags or [ ] ++ [ "--without-gnutls" ];
+  });
 }
