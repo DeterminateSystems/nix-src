@@ -55,7 +55,19 @@ struct CmdServe : StoreCommand
 
     std::string description() override
     {
-        return "serve a Nix store over the network";
+        return "serve a Nix store as a HTTP binary cache";
+    }
+
+    Category category() override
+    {
+        return catSecondary;
+    }
+
+    std::string doc() override
+    {
+        return
+#include "serve.md"
+            ;
     }
 
     MHD_Result
