@@ -5,6 +5,7 @@
 #include "nix/util/deleter.hh"
 #include "nix/store/nar-info.hh"
 #include "nix/store/binary-cache-store.hh"
+#include "nix/store/log-store.hh"
 
 #include <future>
 #include <regex>
@@ -95,11 +96,12 @@ struct CmdServe : StoreCommand
 
         static const std::regex narInfoUrlRegex{R"(^/([0-9a-z]+)\.narinfo$)"};
         static const std::regex narUrlRegex{R"(^/nar/([0-9a-z]+)-([0-9a-z]+)\.nar$)"};
+        static const std::regex logUrlRegex{R"(^/log/([0-9a-z]+-[0-9a-zA-Z+\-._?=]+)$)"};
 
         if (method != MHD_HTTP_METHOD_GET && method != MHD_HTTP_METHOD_HEAD) {
             std::string_view body = "405 method not allowed\n";
             response.reset(MHD_create_response_from_buffer(body.size(), (void *) body.data(), MHD_RESPMEM_PERSISTENT));
-            MHD_add_response_header(response.get(), "Allow", MHD_HTTP_METHOD_GET);
+            MHD_add_response_header(response.get(), "Allow", "GET, HEAD");
             return MHD_queue_response(connection, MHD_HTTP_METHOD_NOT_ALLOWED, response.get());
         }
 
@@ -186,6 +188,20 @@ struct CmdServe : StoreCommand
 
             response.reset(MHD_create_response_from_callback(MHD_SIZE_UNKNOWN, 65536, reader, state.release(), freeCb));
             MHD_add_response_header(response.get(), "Content-Type", "application/x-nix-nar");
+
+        } else if (std::smatch m; std::regex_match(url, m, logUrlRegex)) {
+            auto * logStore = dynamic_cast<LogStore *>(&store);
+            if (!logStore)
+                return notFound();
+
+            StorePath path{m[1].str()};
+
+            auto log = logStore->getBuildLog(path);
+            if (!log)
+                return notFound();
+
+            response.reset(MHD_create_response_from_buffer(log->size(), log->data(), MHD_RESPMEM_MUST_COPY));
+            MHD_add_response_header(response.get(), "Content-Type", "text/plain; charset=utf-8");
         } else
             return notFound();
 
