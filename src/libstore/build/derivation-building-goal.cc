@@ -1362,13 +1362,16 @@ Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
 
     worker.updateProgress();
 
+    auto res = Goal::doneFailure(ecFailed, std::move(ex));
+
     logger->result(
         getCurActivity(),
         resBuildResult,
         nlohmann::json(KeyedBuildResult(
-            {ex}, DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
-    return Goal::doneFailure(ecFailed, std::move(ex));
+    return res;
 }
 
 } // namespace nix

@@ -30,10 +30,14 @@ PathSubstitutionGoal::~PathSubstitutionGoal()
 
 Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failure failure)
 {
-    logger->result(
-        getCurActivity(), resBuildResult, nlohmann::json(KeyedBuildResult({failure}, DerivedPath::Opaque{storePath})));
+    auto res = Goal::doneFailure(result, std::move(failure));
 
-    return Goal::doneFailure(result, std::move(failure));
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+
+    return res;
 }
 
 Goal::Co PathSubstitutionGoal::init()
