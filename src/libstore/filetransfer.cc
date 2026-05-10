@@ -1066,11 +1066,11 @@ struct curlFileTransfer : public FileTransfer
 
         try {
             return enqueueItem(item);
-        } catch (const nix::BaseError & e) {
+        } catch (const nix::BaseError &) {
             // NOTE(cole-h): catches both nix::Error and nix::Interrupted -- enqueueItem calls
             // writeFull which may throw nix::Interrupted, and the rest of enqueueItem may throw
             // nix::Error
-            item->fail(e);
+            item->failEx(std::current_exception());
             return ItemHandle(item.get_ptr());
         }
     }
