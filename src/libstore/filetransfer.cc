@@ -1046,16 +1046,33 @@ struct curlFileTransfer : public FileTransfer
         return ItemHandle(item.get_ptr());
     }
 
-    ItemHandle enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) override
+    inline ref<TransferItem>
+    makeTransferItem(const FileTransferRequest & request, Callback<FileTransferResult> callback)
     {
         /* Handle s3:// URIs by converting to HTTPS and optionally adding auth */
         if (request.uri.scheme() == "s3") {
             auto modifiedRequest = request;
             modifiedRequest.setupForS3();
-            return enqueueItem(make_ref<TransferItem>(*this, std::move(modifiedRequest), std::move(callback)));
+            return make_ref<TransferItem>(*this, std::move(modifiedRequest), std::move(callback));
+        } else {
+            return make_ref<TransferItem>(*this, request, std::move(callback));
         }
+    }
 
-        return enqueueItem(make_ref<TransferItem>(*this, request, std::move(callback)));
+    ItemHandle
+    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) noexcept override
+    {
+        const auto item = makeTransferItem(request, std::move(callback));
+
+        try {
+            return enqueueItem(item);
+        } catch (const nix::BaseError &) {
+            // NOTE(cole-h): catches both nix::Error and nix::Interrupted -- enqueueItem calls
+            // writeFull which may throw nix::Interrupted, and the rest of enqueueItem may throw
+            // nix::Error
+            item->failEx(std::current_exception());
+            return ItemHandle(item.get_ptr());
+        }
     }
 
     void unpauseTransfer(std::weak_ptr<Item> item)
@@ -1133,7 +1150,7 @@ void FileTransferRequest::setupForS3()
 #endif
 }
 
-std::future<FileTransferResult> FileTransfer::enqueueFileTransfer(const FileTransferRequest & request)
+std::future<FileTransferResult> FileTransfer::enqueueFileTransfer(const FileTransferRequest & request) noexcept
 {
     auto promise = std::make_shared<std::promise<FileTransferResult>>();
     enqueueFileTransfer(request, {[promise](std::future<FileTransferResult> fut) {
