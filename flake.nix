@@ -461,21 +461,23 @@
                 supportsCross ? true,
                 linuxOnly ? false,
               }:
-              lib.optionalAttrs (linuxOnly -> nixpkgsFor.${system}.native.stdenv.hostPlatform.isLinux) (
+              lib.optionalAttrs (linuxOnly -> nixpkgsFor.${system}.native.stdenv.hostPlatform.isLinux) {
+                # These attributes go right into `packages.<system>`.
+                "${pkgName}" = nixpkgsFor.${system}.native.nixComponents2.${pkgName};
+                "${pkgName}-static" = nixpkgsFor.${system}.native.pkgsStatic.nixComponents2.${pkgName};
+              }
+              // flatMapAttrs (lib.genAttrs stdenvs (_: { })) (
+                stdenvName:
+                { }:
                 {
                   # These attributes go right into `packages.<system>`.
-                  "${pkgName}" = nixpkgsFor.${system}.native.nixComponents2.${pkgName};
-                  "${pkgName}-static" = nixpkgsFor.${system}.native.pkgsStatic.nixComponents2.${pkgName};
+                  "${pkgName}-${stdenvName}" =
+                    nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.nixComponents2.${pkgName};
                 }
-                // flatMapAttrs (lib.genAttrs stdenvs (_: { })) (
-                  stdenvName:
-                  { }:
-                  {
-                    # These attributes go right into `packages.<system>`.
-                    "${pkgName}-${stdenvName}" =
-                      nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.nixComponents2.${pkgName};
-                  }
-                )
+                // lib.optionalAttrs supportsCross {
+                  "${pkgName}-${stdenvName}-static" =
+                    nixpkgsFor.${system}.nativeForStdenv.${stdenvName}.pkgsStatic.nixComponents2.${pkgName};
+                }
               )
               // lib.optionalAttrs supportsCross (
                 flatMapAttrs (lib.genAttrs crossSystems (_: { })) (
