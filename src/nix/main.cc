@@ -23,6 +23,7 @@
 #include "nix/flake/flake.hh"
 #include "nix/flake/settings.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/util/sentry.hh"
 
 #include "self-exe.hh"
 #include "crash-handler.hh"
@@ -420,7 +421,8 @@ void mainWrapped(int argc, char ** argv)
         sentry_options_set_auto_session_tracking(options, false);
         sentry_options_set_handler_path(options, CRASHPAD_HANDLER_PATH);
         sentry_init(options);
-        sentry_set_tag("nix_command", argc > 0 ? std::string(baseNameOf(argv[0])).c_str() : "");
+        setSentryTag = [](const char * key, const char * value) { sentry_set_tag(key, value); };
+        setSentryTag("nix_command", argc > 0 ? std::string(baseNameOf(argv[0])).c_str() : "");
         sentryEnabled = true;
     }
 
@@ -629,10 +631,7 @@ void mainWrapped(int argc, char ** argv)
         evalSettings.pureEval = false;
     }
 
-#if HAVE_SENTRY
-    if (sentryEnabled)
-        sentry_set_tag("nix_subcommand", concatStringsSep(" ", subcommand).c_str());
-#endif
+    setSentryTag("nix_subcommand", concatStringsSep(" ", subcommand).c_str());
 
     try {
         args.command->second->run();
