@@ -307,4 +307,6 @@ std::pair<std::string_view, std::string_view> getLine(std::string_view s)
     }
 }
 
+fun<void(const char *, const char *)> setSentryTag = [](const char *, const char *) {};
+
 } // namespace nix
