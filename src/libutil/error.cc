@@ -453,7 +453,7 @@ void panic(std::string_view msg)
     writeErr("\n\n" ANSI_RED "terminating due to unexpected unrecoverable internal error: " ANSI_NORMAL);
     writeErr(msg);
     writeErr("\n");
-    setSentryTag("panic_msg", msg.data());
+    setSentryTag("panic_msg", std::string(msg).c_str());
     std::terminate();
 }
 
