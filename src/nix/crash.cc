@@ -4,6 +4,11 @@
 
 using namespace nix;
 
+static void doThrow()
+{
+    throw Error("exception in destructor");
+}
+
 struct CmdCrash : Command
 {
     std::string type;
@@ -39,6 +44,25 @@ struct CmdCrash : Command
         else if (type == "logic-error") {
             printError("Triggering a C++ logic error...");
             std::bitset<4>{"012"};
+        }
+
+        else if (type == "panic") {
+            printError("Triggering a panic...");
+            panic("test panic");
+        }
+
+        else if (type == "terminate") {
+            printError("Triggering an std::terminate...");
+
+            struct Foo
+            {
+                ~Foo()
+                {
+                    doThrow();
+                }
+            };
+
+            Foo foo;
         }
 
         else {

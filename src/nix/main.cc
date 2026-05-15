@@ -384,6 +384,33 @@ struct CmdHelpStores : Command
 
 static auto rCmdHelpStores = registerCommand<CmdHelpStores>("help-stores");
 
+static void terminateHandler()
+{
+    // Add the exception type and message to the Sentry crash report.
+    auto ex = std::current_exception();
+    if (ex) {
+        try {
+            std::rethrow_exception(ex);
+        } catch (BaseError & e) {
+            try {
+                nix::setSentryTag("terminate_exception_type", typeid(e).name());
+                nix::setSentryTag("terminate_exception_msg", e.message().c_str());
+            } catch (...) {
+            }
+        } catch (const std::exception & e) {
+            try {
+                nix::setSentryTag("terminate_exception_type", typeid(e).name());
+                nix::setSentryTag("terminate_exception_msg", e.what());
+            } catch (...) {
+            }
+        }
+    }
+
+    // Call the original terminate handler.
+    std::set_terminate(nullptr);
+    std::terminate();
+}
+
 void mainWrapped(int argc, char ** argv)
 {
     savedArgv = argv;
@@ -423,6 +450,7 @@ void mainWrapped(int argc, char ** argv)
         sentry_init(options);
         setSentryTag = [](const char * key, const char * value) { sentry_set_tag(key, value); };
         setSentryTag("nix_command", argc > 0 ? std::string(baseNameOf(argv[0])).c_str() : "");
+        std::set_terminate(terminateHandler);
         sentryEnabled = true;
     }
 
