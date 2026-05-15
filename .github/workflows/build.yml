@@ -179,6 +179,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: NixOS/flake-regressions
+          ref: impure
           path: flake-regressions
       - name: Checkout flake-regressions-data
         uses: actions/checkout@v4
@@ -195,6 +196,7 @@ jobs:
           NIX_CONFIG: ${{ matrix.nix_config }}
           PREFETCH: "1"
           USE_NIX_FLAKE_SHOW: "1"
+          IMPURE: "1"
         run: |
           set -x
           echo "PARALLEL: $PARALLEL"
