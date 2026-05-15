@@ -41,6 +41,11 @@ struct CmdCrash : Command
             std::bitset<4>{"012"};
         }
 
+        else if (type == "panic") {
+            printError("Triggering a panic...");
+            panic("test panic");
+        }
+
         else {
             throw Error("unknown crash type '%s'", type);
         }
