@@ -513,7 +513,7 @@ void Args::checkArgs()
 {
     for (auto & [name, flag] : longFlags) {
         if (flag->required && flag->timesUsed == 0)
-            throw UsageError("required argument '--%s' is missing", name);
+            throw UsageError("required argument '%s' is missing", "--" + name);
     }
 }
 
@@ -607,7 +607,7 @@ Strings argvToStrings(int argc, char ** argv)
 
 std::optional<ExperimentalFeature> Command::experimentalFeature()
 {
-    return {Xp::NixCommand};
+    return {};
 }
 
 MultiCommand::MultiCommand(std::string_view commandName, const Commands & commands_)
@@ -632,7 +632,7 @@ MultiCommand::MultiCommand(std::string_view commandName, const Commands & comman
          }},
          .completer = {[&](AddCompletions & completions, size_t, std::string_view prefix) {
              for (auto & [name, command] : commands)
-                 if (hasPrefix(name, prefix))
+                 if (hasPrefix(name, prefix) && !hasPrefix(name, "__"))
                      completions.add(name);
          }}});
 
@@ -671,6 +671,8 @@ nlohmann::json MultiCommand::toJSON()
         auto command = commandFun();
         auto j = command->toJSON();
         auto cat = nlohmann::json::object();
+        if (command->category() == Command::catUndocumented)
+            continue;
         cat["id"] = command->category();
         cat["description"] = trim(categories[command->category()]);
         cat["experimental-feature"] = command->experimentalFeature();

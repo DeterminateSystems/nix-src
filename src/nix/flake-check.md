@@ -18,66 +18,20 @@ R""(
 # Description
 
 This command verifies that the flake specified by flake reference
-*flake-url* can be evaluated successfully (as detailed below), and
-that the derivations specified by the flake's `checks` output can be
-built successfully.
+*flake-url* can be evaluated and built successfully according to its
+`schemas` flake output. For every flake output that has a schema
+definition, `nix flake check` uses the schema to extract the contents
+of the output. Then, for every item in the contents:
+
+* It evaluates the elements of the `evalChecks` attribute set returned
+  by the schema for that item, printing an error or warning for every
+  check that fails to evaluate or that evaluates to `false`.
+
+* It builds the `derivation` attribute returned by the schema for that
+  item, if the item has the `isFlakeCheck` attribute.
 
 If the `keep-going` option is set to `true`, Nix will keep evaluating as much
 as it can and report the errors as it encounters them. Otherwise it will stop
 at the first error.
-
-# Evaluation checks
-
-The following flake output attributes must be derivations:
-
-* `checks.`*system*`.`*name*
-* `devShells.`*system*`.default`
-* `devShells.`*system*`.`*name*
-* `nixosConfigurations.`*name*`.config.system.build.toplevel`
-* `packages.`*system*`.default`
-* `packages.`*system*`.`*name*
-
-The following flake output attributes must be [app
-definitions](./nix3-run.md):
-
-* `apps.`*system*`.default`
-* `apps.`*system*`.`*name*
-
-The following flake output attributes must be [template
-definitions](./nix3-flake-init.md):
-
-* `templates.default`
-* `templates.`*name*
-
-The following flake output attributes must be *Nixpkgs overlays*:
-
-* `overlays.default`
-* `overlays.`*name*
-
-The following flake output attributes must be *NixOS modules*:
-
-* `nixosModules.default`
-* `nixosModules.`*name*
-
-The following flake output attributes must be
-[bundlers](./nix3-bundle.md):
-
-* `bundlers.default`
-* `bundlers.`*name*
-
-Old default attributes are renamed, they will work but will emit a warning:
-
-* `defaultPackage.<system>` → `packages.`*system*`.default`
-* `defaultApps.<system>` → `apps.`*system*`.default`
-* `defaultTemplate` → `templates.default`
-* `defaultBundler.<system>` → `bundlers.`*system*`.default`
-* `overlay` → `overlays.default`
-* `devShell.<system>` → `devShells.`*system*`.default`
-* `nixosModule` → `nixosModules.default`
-
-In addition, the `hydraJobs` output is evaluated in the same way as
-Hydra's `hydra-eval-jobs` (i.e. as a arbitrarily deeply nested
-attribute set of derivations). Similarly, the
-`legacyPackages`.*system* output is evaluated like `nix-env --query --available `.
 
 )""

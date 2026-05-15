@@ -2,11 +2,15 @@
   stdenv,
   lib,
   mkMesonExecutable,
+  llvmPackages,
 
   nix-store,
   nix-expr,
   nix-main,
   nix-cmd,
+  sentry-native,
+
+  libmicrohttpd,
 
   # Configuration Options
 
@@ -15,10 +19,11 @@
 
 let
   inherit (lib) fileset;
+  enableSentry = !stdenv.hostPlatform.isStatic;
 in
 
 mkMesonExecutable (finalAttrs: {
-  pname = "nix";
+  pname = "determinate-nix";
   inherit version;
 
   workDir = ./.;
@@ -69,15 +74,38 @@ mkMesonExecutable (finalAttrs: {
     nix-expr
     nix-main
     nix-cmd
-  ];
+    libmicrohttpd
+  ]
+  ++ lib.optional (
+    stdenv.cc.isClang
+    && stdenv.hostPlatform.isStatic
+    && stdenv.cc.libcxx != null
+    && stdenv.cc.libcxx.isLLVM
+  ) llvmPackages.libunwind
+  ++ lib.optional enableSentry sentry-native;
 
   mesonFlags = [
-  ];
+    (lib.mesonEnable "sentry" enableSentry)
+  ]
+  ++ lib.optional enableSentry (
+    lib.mesonOption "crashpad-handler" "${sentry-native}/bin/crashpad_handler"
+  );
 
   postInstall = lib.optionalString stdenv.hostPlatform.isStatic ''
     mkdir -p $out/nix-support
     echo "file binary-dist $out/bin/nix" >> $out/nix-support/hydra-build-products
   '';
+
+  # Fixes a problem with the "nix-cli-libcxxStdenv-static" package output.
+  # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
+  # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
+  # Issue: https://github.com/NixOS/nixpkgs/issues/177129
+  NIX_CFLAGS_COMPILE = lib.optionalString (
+    stdenv.cc.isClang
+    && stdenv.hostPlatform.isStatic
+    && stdenv.cc.libcxx != null
+    && stdenv.cc.libcxx.isLLVM
+  ) "-rtlib=compiler-rt -unwindlib=libunwind";
 
   meta = {
     mainProgram = "nix";

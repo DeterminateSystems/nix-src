@@ -8,7 +8,11 @@
 #  include "nix/store/aws-creds.hh"
 #endif
 
+#include <nlohmann/json_fwd.hpp>
+
 namespace nix {
+
+struct StructuredAttrs;
 
 struct BuiltinBuilderContext
 {

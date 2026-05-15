@@ -8,6 +8,7 @@
 #include "nix/store/worker-protocol-impl.hh"
 #include "nix/util/archive.hh"
 #include "nix/store/path-info.hh"
+#include "nix/util/provenance.hh"
 
 #include <chrono>
 #include <nlohmann/json.hpp>
@@ -19,6 +20,12 @@ const WorkerProto::Version WorkerProto::latest = {
         {
             .major = 1,
             .minor = 38,
+        },
+    .features =
+        {
+            std::string{WorkerProto::featureQueryActiveBuilds},
+            std::string{WorkerProto::featureProvenance},
+            std::string{WorkerProto::featureVersionedAddToStoreMultiple},
         },
 };
 
@@ -346,6 +353,8 @@ UnkeyedValidPathInfo WorkerProto::Serialise<UnkeyedValidPathInfo>::read(const St
         info.sigs = WorkerProto::Serialise<std::set<Signature>>::read(store, conn);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
     }
+    if (conn.version.features.contains(WorkerProto::featureProvenance))
+        info.provenance = Provenance::from_json_str_optional(readString(conn.from));
     return info;
 }
 
@@ -361,6 +370,8 @@ void WorkerProto::Serialise<UnkeyedValidPathInfo>::write(
         WorkerProto::write(store, conn, pathInfo.sigs);
         conn.to << renderContentAddress(pathInfo.ca);
     }
+    if (conn.version.features.contains(WorkerProto::featureProvenance))
+        conn.to << (pathInfo.provenance ? pathInfo.provenance->to_json_str() : "");
 }
 
 WorkerProto::ClientHandshakeInfo

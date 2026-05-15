@@ -109,6 +109,10 @@ struct WorkerProto
 
     static const Version minimum;
 
+    static constexpr std::string_view featureQueryActiveBuilds = "queryActiveBuilds";
+    static constexpr std::string_view featureProvenance = "provenance";
+    static constexpr std::string_view featureVersionedAddToStoreMultiple = "versionedAddToStoreMultiple";
+
     /**
      * A unidirectional read connection, to be used by the read half of the
      * canonical serializers below.
@@ -117,6 +121,7 @@ struct WorkerProto
     {
         Source & from;
         const Version & version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -127,6 +132,7 @@ struct WorkerProto
     {
         Sink & to;
         const Version & version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -230,6 +236,7 @@ enum struct WorkerProto::Op : uint64_t {
     AddBuildLog = 45,
     BuildPathsWithResults = 46,
     AddPermRoot = 47,
+    QueryActiveBuilds = 48,
 };
 
 struct WorkerProto::ClientHandshakeInfo

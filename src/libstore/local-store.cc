@@ -17,6 +17,7 @@
 #include "nix/store/keys.hh"
 #include "nix/util/users.hh"
 #include "nix/store/store-registration.hh"
+#include "nix/util/provenance.hh"
 
 #include <algorithm>
 #include <cstring>
@@ -125,6 +126,7 @@ LocalStore::LocalStore(ref<const Config> config)
     , schemaPath(dbDir / "schema")
     , tempRootsDir(config->stateDir.get() / "temproots")
     , fnTempRoots(tempRootsDir / std::to_string(getpid()))
+    , activeBuildsDir(config->stateDir.get() / "active-builds")
 {
     auto state(_state->lock());
     state->stmts = std::make_unique<State::Stmts>();
@@ -145,6 +147,7 @@ LocalStore::LocalStore(ref<const Config> config)
     const auto & localSettings = config->getLocalSettings();
     const auto & gcSettings = localSettings.getGCSettings();
     createDirs(gcRootsDir);
+    createDirs(activeBuildsDir);
 
     for (auto & perUserDir : {profilesDir / "per-user", gcRootsDir / "per-user"}) {
         createDirs(perUserDir);
@@ -331,13 +334,16 @@ LocalStore::LocalStore(ref<const Config> config)
     /* Prepare SQL statements. */
     state->stmts->RegisterValidPath.create(
         state->db,
-        "insert into ValidPaths (path, hash, registrationTime, deriver, narSize, ultimate, sigs, ca) values (?, ?, ?, ?, ?, ?, ?, ?);");
+        fmt("insert into ValidPaths (path, hash, registrationTime, deriver, narSize, ultimate, sigs, ca%s) values (?, ?, ?, ?, ?, ?, ?, ?%s);",
+            experimentalFeatureSettings.isEnabled(Xp::Provenance) ? ", provenance" : "",
+            experimentalFeatureSettings.isEnabled(Xp::Provenance) ? ", ?" : ""));
     state->stmts->UpdatePathInfo.create(
         state->db, "update ValidPaths set narSize = ?, hash = ?, ultimate = ?, sigs = ?, ca = ? where path = ?;");
     state->stmts->AddReference.create(state->db, "insert or replace into Refs (referrer, reference) values (?, ?);");
     state->stmts->QueryPathInfo.create(
         state->db,
-        "select id, hash, registrationTime, deriver, narSize, ultimate, sigs, ca from ValidPaths where path = ?;");
+        fmt("select id, hash, registrationTime, deriver, narSize, ultimate, sigs, ca%s from ValidPaths where path = ?;",
+            experimentalFeatureSettings.isEnabled(Xp::Provenance) ? ", provenance" : ""));
     state->stmts->QueryReferences.create(
         state->db, "select path from Refs join ValidPaths on reference = id where referrer = ?;");
     state->stmts->QueryReferrers.create(
@@ -606,6 +612,9 @@ void LocalStore::upgradeDBSchema(State & state)
             "20220326-ca-derivations",
 #include "ca-specific-schema.sql.gen.hh"
         );
+
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        doUpgrade("20241024-provenance", "alter table ValidPaths add column provenance text");
 }
 
 /* To improve purity, users may want to make the Nix store a read-only
@@ -683,14 +692,15 @@ uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)
             "cannot add path '%s' to the Nix store because it claims to be content-addressed but isn't",
             printStorePath(info.path));
 
-    state.stmts->RegisterValidPath
-        .use()(printStorePath(info.path))(info.narHash.to_string(HashFormat::Base16, true))(
-            info.registrationTime == 0 ? time(nullptr) : info.registrationTime)(
-            info.deriver ? printStorePath(*info.deriver) : "",
-            (bool) info.deriver)(info.narSize, info.narSize != 0)(info.ultimate ? 1 : 0, info.ultimate)(
-            concatStringsSep(" ", Signature::toStrings(info.sigs)),
-            !info.sigs.empty())(renderContentAddress(info.ca), (bool) info.ca)
-        .exec();
+    auto query = state.stmts->RegisterValidPath.use()(printStorePath(info.path))(info.narHash.to_string(
+        HashFormat::Base16, true))(info.registrationTime == 0 ? time(nullptr) : info.registrationTime)(
+        info.deriver ? printStorePath(*info.deriver) : "",
+        (bool) info.deriver)(info.narSize, info.narSize != 0)(info.ultimate ? 1 : 0, info.ultimate)(
+        concatStringsSep(" ", Signature::toStrings(info.sigs)),
+        !info.sigs.empty())(renderContentAddress(info.ca), (bool) info.ca);
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        query(info.provenance ? info.provenance->to_json_str() : "", (bool) info.provenance);
+    query.exec();
     uint64_t id = state.db.getLastInsertedRowId();
 
     /* If this is a derivation, then store the derivation outputs in
@@ -778,6 +788,12 @@ std::shared_ptr<const ValidPathInfo> LocalStore::queryPathInfoInternal(State & s
 
     while (useQueryReferences.next())
         info->references.insert(parseStorePath(useQueryReferences.getStr(0)));
+
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+        auto prov = (const char *) sqlite3_column_text(state.stmts->QueryPathInfo, 8);
+        if (prov)
+            info->provenance = Provenance::from_json_str(prov);
+    }
 
     return info;
 }
@@ -971,7 +987,7 @@ void LocalStore::invalidatePath(State & state, const StorePath & path)
     /* Note that the foreign key constraints on the Refs table take
        care of deleting the references entries for `path'. */
 
-    pathInfoCache->lock()->erase(path);
+    invalidatePathInfoCacheFor(path);
 }
 
 const PublicKeys & LocalStore::getPublicKeys()
@@ -998,18 +1014,6 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
         throw Error("cannot add path '%s' because it lacks a signature by a trusted key", printStorePath(info.path));
 
     {
-        /* In case we are not interested in reading the NAR: discard it. */
-        bool narRead = false;
-        Finally cleanup = [&]() {
-            if (!narRead)
-                try {
-                    source.skip(info.narSize);
-                } catch (...) {
-                    // TODO: should Interrupted be handled here?
-                    ignoreExceptionInDestructor();
-                }
-        };
-
         addTempRoot(info.path);
 
         if (repair || !isValidPath(info.path)) {
@@ -1019,22 +1023,22 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
             auto realPath = toRealPath(info.path);
 
             /* Lock the output path.  But don't lock if we're being called
-            from a build hook (whose parent process already acquired a
-            lock on this path). */
+               from a build hook (whose parent process already acquired a
+               lock on this path). */
             if (!locksHeld.count(printStorePath(info.path)))
                 outputLock.lockPaths({realPath});
 
-            if (repair || !isValidPath(info.path)) {
+            /* The path may have been created by another process in the meantime, so check again. */
+            if (repair || !isValidPathUncached(info.path)) {
 
                 deletePath(realPath);
 
                 /* While restoring the path from the NAR, compute the hash
-                of the NAR. */
+                   of the NAR. */
                 HashSink hashSink(HashAlgorithm::SHA256);
 
                 TeeSource wrapperSource{source, hashSink};
 
-                narRead = true;
                 restorePath(realPath, wrapperSource, config->getLocalSettings().fsyncStorePaths);
 
                 auto hashResult = hashSink.finish();
@@ -1043,8 +1047,8 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
                     throw Error(
                         "hash mismatch importing path '%s';\n  specified: %s\n  got:       %s",
                         printStorePath(info.path),
-                        info.narHash.to_string(HashFormat::Nix32, true),
-                        hashResult.hash.to_string(HashFormat::Nix32, true));
+                        info.narHash.to_string(HashFormat::SRI, true),
+                        hashResult.hash.to_string(HashFormat::SRI, true));
 
                 if (hashResult.numBytesDigested != info.narSize)
                     throw Error(
@@ -1101,7 +1105,9 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
                 }
 
                 registerValidPath(info);
-            }
+            } else
+                // We may have a negative cache entry for this path, so get rid of it.
+                invalidatePathInfoCacheFor(info.path);
 
             outputLock.setDeletion(true);
         }
@@ -1118,7 +1124,8 @@ StorePath LocalStore::addToStoreFromDump(
     ContentAddressMethod hashMethod,
     HashAlgorithm hashAlgo,
     const StorePathSet & references,
-    RepairFlag repair)
+    RepairFlag repair,
+    std::shared_ptr<const Provenance> provenance)
 {
     /* For computing the store path. */
     auto hashSink = std::make_unique<HashSink>(hashAlgo);
@@ -1218,7 +1225,8 @@ StorePath LocalStore::addToStoreFromDump(
 
         PathLocks outputLock({realPath});
 
-        if (repair || !isValidPath(dstPath)) {
+        /* The path may have been created by another process in the meantime, so check again. */
+        if (repair || !isValidPathUncached(dstPath)) {
 
             deletePath(realPath);
 
@@ -1264,8 +1272,11 @@ StorePath LocalStore::addToStoreFromDump(
 
             auto info = ValidPathInfo::makeFromCA(*this, name, std::move(desc), narHash.hash);
             info.narSize = narHash.numBytesDigested;
+            info.provenance = provenance;
             registerValidPath(info);
-        }
+        } else
+            // We may have a negative cache entry for this path, so get rid of it.
+            invalidatePathInfoCacheFor(dstPath);
 
         outputLock.setDeletion(true);
     }

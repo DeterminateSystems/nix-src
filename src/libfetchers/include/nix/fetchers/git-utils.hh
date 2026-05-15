@@ -26,6 +26,9 @@ struct GitAccessorOptions
 {
     bool exportIgnore = false;
     bool smudgeLfs = false;
+    bool submodules = false; // Currently implemented in GitInputScheme rather than GitAccessor
+
+    std::string makeFingerprint(const Hash & rev) const;
 };
 
 struct GitRepo
@@ -131,17 +134,6 @@ struct GitRepo
      * Otherwise, return the passed ID unchanged.
      */
     virtual Hash dereferenceSingletonDirectory(const Hash & oid) = 0;
-};
-
-// A helper to ensure that the `git_*_free` functions get called.
-template<auto del>
-struct Deleter
-{
-    template<typename T>
-    void operator()(T * p) const
-    {
-        del(p);
-    };
 };
 
 // A helper to ensure that we don't leak objects returned by libgit2.

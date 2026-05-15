@@ -9,7 +9,7 @@ description: |
   > **Warning**
   >
   > This JSON format is currently
-  > [**experimental**](@docroot@/development/experimental-features.md#xp-feature-nix-command)
+  > [**experimental**](@docroot@/development/experimental-features.md)
   > and subject to change.
 
 type: object

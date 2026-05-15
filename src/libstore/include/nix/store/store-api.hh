@@ -43,6 +43,8 @@ struct SourceAccessor;
 struct NarInfoDiskCache;
 struct NarInfoDiskCacheSettings;
 class Store;
+struct AsyncPathWriter;
+struct Provenance;
 
 typedef std::map<std::string, StorePath> OutputPathMap;
 
@@ -370,7 +372,9 @@ public:
     StorePath followLinksToStorePath(std::string_view path) const;
 
     /**
-     * Check whether a path is valid.
+     * Check whether a path is valid. NOTE: this function does not
+     * generally cache whether a path is valid. You may want to use
+     * `maybeQueryPathInfo()`, which does cache.
      */
     bool isValidPath(const StorePath & path);
 
@@ -410,9 +414,16 @@ public:
 
     /**
      * Query information about a valid path. It is permitted to omit
-     * the name part of the store path.
+     * the name part of the store path. Throws an exception if the
+     * path is not valid.
      */
     ref<const ValidPathInfo> queryPathInfo(const StorePath & path);
+
+    /**
+     * Like `queryPathInfo()`, but returns `nullptr` if the path is
+     * not valid.
+     */
+    std::shared_ptr<const ValidPathInfo> maybeQueryPathInfo(const StorePath & path);
 
     /**
      * Asynchronous version of queryPathInfo().
@@ -542,7 +553,8 @@ public:
     virtual void querySubstitutablePathInfos(const StorePathCAMap & paths, SubstitutablePathInfos & infos);
 
     /**
-     * Import a path into the store.
+     * Import a path into the store. Note that the entire NAR may not be read from `narSource`, e.g. if the path is
+     * already valid.
      */
     virtual void addToStore(
         const ValidPathInfo & info,
@@ -559,8 +571,6 @@ public:
     /**
      * Import multiple paths into the store.
      */
-    virtual void addMultipleToStore(Source & source, RepairFlag repair = NoRepair, CheckSigsFlag checkSigs = CheckSigs);
-
     virtual void addMultipleToStore(
         PathsSource && pathsToCopy, Activity & act, RepairFlag repair = NoRepair, CheckSigsFlag checkSigs = CheckSigs);
 
@@ -618,7 +628,8 @@ public:
         ContentAddressMethod hashMethod = ContentAddressMethod::Raw::NixArchive,
         HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
         const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) = 0;
+        RepairFlag repair = NoRepair,
+        std::shared_ptr<const Provenance> provenance = nullptr) = 0;
 
     /**
      * Add a mapping indicating that `deriver!outputName` maps to the output path
@@ -811,7 +822,17 @@ public:
     /**
      * Write a derivation to the Nix store, and return its path.
      */
-    virtual StorePath writeDerivation(const Derivation & drv, RepairFlag repair = NoRepair);
+    virtual StorePath writeDerivation(
+        const Derivation & drv, RepairFlag repair = NoRepair, std::shared_ptr<const Provenance> provenance = nullptr);
+
+    /**
+     * Asynchronously write a derivation to the Nix store, and return its path.
+     */
+    StorePath writeDerivation(
+        AsyncPathWriter & asyncPathWriter,
+        const Derivation & drv,
+        RepairFlag repair = NoRepair,
+        std::shared_ptr<const Provenance> provenance = nullptr);
 
     /**
      * Read a derivation (which must already be valid).
@@ -936,6 +957,15 @@ public:
         return {};
     }
 
+    /**
+     * Whether, when copying *from* this store, a "copied" provenance
+     * record should be added.
+     */
+    virtual bool includeInProvenance()
+    {
+        return false;
+    }
+
 protected:
 
     Stats stats;
@@ -954,9 +984,10 @@ protected:
 };
 
 /**
- * Copy a path from one store to another.
+ * Copy a path from one store to another. Return the path info of the newly added store path, or nullptr if the path was
+ * already valid.
  */
-void copyStorePath(
+std::shared_ptr<const ValidPathInfo> copyStorePath(
     Store & srcStore,
     Store & dstStore,
     const StorePath & storePath,

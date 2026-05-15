@@ -13,6 +13,8 @@
 #include "nix/util/util.hh"
 #include "nix/util/thread-pool.hh"
 #include "nix/util/pool.hh"
+#include "nix/util/executable-path.hh"
+#include "nix/util/deleter.hh"
 
 #include <git2/attr.h>
 #include <git2/blob.h>
@@ -427,7 +429,7 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
 
         ThreadPool pool;
 
-        auto process = [&done, &pool, &repoPool](this const auto & process, const git_oid & oid) -> void {
+        auto process = [&done, &pool, &repoPool](this auto const & process, const git_oid & oid) -> void {
             auto repo(repoPool.get());
 
             auto _commit = lookupObject(*repo, oid, GIT_OBJECT_COMMIT);
@@ -637,28 +639,46 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
         // that)
         //       then use code that was removed in this commit (see blame)
 
-        auto dir = this->path;
-        OsStrings gitArgs = {
-            OS_STR("-C"),
-            dir.native(),
-            OS_STR("--git-dir"),
-            OS_STR("."),
-            OS_STR("fetch"),
-            OS_STR("--progress"),
-            OS_STR("--force"),
-        };
-        if (shallow) {
-            gitArgs.push_back(OS_STR("--depth"));
-            gitArgs.push_back(OS_STR("1"));
+        if (ExecutablePath::load().findName("git")) {
+            auto dir = this->path;
+
+            // Remove shallow.lock left behind by a previously interrupted `git fetch`, as it would prevent `git fetch`
+            // from running. Note that we already have a repository-wide `PathLock` (see git.cc), so this is safe.
+            std::filesystem::remove(dir / "shallow.lock");
+
+            OsStrings gitArgs{"-C", dir.native(), "--git-dir", ".", "fetch", "--progress", "--force"};
+            if (shallow) {
+                gitArgs.push_back(OS_STR("--depth"));
+                gitArgs.push_back(OS_STR("1"));
+            }
+            gitArgs.push_back(OS_STR("--"));
+            gitArgs.push_back(string_to_os_string(url));
+            gitArgs.push_back(string_to_os_string(refspec));
+
+            auto status = runProgram(RunOptions{.program = "git", .args = gitArgs, .isInteractive = true}).first;
+
+            if (status > 0)
+                throw Error("Failed to fetch git repository '%s'", url);
+        } else {
+            // Fall back to using libgit2 for fetching. This does not
+            // support SSH very well.
+            Remote remote;
+
+            if (git_remote_create_anonymous(Setter(remote), *this, url.c_str()))
+                throw Error("cannot create Git remote '%s': %s", url, git_error_last()->message);
+
+            char * refspecs[] = {(char *) refspec.c_str()};
+            git_strarray refspecs2{.strings = refspecs, .count = 1};
+
+            git_fetch_options opts = GIT_FETCH_OPTIONS_INIT;
+            // FIXME: for some reason, shallow fetching over ssh barfs
+            // with "could not read from remote repository".
+            opts.depth = shallow && parseURL(url).scheme != "ssh" ? 1 : GIT_FETCH_DEPTH_FULL;
+            opts.callbacks.payload = &act;
+
+            if (git_remote_fetch(remote.get(), &refspecs2, &opts, nullptr))
+                throw Error("fetching '%s' from '%s': %s", refspec, url, git_error_last()->message);
         }
-        gitArgs.push_back(OS_STR("--"));
-        gitArgs.push_back(string_to_os_string(url));
-        gitArgs.push_back(string_to_os_string(refspec));
-
-        auto status = runProgram({.program = "git", .args = gitArgs, .isInteractive = true}).first;
-
-        if (status > 0)
-            throw Error("Failed to fetch git repository '%s'", url);
     }
 
     void verifyCommit(const Hash & rev, const std::vector<fetchers::PublicKey> & publicKeys) override
@@ -774,10 +794,14 @@ ref<GitRepo> GitRepo::openRepo(const std::filesystem::path & path, GitRepo::Opti
     return make_ref<GitRepoImpl>(path, options);
 }
 
+std::string GitAccessorOptions::makeFingerprint(const Hash & rev) const
+{
+    return "git:" + rev.gitRev() + (exportIgnore ? ";e" : "") + (smudgeLfs ? ";l" : "");
+}
+
 /**
  * Raw git tree input accessor.
  */
-
 struct GitSourceAccessor : SourceAccessor
 {
     struct State
@@ -798,6 +822,7 @@ struct GitSourceAccessor : SourceAccessor
               .options = options,
           }}
     {
+        fingerprint = options.makeFingerprint(rev);
     }
 
     void readBlob(const CanonPath & path, bool symlink, Sink & sink, std::function<void(uint64_t)> sizeCallback)
@@ -1493,7 +1518,10 @@ ref<GitRepo> Settings::getTarballCache() const
      * for optimal packfiles.
      */
     static auto repoDir = std::filesystem::path(getCacheDir()) / "tarball-cache-v2";
-    return GitRepo::openRepo(repoDir, {.create = true, .bare = true, .packfilesOnly = true});
+    auto tarballCache(_tarballCache.lock());
+    if (!*tarballCache)
+        *tarballCache = GitRepo::openRepo(repoDir, {.create = true, .bare = true, .packfilesOnly = true});
+    return ref<GitRepo>(*tarballCache);
 }
 
 } // namespace fetchers

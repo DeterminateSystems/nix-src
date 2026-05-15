@@ -6,6 +6,7 @@
 #include "nix/util/signals.hh"
 #include "nix/util/terminal.hh"
 #include "nix/util/position.hh"
+#include "nix/util/sentry.hh"
 
 #include <cinttypes>
 #include <iostream>
@@ -452,6 +453,7 @@ void panic(std::string_view msg)
     writeErr("\n\n" ANSI_RED "terminating due to unexpected unrecoverable internal error: " ANSI_NORMAL);
     writeErr(msg);
     writeErr("\n");
+    setSentryTag("panic_msg", std::string(msg).c_str());
     std::terminate();
 }
 
@@ -476,17 +478,25 @@ int handleExceptions(const std::string & programName, fun<void()> body)
 
     ErrorInfo::programName = baseNameOf(programName);
 
+    auto doLog = [&](BaseError & e) {
+        try {
+            logError(e.info());
+        } catch (...) {
+            printError(ANSI_RED "error:" ANSI_NORMAL " Exception while printing an exception.");
+        }
+    };
+
     std::string error = ANSI_RED "error:" ANSI_NORMAL " ";
     try {
         body();
     } catch (Exit & e) {
         return e.status;
     } catch (UsageError & e) {
-        logError(e.info());
-        printError("Try '%1% --help' for more information.", programName);
+        doLog(e);
+        printError("\nTry '%1% --help' for more information.", programName);
         return 1;
     } catch (BaseError & e) {
-        logError(e.info());
+        doLog(e);
         return e.info().status;
     } catch (std::bad_alloc & e) {
         printError(error + "out of memory");

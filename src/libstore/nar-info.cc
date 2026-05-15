@@ -3,6 +3,7 @@
 #include "nix/store/store-api.hh"
 #include "nix/util/strings.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/util/provenance.hh"
 
 namespace nix {
 
@@ -84,7 +85,8 @@ NarInfo::NarInfo(const StoreDirConfig & store, const std::string & s, const std:
                 throw corrupt("extra CA");
             // FIXME: allow blank ca or require skipping field?
             ca = ContentAddress::parseOpt(value);
-        }
+        } else if (name == "Provenance" && experimentalFeatureSettings.isEnabled(Xp::Provenance))
+            provenance = Provenance::from_json_str(value);
 
         pos = eol + 1;
         line += 1;
@@ -111,9 +113,12 @@ std::string NarInfo::to_string(const StoreDirConfig & store) const
     res += "URL: " + url + "\n";
     assert(compression != "");
     res += "Compression: " + compression + "\n";
-    assert(fileHash && fileHash->algo == HashAlgorithm::SHA256);
-    res += "FileHash: " + fileHash->to_string(HashFormat::Nix32, true) + "\n";
-    res += "FileSize: " + std::to_string(fileSize) + "\n";
+    if (fileHash) {
+        assert(fileHash->algo == HashAlgorithm::SHA256);
+        res += "FileHash: " + fileHash->to_string(HashFormat::Nix32, true) + "\n";
+    }
+    if (fileSize)
+        res += "FileSize: " + std::to_string(fileSize) + "\n";
     assert(narHash.algo == HashAlgorithm::SHA256);
     res += "NarHash: " + narHash.to_string(HashFormat::Nix32, true) + "\n";
     res += "NarSize: " + std::to_string(narSize) + "\n";
@@ -128,6 +133,9 @@ std::string NarInfo::to_string(const StoreDirConfig & store) const
 
     if (ca)
         res += "CA: " + renderContentAddress(*ca) + "\n";
+
+    if (provenance && experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        res += "Provenance: " + provenance->to_json_str() + "\n";
 
     return res;
 }

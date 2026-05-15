@@ -364,21 +364,31 @@ void AttrCursor::fetchCachedValue()
         throw CachedEvalError(parent->first, parent->second);
 }
 
-AttrPath AttrCursor::getAttrPath() const
+AttrPath AttrCursor::getAttrPathRaw() const
 {
     if (parent) {
-        auto attrPath = parent->first->getAttrPath();
+        auto attrPath = parent->first->getAttrPathRaw();
         attrPath.push_back(parent->second);
         return attrPath;
     } else
         return {};
 }
 
-AttrPath AttrCursor::getAttrPath(Symbol name) const
+AttrPath AttrCursor::getAttrPath() const
 {
-    auto attrPath = getAttrPath();
+    return root->cleanupAttrPath(getAttrPathRaw());
+}
+
+AttrPath AttrCursor::getAttrPathRaw(Symbol name) const
+{
+    auto attrPath = getAttrPathRaw();
     attrPath.push_back(name);
     return attrPath;
+}
+
+AttrPath AttrCursor::getAttrPath(Symbol name) const
+{
+    return root->cleanupAttrPath(getAttrPathRaw(name));
 }
 
 std::string AttrCursor::getAttrPathStr() const
@@ -554,16 +564,17 @@ string_t AttrCursor::getStringWithContext()
             if (auto s = std::get_if<string_t>(&cachedValue->second)) {
                 bool valid = true;
                 for (auto & c : s->second) {
-                    const StorePath & path = std::visit(
+                    const StorePath * path = std::visit(
                         overloaded{
-                            [&](const NixStringContextElem::DrvDeep & d) -> const StorePath & { return d.drvPath; },
-                            [&](const NixStringContextElem::Built & b) -> const StorePath & {
-                                return b.drvPath->getBaseStorePath();
+                            [&](const NixStringContextElem::DrvDeep & d) -> const StorePath * { return &d.drvPath; },
+                            [&](const NixStringContextElem::Built & b) -> const StorePath * {
+                                return &b.drvPath->getBaseStorePath();
                             },
-                            [&](const NixStringContextElem::Opaque & o) -> const StorePath & { return o.path; },
+                            [&](const NixStringContextElem::Opaque & o) -> const StorePath * { return &o.path; },
+                            [&](const NixStringContextElem::Path & p) -> const StorePath * { return nullptr; },
                         },
                         c.raw);
-                    if (!root->state.store->isValidPath(path)) {
+                    if (!path || !root->state.store->isValidPath(*path)) {
                         valid = false;
                         break;
                     }
@@ -711,6 +722,7 @@ StorePath AttrCursor::forceDerivation()
         /* The eval cache contains 'drvPath', but the actual path has
            been garbage-collected. So force it to be regenerated. */
         aDrvPath->forceValue();
+        root->state.waitForPath(drvPath);
         if (!root->state.store->isValidPath(drvPath))
             throw Error(
                 "don't know how to recreate store derivation '%s'!", root->state.store->printStorePath(drvPath));
