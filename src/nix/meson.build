@@ -92,6 +92,7 @@ nix_sources = [ config_priv_h ] + files(
   'edit.cc',
   'env.cc',
   'eval.cc',
+  'flake-bake.cc',
   'flake-prefetch-inputs.cc',
   'flake-prefetch-inputs.cc',
   'flake.cc',
@@ -145,6 +146,7 @@ nix_sources += [
   gen_header.process('get-env.sh'),
   gen_header.process('profiles.md'),
   gen_header.process('help-stores.md'),
+  gen_header.process('baked-flake.nix'),
 ]
 
 # The rest of the subdirectories aren't separate components,
