@@ -1,3 +1,6 @@
+#include "nix/store/globals.hh"
+#include "nix/util/config-global.hh"
+#include "nix/util/configuration.hh"
 #include "nix/util/signals.hh"
 #include "nix/cmd/command.hh"
 #include "nix/main/shared.hh"
@@ -100,17 +103,28 @@ static auto rCmdCopySigs = registerCommand2<CmdCopySigs>({"store", "copy-sigs"})
 struct CmdSign : StorePathsCommand
 {
     std::filesystem::path secretKeyFile;
+    std::string secretKeyUri;
 
     CmdSign()
     {
         addFlag({
             .longName = "key-file",
             .shortName = 'k',
-            .description = "File containing the secret signing key.",
+            .description = "File containing the secret signing key, or a URI to one.",
             .labels = {"file"},
             .handler = {&secretKeyFile},
             .completer = completePath,
-            .required = true,
+            .required = false,
+        });
+        addFlag({
+            .longName = "key-uri",
+            .shortName = 'u',
+            .description = "Name-prefixed URI pointing to an OpenSSL keystore-compatible "
+                "secret signing key (e.g. keyname:file:/etc/nix/my.key). "
+                "Enables feature 'keystore' automatically and overrides 'key-file'.",
+            .labels = {"uri"},
+            .handler = {&secretKeyUri},
+            .required = false,
         });
     }
 
@@ -121,7 +135,20 @@ struct CmdSign : StorePathsCommand
 
     void run(ref<Store> store, StorePaths && storePaths) override
     {
-        LocalSigner signer(SecretKey::parse(readFile(secretKeyFile)));
+        std::string secretKey;
+        if (secretKeyUri.empty()) {
+            if (secretKeyFile.empty()) {
+                throw UsageError("you must specify either a key file or URI");
+            } else {
+                secretKey = readFile(secretKeyFile);
+            }
+        } else {
+            // Passing key-uri implies 'keystore'.
+            experimentalFeatureSettings.set("extra-experimental-features", "keystore");
+            secretKey = secretKeyUri;
+        }
+
+        LocalSigner signer(SecretKey::parse(secretKey, !secretKeyUri.empty()));
 
         size_t added{0};
 
@@ -204,7 +231,7 @@ struct CmdKeyConvertSecretToPublic : Command
     void run() override
     {
         logger->stop();
-        writeFull(getStandardOutput(), SecretKey::parse(drainFD(STDIN_FILENO))->toPublicKey()->to_string());
+        writeFull(getStandardOutput(), SecretKey::parse(drainFD(STDIN_FILENO), false)->toPublicKey()->to_string());
     }
 };
 
@@ -225,7 +252,7 @@ struct CmdKeyConvertSecretToPem : Command
     void run() override
     {
         logger->stop();
-        writeFull(getStandardOutput(), SecretKey::parse(drainFD(STDIN_FILENO))->toPEM());
+        writeFull(getStandardOutput(), SecretKey::parse(drainFD(STDIN_FILENO), false)->toPEM());
     }
 };
 

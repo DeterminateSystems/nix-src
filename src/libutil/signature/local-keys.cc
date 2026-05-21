@@ -1,12 +1,17 @@
+#include <boost/algorithm/string/trim.hpp>
 #include <nlohmann/json.hpp>
 #include <ranges>
 #include <sodium.h>
 #include <openssl/core_names.h>
+#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
+#include <openssl/store.h>
+#include <openssl/ui.h>
 
 #include "nix/util/base-n.hh"
 #include "nix/util/signature/local-keys.hh"
+#include "nix/util/configuration.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/util/util.hh"
 #include "nix/util/deleter.hh"
@@ -20,32 +25,44 @@ using AutoEVP_PKEY_CTX = std::unique_ptr<EVP_PKEY_CTX, Deleter<EVP_PKEY_CTX_free
 using AutoEVP_MD_CTX = std::unique_ptr<EVP_MD_CTX, Deleter<EVP_MD_CTX_free>>;
 using AutoBIO = std::unique_ptr<BIO, Deleter<BIO_free>>;
 
-std::string_view keyNamePart(std::string_view s)
-{
-    auto colon = s.find(':');
-    return colon == std::string_view::npos ? std::string_view{} : s.substr(0, colon);
-}
+/**
+ * Some data with a label that can also be a URI to something.
+ * Used for keys and signatures.
+ */
+struct LabeledData {
+    std::string label;
+    std::string data;
+    bool isUri;
+};
 
 /**
- * Parse a colon-separated string where the second part is Base64-encoded.
+ * Parse a colon-separated string where the second part is Base64-encoded or a URI.
  *
  * @param s The string to parse in the format `<name>:<base64-data>`.
  * @param typeName Name of the type being parsed (for error messages).
+ * @param allowUri true if we should allow URIs
  * @return A pair of (name, decoded-data).
  */
-std::pair<std::string, std::string> parseColonBase64(std::string_view s, std::string_view typeName)
+LabeledData parseColonBase64OrUri(std::string_view s, std::string_view typeName, bool allowUri)
 {
-    size_t colon = s.find(':');
-    if (colon == std::string::npos || colon == 0)
+    auto [name, rest] = splitColon(s);
+    if (name.empty() || rest.empty())
         throw FormatError("%s is corrupt", typeName);
 
-    auto name = std::string(s.substr(0, colon));
-    auto data = base64::decode(s.substr(colon + 1));
+    bool isUri = false;
+    std::string data;
+    if (!allowUri || std::get<0>(splitColon(rest)).empty())
+        data = base64::decode(rest);
+    else {
+        // Maybe a URI. If it's from a file, there may be a newline at the end, so trim it.
+        isUri = true;
+        data = boost::trim_right_copy(rest);
+    }
 
-    if (name.empty() || data.empty())
+    if (data.empty())
         throw FormatError("%s is corrupt", typeName);
 
-    return {std::move(name), std::move(data)};
+    return {.label = std::string(name), .data = std::move(data), .isUri = isUri};
 }
 
 /**
@@ -120,13 +137,73 @@ std::optional<KeyType> detectOpenSSLKeyType(EVP_PKEY * pkey)
 }
 
 /**
- * Parse a DER-encoded PKCS#8 `PrivateKeyInfo`.
+ * Parses an OpenSSL store URI, trying to find a single matching PKEY object.
+ * @param uri the URI
+ * @returns the PKEY
  */
-AutoEVP_PKEY parsePrivateKey(std::string_view der)
+static AutoEVP_PKEY parseOsslStoreUri(std::string_view uri) {
+    std::optional<Error> err;
+
+    // Per https://docs.openssl.org/3.5/man3/ERR_error_string/#description:
+    // buf must be at least 256 bytes long, so just make it twice that.
+    char errBuf[512] = {0};
+
+    OSSL_STORE_CTX *ctx = OSSL_STORE_open(
+        uri.data(),
+        UI_get_default_method(),
+        nullptr,
+        nullptr,
+        nullptr
+    );
+    if (ctx == nullptr) {
+        auto errCode = ERR_get_error();
+        ERR_error_string_n(errCode, errBuf, sizeof(errBuf));
+        err = Error("error opening OpenSSL store URI '%s': %s (%x)", uri, errBuf, errCode);
+    }
+
+    // Find the first matching private key object. If there are more than one, error.
+    EVP_PKEY *found = nullptr;
+    while (!err.has_value() && !OSSL_STORE_eof(ctx)) {
+        OSSL_STORE_INFO *info = OSSL_STORE_load(ctx);
+        if (info != nullptr) {
+            if (OSSL_STORE_INFO_get_type(info) == OSSL_STORE_INFO_PKEY) {
+                // Use get1 over get0 because we want to take a reference to it.
+                // get0 will only last as long as 'info'.
+                if (found == nullptr)
+                    found = OSSL_STORE_INFO_get1_PKEY(info);
+                else {
+                    // Clean it up to avoid a leak.
+                    EVP_PKEY_free(found);
+                    found = nullptr;
+                    err = Error("multiple matches for OpenSSL store URI '%s'", uri);
+                }
+            }
+            OSSL_STORE_INFO_free(info);
+        }
+    }
+
+    if (ctx != nullptr)
+        OSSL_STORE_close(ctx);
+
+    if (err.has_value())
+        throw err.value();
+
+    return AutoEVP_PKEY(found);
+}
+
+/**
+ * Parse a DER-encoded PKCS#8 `PrivateKeyInfo` or a URI.
+ * @param key the DER to parse, or a URI
+ * @param isUri true if it is a URI
+ */
+AutoEVP_PKEY parsePrivateKey(std::string_view key, bool isUri)
 {
-    auto p = (const unsigned char *) der.data();
-    AutoEVP_PKEY pkey(d2i_AutoPrivateKey(nullptr, &p, der.size()));
-    return pkey;
+    if (isUri)
+        return parseOsslStoreUri(key);
+    else {
+        auto p = (const unsigned char *) key.data();
+        return AutoEVP_PKEY(d2i_AutoPrivateKey(nullptr, &p, key.size()));
+    }
 }
 
 /**
@@ -157,10 +234,10 @@ AutoEVP_PKEY parsePublicKey(std::string_view der, KeyType type)
 
 Signature Signature::parse(std::string_view s)
 {
-    auto [keyName, sig] = parseColonBase64(s, "signature");
+    auto sig = parseColonBase64OrUri(s, "signature", false);
     return Signature{
-        .keyName = std::move(keyName),
-        .sig = std::move(sig),
+        .keyName = std::move(sig.label),
+        .sig = std::move(sig.data),
     };
 }
 
@@ -207,6 +284,20 @@ const StringSet & getKeyTypes()
         return s;
     }();
     return validKeyTypes;
+}
+
+/**
+ * Splits a string_view at ':', and returns the parts before and after.
+ * If there is no ':', will return the prefix as empty and the suffix as the whole string.
+ * @param s The string to parse.
+ * @return A pair of (name, data).
+ */
+std::tuple<std::string_view, std::string_view> splitColon(std::string_view s)
+{
+    auto colon = s.find(':');
+    auto prefix = colon == std::string_view::npos ? std::string_view{} : s.substr(0, colon);
+    auto suffix = colon == std::string_view::npos ? s : s.substr(colon + 1);
+    return {prefix, suffix};
 }
 
 KeyType parseKeyType(std::string_view s)
@@ -477,23 +568,25 @@ struct OpenSSLSecretKey : SecretKey
     }
 };
 
-std::unique_ptr<SecretKey> SecretKey::parse(std::string_view s)
+std::unique_ptr<SecretKey> SecretKey::parse(std::string_view s, bool forceUri = false)
 {
     try {
-        auto [name, key] = parseColonBase64(s, "key");
+        auto key = parseColonBase64OrUri(s, "key", experimentalFeatureSettings.isEnabled(Xp::Keystore));
+        if (forceUri && !key.isUri)
+            throw Error("secret key was not a URI");
 
-        if (key.size() == crypto_sign_SECRETKEYBYTES)
-            return std::make_unique<Ed25519SecretKey>(name, std::move(key));
-        else if (auto pkey = parsePrivateKey(key); experimentalFeatureSettings.isEnabled(Xp::CNSA) && pkey) {
+        if (!key.isUri && key.data.size() == crypto_sign_SECRETKEYBYTES)
+            return std::make_unique<Ed25519SecretKey>(key.label, std::move(key.data));
+        else if (auto pkey = parsePrivateKey(key.data, key.isUri); experimentalFeatureSettings.isEnabled(Xp::CNSA) && pkey) {
             auto type = detectOpenSSLKeyType(pkey.get());
             if (!type)
                 throw Error("secret key has unsupported type '%s'", EVP_PKEY_get0_type_name(pkey.get()));
-            return std::make_unique<OpenSSLSecretKey>(*type, name, std::move(key), std::move(pkey));
+            return std::make_unique<OpenSSLSecretKey>(*type, key.label, std::move(key.data), std::move(pkey));
         } else
             throw Error("secret key is not valid");
 
     } catch (Error & e) {
-        e.addTrace({}, "while decoding key '%s'", keyNamePart(s));
+        e.addTrace({}, "while decoding key '%s'", std::get<0>(splitColon(s)));
         throw;
     }
 }
@@ -519,19 +612,19 @@ std::unique_ptr<SecretKey> SecretKey::generate(std::string_view name, KeyType ty
 std::unique_ptr<PublicKey> PublicKey::parse(std::string_view s)
 {
     try {
-        auto [name, key] = parseColonBase64(s, "key");
+        auto key = parseColonBase64OrUri(s, "key", false);
 
-        if (key.size() == crypto_sign_PUBLICKEYBYTES)
-            return std::make_unique<Ed25519PublicKey>(name, std::move(key));
-        else if (auto pkey = parsePublicKey(key); experimentalFeatureSettings.isEnabled(Xp::CNSA) && pkey) {
+        if (key.data.size() == crypto_sign_PUBLICKEYBYTES)
+            return std::make_unique<Ed25519PublicKey>(key.label, std::move(key.data));
+        else if (auto pkey = parsePublicKey(key.data); experimentalFeatureSettings.isEnabled(Xp::CNSA) && pkey) {
             auto type = detectOpenSSLKeyType(pkey.get());
             if (!type)
                 throw Error("public key has unsupported type '%s'", EVP_PKEY_get0_type_name(pkey.get()));
-            return std::make_unique<OpenSSLPublicKey>(*type, name, std::move(key), std::move(pkey));
+            return std::make_unique<OpenSSLPublicKey>(*type, key.label, std::move(key.data), std::move(pkey));
         } else
             throw Error("public key is not valid");
     } catch (Error & e) {
-        e.addTrace({}, "while decoding key '%s'", keyNamePart(s));
+        e.addTrace({}, "while decoding key '%s'", std::get<0>(splitColon(s)));
         throw;
     }
 }

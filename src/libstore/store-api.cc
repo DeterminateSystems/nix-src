@@ -1266,10 +1266,12 @@ void Store::signPathInfo(ValidPathInfo & info)
 {
     // FIXME: keep secret keys in memory.
 
+    auto keystoreEnabled = experimentalFeatureSettings.isEnabled(Xp::Keystore);
     auto secretKeyFiles = settings.secretKeyFiles;
 
     for (auto & secretKeyFile : secretKeyFiles.get()) {
-        LocalSigner signer(SecretKey::parse(readFile(secretKeyFile)));
+        auto isUri = keystoreEnabled && !std::get<0>(splitColon(secretKeyFile)).empty();
+        LocalSigner signer(SecretKey::parse(isUri ? secretKeyFile : readFile(secretKeyFile), isUri));
         info.sign(*this, signer);
     }
 }
@@ -1278,10 +1280,12 @@ void Store::signRealisation(Realisation & realisation)
 {
     // FIXME: keep secret keys in memory.
 
+    auto keystoreEnabled = experimentalFeatureSettings.isEnabled(Xp::Keystore);
     auto secretKeyFiles = settings.secretKeyFiles;
 
     for (auto & secretKeyFile : secretKeyFiles.get()) {
-        LocalSigner signer(SecretKey::parse(readFile(secretKeyFile)));
+        auto isUri = keystoreEnabled && !std::get<0>(splitColon(secretKeyFile)).empty();
+        LocalSigner signer(SecretKey::parse(isUri ? secretKeyFile : readFile(secretKeyFile), isUri));
         realisation.sign(realisation.id, signer);
     }
 }
