@@ -493,9 +493,7 @@
                   let
                     pkgs = nixpkgsFor.${system};
                   in
-                  (
-                    if pkgs.native.stdenv.hostPlatform.isDarwin then pkgs.nativeForStdenv.libcxxStdenv else pkgs.native
-                  ).pkgsStatic.nixComponents2.${pkgName};
+                  pkgs.native.pkgsStatic.nixComponents2.${pkgName};
               }
             )
         // lib.optionalAttrs (builtins.elem system linux64BitSystems) {
