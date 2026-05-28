@@ -52,12 +52,16 @@ jobs:
       fail-fast: false
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
+    env:
+      SYSTEM: ${{ inputs.system }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
-      - run: nix build .#packages.${{ inputs.system }}.default .#packages.${{ inputs.system }}.binaryTarball --no-link -L
-      - run: nix build .#packages.${{ inputs.system }}.binaryTarball --out-link tarball
+      - run: nix build ".#packages.${SYSTEM}.default" ".#packages.${SYSTEM}.binaryTarball" --no-link -L
+      - run: nix build ".#packages.${SYSTEM}.binaryTarball" --out-link tarball
       - run: nix build .#^debug,out
       - name: Upload debug info to Sentry
         run: ./maintainers/upload-debug-info-to-sentry.py --debug-dir ./result-debug ./result/bin/nix
@@ -66,9 +70,9 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.sentry_auth_token }}
           SENTRY_ORG: ${{ secrets.sentry_org }}
           SENTRY_PROJECT: ${{ secrets.sentry_project }}
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ inputs.system }}
+          name: ${{ env.SYSTEM }}
           path: ./tarball/*.xz
 
   build_static:
@@ -77,11 +81,15 @@ jobs:
       fail-fast: false
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
+    env:
+      SYSTEM: ${{ inputs.system }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
-      - run: nix build .#packages.${{ inputs.system }}.nix-cli-static --no-link -L
+      - run: nix build ".#packages.${SYSTEM}.nix-cli-static" --no-link -L
 
   test:
     if: ${{ inputs.if && inputs.run_tests}}
@@ -90,18 +98,24 @@ jobs:
       fail-fast: false
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
+    env:
+      SYSTEM: ${{ inputs.system }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
-      - run: nix flake check -L --system ${{ inputs.system }}
+      - run: nix flake check -L --system "${SYSTEM}"
 
   vm_tests_smoke:
     if: inputs.run_vm_tests && github.event_name != 'merge_group'
     needs: build
     runs-on: ${{ inputs.runner_for_virt }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
       - run: |
@@ -117,7 +131,9 @@ jobs:
     needs: build
     runs-on: ${{ inputs.runner_for_virt }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
       - run: |
@@ -174,23 +190,28 @@ jobs:
 
     steps:
       - name: Checkout nix
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
       - name: Checkout flake-regressions
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: NixOS/flake-regressions
           path: flake-regressions
+          persist-credentials: false
       - name: Checkout flake-regressions-data
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: NixOS/flake-regressions-data
           path: flake-regressions/tests
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
       - name: Run flake regression tests
         env:
           #PARALLEL: ${{ !contains(matrix.nix_config, 'eval-cores') && '-P 50%' || '-P 1' }}
-          PARALLEL: '-P 1'
+          PARALLEL: "-P 1"
           FLAKE_REGRESSION_GLOB: ${{ matrix.glob }}
           NIX_CONFIG: ${{ matrix.nix_config }}
           PREFETCH: "1"
@@ -230,13 +251,15 @@ jobs:
       deployments: "write"
     steps:
       - name: Checkout nix
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
       - name: Build manual
         if: inputs.system == 'x86_64-linux'
         run: nix build .#hydraJobs.manual
-      - uses: nwtgck/actions-netlify@v3.0
+      - uses: nwtgck/actions-netlify@4cbaf4c08f1a7bfa537d6113472ef4424e4eb654 # v3.0.0
         if: inputs.publish_manual && inputs.system == 'x86_64-linux'
         with:
           publish-dir: "./result/share/doc/nix/manual"
