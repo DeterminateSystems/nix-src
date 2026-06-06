@@ -14,11 +14,17 @@
 #include "nix/util/signals.hh"
 #include "nix/util/archive.hh"
 #include "nix/util/util.hh"
+#include "nix/util/base-nix-32.hh"
+#include "nix/util/users.hh"
+#include "nix/store/pathlocks.hh"
 
+#include <cassert>
 #include <chrono>
+#include <cstring>
 #include <future>
 #include <regex>
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <variant>
 
@@ -68,8 +74,164 @@ void BinaryCacheStore::init()
                 config.wantMassQuery.setDefault(value == "1");
             } else if (name == "Priority") {
                 config.priority.setDefault(std::stoi(value));
+            } else if (name == "BloomFilter") {
+                bloomFilterUrl = value;
             }
         }
+    }
+}
+
+ConditionalGetResult
+BinaryCacheStore::getFileConditional(const std::string & path, const std::string & /*expectedETag*/)
+{
+    /* Default: no ETag support; just do an ordinary fetch. */
+    auto data = getFile(path);
+    return ConditionalGetResult{.data = std::move(data), .etag = "", .notModified = false};
+}
+
+static std::vector<uint64_t> bloomBitPositions(const StorePath & path, uint32_t k, uint64_t mBits)
+{
+    auto raw = BaseNix32::decode(std::string(path.hashPart()));
+    assert(raw.size() == 20);
+    auto * b = reinterpret_cast<unsigned char *>(raw.data());
+    uint64_t h1 = readLittleEndian<uint64_t>(b);
+    uint64_t h2 = readLittleEndian<uint64_t>(b + 8);
+    std::vector<uint64_t> out(k);
+    for (uint32_t i = 0; i < k; ++i)
+        out[i] = (h1 + uint64_t(i) * h2) % mBits;
+    return out;
+}
+
+bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
+{
+    try {
+        if (!diskCache || !bloomFilterUrl)
+            return false;
+
+        const auto uri = config.getReference().render(/*withParams=*/false);
+
+        auto probe = [&](uint32_t k, uint64_t mBits) {
+            auto positions = bloomBitPositions(storePath, k, mBits);
+            bool definitelyMissing = !diskCache->probeBloomFilter(uri, positions);
+            if (definitelyMissing)
+                debug("bloom filter for '%s' ruled out '%s'", uri, printStorePath(storePath));
+            return definitelyMissing;
+        };
+
+        /* Fast path: filter already loaded or known disabled. */
+        {
+            auto state(bloomState.lock());
+            if (state->status == BloomState::Disabled)
+                return false;
+            if (state->status == BloomState::Ready)
+                return probe(state->k, state->mBits);
+        }
+
+        /* Slow path: acquire a cross-process file lock so concurrent first-probers
+           don't race on the network. */
+        auto lockDir = getCacheDir() / "bloom-filter-locks";
+        std::filesystem::create_directories(lockDir);
+        auto lockFile =
+            lockDir / hashString(HashAlgorithm::SHA256, uri).to_string(HashFormat::Base16, /*includePrefix=*/false);
+        PathLocks fetchLock(
+            {lockFile.string()}, fmt("waiting for another Nix process to fetch bloom filter for '%s'...", uri));
+
+        /* Check disk cache while holding the lock: another process may have
+           just refreshed it. */
+        NarInfoDiskCache::BloomFilterMeta meta;
+        bool haveMeta = false;
+        std::string expectedETag;
+        if (auto m = diskCache->lookupBloomFilter(uri)) {
+            auto ttl = (time_t) settings.getNarInfoDiskCacheSettings().ttlNegative.get();
+            if (time(nullptr) - m->timestamp <= ttl) {
+                meta = *m;
+                haveMeta = true;
+            } else {
+                expectedETag = m->etag;
+            }
+        }
+
+        if (!haveMeta) {
+            const auto & url = *bloomFilterUrl;
+            if (hasPrefix(url, "http://") || hasPrefix(url, "https://")) {
+                warn(
+                    "bloom filter at absolute URL '%s' is not yet supported; disabling bloom filter for cache '%s'",
+                    url,
+                    uri);
+                bloomState.lock()->status = BloomState::Disabled;
+                return false;
+            }
+            std::string path = url;
+            while (!path.empty() && path[0] == '/')
+                path.erase(0, 1);
+
+            ConditionalGetResult res;
+            try {
+                res = getFileConditional(path, expectedETag);
+            } catch (Error & e) {
+                warn("failed to fetch bloom filter from cache '%s': %s; disabling for this process", uri, e.message());
+                bloomState.lock()->status = BloomState::Disabled;
+                return false;
+            }
+
+            if (res.notModified) {
+                diskCache->touchBloomFilter(uri, res.etag.empty() ? expectedETag : res.etag);
+                auto m = diskCache->lookupBloomFilter(uri);
+                if (!m) {
+                    warn("bloom filter cache row missing after 304 for '%s'; disabling", uri);
+                    bloomState.lock()->status = BloomState::Disabled;
+                    return false;
+                }
+                meta = *m;
+            } else if (!res.data) {
+                warn("bloom filter at '%s' returned 404; disabling for this process", uri);
+                bloomState.lock()->status = BloomState::Disabled;
+                return false;
+            } else {
+                const auto & body = *res.data;
+                if (body.size() < 24 || std::memcmp(body.data(), "NixBloom", 8) != 0) {
+                    warn("bloom filter from cache '%s' has invalid magic; disabling", uri);
+                    bloomState.lock()->status = BloomState::Disabled;
+                    return false;
+                }
+                auto readU32 = [&](size_t off) {
+                    return uint32_t((unsigned char) body[off])
+                           | (uint32_t((unsigned char) body[off + 1]) << 8)
+                           | (uint32_t((unsigned char) body[off + 2]) << 16)
+                           | (uint32_t((unsigned char) body[off + 3]) << 24);
+                };
+                auto readU64 = [&](size_t off) {
+                    uint64_t v = 0;
+                    for (int i = 0; i < 8; ++i)
+                        v |= uint64_t((unsigned char) body[off + i]) << (8 * i);
+                    return v;
+                };
+                uint32_t version = readU32(8);
+                uint32_t k = readU32(12);
+                uint64_t mBits = readU64(16);
+                if (version != 1 || mBits == 0 || mBits % 8 != 0 || body.size() != 24 + mBits / 8) {
+                    warn("bloom filter from cache '%s' has invalid header; disabling", uri);
+                    bloomState.lock()->status = BloomState::Disabled;
+                    return false;
+                }
+                std::span<const std::byte> bits(
+                    reinterpret_cast<const std::byte *>(body.data() + 24), (size_t) (mBits / 8));
+                diskCache->upsertBloomFilter(uri, res.etag, k, mBits, bits);
+                meta = {.k = k, .mBits = mBits, .etag = res.etag, .timestamp = time(nullptr)};
+            }
+        }
+
+        {
+            auto state(bloomState.lock());
+            state->status = BloomState::Ready;
+            state->k = meta.k;
+            state->mBits = meta.mBits;
+        }
+
+        return probe(meta.k, meta.mBits);
+    } catch (...) {
+        ignoreExceptionExceptInterrupt();
+        return false;
     }
 }
 
@@ -527,6 +689,8 @@ StorePath BinaryCacheStore::addToStoreFromDump(
 
 bool BinaryCacheStore::isValidPathUncached(const StorePath & storePath)
 {
+    if (isDefinitelyMissing(storePath))
+        return false;
     // FIXME: this only checks whether a .narinfo with a matching hash
     // part exists. So ‘f4kb...-foo’ matches ‘f4kb...-bar’, even
     // though they shouldn't. Not easily fixed.
@@ -580,6 +744,9 @@ void BinaryCacheStore::queryPathInfoUncached(
     auto callbackPtr = std::make_shared<decltype(callback)>(std::move(callback));
 
     try {
+        if (isDefinitelyMissing(storePath))
+            return (*callbackPtr)({});
+
         auto uri = config.getReference().render(/*FIXME withParams=*/false);
         auto storePathS = printStorePath(storePath);
         auto act = std::make_shared<Activity>(

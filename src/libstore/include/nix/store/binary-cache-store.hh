@@ -6,6 +6,7 @@
 #include "nix/store/log-store.hh"
 
 #include "nix/util/pool.hh"
+#include "nix/util/sync.hh"
 
 #include <atomic>
 
@@ -69,6 +70,22 @@ struct BinaryCacheStoreConfig : virtual StoreConfig
 };
 
 /**
+ * Result of a conditional HTTP-style GET. Returned by
+ * `BinaryCacheStore::getFileConditional`.
+ */
+struct ConditionalGetResult
+{
+    /** Response body. Empty if `notModified`. `nullopt` if the file does not exist (404). */
+    std::optional<std::string> data;
+
+    /** ETag returned by the server. Empty if no ETag was sent. */
+    std::string etag;
+
+    /** True if the server replied 304 Not Modified to our If-None-Match. */
+    bool notModified = false;
+};
+
+/**
  * @note subclasses must implement at least one of the two
  * virtual getFile() methods.
  */
@@ -84,8 +101,27 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
      */
     Config & config;
 
+    /**
+     * URL of the bloom filter advertised by this cache (from the
+     * `BloomFilter:` field in `nix-cache-info`), as written by the server.
+     * Absolute URL or path relative to the cache root. `nullopt` if the
+     * cache doesn't advertise a bloom filter. Populated by `init()` on
+     * the cold path or restored from the disk-cache by subclasses on the
+     * warm path.
+     */
+    std::optional<std::string> bloomFilterUrl;
+
 private:
     std::vector<std::unique_ptr<Signer>> signers;
+
+    struct BloomState
+    {
+        enum Status { Pending, Ready, Disabled };
+        Status status = Pending;
+        uint32_t k = 0;
+        uint64_t mBits = 0;
+    };
+    Sync<BloomState> bloomState;
 
 protected:
 
@@ -153,9 +189,27 @@ public:
 
     std::optional<std::string> getFile(const std::string & path);
 
+    /**
+     * Fetch a file with an HTTP-style conditional GET. The default
+     * implementation just forwards to `getFile()` (no ETag support).
+     * `HttpBinaryCacheStore` overrides this to use `If-None-Match` and
+     * to surface 304 responses.
+     */
+    virtual ConditionalGetResult
+    getFileConditional(const std::string & path, const std::string & expectedETag);
+
 public:
 
     virtual void init() override;
+
+    /**
+     * Return true if this cache definitely does not contain `storePath`.
+     * Consults the bloom filter advertised by the cache; lazily fetches
+     * and caches the filter on first call. Returns false in every other
+     * case (no filter advertised, filter disabled after a failure,
+     * filter says "possibly present"). Never throws.
+     */
+    bool isDefinitelyMissing(const StorePath & storePath) noexcept;
 
 private:
 

@@ -1,6 +1,7 @@
 #include "nix/store/nar-info-disk-cache.hh"
 #include "nix/util/users.hh"
 #include "nix/util/sync.hh"
+#include "nix/util/finally.hh"
 #include "nix/store/sqlite.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/provenance.hh"
@@ -20,7 +21,18 @@ create table if not exists BinaryCaches (
     timestamp integer not null,
     storeDir  text not null,
     wantMassQuery integer not null,
-    priority  integer not null
+    priority  integer not null,
+    bloomFilterUrl text -- NULL if the cache doesn't advertise a bloom filter
+);
+
+create table if not exists BloomFilters (
+    cache     integer primary key not null,
+    timestamp integer not null,
+    etag      text,
+    k         integer not null,
+    mBits     integer not null,
+    bits      blob not null,
+    foreign key (cache) references BinaryCaches(id) on delete cascade
 );
 
 create table if not exists NARs (
@@ -75,7 +87,8 @@ struct NarInfoDiskCacheImpl : NarInfoDiskCache
     {
         SQLite db;
         SQLiteStmt insertCache, queryCache, insertNAR, insertMissingNAR, queryNAR, insertRealisation,
-            insertMissingRealisation, queryRealisation, purgeCache;
+            insertMissingRealisation, queryRealisation, purgeCache, queryBloomFilter, insertBloomFilter,
+            touchBloomFilter, queryBloomFilterRowId;
         std::map<std::string, Cache> caches;
     };
 
@@ -84,7 +97,7 @@ struct NarInfoDiskCacheImpl : NarInfoDiskCache
     NarInfoDiskCacheImpl(
         const Settings & settings,
         SQLiteSettings sqliteSettings,
-        std::filesystem::path dbPath = getCacheDir() / "binary-cache-detsys-v1.sqlite")
+        std::filesystem::path dbPath = getCacheDir() / "binary-cache-detsys-v2.sqlite")
         : NarInfoDiskCache{settings}
     {
         auto state(_state.lock());
@@ -99,11 +112,21 @@ struct NarInfoDiskCacheImpl : NarInfoDiskCache
 
         state->insertCache.create(
             state->db,
-            "insert into BinaryCaches(url, timestamp, storeDir, wantMassQuery, priority) values (?1, ?2, ?3, ?4, ?5) on conflict (url) do update set timestamp = ?2, storeDir = ?3, wantMassQuery = ?4, priority = ?5 returning id;");
+            "insert into BinaryCaches(url, timestamp, storeDir, wantMassQuery, priority, bloomFilterUrl) values (?1, ?2, ?3, ?4, ?5, ?6) on conflict (url) do update set timestamp = ?2, storeDir = ?3, wantMassQuery = ?4, priority = ?5, bloomFilterUrl = ?6 returning id;");
 
         state->queryCache.create(
             state->db,
-            "select id, storeDir, wantMassQuery, priority from BinaryCaches where url = ? and timestamp > ?");
+            "select id, storeDir, wantMassQuery, priority, bloomFilterUrl from BinaryCaches where url = ? and timestamp > ?");
+
+        state->queryBloomFilter.create(state->db, "select timestamp, etag, k, mBits from BloomFilters where cache = ?");
+
+        state->queryBloomFilterRowId.create(state->db, "select rowid from BloomFilters where cache = ?");
+
+        state->insertBloomFilter.create(
+            state->db,
+            "insert or replace into BloomFilters(cache, timestamp, etag, k, mBits, bits) values (?, ?, ?, ?, ?, ?)");
+
+        state->touchBloomFilter.create(state->db, "update BloomFilters set timestamp = ?, etag = ? where cache = ?");
 
         state->insertNAR.create(
             state->db,
@@ -195,6 +218,7 @@ private:
                     .id = (int) queryCache.getInt(0),
                     .wantMassQuery = queryCache.getInt(2) != 0,
                     .priority = (int) queryCache.getInt(3),
+                    .bloomFilterUrl = queryCache.isNull(4) ? std::nullopt : std::optional(queryCache.getStr(4)),
                 }};
             state.caches.emplace(uri, cache);
         }
@@ -223,7 +247,8 @@ public:
                            .apply(time(nullptr))
                            .apply(storeDir)
                            .apply(info.wantMassQuery)
-                           .apply(info.priority));
+                           .apply(info.priority)
+                           .apply(info.bloomFilterUrl.value_or(""), info.bloomFilterUrl.has_value()));
                 if (!r.next()) {
                     unreachable();
                 }
@@ -398,6 +423,87 @@ public:
                 .apply(id.to_string())
                 .apply(time(nullptr))
                 .exec();
+        });
+    }
+
+    std::optional<BloomFilterMeta> lookupBloomFilter(const std::string & uri) override
+    {
+        return retrySQLite<std::optional<BloomFilterMeta>>([&]() -> std::optional<BloomFilterMeta> {
+            auto state(_state.lock());
+            auto & cache(getCache(*state, uri));
+            auto q(state->queryBloomFilter.use().apply(cache.info.id));
+            if (!q.next())
+                return std::nullopt;
+            return BloomFilterMeta{
+                .k = (uint32_t) q.getInt(2),
+                .mBits = (uint64_t) q.getInt(3),
+                .etag = q.isNull(1) ? std::string{} : q.getStr(1),
+                .timestamp = (time_t) q.getInt(0),
+            };
+        });
+    }
+
+    void upsertBloomFilter(
+        const std::string & uri,
+        const std::string & etag,
+        uint32_t k,
+        uint64_t mBits,
+        std::span<const std::byte> bits) override
+    {
+        retrySQLite<void>([&]() {
+            auto state(_state.lock());
+            auto & cache(getCache(*state, uri));
+            state->insertBloomFilter.use()
+                .apply(cache.info.id)
+                .apply(time(nullptr))
+                .apply(etag, !etag.empty())
+                .apply((uint64_t) k)
+                .apply(mBits)
+                .apply(reinterpret_cast<const unsigned char *>(bits.data()), bits.size())
+                .exec();
+        });
+    }
+
+    void touchBloomFilter(const std::string & uri, const std::string & etag) override
+    {
+        retrySQLite<void>([&]() {
+            auto state(_state.lock());
+            auto & cache(getCache(*state, uri));
+            state->touchBloomFilter.use().apply(time(nullptr)).apply(etag, !etag.empty()).apply(cache.info.id).exec();
+        });
+    }
+
+    bool probeBloomFilter(const std::string & uri, std::span<const uint64_t> bitPositions) override
+    {
+        return retrySQLite<bool>([&]() -> bool {
+            auto state(_state.lock());
+            auto & cache(getCache(*state, uri));
+
+            int64_t rowid;
+            {
+                auto q(state->queryBloomFilterRowId.use().apply(cache.info.id));
+                if (!q.next())
+                    return false; // no cached filter
+                rowid = q.getInt(0);
+            }
+
+            sqlite3_blob * blob = nullptr;
+            if (sqlite3_blob_open(state->db, "main", "BloomFilters", "bits", rowid, /*write=*/0, &blob) != SQLITE_OK)
+                SQLiteError::throw_(state->db, "opening bloom-filter blob");
+            Finally _closeBlob([&] {
+                if (blob)
+                    sqlite3_blob_close(blob);
+            });
+
+            for (auto pos : bitPositions) {
+                unsigned char byte = 0;
+                int rc = sqlite3_blob_read(blob, &byte, 1, (int) (pos / 8));
+                if (rc != SQLITE_OK)
+                    SQLiteError::throw_(state->db, "reading bloom-filter blob");
+                if (!((byte >> (pos % 8)) & 1))
+                    return false;
+            }
+            return true;
         });
     }
 };

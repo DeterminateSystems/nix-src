@@ -69,6 +69,7 @@ void HttpBinaryCacheStore::init()
     if (auto cacheInfo = diskCache->upToDateCacheExists(cacheKey)) {
         config->wantMassQuery.setDefault(cacheInfo->wantMassQuery);
         config->priority.setDefault(cacheInfo->priority);
+        bloomFilterUrl = cacheInfo->bloomFilterUrl;
     } else {
         try {
             BinaryCacheStore::init();
@@ -76,7 +77,9 @@ void HttpBinaryCacheStore::init()
             throw Error("'%s' does not appear to be a binary cache", config->cacheUri.to_string());
         }
         diskCache->createCache(
-            cacheKey, config->storeDir, {.wantMassQuery = config->wantMassQuery, .priority = config->priority});
+            cacheKey,
+            config->storeDir,
+            {.wantMassQuery = config->wantMassQuery, .priority = config->priority, .bloomFilterUrl = bloomFilterUrl});
     }
 }
 
@@ -257,6 +260,28 @@ void HttpBinaryCacheStore::getFile(const std::string & path, Callback<std::optio
     } catch (...) {
         callbackPtr->rethrow();
         return;
+    }
+}
+
+ConditionalGetResult
+HttpBinaryCacheStore::getFileConditional(const std::string & path, const std::string & expectedETag)
+{
+    checkEnabled();
+    auto request(makeRequest(path));
+    request.expectedETag = expectedETag;
+    try {
+        auto result = fileTransfer->download(request);
+        return ConditionalGetResult{
+            .data = result.cached ? std::optional<std::string>(std::string{})
+                                  : std::optional<std::string>(std::move(result.data)),
+            .etag = std::move(result.etag),
+            .notModified = result.cached,
+        };
+    } catch (FileTransferError & e) {
+        if (e.error == FileTransfer::NotFound || e.error == FileTransfer::Forbidden)
+            return ConditionalGetResult{.data = std::nullopt, .etag = "", .notModified = false};
+        maybeDisable();
+        throw;
     }
 }
 
