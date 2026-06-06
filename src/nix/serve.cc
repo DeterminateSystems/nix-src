@@ -3,14 +3,12 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/deleter.hh"
-#include "nix/util/base-nix-32.hh"
-#include "nix/util/util.hh"
 #include "nix/store/nar-info.hh"
 #include "nix/store/binary-cache-store.hh"
+#include "nix/store/bloom-filter.hh"
 #include "nix/store/log-store.hh"
 #include "nix/util/environment-variables.hh"
 
-#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <future>
@@ -61,17 +59,9 @@ static std::string buildBloomFilter(Store & store)
 
     char * bits = out.data() + headerLen;
 
-    for (auto & path : paths) {
-        auto raw = BaseNix32::decode(std::string(path.hashPart()));
-        assert(raw.size() == 20);
-        auto * rawBytes = reinterpret_cast<unsigned char *>(raw.data());
-        uint64_t h1 = readLittleEndian<uint64_t>(rawBytes);
-        uint64_t h2 = readLittleEndian<uint64_t>(rawBytes + 8);
-        for (uint32_t i = 0; i < k; ++i) {
-            uint64_t pos = (h1 + uint64_t(i) * h2) % mBits;
-            bits[pos / 8] |= uint8_t(1) << (pos % 8);
-        }
-    }
+    for (auto & path : paths)
+        forEachBloomBitPosition(
+            path, k, mBits, [&](uint64_t pos) { bits[pos / 8] |= uint8_t(1) << (pos % 8); });
 
     return out;
 }

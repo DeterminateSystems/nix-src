@@ -14,6 +14,7 @@ headers = [ config_pub_h ] + files(
   'async-path-writer.hh',
   'aws-creds.hh',
   'binary-cache-store.hh',
+  'bloom-filter.hh',
   'build-result.hh',
   'build/build-log.hh',
   'build/derivation-builder.hh',

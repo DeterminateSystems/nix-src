@@ -14,11 +14,10 @@
 #include "nix/util/signals.hh"
 #include "nix/util/archive.hh"
 #include "nix/util/util.hh"
-#include "nix/util/base-nix-32.hh"
 #include "nix/util/users.hh"
+#include "nix/store/bloom-filter.hh"
 #include "nix/store/pathlocks.hh"
 
-#include <cassert>
 #include <chrono>
 #include <cstring>
 #include <future>
@@ -91,14 +90,9 @@ BinaryCacheStore::getFileConditional(const std::string & path, const std::string
 
 static std::vector<uint64_t> bloomBitPositions(const StorePath & path, uint32_t k, uint64_t mBits)
 {
-    auto raw = BaseNix32::decode(std::string(path.hashPart()));
-    assert(raw.size() == 20);
-    auto * b = reinterpret_cast<unsigned char *>(raw.data());
-    uint64_t h1 = readLittleEndian<uint64_t>(b);
-    uint64_t h2 = readLittleEndian<uint64_t>(b + 8);
-    std::vector<uint64_t> out(k);
-    for (uint32_t i = 0; i < k; ++i)
-        out[i] = (h1 + uint64_t(i) * h2) % mBits;
+    std::vector<uint64_t> out;
+    out.reserve(k);
+    forEachBloomBitPosition(path, k, mBits, [&](uint64_t pos) { out.push_back(pos); });
     return out;
 }
 
