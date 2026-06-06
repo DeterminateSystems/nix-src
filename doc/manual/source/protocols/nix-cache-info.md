@@ -36,12 +36,27 @@ error: binary cache 'https://example.com' is for Nix stores with prefix '/nix/st
 
 Integer. Sets the default for [`priority`](@docroot@/store/types/http-binary-cache-store.md#store-http-binary-cache-store-priority).
 
+### `BloomFilter`
+
+URL of a [Bloom filter](@docroot@/protocols/binary-cache-bloom-filter.md) that enumerates the store paths held by this cache.
+Clients may use it to skip `.narinfo` requests for paths the filter rules out.
+
+The value is either an absolute URL or a path relative to the cache root:
+
+```
+BloomFilter: /bloom-filter
+BloomFilter: https://filters.example.com/cache-abc.bloom
+```
+
+If absent, the cache does not publish a Bloom filter and clients must not assume one is available at any default location.
+
 ## Example
 
 ```
 StoreDir: /nix/store
 WantMassQuery: 1
 Priority: 30
+BloomFilter: /bloom-filter
 ```
 
 ## Caching Behavior
