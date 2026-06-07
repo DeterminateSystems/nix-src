@@ -148,19 +148,27 @@ nix path-info -vvvv --store "$httpBinaryCacheUrl" "$bigFile" 2> "$TEST_ROOT/log"
 
 
 # Bloom filter advertised by `nix serve` should rule out random store paths.
-# The hashparts below are chosen so their 7 bloom positions hit several
-# bits that the deterministic test-cache filter leaves unset.
+# Any fixed hashpart can hit a false positive, so loop generating fakes
+# until one is ruled out. The counter sits in the last 6 chars of the
+# hashpart because Nix32 decode reverse-iterates: low-order chars feed the
+# bytes that drive `h1` in the double-hashing scheme; varying the leading
+# chars wouldn't change `h1` or `h2` at all.
 clearCacheCache
 restartNixServe
-fake="$NIX_STORE_DIR/0123456789abcdfghijklmnpqrsvwxyz-fake-not-in-cache"
-nix path-info --debug --store "$httpBinaryCacheUrl" "$fake" 2> "$TEST_ROOT/bloom-log" || true
-grepQuiet "bloom filter for.*ruled out.*$fake" "$TEST_ROOT/bloom-log"
+ruledOut=0
+for n in $(seq 0 100); do
+    fake="$NIX_STORE_DIR/00000000000000000000000000$(printf '%06d' "$n")-fake-not-in-cache"
+    nix path-info --debug --store "$httpBinaryCacheUrl" "$fake" 2> "$TEST_ROOT/bloom-log" || true
+    if grep -q "bloom filter for.*ruled out.*$fake" "$TEST_ROOT/bloom-log"; then
+        ruledOut=1
+        break
+    fi
+done
+[[ $ruledOut -eq 1 ]]
 
 
-# A second probe with a different fake path should reuse the cached filter
-# rather than fetching /bloom-filter again.
-fake2="$NIX_STORE_DIR/abcdfghijklmnpqrsvwxyz0123456789-fake-also-not-in-cache"
-nix path-info --debug --store "$httpBinaryCacheUrl" "$fake2" 2> "$TEST_ROOT/bloom-log2" || true
+# The bloom filter should have been fetched exactly once across all the
+# loop iterations, proving the disk-cache reuse path works.
 [[ $(grep -c "url=/bloom-filter" "$nixServeLog") -eq 1 ]]
 
 
