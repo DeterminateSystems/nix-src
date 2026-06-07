@@ -295,6 +295,7 @@ sources = files(
   'active-builds.cc',
   'async-path-writer.cc',
   'binary-cache-store.cc',
+  'bloom-filter.cc',
   'build-result.cc',
   'build/build-log.cc',
   'build/derivation-builder.cc',
