@@ -184,32 +184,30 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
                 return false;
             } else {
                 const auto & body = *res.data;
-                if (body.size() < 24 || std::memcmp(body.data(), "NixBloom", 8) != 0) {
+                constexpr size_t headerLen = 8 + 8 + 8 + 8;
+                if (body.size() < headerLen || std::memcmp(body.data(), "NixBloom", 8) != 0) {
                     warn("bloom filter from cache '%s' has invalid magic; disabling", uri);
                     bloomState.lock()->status = BloomState::Disabled;
                     return false;
                 }
-                auto readU32 = [&](size_t off) {
-                    return uint32_t((unsigned char) body[off]) | (uint32_t((unsigned char) body[off + 1]) << 8)
-                           | (uint32_t((unsigned char) body[off + 2]) << 16)
-                           | (uint32_t((unsigned char) body[off + 3]) << 24);
-                };
-                auto readU64 = [&](size_t off) {
-                    uint64_t v = 0;
-                    for (int i = 0; i < 8; ++i)
-                        v |= uint64_t((unsigned char) body[off + i]) << (8 * i);
-                    return v;
-                };
-                uint32_t version = readU32(8);
-                uint32_t k = readU32(12);
-                uint64_t mBits = readU64(16);
-                if (version != 1 || mBits == 0 || mBits % 8 != 0 || body.size() != 24 + mBits / 8) {
+                StringSource source(std::string_view(body).substr(8));
+                uint64_t version;
+                uint32_t k;
+                uint64_t mBits;
+                try {
+                    source >> version >> k >> mBits;
+                } catch (SerialisationError &) {
+                    warn("bloom filter from cache '%s' has invalid header; disabling", uri);
+                    bloomState.lock()->status = BloomState::Disabled;
+                    return false;
+                }
+                if (version != 1 || mBits == 0 || mBits % 8 != 0 || body.size() != headerLen + mBits / 8) {
                     warn("bloom filter from cache '%s' has invalid header; disabling", uri);
                     bloomState.lock()->status = BloomState::Disabled;
                     return false;
                 }
                 std::span<const std::byte> bits(
-                    reinterpret_cast<const std::byte *>(body.data() + 24), (size_t) (mBits / 8));
+                    reinterpret_cast<const std::byte *>(body.data() + headerLen), (size_t) (mBits / 8));
                 diskCache->upsertBloomFilter(uri, res.etag, k, mBits, bits);
                 meta = {.k = k, .mBits = mBits, .etag = res.etag, .timestamp = time(nullptr)};
             }

@@ -12,17 +12,17 @@ MIME type: `application/octet-stream`
 
 ## Format
 
-The response is binary, little-endian, with a fixed 24-byte header followed by the raw bit array:
+The response is binary, little-endian, with a fixed 32-byte header followed by the raw bit array:
 
 | Offset | Size       | Field     | Description                                              |
 |-------:|-----------:|-----------|----------------------------------------------------------|
 | 0      | 8          | `magic`   | ASCII bytes `NixBloom` (no terminating NUL).             |
-| 8      | 4          | `version` | `uint32` format version. Currently `1`.                  |
-| 12     | 4          | `k`       | `uint32` number of hash functions.                       |
-| 16     | 8          | `m`       | `uint64` size of the bit array, in bits. Multiple of 8.  |
-| 24     | `m / 8`    | `bits`    | The bit array. Bit at position `p` is `bits[p / 8] >> (p % 8)` masked with `1`. |
+| 8      | 8          | `version` | `uint64` format version. Currently `1`.                  |
+| 16     | 8          | `k`       | `uint64` number of hash functions.                       |
+| 24     | 8          | `m`       | `uint64` size of the bit array, in bits. Multiple of 8.  |
+| 32     | `m / 8`    | `bits`    | The bit array. Bit at position `p` is `bits[p / 8] >> (p % 8)` masked with `1`. |
 
-The total response size is `24 + m / 8` bytes.
+The total response size is `32 + m / 8` bytes.
 
 ## Membership test
 
