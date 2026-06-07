@@ -225,12 +225,11 @@ struct CmdServe : StoreCommand
         }
 
         else if (url == "/bloom-filter") {
-            auto body = std::make_unique<std::string>(
-                buildBloomFilter(store.queryAllValidPaths(), bloomFalsePositiveRate));
-            auto etag = "\""
-                        + hashString(HashAlgorithm::SHA512, *body)
-                              .to_string(HashFormat::Base16, /*includePrefix=*/false)
-                        + "\"";
+            auto body =
+                std::make_unique<std::string>(buildBloomFilter(store.queryAllValidPaths(), bloomFalsePositiveRate));
+            auto etag =
+                "\"" + hashString(HashAlgorithm::SHA512, *body).to_string(HashFormat::Base16, /*includePrefix=*/false)
+                + "\"";
 
             if (auto * inm = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "If-None-Match");
                 inm && etag == inm) {
