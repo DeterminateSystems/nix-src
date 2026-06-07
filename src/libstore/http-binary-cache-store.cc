@@ -263,7 +263,7 @@ void HttpBinaryCacheStore::getFile(const std::string & path, Callback<std::optio
     }
 }
 
-ConditionalGetResult
+BinaryCacheStore::ConditionalGetResult
 HttpBinaryCacheStore::getFileConditional(const std::string & path, const std::string & expectedETag)
 {
     checkEnabled();

@@ -80,7 +80,7 @@ void BinaryCacheStore::init()
     }
 }
 
-ConditionalGetResult
+BinaryCacheStore::ConditionalGetResult
 BinaryCacheStore::getFileConditional(const std::string & path, const std::string & /*expectedETag*/)
 {
     /* Default: no ETag support; just do an ordinary fetch. */

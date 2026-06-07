@@ -70,22 +70,6 @@ struct BinaryCacheStoreConfig : virtual StoreConfig
 };
 
 /**
- * Result of a conditional HTTP-style GET. Returned by
- * `BinaryCacheStore::getFileConditional`.
- */
-struct ConditionalGetResult
-{
-    /** Response body. Empty if `notModified`. `nullopt` if the file does not exist (404). */
-    std::optional<std::string> data;
-
-    /** ETag returned by the server. Empty if no ETag was sent. */
-    std::string etag;
-
-    /** True if the server replied 304 Not Modified to our If-None-Match. */
-    bool notModified = false;
-};
-
-/**
  * @note subclasses must implement at least one of the two
  * virtual getFile() methods.
  */
@@ -190,6 +174,22 @@ public:
     virtual void getFile(const std::string & path, Callback<std::optional<std::string>> callback) noexcept;
 
     std::optional<std::string> getFile(const std::string & path);
+
+    /**
+     * Result of a conditional HTTP-style GET. Returned by
+     * `BinaryCacheStore::getFileConditional`.
+     */
+    struct ConditionalGetResult
+    {
+        /** Response body. Empty if `notModified`. `nullopt` if the file does not exist (404). */
+        std::optional<std::string> data;
+
+        /** ETag returned by the server. Empty if no ETag was sent. */
+        std::string etag;
+
+        /** True if the server replied 304 Not Modified to our If-None-Match. */
+        bool notModified = false;
+    };
 
     /**
      * Fetch a file with an HTTP-style conditional GET. The default
