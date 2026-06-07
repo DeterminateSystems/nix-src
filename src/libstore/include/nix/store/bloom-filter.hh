@@ -16,7 +16,7 @@ namespace nix {
  * `doc/manual/source/protocols/binary-cache-bloom-filter.md`) from a
  * set of store paths.
  */
-std::string buildBloomFilter(const StorePathSet & paths, double falsePositiveRate = 0.01);
+std::string buildBloomFilter(const StorePathSet & paths, double falsePositiveRate);
 
 /**
  * Invoke `f(uint64_t pos)` for each of the `k` bit positions in an

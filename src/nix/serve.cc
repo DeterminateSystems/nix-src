@@ -26,6 +26,7 @@ struct CmdServe : StoreCommand
     std::string listenAddress = "127.0.0.1";
     std::optional<int> priority;
     std::optional<std::filesystem::path> portFile;
+    double bloomFalsePositiveRate = 0.01;
 
     CmdServe()
     {
@@ -54,6 +55,13 @@ struct CmdServe : StoreCommand
             .description = "Priority of this cache (overrides the store's default).",
             .labels = {"priority"},
             .handler = {[this](std::string s) { priority = std::stoi(s); }},
+        });
+        addFlag({
+            .longName = "false-positive-rate",
+            .description = "Target false-positive rate for the bloom filter "
+                           "served at `/bloom-filter` (default: 0.01).",
+            .labels = {"rate"},
+            .handler = {[this](std::string s) { bloomFalsePositiveRate = std::stod(s); }},
         });
     }
 
@@ -217,7 +225,8 @@ struct CmdServe : StoreCommand
         }
 
         else if (url == "/bloom-filter") {
-            auto body = std::make_unique<std::string>(buildBloomFilter(store.queryAllValidPaths()));
+            auto body = std::make_unique<std::string>(
+                buildBloomFilter(store.queryAllValidPaths(), bloomFalsePositiveRate));
             auto etag = "\""
                         + hashString(HashAlgorithm::SHA512, *body)
                               .to_string(HashFormat::Base16, /*includePrefix=*/false)
