@@ -60,8 +60,7 @@ static std::string buildBloomFilter(Store & store)
     char * bits = out.data() + headerLen;
 
     for (auto & path : paths)
-        forEachBloomBitPosition(
-            path, k, mBits, [&](uint64_t pos) { bits[pos / 8] |= uint8_t(1) << (pos % 8); });
+        forEachBloomBitPosition(path, k, mBits, [&](uint64_t pos) { bits[pos / 8] |= uint8_t(1) << (pos % 8); });
 
     return out;
 }

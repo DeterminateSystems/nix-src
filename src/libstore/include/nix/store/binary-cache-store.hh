@@ -117,10 +117,12 @@ private:
     struct BloomState
     {
         enum Status { Pending, Ready, Disabled };
+
         Status status = Pending;
         uint32_t k = 0;
         uint64_t mBits = 0;
     };
+
     Sync<BloomState> bloomState;
 
 protected:
@@ -195,8 +197,7 @@ public:
      * `HttpBinaryCacheStore` overrides this to use `If-None-Match` and
      * to surface 304 responses.
      */
-    virtual ConditionalGetResult
-    getFileConditional(const std::string & path, const std::string & expectedETag);
+    virtual ConditionalGetResult getFileConditional(const std::string & path, const std::string & expectedETag);
 
 public:
 

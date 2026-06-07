@@ -189,8 +189,7 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
                     return false;
                 }
                 auto readU32 = [&](size_t off) {
-                    return uint32_t((unsigned char) body[off])
-                           | (uint32_t((unsigned char) body[off + 1]) << 8)
+                    return uint32_t((unsigned char) body[off]) | (uint32_t((unsigned char) body[off + 1]) << 8)
                            | (uint32_t((unsigned char) body[off + 2]) << 16)
                            | (uint32_t((unsigned char) body[off + 3]) << 24);
                 };
