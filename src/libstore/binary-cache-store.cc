@@ -137,7 +137,7 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
         std::string expectedETag;
         if (auto m = diskCache->lookupBloomFilter(uri)) {
             auto ttl = (time_t) settings.getNarInfoDiskCacheSettings().ttlNegative.get();
-            if (time(nullptr) - m->timestamp <= ttl) {
+            if (time(nullptr) - m->timestamp < ttl) {
                 meta = *m;
                 haveMeta = true;
             } else {
@@ -169,6 +169,7 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
             }
 
             if (res.notModified) {
+                debug("bloom filter for '%s' unchanged (304 Not Modified)", uri);
                 diskCache->touchBloomFilter(uri, res.etag.empty() ? expectedETag : res.etag);
                 auto m = diskCache->lookupBloomFilter(uri);
                 if (!m) {

@@ -1,5 +1,6 @@
 #include "nix/cmd/command.hh"
 #include "nix/util/file-system.hh"
+#include "nix/util/hash.hh"
 #include "nix/util/serialise.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/deleter.hh"
@@ -217,8 +218,21 @@ struct CmdServe : StoreCommand
 
         else if (url == "/bloom-filter") {
             auto body = std::make_unique<std::string>(buildBloomFilter(store.queryAllValidPaths()));
+            auto etag = "\""
+                        + hashString(HashAlgorithm::SHA512, *body)
+                              .to_string(HashFormat::Base16, /*includePrefix=*/false)
+                        + "\"";
+
+            if (auto * inm = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "If-None-Match");
+                inm && etag == inm) {
+                response.reset(MHD_create_response_from_buffer(0, (void *) "", MHD_RESPMEM_PERSISTENT));
+                MHD_add_response_header(response.get(), "ETag", etag.c_str());
+                return MHD_queue_response(connection, MHD_HTTP_NOT_MODIFIED, response.get());
+            }
+
             response.reset(MHD_create_response_from_buffer(body->size(), body->data(), MHD_RESPMEM_MUST_COPY));
             MHD_add_response_header(response.get(), "Content-Type", "application/octet-stream");
+            MHD_add_response_header(response.get(), "ETag", etag.c_str());
         } else
             return notFound();
 
