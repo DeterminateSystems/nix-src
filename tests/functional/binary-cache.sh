@@ -63,7 +63,9 @@ stopNixServe() {
 startNixServe() {
     local portFile="$TEST_ROOT/nix-serve-port"
     rm -f "$portFile"
-    nix serve --port 0 --port-file "$portFile" "$@" &
+    nixServeLog="$TEST_ROOT/nix-serve.log"
+    rm -f "$nixServeLog"
+    nix serve --port 0 --port-file "$portFile" "$@" > "$nixServeLog" 2>&1 &
     nixServePid="$!"
     while [[ ! -e "$portFile" ]]; do
         if ! kill -0 "$nixServePid" 2>/dev/null; then
@@ -143,6 +145,21 @@ unset _NIX_TEST_NIX_SERVE_TRUNCATE_NAR
 restartNixServe
 nix path-info -vvvv --store "$httpBinaryCacheUrl" "$bigFile" 2> "$TEST_ROOT/log"
 [[ $(grep -c "downloading.*narinfo'" "$TEST_ROOT/log") -eq 1 ]]
+
+
+# Bloom filter advertised by `nix serve` should rule out random store paths.
+clearCacheCache
+restartNixServe
+fake="$NIX_STORE_DIR/00000000000000000000000000000000-fake-not-in-cache"
+nix path-info --debug --store "$httpBinaryCacheUrl" "$fake" 2> "$TEST_ROOT/bloom-log" || true
+grepQuiet "bloom filter for.*ruled out.*$fake" "$TEST_ROOT/bloom-log"
+
+
+# A second probe with a different fake path should reuse the cached filter
+# rather than fetching /bloom-filter again.
+fake2="$NIX_STORE_DIR/11111111111111111111111111111111-fake-also-not-in-cache"
+nix path-info --debug --store "$httpBinaryCacheUrl" "$fake2" 2> "$TEST_ROOT/bloom-log2" || true
+[[ $(grep -c "url=/bloom-filter" "$nixServeLog") -eq 1 ]]
 
 
 # Test that multiple concurrent substitutions do only one download.
