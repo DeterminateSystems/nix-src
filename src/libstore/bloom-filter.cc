@@ -7,6 +7,10 @@ namespace nix {
 
 std::string buildBloomFilter(const StorePathSet & paths, double falsePositiveRate)
 {
+    /* Rejects NaN as well, because all comparisons with NaN are false. */
+    if (!(falsePositiveRate > 0 && falsePositiveRate < 1))
+        throw Error("Bloom filter false positive rate must be between 0 and 1, got %f", falsePositiveRate);
+
     size_t n = paths.size();
 
     uint64_t mBits = 8;
@@ -14,7 +18,9 @@ std::string buildBloomFilter(const StorePathSet & paths, double falsePositiveRat
     if (n) {
         constexpr double ln2 = 0.6931471805599453;
         double mF = -double(n) * std::log(falsePositiveRate) / (ln2 * ln2);
-        mBits = ((uint64_t(std::ceil(mF)) + 7) / 8) * 8;
+        /* `falsePositiveRate` very close to 1 makes `mF` round down to zero;
+           keep the floor of 8 bits so we never modulo by zero later. */
+        mBits = std::max<uint64_t>(8, ((uint64_t(std::ceil(mF)) + 7) / 8) * 8);
         long kL = std::lround((double(mBits) / double(n)) * ln2);
         k = uint32_t(std::max<long>(1, kL));
     }
