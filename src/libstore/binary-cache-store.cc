@@ -140,54 +140,49 @@ bool BinaryCacheStore::fetchBloomFilter(const std::string & uri)
 
 bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
 {
-    try {
-        if (!diskCache || !bloomFilterUrl)
-            return false;
-
-        const auto uri = config.getReference().render(/*withParams=*/false);
-
-        /* Per-process cooldown after a failed fetch, so an unavailable filter
-           doesn't cause a fetch on every query. */
-        {
-            auto state(bloomState.lock());
-            if (!state->enabled) {
-                if (std::chrono::steady_clock::now() < state->disabledUntil)
-                    return false;
-                state->enabled = true; // cooldown elapsed; try again
-            }
-        }
-
-        auto r = diskCache->probeBloomFilter(uri, storePath);
-
-        if (!r) {
-            /* No fresh filter cached. Acquire a cross-process file lock so
-               concurrent first-probers don't all hit the network, then
-               re-check and fetch. */
-            auto lockDir = getCacheDir() / "bloom-filter-locks";
-            std::filesystem::create_directories(lockDir);
-            auto lockFile =
-                lockDir / hashString(HashAlgorithm::SHA256, uri).to_string(HashFormat::Base16, /*includePrefix=*/false);
-            PathLocks fetchLock(
-                {lockFile.string()}, fmt("waiting for another Nix process to fetch Bloom filter for '%s'...", uri));
-
-            r = diskCache->probeBloomFilter(uri, storePath);
-            if (!r) {
-                if (!fetchBloomFilter(uri))
-                    return false;
-                r = diskCache->probeBloomFilter(uri, storePath);
-            }
-        }
-
-        if (!r)
-            return false;
-
-        if (!*r)
-            debug("Bloom filter for '%s' ruled out '%s'", uri, printStorePath(storePath));
-        return !*r;
-    } catch (...) {
-        ignoreExceptionExceptInterrupt();
+    if (!diskCache || !bloomFilterUrl)
         return false;
+
+    const auto uri = config.getReference().render(/*withParams=*/false);
+
+    /* Per-process cooldown after a failed fetch, so an unavailable filter
+       doesn't cause a fetch on every query. */
+    {
+        auto state(bloomState.lock());
+        if (!state->enabled) {
+            if (std::chrono::steady_clock::now() < state->disabledUntil)
+                return false;
+            state->enabled = true; // cooldown elapsed; try again
+        }
     }
+
+    auto r = diskCache->probeBloomFilter(uri, storePath);
+
+    if (!r) {
+        /* No fresh filter cached. Acquire a cross-process file lock so
+           concurrent first-probers don't all hit the network, then
+           re-check and fetch. */
+        auto lockDir = getCacheDir() / "bloom-filter-locks";
+        std::filesystem::create_directories(lockDir);
+        auto lockFile =
+            lockDir / hashString(HashAlgorithm::SHA256, uri).to_string(HashFormat::Base16, /*includePrefix=*/false);
+        PathLocks fetchLock(
+            {lockFile.string()}, fmt("waiting for another Nix process to fetch Bloom filter for '%s'...", uri));
+
+        r = diskCache->probeBloomFilter(uri, storePath);
+        if (!r) {
+            if (!fetchBloomFilter(uri))
+                return false;
+            r = diskCache->probeBloomFilter(uri, storePath);
+        }
+    }
+
+    if (!r)
+        return false;
+
+    if (!*r)
+        debug("Bloom filter for '%s' ruled out '%s'", uri, printStorePath(storePath));
+    return !*r;
 }
 
 std::optional<std::string> BinaryCacheStore::getNixCacheInfo()
