@@ -12,7 +12,7 @@
 namespace nix {
 
 /**
- * Build a bloom-filter blob (24-byte header + raw bit array, see
+ * Build a bloom-filter blob (32-byte header + raw bit array, see
  * `doc/manual/source/protocols/binary-cache-bloom-filter.md`) from a
  * set of store paths.
  */
