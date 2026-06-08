@@ -88,19 +88,21 @@ BinaryCacheStore::getFileConditional(const std::string & path, const std::string
     return ConditionalGetResult{.data = std::move(data), .etag = "", .notModified = false};
 }
 
-void BinaryCacheStore::maybeDisableBloomFilter(std::string_view uri)
-{
-    auto state(bloomState.lock());
-    if (state->enabled) {
-        int t = 60;
-        debug("disabling Bloom filter for cache '%s' for %d seconds", uri, t);
-        state->enabled = false;
-        state->disabledUntil = std::chrono::steady_clock::now() + std::chrono::seconds(t);
-    }
-}
-
 bool BinaryCacheStore::fetchBloomFilter(const std::string & uri)
 {
+    /* Disable the Bloom filter for this cache for a short cooldown, so an
+       unavailable/broken filter doesn't cause a fetch on every query. */
+    auto disable = [&] {
+        auto state(bloomState.lock());
+        if (state->enabled) {
+            int t = 60;
+            debug("disabling Bloom filter for cache '%s' for %d seconds", uri, t);
+            state->enabled = false;
+            state->disabledUntil = std::chrono::steady_clock::now() + std::chrono::seconds(t);
+        }
+        return false;
+    };
+
     auto expectedETag = diskCache->getBloomFilterETag(uri).value_or("");
 
     /* `*bloomFilterUrl` can be a full (absolute) URL or a path relative to
@@ -111,8 +113,7 @@ bool BinaryCacheStore::fetchBloomFilter(const std::string & uri)
         res = getFileConditional(*bloomFilterUrl, expectedETag);
     } catch (Error & e) {
         warn("failed to fetch Bloom filter from cache '%s': %s; disabling for now", uri, e.message());
-        maybeDisableBloomFilter(uri);
-        return false;
+        return disable();
     }
 
     if (res.notModified) {
@@ -123,16 +124,14 @@ bool BinaryCacheStore::fetchBloomFilter(const std::string & uri)
 
     if (!res.data) {
         warn("Bloom filter at '%s' returned 404; disabling for now", uri);
-        maybeDisableBloomFilter(uri);
-        return false;
+        return disable();
     }
 
     const auto & body = *res.data;
     auto params = parseBloomFilterHeader(body);
     if (!params || body.size() != bloomFilterHeaderLen + params->mBits / 8) {
         warn("Bloom filter from cache '%s' is malformed; disabling for now", uri);
-        maybeDisableBloomFilter(uri);
-        return false;
+        return disable();
     }
 
     diskCache->upsertBloomFilter(uri, res.etag, {reinterpret_cast<const std::byte *>(body.data()), body.size()});

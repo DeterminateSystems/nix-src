@@ -113,12 +113,6 @@ private:
     Sync<BloomState> bloomState;
 
     /**
-     * Disable the Bloom filter for this cache for a short cooldown after a
-     * failed fetch.
-     */
-    void maybeDisableBloomFilter(std::string_view uri);
-
-    /**
      * Fetch (with a conditional GET), validate, and store the Bloom filter in
      * the disk cache. Returns false if the filter is unavailable/invalid (and
      * disables it for a cooldown). Caller must hold the fetch lock.
