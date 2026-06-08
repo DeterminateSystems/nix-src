@@ -54,29 +54,26 @@ struct NarInfoDiskCache
     virtual std::pair<Outcome, std::shared_ptr<Realisation>>
     lookupRealisation(const std::string & uri, const DrvOutput & id) = 0;
 
-    struct BloomFilterMeta
-    {
-        uint32_t k;
-        uint64_t mBits;
-        std::string etag;
-        time_t timestamp;
-    };
+    /**
+     * Probe `path` against the cached Bloom filter for `uri`.
+     *
+     * Returns `std::nullopt` if there is no Bloom filter cached for this
+     * cache, or the cached one is stale (older than the negative TTL) — the
+     * caller should (re)fetch and try again. Otherwise returns whether the
+     * filter says the path is *possibly present* (`true`) or *definitely not
+     * present* (`false`).
+     *
+     * The filter parameters (`k`, `mBits`) and the bits are read from the
+     * same stored blob in a single transaction, so they cannot drift.
+     */
+    virtual std::optional<bool> probeBloomFilter(const std::string & uri, const StorePath & path) = 0;
 
     /**
-     * Return the metadata for a cached Bloom filter, or nullopt if none is cached.
-     * Does not check the TTL; the caller decides whether to refresh.
+     * Store a freshly fetched Bloom filter blob (the full response body:
+     * header + bit array).
      */
-    virtual std::optional<BloomFilterMeta> lookupBloomFilter(const std::string & uri) = 0;
-
-    /**
-     * Store a freshly fetched Bloom filter blob (just the bit array, no header).
-     */
-    virtual void upsertBloomFilter(
-        const std::string & uri,
-        const std::string & etag,
-        uint32_t k,
-        uint64_t mBits,
-        std::span<const std::byte> bits) = 0;
+    virtual void
+    upsertBloomFilter(const std::string & uri, const std::string & etag, std::span<const std::byte> blob) = 0;
 
     /**
      * Refresh the timestamp (and optionally the etag) of an existing Bloom filter
@@ -85,12 +82,11 @@ struct NarInfoDiskCache
     virtual void touchBloomFilter(const std::string & uri, const std::string & etag) = 0;
 
     /**
-     * Probe `bitPositions` against the cached Bloom filter via random-access
-     * blob reads. Returns true if every position has its bit set (i.e. the
-     * Bloom filter says "possibly present"), false otherwise (definitely
-     * not present, OR no filter is cached).
+     * Return the etag of the currently cached Bloom filter for `uri`
+     * (regardless of its age), or nullopt if none is cached or it has no
+     * etag. Used to send `If-None-Match` when refetching.
      */
-    virtual bool probeBloomFilter(const std::string & uri, std::span<const uint64_t> bitPositions) = 0;
+    virtual std::optional<std::string> getBloomFilterETag(const std::string & uri) = 0;
 
     /**
      * Return a singleton cache object that can be used concurrently by

@@ -5,6 +5,28 @@
 
 namespace nix {
 
+std::optional<BloomFilterParams> parseBloomFilterHeader(std::string_view header)
+{
+    using namespace std::string_view_literals;
+    if (header.size() < bloomFilterHeaderLen || header.substr(0, 8) != "NixBloom"sv)
+        return std::nullopt;
+
+    StringSource source(header.substr(8));
+    uint64_t version;
+    uint32_t k;
+    uint64_t mBits;
+    try {
+        source >> version >> k >> mBits;
+    } catch (SerialisationError &) {
+        return std::nullopt;
+    }
+
+    if (version != 1 || mBits == 0 || mBits % 8 != 0)
+        return std::nullopt;
+
+    return BloomFilterParams{.k = k, .mBits = mBits};
+}
+
 std::string buildBloomFilter(const StorePathSet & paths, double falsePositiveRate)
 {
     /* Rejects NaN as well, because all comparisons with NaN are false. */
@@ -25,18 +47,17 @@ std::string buildBloomFilter(const StorePathSet & paths, double falsePositiveRat
         k = uint32_t(std::max<long>(1, kL));
     }
 
-    constexpr size_t headerLen = 8 + 8 + 8 + 8;
-    StringSink sink(headerLen + mBits / 8);
+    StringSink sink(bloomFilterHeaderLen + mBits / 8);
 
     using namespace std::string_view_literals;
     sink("NixBloom"sv);
-    sink << 1;    // version
+    sink << 1; // version
     sink << k;
     sink << mBits;
-    assert(sink.s.size() == headerLen);
+    assert(sink.s.size() == bloomFilterHeaderLen);
 
-    sink.s.resize(headerLen + mBits / 8);
-    char * bits = sink.s.data() + headerLen;
+    sink.s.resize(bloomFilterHeaderLen + mBits / 8);
+    char * bits = sink.s.data() + bloomFilterHeaderLen;
     for (auto & path : paths)
         forEachBloomBitPosition(path, k, mBits, [&](uint64_t pos) { bits[pos / 8] |= uint8_t(1) << (pos % 8); });
 

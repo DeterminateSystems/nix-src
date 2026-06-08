@@ -88,12 +88,55 @@ BinaryCacheStore::getFileConditional(const std::string & path, const std::string
     return ConditionalGetResult{.data = std::move(data), .etag = "", .notModified = false};
 }
 
-static std::vector<uint64_t> bloomBitPositions(const StorePath & path, uint32_t k, uint64_t mBits)
+void BinaryCacheStore::maybeDisableBloomFilter(std::string_view uri)
 {
-    std::vector<uint64_t> out;
-    out.reserve(k);
-    forEachBloomBitPosition(path, k, mBits, [&](uint64_t pos) { out.push_back(pos); });
-    return out;
+    auto state(bloomState.lock());
+    if (state->enabled) {
+        int t = 60;
+        debug("disabling Bloom filter for cache '%s' for %d seconds", uri, t);
+        state->enabled = false;
+        state->disabledUntil = std::chrono::steady_clock::now() + std::chrono::seconds(t);
+    }
+}
+
+bool BinaryCacheStore::fetchBloomFilter(const std::string & uri)
+{
+    auto expectedETag = diskCache->getBloomFilterETag(uri).value_or("");
+
+    /* `*bloomFilterUrl` can be a full (absolute) URL or a path relative to
+       the cache root; either way the resolution is done by `getFile()` /
+       `makeRequest()`, the same as for NAR URLs in `.narinfo` files. */
+    ConditionalGetResult res;
+    try {
+        res = getFileConditional(*bloomFilterUrl, expectedETag);
+    } catch (Error & e) {
+        warn("failed to fetch Bloom filter from cache '%s': %s; disabling for now", uri, e.message());
+        maybeDisableBloomFilter(uri);
+        return false;
+    }
+
+    if (res.notModified) {
+        debug("Bloom filter for '%s' unchanged (304 Not Modified)", uri);
+        diskCache->touchBloomFilter(uri, res.etag.empty() ? expectedETag : res.etag);
+        return true;
+    }
+
+    if (!res.data) {
+        warn("Bloom filter at '%s' returned 404; disabling for now", uri);
+        maybeDisableBloomFilter(uri);
+        return false;
+    }
+
+    const auto & body = *res.data;
+    auto params = parseBloomFilterHeader(body);
+    if (!params || body.size() != bloomFilterHeaderLen + params->mBits / 8) {
+        warn("Bloom filter from cache '%s' is malformed; disabling for now", uri);
+        maybeDisableBloomFilter(uri);
+        return false;
+    }
+
+    diskCache->upsertBloomFilter(uri, res.etag, {reinterpret_cast<const std::byte *>(body.data()), body.size()});
+    return true;
 }
 
 bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
@@ -104,114 +147,44 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
 
         const auto uri = config.getReference().render(/*withParams=*/false);
 
-        auto probe = [&](uint32_t k, uint64_t mBits) {
-            auto positions = bloomBitPositions(storePath, k, mBits);
-            bool definitelyMissing = !diskCache->probeBloomFilter(uri, positions);
-            if (definitelyMissing)
-                debug("Bloom filter for '%s' ruled out '%s'", uri, printStorePath(storePath));
-            return definitelyMissing;
-        };
-
-        /* Fast path: filter already loaded or known disabled. */
+        /* Per-process cooldown after a failed fetch, so an unavailable filter
+           doesn't cause a fetch on every query. */
         {
             auto state(bloomState.lock());
-            if (state->status == BloomState::Disabled)
-                return false;
-            if (state->status == BloomState::Ready)
-                return probe(state->k, state->mBits);
-        }
-
-        /* Slow path: acquire a cross-process file lock so concurrent first-probers
-           don't race on the network. */
-        auto lockDir = getCacheDir() / "bloom-filter-locks";
-        std::filesystem::create_directories(lockDir);
-        auto lockFile =
-            lockDir / hashString(HashAlgorithm::SHA256, uri).to_string(HashFormat::Base16, /*includePrefix=*/false);
-        PathLocks fetchLock(
-            {lockFile.string()}, fmt("waiting for another Nix process to fetch Bloom filter for '%s'...", uri));
-
-        /* Check disk cache while holding the lock: another process may have
-           just refreshed it. */
-        NarInfoDiskCache::BloomFilterMeta meta;
-        bool haveMeta = false;
-        std::string expectedETag;
-        if (auto m = diskCache->lookupBloomFilter(uri)) {
-            auto ttl = (time_t) settings.getNarInfoDiskCacheSettings().ttlNegative.get();
-            if (time(nullptr) - m->timestamp < ttl) {
-                meta = *m;
-                haveMeta = true;
-            } else {
-                expectedETag = m->etag;
+            if (!state->enabled) {
+                if (std::chrono::steady_clock::now() < state->disabledUntil)
+                    return false;
+                state->enabled = true; // cooldown elapsed; try again
             }
         }
 
-        if (!haveMeta) {
-            /* `*bloomFilterUrl` can be a full (absolute) URL or a path
-               relative to the cache root; either way the resolution is
-               done by `getFile()` / `makeRequest()`, the same as for NAR
-               URLs in `.narinfo` files. */
-            ConditionalGetResult res;
-            try {
-                res = getFileConditional(*bloomFilterUrl, expectedETag);
-            } catch (Error & e) {
-                warn("failed to fetch Bloom filter from cache '%s': %s; disabling for this process", uri, e.message());
-                bloomState.lock()->status = BloomState::Disabled;
-                return false;
-            }
+        auto r = diskCache->probeBloomFilter(uri, storePath);
 
-            if (res.notModified) {
-                debug("Bloom filter for '%s' unchanged (304 Not Modified)", uri);
-                diskCache->touchBloomFilter(uri, res.etag.empty() ? expectedETag : res.etag);
-                auto m = diskCache->lookupBloomFilter(uri);
-                if (!m) {
-                    warn("Bloom filter cache row missing after 304 for '%s'; disabling", uri);
-                    bloomState.lock()->status = BloomState::Disabled;
+        if (!r) {
+            /* No fresh filter cached. Acquire a cross-process file lock so
+               concurrent first-probers don't all hit the network, then
+               re-check and fetch. */
+            auto lockDir = getCacheDir() / "bloom-filter-locks";
+            std::filesystem::create_directories(lockDir);
+            auto lockFile =
+                lockDir / hashString(HashAlgorithm::SHA256, uri).to_string(HashFormat::Base16, /*includePrefix=*/false);
+            PathLocks fetchLock(
+                {lockFile.string()}, fmt("waiting for another Nix process to fetch Bloom filter for '%s'...", uri));
+
+            r = diskCache->probeBloomFilter(uri, storePath);
+            if (!r) {
+                if (!fetchBloomFilter(uri))
                     return false;
-                }
-                meta = *m;
-            } else if (!res.data) {
-                warn("Bloom filter at '%s' returned 404; disabling for this process", uri);
-                bloomState.lock()->status = BloomState::Disabled;
-                return false;
-            } else {
-                const auto & body = *res.data;
-                constexpr size_t headerLen = 8 + 8 + 8 + 8;
-                if (body.size() < headerLen || std::memcmp(body.data(), "NixBloom", 8) != 0) {
-                    warn("Bloom filter from cache '%s' has invalid magic; disabling", uri);
-                    bloomState.lock()->status = BloomState::Disabled;
-                    return false;
-                }
-                StringSource source(std::string_view(body).substr(8));
-                uint64_t version;
-                uint32_t k;
-                uint64_t mBits;
-                try {
-                    source >> version >> k >> mBits;
-                } catch (SerialisationError &) {
-                    warn("Bloom filter from cache '%s' has invalid header; disabling", uri);
-                    bloomState.lock()->status = BloomState::Disabled;
-                    return false;
-                }
-                if (version != 1 || mBits == 0 || mBits % 8 != 0 || body.size() != headerLen + mBits / 8) {
-                    warn("Bloom filter from cache '%s' has invalid header; disabling", uri);
-                    bloomState.lock()->status = BloomState::Disabled;
-                    return false;
-                }
-                std::span<const std::byte> bits(
-                    reinterpret_cast<const std::byte *>(body.data() + headerLen), (size_t) (mBits / 8));
-                diskCache->upsertBloomFilter(uri, res.etag, k, mBits, bits);
-                meta = {.k = k, .mBits = mBits, .etag = res.etag, .timestamp = time(nullptr)};
+                r = diskCache->probeBloomFilter(uri, storePath);
             }
         }
 
-        {
-            auto state(bloomState.lock());
-            state->status = BloomState::Ready;
-            state->k = meta.k;
-            state->mBits = meta.mBits;
-        }
+        if (!r)
+            return false;
 
-        return probe(meta.k, meta.mBits);
+        if (!*r)
+            debug("Bloom filter for '%s' ruled out '%s'", uri, printStorePath(storePath));
+        return !*r;
     } catch (...) {
         ignoreExceptionExceptInterrupt();
         return false;

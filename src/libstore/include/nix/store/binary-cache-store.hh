@@ -9,6 +9,7 @@
 #include "nix/util/sync.hh"
 
 #include <atomic>
+#include <chrono>
 
 namespace nix {
 
@@ -98,16 +99,31 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
 private:
     std::vector<std::unique_ptr<Signer>> signers;
 
+    /**
+     * Per-process cooldown that suppresses Bloom filter use after a failed
+     * fetch, so we don't re-hit an unavailable filter on every query. Mirrors
+     * `HttpBinaryCacheStore::maybeDisable()`.
+     */
     struct BloomState
     {
-        enum Status { Pending, Ready, Disabled };
-
-        Status status = Pending;
-        uint32_t k = 0;
-        uint64_t mBits = 0;
+        bool enabled = true;
+        std::chrono::steady_clock::time_point disabledUntil;
     };
 
     Sync<BloomState> bloomState;
+
+    /**
+     * Disable the Bloom filter for this cache for a short cooldown after a
+     * failed fetch.
+     */
+    void maybeDisableBloomFilter(std::string_view uri);
+
+    /**
+     * Fetch (with a conditional GET), validate, and store the Bloom filter in
+     * the disk cache. Returns false if the filter is unavailable/invalid (and
+     * disables it for a cooldown). Caller must hold the fetch lock.
+     */
+    bool fetchBloomFilter(const std::string & uri);
 
 protected:
 

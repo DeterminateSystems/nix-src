@@ -175,6 +175,9 @@ done
 # `--refresh` should force the cached filter to be treated as stale; the
 # client must re-fetch with `If-None-Match` and the server should reply 304
 # Not Modified instead of resending the body.
+# Sleep so the cached entry is stamped strictly before this --refresh
+# process starts (freshness is at 1-second resolution).
+sleep 1
 prev=$(grep -c "url=/bloom-filter" "$nixServeLog")
 nix path-info --debug --refresh --store "$httpBinaryCacheUrl" "$fake" 2> "$TEST_ROOT/bloom-log3" || true
 # One additional /bloom-filter request was made.

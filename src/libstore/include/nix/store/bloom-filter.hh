@@ -7,14 +7,40 @@
 
 #include <cassert>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace nix {
 
 /**
- * Build a bloom-filter blob (32-byte header + raw bit array, see
- * `doc/manual/source/protocols/binary-cache-bloom-filter.md`) from a
- * set of store paths.
+ * Size of the Bloom filter blob header: magic(8) + version(8) + k(8) + mBits(8).
+ * See `doc/manual/source/protocols/binary-cache-bloom-filter.md`.
+ */
+constexpr size_t bloomFilterHeaderLen = 8 + 8 + 8 + 8;
+
+/**
+ * The parameters of a Bloom filter, as encoded in its header.
+ */
+struct BloomFilterParams
+{
+    uint32_t k;
+    uint64_t mBits;
+};
+
+/**
+ * Parse and validate the `bloomFilterHeaderLen`-byte header at the start
+ * of a Bloom filter blob: magic `NixBloom`, version 1, `mBits != 0` and a
+ * multiple of 8. Returns `std::nullopt` if the header is too short or
+ * invalid. Does *not* check that the total body length matches `mBits`;
+ * the caller does that when it has the whole body.
+ */
+std::optional<BloomFilterParams> parseBloomFilterHeader(std::string_view header);
+
+/**
+ * Build a bloom-filter blob (`bloomFilterHeaderLen`-byte header + raw bit
+ * array, see `doc/manual/source/protocols/binary-cache-bloom-filter.md`)
+ * from a set of store paths.
  */
 std::string buildBloomFilter(const StorePathSet & paths, double falsePositiveRate);
 
