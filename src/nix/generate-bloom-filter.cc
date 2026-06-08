@@ -70,39 +70,6 @@ struct CmdGenerateBloomFilter : StoreCommand
             blob.size(),
             paths.size(),
             falsePositiveRate);
-
-#if 0
-        /* Self-check the empirical false-positive rate by probing the
-           just-built filter with 10 000 random store paths. */
-        auto readU64 = [&](size_t off) {
-            uint64_t v = 0;
-            for (int i = 0; i < 8; ++i)
-                v |= uint64_t((unsigned char) blob[off + i]) << (8 * i);
-            return v;
-        };
-        uint32_t k = uint32_t(readU64(16));
-        uint64_t mBits = readU64(24);
-        const char * bits = blob.data() + 32;
-
-        constexpr size_t numSamples = 1000000;
-        size_t falsePositives = 0;
-        for (size_t i = 0; i < numSamples; ++i) {
-            auto p = StorePath::random("nix-bloom-fpr-probe");
-            bool allSet = true;
-            forEachBloomBitPosition(p, k, mBits, [&](uint64_t pos) {
-                if (!((uint8_t(bits[pos / 8]) >> (pos % 8)) & 1))
-                    allSet = false;
-            });
-            if (allSet)
-                ++falsePositives;
-        }
-        notice(
-            "Empirical false-positive rate over %d random probes: %d (%f, target %f).",
-            numSamples,
-            falsePositives,
-            double(falsePositives) / double(numSamples),
-            falsePositiveRate);
-#endif
     }
 };
 
