@@ -61,7 +61,7 @@ The choice of `p` is server-defined and not advertised separately: a client can 
 
 ## Caching
 
-The bloom filter changes whenever the cache's path set changes.
+The Bloom filter changes whenever the cache's path set changes.
 Clients should refetch periodically; an HTTP cache lifetime on the order of minutes-to-hours is typically appropriate.
 
 ## Example

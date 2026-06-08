@@ -108,7 +108,7 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
             auto positions = bloomBitPositions(storePath, k, mBits);
             bool definitelyMissing = !diskCache->probeBloomFilter(uri, positions);
             if (definitelyMissing)
-                debug("bloom filter for '%s' ruled out '%s'", uri, printStorePath(storePath));
+                debug("Bloom filter for '%s' ruled out '%s'", uri, printStorePath(storePath));
             return definitelyMissing;
         };
 
@@ -128,7 +128,7 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
         auto lockFile =
             lockDir / hashString(HashAlgorithm::SHA256, uri).to_string(HashFormat::Base16, /*includePrefix=*/false);
         PathLocks fetchLock(
-            {lockFile.string()}, fmt("waiting for another Nix process to fetch bloom filter for '%s'...", uri));
+            {lockFile.string()}, fmt("waiting for another Nix process to fetch Bloom filter for '%s'...", uri));
 
         /* Check disk cache while holding the lock: another process may have
            just refreshed it. */
@@ -149,7 +149,7 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
             const auto & url = *bloomFilterUrl;
             if (hasPrefix(url, "http://") || hasPrefix(url, "https://")) {
                 warn(
-                    "bloom filter at absolute URL '%s' is not yet supported; disabling bloom filter for cache '%s'",
+                    "Bloom filter at absolute URL '%s' is not yet supported; disabling Bloom filter for cache '%s'",
                     url,
                     uri);
                 bloomState.lock()->status = BloomState::Disabled;
@@ -163,30 +163,30 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
             try {
                 res = getFileConditional(path, expectedETag);
             } catch (Error & e) {
-                warn("failed to fetch bloom filter from cache '%s': %s; disabling for this process", uri, e.message());
+                warn("failed to fetch Bloom filter from cache '%s': %s; disabling for this process", uri, e.message());
                 bloomState.lock()->status = BloomState::Disabled;
                 return false;
             }
 
             if (res.notModified) {
-                debug("bloom filter for '%s' unchanged (304 Not Modified)", uri);
+                debug("Bloom filter for '%s' unchanged (304 Not Modified)", uri);
                 diskCache->touchBloomFilter(uri, res.etag.empty() ? expectedETag : res.etag);
                 auto m = diskCache->lookupBloomFilter(uri);
                 if (!m) {
-                    warn("bloom filter cache row missing after 304 for '%s'; disabling", uri);
+                    warn("Bloom filter cache row missing after 304 for '%s'; disabling", uri);
                     bloomState.lock()->status = BloomState::Disabled;
                     return false;
                 }
                 meta = *m;
             } else if (!res.data) {
-                warn("bloom filter at '%s' returned 404; disabling for this process", uri);
+                warn("Bloom filter at '%s' returned 404; disabling for this process", uri);
                 bloomState.lock()->status = BloomState::Disabled;
                 return false;
             } else {
                 const auto & body = *res.data;
                 constexpr size_t headerLen = 8 + 8 + 8 + 8;
                 if (body.size() < headerLen || std::memcmp(body.data(), "NixBloom", 8) != 0) {
-                    warn("bloom filter from cache '%s' has invalid magic; disabling", uri);
+                    warn("Bloom filter from cache '%s' has invalid magic; disabling", uri);
                     bloomState.lock()->status = BloomState::Disabled;
                     return false;
                 }
@@ -197,12 +197,12 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
                 try {
                     source >> version >> k >> mBits;
                 } catch (SerialisationError &) {
-                    warn("bloom filter from cache '%s' has invalid header; disabling", uri);
+                    warn("Bloom filter from cache '%s' has invalid header; disabling", uri);
                     bloomState.lock()->status = BloomState::Disabled;
                     return false;
                 }
                 if (version != 1 || mBits == 0 || mBits % 8 != 0 || body.size() != headerLen + mBits / 8) {
-                    warn("bloom filter from cache '%s' has invalid header; disabling", uri);
+                    warn("Bloom filter from cache '%s' has invalid header; disabling", uri);
                     bloomState.lock()->status = BloomState::Disabled;
                     return false;
                 }

@@ -63,13 +63,13 @@ struct NarInfoDiskCache
     };
 
     /**
-     * Return the metadata for a cached bloom filter, or nullopt if none is cached.
+     * Return the metadata for a cached Bloom filter, or nullopt if none is cached.
      * Does not check the TTL; the caller decides whether to refresh.
      */
     virtual std::optional<BloomFilterMeta> lookupBloomFilter(const std::string & uri) = 0;
 
     /**
-     * Store a freshly fetched bloom filter blob (just the bit array, no header).
+     * Store a freshly fetched Bloom filter blob (just the bit array, no header).
      */
     virtual void upsertBloomFilter(
         const std::string & uri,
@@ -79,15 +79,15 @@ struct NarInfoDiskCache
         std::span<const std::byte> bits) = 0;
 
     /**
-     * Refresh the timestamp (and optionally the etag) of an existing bloom filter
+     * Refresh the timestamp (and optionally the etag) of an existing Bloom filter
      * after a successful conditional GET returned 304 Not Modified.
      */
     virtual void touchBloomFilter(const std::string & uri, const std::string & etag) = 0;
 
     /**
-     * Probe `bitPositions` against the cached bloom filter via random-access
+     * Probe `bitPositions` against the cached Bloom filter via random-access
      * blob reads. Returns true if every position has its bit set (i.e. the
-     * bloom filter says "possibly present"), false otherwise (definitely
+     * Bloom filter says "possibly present"), false otherwise (definitely
      * not present, OR no filter is cached).
      */
     virtual bool probeBloomFilter(const std::string & uri, std::span<const uint64_t> bitPositions) = 0;

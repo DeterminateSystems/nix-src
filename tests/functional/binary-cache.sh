@@ -159,7 +159,7 @@ ruledOut=0
 for n in $(seq 0 100); do
     fake="$NIX_STORE_DIR/00000000000000000000000000$(printf '%06d' "$n")-fake-not-in-cache"
     nix path-info --debug --store "$httpBinaryCacheUrl" "$fake" 2> "$TEST_ROOT/bloom-log" || true
-    if grep -q "bloom filter for.*ruled out.*$fake" "$TEST_ROOT/bloom-log"; then
+    if grep -q "Bloom filter for.*ruled out.*$fake" "$TEST_ROOT/bloom-log"; then
         ruledOut=1
         break
     fi
@@ -167,7 +167,7 @@ done
 [[ $ruledOut -eq 1 ]]
 
 
-# The bloom filter should have been fetched exactly once across all the
+# The Bloom filter should have been fetched exactly once across all the
 # loop iterations, proving the disk-cache reuse path works.
 [[ $(grep -c "url=/bloom-filter" "$nixServeLog") -eq 1 ]]
 
@@ -180,7 +180,7 @@ nix path-info --debug --refresh --store "$httpBinaryCacheUrl" "$fake" 2> "$TEST_
 # One additional /bloom-filter request was made.
 [[ $(grep -c "url=/bloom-filter" "$nixServeLog") -eq $((prev + 1)) ]]
 # And the client logged the 304 Not Modified branch.
-grepQuiet "bloom filter for.*unchanged.*304 Not Modified" "$TEST_ROOT/bloom-log3"
+grepQuiet "Bloom filter for.*unchanged.*304 Not Modified" "$TEST_ROOT/bloom-log3"
 
 
 # Test that multiple concurrent substitutions do only one download.

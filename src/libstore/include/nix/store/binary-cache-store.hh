@@ -86,10 +86,10 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
     Config & config;
 
     /**
-     * URL of the bloom filter advertised by this cache (from the
+     * URL of the Bloom filter advertised by this cache (from the
      * `BloomFilter:` field in `nix-cache-info`), as written by the server.
      * Absolute URL or path relative to the cache root. `nullopt` if the
-     * cache doesn't advertise a bloom filter. Populated by `init()` on
+     * cache doesn't advertise a Bloom filter. Populated by `init()` on
      * the cold path or restored from the disk-cache by subclasses on the
      * warm path.
      */
@@ -205,7 +205,7 @@ public:
 
     /**
      * Return true if this cache definitely does not contain `storePath`.
-     * Consults the bloom filter advertised by the cache; lazily fetches
+     * Consults the Bloom filter advertised by the cache; lazily fetches
      * and caches the filter on first call. Returns false in every other
      * case (no filter advertised, filter disabled after a failure,
      * filter says "possibly present"). Never throws.

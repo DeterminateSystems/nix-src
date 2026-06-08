@@ -33,7 +33,7 @@ struct CmdGenerateBloomFilter : StoreCommand
 
     std::string description() override
     {
-        return "build a bloom filter from the store's valid paths";
+        return "build a Bloom filter from the store's valid paths";
     }
 
     Category category() override
@@ -45,7 +45,7 @@ struct CmdGenerateBloomFilter : StoreCommand
     {
         auto fd = getStandardOutput();
         if (isatty(fd))
-            throw UsageError("refusing to write bloom filter to a terminal");
+            throw UsageError("refusing to write Bloom filter to a terminal");
 
         StorePathSet paths;
         if (fromFile) {
@@ -66,7 +66,7 @@ struct CmdGenerateBloomFilter : StoreCommand
         sink.flush();
 
         notice(
-            "Wrote bloom filter (%d bytes) for %d store paths (%f false positive rate).",
+            "Wrote Bloom filter (%d bytes) for %d store paths (%f false positive rate).",
             blob.size(),
             paths.size(),
             falsePositiveRate);

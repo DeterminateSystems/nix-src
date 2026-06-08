@@ -58,7 +58,7 @@ struct CmdServe : StoreCommand
         });
         addFlag({
             .longName = "false-positive-rate",
-            .description = "Target false-positive rate for the bloom filter "
+            .description = "Target false-positive rate for the Bloom filter "
                            "served at `/bloom-filter` (default: 0.01).",
             .labels = {"rate"},
             .handler = {[this](std::string s) { bloomFalsePositiveRate = std::stod(s); }},

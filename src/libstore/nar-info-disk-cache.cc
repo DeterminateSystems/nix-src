@@ -22,7 +22,7 @@ create table if not exists BinaryCaches (
     storeDir  text not null,
     wantMassQuery integer not null,
     priority  integer not null,
-    bloomFilterUrl text -- NULL if the cache doesn't advertise a bloom filter
+    bloomFilterUrl text -- NULL if the cache doesn't advertise a Bloom filter
 );
 
 create table if not exists BloomFilters (

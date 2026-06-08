@@ -20,7 +20,7 @@ std::string buildBloomFilter(const StorePathSet & paths, double falsePositiveRat
 
 /**
  * Invoke `f(uint64_t pos)` for each of the `k` bit positions in an
- * `mBits`-sized bloom filter that correspond to `path`.
+ * `mBits`-sized Bloom filter that correspond to `path`.
  *
  * Kirsch-Mitzenmacher double hashing over the 160 bits of the path's
  * `hashPart`; intermediate arithmetic wraps modulo 2^64 before the
