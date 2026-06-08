@@ -146,22 +146,13 @@ bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
         }
 
         if (!haveMeta) {
-            const auto & url = *bloomFilterUrl;
-            if (hasPrefix(url, "http://") || hasPrefix(url, "https://")) {
-                warn(
-                    "Bloom filter at absolute URL '%s' is not yet supported; disabling Bloom filter for cache '%s'",
-                    url,
-                    uri);
-                bloomState.lock()->status = BloomState::Disabled;
-                return false;
-            }
-            std::string path = url;
-            while (!path.empty() && path[0] == '/')
-                path.erase(0, 1);
-
+            /* `*bloomFilterUrl` can be a full (absolute) URL or a path
+               relative to the cache root; either way the resolution is
+               done by `getFile()` / `makeRequest()`, the same as for NAR
+               URLs in `.narinfo` files. */
             ConditionalGetResult res;
             try {
-                res = getFileConditional(path, expectedETag);
+                res = getFileConditional(*bloomFilterUrl, expectedETag);
             } catch (Error & e) {
                 warn("failed to fetch Bloom filter from cache '%s': %s; disabling for this process", uri, e.message());
                 bloomState.lock()->status = BloomState::Disabled;
