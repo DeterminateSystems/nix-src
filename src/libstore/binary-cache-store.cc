@@ -140,7 +140,7 @@ bool BinaryCacheStore::fetchBloomFilter(const std::string & uri)
 
 bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
 {
-    if (!diskCache || !bloomFilterUrl)
+    if (!diskCache || !bloomFilterUrl || !config.useBloomFilter)
         return false;
 
     const auto uri = config.getReference().render(/*withParams=*/false);

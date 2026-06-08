@@ -68,6 +68,17 @@ struct BinaryCacheStoreConfig : virtual StoreConfig
           The meaning and accepted values depend on the compression method selected.
           `-1` specifies that the default compression level should be used.
         )"};
+
+    Setting<bool> useBloomFilter{
+        this,
+        true,
+        "use-bloom-filter",
+        R"(
+          Whether to use the Bloom filter advertised by this binary cache (if
+          any) to avoid querying `.narinfo` files for store paths that are
+          definitely not in the cache. Set to `false` to disable this
+          optimization.
+        )"};
 };
 
 /**
