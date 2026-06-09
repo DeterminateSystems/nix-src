@@ -278,7 +278,7 @@ jobs:
       - name: Build manual
         if: inputs.system == 'x86_64-linux'
         run: nix build "${FLAKE}#hydraJobs.manual"
-      - uses: nwtgck/actions-netlify@4cbaf4c08f1a7bfa537d6113472ef4424e4eb654 # v3.0.0
+      - uses: nwtgck/actions-netlify@d22a32a27c918fe470bbc562e984f80ec48c2668 # v4.0.0
         if: inputs.publish_manual && inputs.system == 'x86_64-linux'
         with:
           publish-dir: "./result/share/doc/nix/manual"
