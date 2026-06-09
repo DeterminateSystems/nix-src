@@ -1,6 +1,10 @@
 on:
   workflow_call:
     inputs:
+      flake:
+        required: false
+        default: "./packaging/secure-packages"
+        type: string
       system:
         required: true
         type: string
@@ -33,6 +37,10 @@ on:
         required: false
         default: false
         type: boolean
+      upload_artifacts:
+        required: false
+        default: true
+        type: boolean
     secrets:
       manual_netlify_auth_token:
         required: false
@@ -51,17 +59,18 @@ jobs:
     strategy:
       fail-fast: false
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 60
     env:
+      FLAKE: ${{ inputs.flake }}
       SYSTEM: ${{ inputs.system }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
-      - run: nix build ".#packages.${SYSTEM}.default" ".#packages.${SYSTEM}.binaryTarball" --no-link -L
-      - run: nix build ".#packages.${SYSTEM}.binaryTarball" --out-link tarball
+      - run: nix build "${FLAKE}#packages.${SYSTEM}.default" "${FLAKE}#packages.${SYSTEM}.binaryTarball" --no-link -L
+      - run: nix build "${FLAKE}#packages.${SYSTEM}.binaryTarball" --out-link tarball
       - run: nix build .#^debug,out
       - name: Upload debug info to Sentry
         run: ./maintainers/upload-debug-info-to-sentry.py --debug-dir ./result-debug ./result/bin/nix
@@ -71,6 +80,7 @@ jobs:
           SENTRY_ORG: ${{ secrets.sentry_org }}
           SENTRY_PROJECT: ${{ secrets.sentry_project }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: inputs.upload_artifacts
         with:
           name: ${{ env.SYSTEM }}
           path: ./tarball/*.xz
@@ -80,8 +90,9 @@ jobs:
     strategy:
       fail-fast: false
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
+      FLAKE: ${{ inputs.flake }}
       SYSTEM: ${{ inputs.system }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -89,7 +100,7 @@ jobs:
           persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
-      - run: nix build ".#packages.${SYSTEM}.nix-cli-static" --no-link -L
+      - run: nix build "${FLAKE}#packages.${SYSTEM}.nix-cli-static" --no-link -L
 
   test:
     if: ${{ inputs.if && inputs.run_tests}}
@@ -97,8 +108,9 @@ jobs:
     strategy:
       fail-fast: false
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
+      FLAKE: ${{ inputs.flake }}
       SYSTEM: ${{ inputs.system }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -106,12 +118,14 @@ jobs:
           persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
-      - run: nix flake check -L --system "${SYSTEM}"
+      - run: nix flake check --keep-going "${FLAKE}" -L --system "${SYSTEM}"
 
   vm_tests_smoke:
     if: inputs.run_vm_tests && github.event_name != 'merge_group'
     needs: build
     runs-on: ${{ inputs.runner_for_virt }}
+    env:
+      FLAKE: ${{ inputs.flake }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -120,16 +134,18 @@ jobs:
       - uses: DeterminateSystems/flakehub-cache-action@main
       - run: |
           nix build -L \
-            .#hydraJobs.tests.functional_user \
-            .#hydraJobs.tests.githubFlakes \
-            .#hydraJobs.tests.nix-docker \
-            .#hydraJobs.tests.tarballFlakes \
+            "${FLAKE}#hydraJobs.tests.functional_user" \
+            "${FLAKE}#hydraJobs.tests.githubFlakes" \
+            "${FLAKE}#hydraJobs.tests.nix-docker" \
+            "${FLAKE}#hydraJobs.tests.tarballFlakes" \
             ;
 
   vm_tests_all:
     if: inputs.run_vm_tests && github.event_name == 'merge_group'
     needs: build
     runs-on: ${{ inputs.runner_for_virt }}
+    env:
+      FLAKE: ${{ inputs.flake }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -144,7 +160,7 @@ jobs:
                   .hydraJobs.tests
                   | with_entries(select(.value.type == "derivation"))
                   | keys[]
-                  | ".#hydraJobs.tests." + .')
+                  | "${FLAKE}#hydraJobs.tests." + .')
           }
 
           if ! cmd; then
@@ -216,6 +232,7 @@ jobs:
           NIX_CONFIG: ${{ matrix.nix_config }}
           PREFETCH: "1"
           USE_NIX_FLAKE_SHOW: "1"
+          FLAKE: ${{ inputs.flake }}
         run: |
           set -x
           echo "PARALLEL: $PARALLEL"
@@ -224,7 +241,7 @@ jobs:
             mkdir -p "${NSC_CACHE_PATH}/nix/xdg-cache"
             export XDG_CACHE_HOME="${NSC_CACHE_PATH}/nix/xdg-cache"
           fi
-          nix build -L --out-link ./new-nix
+          nix build "${FLAKE}" -L --out-link ./new-nix
           export PATH=$(pwd)/new-nix/bin:$PATH
           [[ $(type -p nix) = $(pwd)/new-nix/bin/nix ]]
 
@@ -243,6 +260,8 @@ jobs:
     if: github.event_name != 'merge_group'
     needs: build
     runs-on: ${{ inputs.runner_small }}
+    env:
+      FLAKE: ${{ inputs.flake }}
     permissions:
       id-token: "write"
       contents: "read"
@@ -258,7 +277,7 @@ jobs:
       - uses: DeterminateSystems/flakehub-cache-action@main
       - name: Build manual
         if: inputs.system == 'x86_64-linux'
-        run: nix build .#hydraJobs.manual
+        run: nix build "${FLAKE}#hydraJobs.manual"
       - uses: nwtgck/actions-netlify@4cbaf4c08f1a7bfa537d6113472ef4424e4eb654 # v3.0.0
         if: inputs.publish_manual && inputs.system == 'x86_64-linux'
         with:
