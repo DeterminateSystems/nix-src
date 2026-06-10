@@ -138,7 +138,7 @@ bool BinaryCacheStore::fetchBloomFilter(const std::string & uri)
     return true;
 }
 
-bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath) noexcept
+bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath)
 {
     if (!diskCache || !bloomFilterUrl || !config.useBloomFilter)
         return false;

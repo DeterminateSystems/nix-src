@@ -231,7 +231,7 @@ public:
      * case (no filter advertised, filter disabled after a failure,
      * filter says "possibly present"). Never throws.
      */
-    bool isDefinitelyMissing(const StorePath & storePath) noexcept;
+    bool isDefinitelyMissing(const StorePath & storePath);
 
 private:
 
