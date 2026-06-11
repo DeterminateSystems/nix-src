@@ -17,6 +17,17 @@ struct UnkeyedNarInfo : virtual UnkeyedValidPathInfo
     std::optional<Hash> fileHash;
     uint64_t fileSize = 0;
 
+    /**
+     * An optional hint containing (some of) the indirect references
+     * of this path, i.e. a subset of the references closure of the
+     * path, excluding the path itself and its direct references.
+     * This allows substituters to start fetching the NAR info of the
+     * entire closure without waiting for intermediate narinfos. It
+     * is only a hint: it need not be complete and is not covered by
+     * the signature.
+     */
+    StorePathSet partialClosure;
+
     UnkeyedNarInfo(UnkeyedValidPathInfo info)
         : UnkeyedValidPathInfo(std::move(info))
     {

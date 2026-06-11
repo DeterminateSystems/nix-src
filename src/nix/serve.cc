@@ -123,6 +123,12 @@ struct CmdServe : StoreCommand
             auto info = store.queryPathInfo(*path);
             NarInfo ni(*info);
             ni.compression = "none";
+            StorePathSet closure;
+            store.computeFSClosure(*path, closure);
+            closure.erase(*path);
+            for (auto & ref : info->references)
+                closure.erase(ref);
+            ni.partialClosure = std::move(closure);
             // FIXME: would be nicer to use just the NAR hash, but we can't look up NARs by NAR hash.
             ni.url = "nar/" + std::string(info->path.hashPart()) + "-"
                      + info->narHash.to_string(HashFormat::Nix32, false) + ".nar";

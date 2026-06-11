@@ -75,6 +75,12 @@ NarInfo::NarInfo(const StoreDirConfig & store, const std::string & s, const std:
                 throw corrupt("extra References");
             for (auto & r : refs)
                 references.insert(StorePath(r));
+        } else if (name == "PartialClosure") {
+            auto refs = tokenizeString<Strings>(value, " ");
+            if (!partialClosure.empty())
+                throw corrupt("extra PartialClosure");
+            for (auto & r : refs)
+                partialClosure.insert(StorePath(r));
         } else if (name == "Deriver") {
             if (value != "unknown-deriver")
                 deriver = StorePath(value);
@@ -124,6 +130,13 @@ std::string NarInfo::to_string(const StoreDirConfig & store) const
     res += "NarSize: " + std::to_string(narSize) + "\n";
 
     res += "References: " + concatStringsSep(" ", shortRefs()) + "\n";
+
+    if (!partialClosure.empty()) {
+        Strings ss;
+        for (auto & p : partialClosure)
+            ss.push_back(std::string(p.to_string()));
+        res += "PartialClosure: " + concatStringsSep(" ", ss) + "\n";
+    }
 
     if (deriver)
         res += "Deriver: " + std::string(deriver->to_string()) + "\n";

@@ -139,6 +139,7 @@ querySubstitutablePathInfosAsync(Store & store, const StorePathCAMap & paths, Su
                         .references = info->references,
                         .downloadSize = narInfo ? narInfo->fileSize : 0,
                         .narSize = info->narSize,
+                        .partialClosure = narInfo ? narInfo->partialClosure : StorePathSet{},
                     });
 
                 break; /* We are done. */
@@ -321,6 +322,13 @@ MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
                     res.narSize += info->second.narSize;
 
                     for (auto & ref : info->second.references)
+                        edges.insert(DerivedPath::Opaque{ref});
+
+                    /* Recurse into the partial closure hint as well,
+                       so we don't have to wait for the narinfos of
+                       the direct references to discover the rest of
+                       the closure. */
+                    for (auto & ref : info->second.partialClosure)
                         edges.insert(DerivedPath::Opaque{ref});
                 },
             },
