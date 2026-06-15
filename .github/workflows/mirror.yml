@@ -5,7 +5,7 @@ on:
   #pull_request:
 
 jobs:
-  barch:
+  barchl:
     runs-on: UbuntuLatest32Cores128GArm
     permissions:
       id-token: write
@@ -21,13 +21,29 @@ jobs:
       - name: Build
         id: build
         run: |
-          nix build ./packaging/secure-packages#fallbackPathsNix
-          echo "store-path-dsp=$(readlink -f result)" >> "$GITHUB_OUTPUT"
-          nix build .#fallbackPathsNix
-          echo "store-path=$(readlink -f result)" >> "$GITHUB_OUTPUT"
+          nix build .#fallbackPathsNix --keep-going || true
+  barchd:
+    runs-on: namespace-profile-mac-m2-12c28g
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: v3.21.1
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: DeterminateSystems/flakehub-cache-action@v3
+
+      - name: Build
+        id: build
+        run: |
+          nix build .#fallbackPathsNix --keep-going || true
           
   build:
-    needs: barch
+    needs: 
+      - barchd
+      - barchl
     runs-on: ubuntu-latest
     permissions:
       id-token: write
