@@ -374,6 +374,26 @@
 
               closures = forAllSystems (system: self.packages.${system}.default.outPath);
 
+              commentedClosures =
+                let
+                  allClosures = forAllSystems (
+                    system:
+                    let
+                      package = self.packages.${system}.default;
+                      outputs = pkgs.lib.subtractLists [
+                        # TODO: NIX-434
+                        "debug"
+                      ] package.outputs;
+                    in
+                    map (output: "${output}=${package.${output}}") outputs
+                  );
+                in
+                builtins.concatStringsSep "\n" (
+                  builtins.attrValues (
+                    builtins.mapAttrs (k: v: "# ${k}: ${builtins.concatStringsSep " " v}") allClosures
+                  )
+                );
+
               closures_json =
                 pkgs.runCommand "versions.json"
                   {
@@ -392,6 +412,7 @@
                     passAsFile = [ "template" ];
                     jsonPath = closures_json;
                     template = ''
+                      ${commentedClosures}
                       builtins.fromJSON('''@closures@''')
                     '';
                   }
