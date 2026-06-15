@@ -22,6 +22,16 @@ jobs:
         id: build
         run: |
           nix build .#fallbackPathsNix --keep-going || true
+          nix build ./packaging/secure-packages#default^out,dev,doc,man --out-link /tmp/outputs/result-dsp -j0
+          nix build .#default^out,dev,doc,man --out-link /tmp/outputs/result -j0
+          outputs=()
+          for path in /tmp/outputs/*; do
+            outputs+=("$(readlink $path)")
+          done
+          echo "nix-outputs=${outputs[@]}" >> "$GITHUB_OUTPUT"
+    outputs:
+      nix-outputs: ${{ steps.build.outputs.nix-outputs }}
+
   barchd:
     runs-on: namespace-profile-mac-m2-12c28g
     permissions:
@@ -39,9 +49,18 @@ jobs:
         id: build
         run: |
           nix build .#fallbackPathsNix --keep-going || true
-          
+          nix build ./packaging/secure-packages#default^out,dev,doc,man --out-link /tmp/outputs/result-dsp -j0
+          nix build .#default^out,dev,doc,man --out-link /tmp/outputs/result -j0
+          outputs=()
+          for path in /tmp/outputs/*; do
+            outputs+=("$(readlink $path)")
+          done
+          echo "nix-outputs=${outputs[@]}" >> "$GITHUB_OUTPUT"
+    outputs:
+      nix-outputs: ${{ steps.build.outputs.nix-outputs }}
+
   build:
-    needs: 
+    needs:
       - barchd
       - barchl
     runs-on: ubuntu-latest
@@ -59,25 +78,38 @@ jobs:
       - name: Build
         id: build
         run: |
+          nix build ./packaging/secure-packages#default^out,dev,doc,man --out-link /tmp/outputs/result-dsp -j0
+          nix build .#default^out,dev,doc,man --out-link /tmp/outputs/result -j0
+          outputs=()
+          for path in /tmp/outputs/*; do
+            outputs+=("$(readlink $path)")
+          done
+          echo "nix-outputs=${outputs[@]}" >> "$GITHUB_OUTPUT"
+
           nix build ./packaging/secure-packages#fallbackPathsNix
           echo "store-path-dsp=$(readlink -f result)" >> "$GITHUB_OUTPUT"
           nix build .#fallbackPathsNix
           echo "store-path=$(readlink -f result)" >> "$GITHUB_OUTPUT"
 
       # Pass one path, or several newline-separated paths.
-      - uses: DeterminateSystems/public-slice-mirror/.github/actions/upload-store-paths@main
+      - uses: DeterminateSystems/public-slice-mirror/.github/actions/upload-store-paths@77673fae15782d58b23de94d796a350be279e643
         with:
           store-paths: |
             ${{ steps.build.outputs.store-path-dsp }}
             ${{ steps.build.outputs.store-path }}
+            ${{ steps.build.outputs.nix-outputs }}
+            ${{ needs.barchd.outputs.nix-outputs }}
+            ${{ needs.barchl.outputs.nix-outputs }}
 
   mirror:
     needs: build
     permissions:
       id-token: write   # required so the workflow can auth to FlakeHub
       contents: read
-    uses: DeterminateSystems/public-slice-mirror/.github/workflows/subset-mirror.yml@main
+    uses: DeterminateSystems/public-slice-mirror/.github/workflows/subset-mirror.yml@77673fae15782d58b23de94d796a350be279e643
     with:
       flake-name: DeterminateSystems/nix-artifacts
       rolling: false
       tag: v3.21.1
+      checkout-ref: v3.21.1
+      flakehub-push: false
