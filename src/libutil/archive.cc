@@ -1,5 +1,7 @@
 #include <cerrno>
 #include <algorithm>
+#include <optional>
+#include <variant>
 #include <vector>
 #include <map>
 
@@ -32,10 +34,11 @@ static ArchiveSettings archiveSettings;
 
 static GlobalConfig::Register rArchiveSettings(&archiveSettings);
 
-/* Maximum directory nesting depth for dumpPath()/parseDump(). Bounds
-   stack usage so deep trees cannot overflow the (possibly coroutine)
-   stack these run on. Chosen to fit comfortably in the default 128 KiB
-   boost coroutine stack. */
+/* Maximum directory nesting depth for parseDump(). Bounds stack usage
+   so a deeply nested (possibly malicious) NAR cannot overflow the
+   (possibly coroutine) stack parsing runs on. Chosen to fit comfortably
+   in the default 128 KiB boost coroutine stack. dumpPath() needs no such
+   limit because it walks the tree iteratively. */
 static constexpr size_t narMaxDepth = 64;
 
 PathFilter defaultPathFilter = [](const std::string &) { return true; };
@@ -55,13 +58,43 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
 
     sink << narVersionMagic1;
 
-    [&, &this_(*this)](this const auto & dump, const CanonPath & path, size_t depth) -> void {
+    /* Walk the tree iteratively rather than recursively, so that a
+       deeply nested directory cannot overflow the (possibly coroutine)
+       stack this runs on. The work stack holds two kinds of items: an
+       Enter visits a node (optionally prefixed by a directory-entry
+       header), and a Leave emits a closing ")". */
+    struct Enter
+    {
+        CanonPath path;
+        /* If set, this node is a directory entry; emit its header first. */
+        std::optional<std::string> name;
+    };
+
+    struct Leave
+    {};
+
+    using Item = std::variant<Enter, Leave>;
+
+    std::vector<Item> stack;
+    stack.push_back(Enter{path, std::nullopt});
+
+    while (!stack.empty()) {
+        auto item = std::move(stack.back());
+        stack.pop_back();
+
+        if (std::holds_alternative<Leave>(item)) {
+            sink << ")";
+            continue;
+        }
+
+        auto & enter = std::get<Enter>(item);
+
         checkInterrupt();
 
-        if (depth >= narMaxDepth)
-            throw Error("path '%s' exceeds maximum NAR directory depth of %d", this_.showPath(path), narMaxDepth);
+        if (enter.name)
+            sink << "entry" << "(" << "name" << *enter.name << "node";
 
-        auto st = this_.lstat(path);
+        auto st = lstat(enter.path);
 
         sink << "(";
 
@@ -69,7 +102,8 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
             sink << "type" << "regular";
             if (st.isExecutable)
                 sink << "executable" << "";
-            dumpContents(path);
+            dumpContents(enter.path);
+            sink << ")";
         }
 
         else if (st.type == tDirectory) {
@@ -78,36 +112,42 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
             /* If we're on a case-insensitive system like macOS, undo
                the case hack applied by restorePath(). */
             StringMap unhacked;
-            for (auto & i : this_.readDirectory(path))
+            for (auto & i : readDirectory(enter.path))
                 if (archiveSettings.useCaseHack) {
                     std::string name(i.first);
                     size_t pos = i.first.find(caseHackSuffix);
                     if (pos != std::string::npos) {
-                        debug("removing case hack suffix from '%s'", path / i.first);
+                        debug("removing case hack suffix from '%s'", enter.path / i.first);
                         name.erase(pos);
                     }
                     if (!unhacked.emplace(name, i.first).second)
                         throw Error(
-                            "file name collision between '%s' and '%s'", (path / unhacked[name]), (path / i.first));
+                            "file name collision between '%s' and '%s'",
+                            (enter.path / unhacked[name]),
+                            (enter.path / i.first));
                 } else
                     unhacked.emplace(i.first, i.first);
 
-            for (auto & i : unhacked)
-                if (filter((path / i.first).abs())) {
-                    sink << "entry" << "(" << "name" << i.first << "node";
-                    dump(path / i.second, depth + 1);
-                    sink << ")";
+            /* Schedule the directory's closing ")", then each entry in
+               reverse order (so they pop in sorted order). Each entry is
+               an Enter (which emits its header and node) followed by a
+               Leave that closes the entry. */
+            stack.push_back(Leave{});
+            for (auto i = unhacked.rbegin(); i != unhacked.rend(); ++i)
+                if (filter((enter.path / i->first).abs())) {
+                    stack.push_back(Leave{});
+                    stack.push_back(Enter{enter.path / i->second, i->first});
                 }
         }
 
-        else if (st.type == tSymlink)
-            sink << "type" << "symlink" << "target" << this_.readLink(path);
+        else if (st.type == tSymlink) {
+            sink << "type" << "symlink" << "target" << readLink(enter.path);
+            sink << ")";
+        }
 
         else
-            throw Error("file '%s' has an unsupported type", path);
-
-        sink << ")";
-    }(path, 0);
+            throw Error("file '%s' has an unsupported type", enter.path);
+    }
 }
 
 time_t dumpPathAndGetMtime(const std::filesystem::path & path, Sink & sink, PathFilter & filter)
