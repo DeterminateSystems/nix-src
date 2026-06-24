@@ -30,6 +30,7 @@ struct NarInfoDiskCache
         int id = 0;
         bool wantMassQuery = false;
         int priority = 0;
+        StringSet features;
     };
 
     /**

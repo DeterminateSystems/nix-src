@@ -71,6 +71,7 @@ void HttpBinaryCacheStore::init()
     if (auto cacheInfo = diskCache->upToDateCacheExists(cacheKey)) {
         config->wantMassQuery.setDefault(cacheInfo->wantMassQuery);
         config->priority.setDefault(cacheInfo->priority);
+        features = cacheInfo->features;
     } else {
         try {
             BinaryCacheStore::init();
@@ -78,7 +79,9 @@ void HttpBinaryCacheStore::init()
             throw Error("'%s' does not appear to be a binary cache", config->cacheUri.to_string());
         }
         diskCache->createCache(
-            cacheKey, config->storeDir, {.wantMassQuery = config->wantMassQuery, .priority = config->priority});
+            cacheKey,
+            config->storeDir,
+            {.wantMassQuery = config->wantMassQuery, .priority = config->priority, .features = features});
     }
 }
 

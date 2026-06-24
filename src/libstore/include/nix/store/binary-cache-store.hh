@@ -84,6 +84,12 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
      */
     Config & config;
 
+    /**
+     * Features advertised by the cache's `nix-cache-info` (e.g.
+     * `get-narinfos-v1`). Discovered at `init()` time.
+     */
+    StringSet features;
+
 private:
     std::vector<std::unique_ptr<Signer>> signers;
 

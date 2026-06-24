@@ -36,12 +36,21 @@ error: binary cache 'https://example.com' is for Nix stores with prefix '/nix/st
 
 Integer. Sets the default for [`priority`](@docroot@/store/types/http-binary-cache-store.md#store-http-binary-cache-store-priority).
 
+### `Features`
+
+A space-separated list of optional protocol features that the cache
+server supports. Clients ignore any feature names they don't
+recognise, and assume no features if the field is absent. This allows
+a client to use server capabilities beyond the basic binary cache
+protocol only when they're available.
+
 ## Example
 
 ```
 StoreDir: /nix/store
 WantMassQuery: 1
 Priority: 30
+Features: foo bar
 ```
 
 ## Caching Behavior

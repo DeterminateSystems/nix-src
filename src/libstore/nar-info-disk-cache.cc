@@ -20,7 +20,8 @@ create table if not exists BinaryCaches (
     timestamp integer not null,
     storeDir  text not null,
     wantMassQuery integer not null,
-    priority  integer not null
+    priority  integer not null,
+    features  text not null
 );
 
 create table if not exists NARs (
@@ -84,7 +85,7 @@ struct NarInfoDiskCacheImpl : NarInfoDiskCache
     NarInfoDiskCacheImpl(
         const Settings & settings,
         SQLiteSettings sqliteSettings,
-        std::filesystem::path dbPath = getCacheDir() / "binary-cache-detsys-v1.sqlite")
+        std::filesystem::path dbPath = getCacheDir() / "binary-cache-detsys-v2.sqlite")
         : NarInfoDiskCache{settings}
     {
         auto state(_state.lock());
@@ -99,11 +100,11 @@ struct NarInfoDiskCacheImpl : NarInfoDiskCache
 
         state->insertCache.create(
             state->db,
-            "insert into BinaryCaches(url, timestamp, storeDir, wantMassQuery, priority) values (?1, ?2, ?3, ?4, ?5) on conflict (url) do update set timestamp = ?2, storeDir = ?3, wantMassQuery = ?4, priority = ?5 returning id;");
+            "insert into BinaryCaches(url, timestamp, storeDir, wantMassQuery, priority, features) values (?1, ?2, ?3, ?4, ?5, ?6) on conflict (url) do update set timestamp = ?2, storeDir = ?3, wantMassQuery = ?4, priority = ?5, features = ?6 returning id;");
 
         state->queryCache.create(
             state->db,
-            "select id, storeDir, wantMassQuery, priority from BinaryCaches where url = ? and timestamp > ?");
+            "select id, storeDir, wantMassQuery, priority, features from BinaryCaches where url = ? and timestamp > ?");
 
         state->insertNAR.create(
             state->db,
@@ -195,6 +196,7 @@ private:
                     .id = (int) queryCache.getInt(0),
                     .wantMassQuery = queryCache.getInt(2) != 0,
                     .priority = (int) queryCache.getInt(3),
+                    .features = tokenizeString<StringSet>(queryCache.getStr(4), " "),
                 }};
             state.caches.emplace(uri, cache);
         }
@@ -223,7 +225,8 @@ public:
                            .apply(time(nullptr))
                            .apply(storeDir)
                            .apply(info.wantMassQuery)
-                           .apply(info.priority));
+                           .apply(info.priority)
+                           .apply(concatStringsSep(" ", info.features)));
                 if (!r.next()) {
                     unreachable();
                 }

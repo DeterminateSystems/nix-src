@@ -68,6 +68,8 @@ void BinaryCacheStore::init()
                 config.wantMassQuery.setDefault(value == "1");
             } else if (name == "Priority") {
                 config.priority.setDefault(std::stoi(value));
+            } else if (name == "Features") {
+                features = tokenizeString<StringSet>(value, " ");
             }
         }
     }
