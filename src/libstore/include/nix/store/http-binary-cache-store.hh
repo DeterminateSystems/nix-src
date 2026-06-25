@@ -84,6 +84,10 @@ public:
 
     StorePaths topoSortPaths(const StorePathSet & paths) override;
 
+    asio::awaitable<void> queryPathInfos(
+        const std::set<StorePath> & paths,
+        fun<void(std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>>)> callback) override;
+
 protected:
 
     std::optional<CompressionAlgo> getCompressionMethod(const std::string & path);

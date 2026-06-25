@@ -44,13 +44,23 @@ recognise, and assume no features if the field is absent. This allows
 a client to use server capabilities beyond the basic binary cache
 protocol only when they're available.
 
+Currently defined features:
+
+- `get-narinfos-v1`: the server accepts a `POST` request to
+  `get-narinfos-v1` whose body is a list of store path hash parts (one
+  per line) and responds with the concatenation of the corresponding
+  `.narinfo` files, separated by empty lines. This lets a client fetch
+  the `.narinfo` files for many paths in a single request instead of
+  one request per path. A path whose `.narinfo` is absent from the
+  response is not available in the cache.
+
 ## Example
 
 ```
 StoreDir: /nix/store
 WantMassQuery: 1
 Priority: 30
-Features: foo bar
+Features: get-narinfos-v1
 ```
 
 ## Caching Behavior
