@@ -32,7 +32,10 @@ static std::string makeNarInfo(Store & store, const ValidPathInfo & info, StoreP
     NarInfo ni(info);
     ni.compression = "none";
     StorePathSet closure;
-    store.computeFSClosure(info.path, closure);
+    try {
+        store.computeFSClosure(info.path, closure);
+    } catch (InvalidPath &) {
+    }
     std::erase_if(closure, [&](const StorePath & p) {
         return p == info.path || info.references.contains(p) || alreadySent.contains(p);
     });
