@@ -5,6 +5,9 @@
 #include "nix/store/nar-info.hh"
 #include "nix/store/realisation.hh"
 
+#include <map>
+#include <string>
+
 namespace nix {
 
 struct SQLiteSettings;
@@ -28,9 +31,14 @@ struct NarInfoDiskCache
     struct CacheInfo
     {
         int id = 0;
-        bool wantMassQuery = false;
-        int priority = 0;
-        StringSet features;
+
+        /**
+         * The `nix-cache-info` fields other than `StoreDir`, stored
+         * verbatim (e.g. `WantMassQuery`, `Priority`, `GetNarInfosV1`).
+         * Keeping these generic means fields we don't (yet) understand
+         * are still recorded.
+         */
+        std::map<std::string, std::string> fields;
     };
 
     /**

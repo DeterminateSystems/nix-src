@@ -36,23 +36,28 @@ error: binary cache 'https://example.com' is for Nix stores with prefix '/nix/st
 
 Integer. Sets the default for [`priority`](@docroot@/store/types/http-binary-cache-store.md#store-http-binary-cache-store-priority).
 
-### `Features`
+### `GetNarInfosV1`
 
-A space-separated list of optional protocol features that the cache
-server supports. Clients ignore any feature names they don't
-recognise, and assume no features if the field is absent. This allows
-a client to use server capabilities beyond the basic binary cache
-protocol only when they're available.
+The path (relative to the cache URL) of an endpoint for fetching
+multiple `.narinfo` files in a single request. If this field is
+present, a client may send a `POST` request to this path whose body is
+a list of store path hash parts (one per line); the server responds
+with the concatenation of the corresponding `.narinfo` files, separated
+by empty lines. This lets a client fetch the `.narinfo` files for many
+paths in one request instead of one request per path. A path whose
+`.narinfo` is absent from the response is not available in the cache.
 
-Currently defined features:
+If the field is absent, the client falls back to fetching each
+`.narinfo` individually.
 
-- `get-narinfos-v1`: the server accepts a `POST` request to
-  `get-narinfos-v1` whose body is a list of store path hash parts (one
-  per line) and responds with the concatenation of the corresponding
-  `.narinfo` files, separated by empty lines. This lets a client fetch
-  the `.narinfo` files for many paths in a single request instead of
-  one request per path. A path whose `.narinfo` is absent from the
-  response is not available in the cache.
+## Other fields
+
+Any field not listed above is stored verbatim in the client's
+[on-disk cache](#caching-behavior) of `nix-cache-info` but is otherwise
+ignored. This keeps the format forward-compatible: a newer server can
+advertise a capability that an older client persists, and a later
+client version can start using it without the server's metadata having
+to be re-fetched.
 
 ## Example
 
@@ -60,7 +65,7 @@ Currently defined features:
 StoreDir: /nix/store
 WantMassQuery: 1
 Priority: 30
-Features: get-narinfos-v1
+GetNarInfosV1: /get-narinfos-v1
 ```
 
 ## Caching Behavior

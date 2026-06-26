@@ -149,7 +149,7 @@ struct CmdServe : StoreCommand
                         "StoreDir: " + store.storeDir + "\n"
                         "WantMassQuery: " + (store.config.wantMassQuery ? "1" : "0") + "\n"
                         "Priority: " + std::to_string(priority.value_or(store.config.priority)) + "\n"
-                        "Features: get-narinfos-v1\n");
+                        "GetNarInfosV1: /get-narinfos-v1\n");
             response.reset(MHD_create_response_from_buffer(body->size(), body->data(), MHD_RESPMEM_MUST_COPY));
             MHD_add_response_header(response.get(), "Content-Type", "text/x-nix-cache-info");
 

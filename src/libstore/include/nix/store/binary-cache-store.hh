@@ -85,10 +85,12 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
     Config & config;
 
     /**
-     * Features advertised by the cache's `nix-cache-info` (e.g.
-     * `get-narinfos-v1`). Discovered at `init()` time.
+     * The endpoint (relative to the cache URL) advertised by the
+     * cache's `nix-cache-info` `GetNarInfosV1` field for fetching
+     * multiple `.narinfo` files in one request, if any. Discovered at
+     * `init()` time.
      */
-    StringSet features;
+    std::optional<std::string> getNarInfosV1;
 
 private:
     std::vector<std::unique_ptr<Signer>> signers;
@@ -103,6 +105,20 @@ protected:
     constexpr const static std::string cacheInfoFile = "nix-cache-info";
 
     BinaryCacheStore(Config &);
+
+    /**
+     * Fetch and parse `nix-cache-info`. Applies the known fields
+     * (`WantMassQuery`, `Priority`, `GetNarInfosV1`, ...) and returns
+     * the remaining non-standard fields verbatim, so that callers can
+     * persist fields we don't (yet) understand.
+     */
+    std::map<std::string, std::string> parseNixCacheInfo();
+
+    /**
+     * Apply the known `nix-cache-info` fields (currently just
+     * `GetNarInfosV1`) from `fields` to this store.
+     */
+    void applyCacheInfoFields(const std::map<std::string, std::string> & fields);
 
     /**
      * Compute the path to the given realisation

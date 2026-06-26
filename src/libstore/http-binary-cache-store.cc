@@ -70,19 +70,16 @@ void HttpBinaryCacheStore::init()
     auto cacheKey = config->getReference().render(/*withParams=*/false);
 
     if (auto cacheInfo = diskCache->upToDateCacheExists(cacheKey)) {
-        config->wantMassQuery.setDefault(cacheInfo->wantMassQuery);
-        config->priority.setDefault(cacheInfo->priority);
-        features = cacheInfo->features;
+        applyCacheInfoFields(cacheInfo->fields);
     } else {
+        std::map<std::string, std::string> fields;
         try {
-            BinaryCacheStore::init();
+            fields = parseNixCacheInfo();
         } catch (UploadToHTTP &) {
             throw Error("'%s' does not appear to be a binary cache", config->cacheUri.to_string());
         }
-        diskCache->createCache(
-            cacheKey,
-            config->storeDir,
-            {.wantMassQuery = config->wantMassQuery, .priority = config->priority, .features = features});
+        applyCacheInfoFields(fields);
+        diskCache->createCache(cacheKey, config->storeDir, {.fields = std::move(fields)});
     }
 }
 
@@ -314,9 +311,10 @@ asio::awaitable<void> HttpBinaryCacheStore::queryPathInfos(
 
     checkEnabled();
 
-    /* Fall back to per-path queries if the server doesn't support the
-       batch endpoint. */
-    if (!features.contains("get-narinfos-v1")) {
+    /* Fall back to per-path queries unless the cache advertises an
+       endpoint for fetching multiple narinfos at once (the path to
+       POST to). */
+    if (!getNarInfosV1) {
         co_await Store::queryPathInfos(paths, std::move(callback));
         co_return;
     }
@@ -346,7 +344,7 @@ asio::awaitable<void> HttpBinaryCacheStore::queryPathInfos(
         body += std::string(path.hashPart()) + "\n";
     StringSource source{body};
 
-    auto request = makeRequest("get-narinfos-v1");
+    auto request = makeRequest(*getNarInfosV1);
     request.method = HttpMethod::Post;
     request.data = {body.size(), source};
     request.mimeType = "text/plain";
@@ -362,14 +360,13 @@ asio::awaitable<void> HttpBinaryCacheStore::queryPathInfos(
     }
 
     /* Parse the concatenated narinfos, indexed by hash part. */
-    auto whence = fmt("%s/get-narinfos-v1", config->getHumanReadableURI());
     std::map<std::string, std::shared_ptr<const NarInfo>, std::less<>> received;
     size_t pos = 0;
     while (pos < result.data.size()) {
         auto end = result.data.find("\n\n", pos);
         auto chunk = result.data.substr(pos, end == std::string::npos ? end : end + 1 - pos);
         pos = end == std::string::npos ? result.data.size() : end + 2;
-        auto narInfo = std::make_shared<NarInfo>(*this, chunk, whence);
+        auto narInfo = std::make_shared<NarInfo>(*this, chunk, request.uri.to_string());
         stats.narInfoRead++;
         received.insert_or_assign(std::string(narInfo->path.hashPart()), std::move(narInfo));
     }
