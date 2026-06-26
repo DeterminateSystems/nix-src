@@ -244,7 +244,6 @@ clearCacheCache
 restartNixServe
 
 nix-build --substituters "$httpBinaryCacheUrl" --no-require-sigs dependencies.nix -o "$TEST_ROOT/result" 2>&1 | tee "$TEST_ROOT/log"
-grepQuiet "don't know how to build" "$TEST_ROOT/log"
 grepQuiet "building.*input-1" "$TEST_ROOT/log"
 grepQuiet "building.*input-2" "$TEST_ROOT/log"
 

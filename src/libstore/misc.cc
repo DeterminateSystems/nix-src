@@ -291,7 +291,7 @@ MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
                         }
 
                         if (knownOutputPaths && settings.getWorkerSettings().useSubstitutes
-                            && drvOptions.substitutesAllowed(settings.getWorkerSettings())) {
+                            && drvOptions.substitutesAllowed(settings.getWorkerSettings()) && !subs.empty()) {
                             for (auto & p : invalid) {
                                 pathsToQuery.insert(p);
                                 outPathsToDrvs[p].insert_or_assign(drvPath, drv);
