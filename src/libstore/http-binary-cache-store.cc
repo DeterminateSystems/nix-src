@@ -350,6 +350,7 @@ asio::awaitable<void> HttpBinaryCacheStore::queryPathInfos(
     request.method = HttpMethod::Post;
     request.data = {body.size(), source};
     request.mimeType = "text/plain";
+    request.activityText = fmt("querying info on %d paths from '%s'", misses.size(), request.uri);
 
     FileTransferResult result;
     try {
