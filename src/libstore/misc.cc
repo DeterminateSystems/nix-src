@@ -327,6 +327,8 @@ MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
 
                     for (auto & [path, info] : infos) {
                         if (info) {
+                            if (!res.willSubstitute.insert(path).second)
+                                continue;
                             res.willSubstitute.insert(path);
                             res.narSize += info->narSize;
 
