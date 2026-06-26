@@ -61,7 +61,7 @@ to be re-fetched.
 
 ## Example
 
-```
+```text
 StoreDir: /nix/store
 WantMassQuery: 1
 Priority: 30
