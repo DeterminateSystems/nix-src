@@ -302,8 +302,12 @@ MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
                     [&](const DerivedPath::Opaque & bo) -> void {
                         // FIXME: this should probably be an async call, but for a local store we probably don't want to
                         // bother.
-                        if (!maybeQueryPathInfo(bo.path))
-                            pathsToQuery.insert(bo.path);
+                        if (!maybeQueryPathInfo(bo.path)) {
+                            if (settings.getWorkerSettings().useSubstitutes && !subs.empty())
+                                pathsToQuery.insert(bo.path);
+                            else
+                                res.unknown.insert(bo.path);
+                        }
                     },
                 },
                 p.raw());
