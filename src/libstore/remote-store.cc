@@ -226,7 +226,6 @@ void RemoteStore::querySubstitutablePathInfos(const StorePathCAMap & pathsMap, S
         info.references = WorkerProto::Serialise<StorePathSet>::read(*this, *conn);
         info.downloadSize = readLongLong(conn->from);
         info.narSize = readLongLong(conn->from);
-        // FIXME: handle partialClosure
     }
 }
 
