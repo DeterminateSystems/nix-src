@@ -34,9 +34,8 @@ struct NarInfoDiskCache
 
         /**
          * The `nix-cache-info` fields other than `StoreDir`, stored
-         * verbatim (e.g. `WantMassQuery`, `Priority`, `GetNarInfosV1`).
-         * Keeping these generic means fields we don't (yet) understand
-         * are still recorded.
+         * verbatim (e.g. `WantMassQuery`).  Keeping these generic
+         * means fields we don't (yet) understand are still recorded.
          */
         std::map<std::string, std::string> fields;
     };
