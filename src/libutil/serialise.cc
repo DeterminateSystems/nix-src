@@ -211,6 +211,9 @@ bool FdSource::hasData()
         return true;
 
     while (true) {
+#ifdef _WIN32
+        /* Windows' fd_set is a bounded handle array, so FD_SET can't
+           overflow; on Unix use poll() since fd may exceed FD_SETSIZE. */
         fd_set fds;
         FD_ZERO(&fds);
         Socket sock = toSocket(fd);
@@ -227,6 +230,20 @@ bool FdSource::hasData()
             throw SysError("polling file descriptor");
         }
         return FD_ISSET(sock, &fds);
+#else
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+
+        auto n = poll(&pfd, 1, 0);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            throw SysError("polling file descriptor");
+        }
+        return n > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR)) != 0;
+#endif
     }
 }
 
@@ -305,6 +322,13 @@ CompressedSource::CompressedSource(RestartableSource & source, CompressionAlgo c
 {
 }
 
+/* 512KiB is a conservative estimate for deeply nested NARs, which are limited
+   to 64 levels. We also tend to allocate rather large buffers on the stack, so
+   we should leave plenty of headroom. Note that no evaluation is supposed to
+   happen on sourceToSink/sinkToSource coroutine stacks (for Boehm GC reasons),
+   which requires much more stack space. */
+static constexpr size_t defaultCoroutineStackSize = 512 * 1024;
+
 std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
 {
     struct SourceToSink : FinishSink
@@ -328,8 +352,9 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
             cur = in;
 
             if (!coro) {
-                coro =
-                    coro_t::push_type(boost::coroutines2::protected_fixedsize_stack(), [&](coro_t::pull_type & yield) {
+                coro = coro_t::push_type(
+                    boost::coroutines2::protected_fixedsize_stack(defaultCoroutineStackSize),
+                    [&](coro_t::pull_type & yield) {
                         LambdaSource source([&](char * out, size_t out_len) {
                             if (cur.empty()) {
                                 yield();
@@ -386,8 +411,9 @@ std::unique_ptr<Source> sinkToSource(fun<void(Sink &)> writer, fun<void()> eof)
         {
             bool hasCoro = coro.has_value();
             if (!hasCoro) {
-                coro =
-                    coro_t::pull_type(boost::coroutines2::protected_fixedsize_stack(), [&](coro_t::push_type & yield) {
+                coro = coro_t::pull_type(
+                    boost::coroutines2::protected_fixedsize_stack(defaultCoroutineStackSize),
+                    [&](coro_t::push_type & yield) {
                         LambdaSink sink([&](std::string_view data) {
                             if (!data.empty()) {
                                 yield(data);

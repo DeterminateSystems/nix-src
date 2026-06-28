@@ -21,9 +21,7 @@ create table if not exists BinaryCaches (
     url       text unique not null,
     timestamp integer not null,
     storeDir  text not null,
-    wantMassQuery integer not null,
-    priority  integer not null,
-    bloomFilterUrl text -- NULL if the cache doesn't advertise a Bloom filter
+    fields    text not null
 );
 
 create table if not exists BloomFilters (
@@ -111,11 +109,10 @@ struct NarInfoDiskCacheImpl : NarInfoDiskCache
 
         state->insertCache.create(
             state->db,
-            "insert into BinaryCaches(url, timestamp, storeDir, wantMassQuery, priority, bloomFilterUrl) values (?1, ?2, ?3, ?4, ?5, ?6) on conflict (url) do update set timestamp = ?2, storeDir = ?3, wantMassQuery = ?4, priority = ?5, bloomFilterUrl = ?6 returning id;");
+            "insert into BinaryCaches(url, timestamp, storeDir, fields) values (?1, ?2, ?3, ?4) on conflict (url) do update set timestamp = ?2, storeDir = ?3, fields = ?4 returning id;");
 
         state->queryCache.create(
-            state->db,
-            "select id, storeDir, wantMassQuery, priority, bloomFilterUrl from BinaryCaches where url = ? and timestamp > ?");
+            state->db, "select id, storeDir, fields from BinaryCaches where url = ? and timestamp > ?");
 
         state->queryBloomFilterETag.create(state->db, "select etag from BloomFilters where cache = ?");
 
@@ -217,9 +214,7 @@ private:
                 .storeDir = queryCache.getStr(1),
                 .info = {
                     .id = (int) queryCache.getInt(0),
-                    .wantMassQuery = queryCache.getInt(2) != 0,
-                    .priority = (int) queryCache.getInt(3),
-                    .bloomFilterUrl = queryCache.isNull(4) ? std::nullopt : std::optional(queryCache.getStr(4)),
+                    .fields = nlohmann::json::parse(queryCache.getStr(2)).get<std::map<std::string, std::string>>(),
                 }};
             state.caches.emplace(uri, cache);
         }
@@ -247,9 +242,7 @@ public:
                            .apply(uri)
                            .apply(time(nullptr))
                            .apply(storeDir)
-                           .apply(info.wantMassQuery)
-                           .apply(info.priority)
-                           .apply(info.bloomFilterUrl.value_or(""), info.bloomFilterUrl.has_value()));
+                           .apply(nlohmann::json(info.fields).dump()));
                 if (!r.next()) {
                     unreachable();
                 }

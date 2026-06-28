@@ -50,8 +50,10 @@ BinaryCacheStore::BinaryCacheStore(Config & config)
     narMagic = sink.s;
 }
 
-void BinaryCacheStore::init()
+std::map<std::string, std::string> BinaryCacheStore::parseNixCacheInfo()
 {
+    std::map<std::string, std::string> fields;
+
     auto cacheInfo = getNixCacheInfo();
     if (!cacheInfo) {
         upsertFile(cacheInfoFile, "StoreDir: " + storeDir + "\n", "text/x-nix-cache-info");
@@ -69,15 +71,33 @@ void BinaryCacheStore::init()
                         config.getHumanReadableURI(),
                         value,
                         storeDir);
-            } else if (name == "WantMassQuery") {
-                config.wantMassQuery.setDefault(value == "1");
-            } else if (name == "Priority") {
-                config.priority.setDefault(std::stoi(value));
-            } else if (name == "BloomFilter") {
-                bloomFilterUrl = value;
+            } else {
+                /* Keep every other field verbatim, including ones we
+                   don't (yet) understand. The known ones are applied
+                   by applyCacheInfoFields(). */
+                fields.insert_or_assign(name, value);
             }
         }
     }
+
+    return fields;
+}
+
+void BinaryCacheStore::applyCacheInfoFields(const std::map<std::string, std::string> & fields)
+{
+    if (auto * value = get(fields, "WantMassQuery"))
+        config.wantMassQuery.setDefault(*value == "1");
+    if (auto * value = get(fields, "Priority")) {
+        if (auto priority = string2Int<int>(*value))
+            config.priority.setDefault(*priority);
+    }
+    if (auto * value = get(fields, "BloomFilter"))
+        bloomFilterUrl = *value;
+}
+
+void BinaryCacheStore::init()
+{
+    applyCacheInfoFields(parseNixCacheInfo());
 }
 
 BinaryCacheStore::ConditionalGetResult

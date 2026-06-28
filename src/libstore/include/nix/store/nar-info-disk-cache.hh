@@ -5,7 +5,8 @@
 #include "nix/store/nar-info.hh"
 #include "nix/store/realisation.hh"
 
-#include <span>
+#include <map>
+#include <string>
 
 namespace nix {
 
@@ -30,9 +31,13 @@ struct NarInfoDiskCache
     struct CacheInfo
     {
         int id = 0;
-        bool wantMassQuery = false;
-        int priority = 0;
-        std::optional<std::string> bloomFilterUrl;
+
+        /**
+         * The `nix-cache-info` fields other than `StoreDir`, stored
+         * verbatim (e.g. `WantMassQuery`).  Keeping these generic
+         * means fields we don't (yet) understand are still recorded.
+         */
+        std::map<std::string, std::string> fields;
     };
 
     /**

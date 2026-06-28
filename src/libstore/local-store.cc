@@ -218,7 +218,7 @@ LocalStore::LocalStore(ref<const Config> config)
 #if HAVE_POSIX_FALLOCATE
             res = posix_fallocate(fd.get(), 0, gcSettings.reservedSize);
 #endif
-            if (res == -1) {
+            if (res != 0) {
                 writeFull(fd.get(), std::string(gcSettings.reservedSize, 'X'));
                 [[gnu::unused]] auto res2 =
 
@@ -402,17 +402,7 @@ LocalStore::LocalStore(ref<const Config> config)
 AutoCloseFD LocalStore::openGCLock()
 {
     auto fnGCLock = config->stateDir.get() / "gc.lock";
-    auto fdGCLock = open(
-        fnGCLock.string().c_str(),
-        O_RDWR | O_CREAT
-#ifndef _WIN32
-            | O_CLOEXEC
-#endif
-        ,
-        0600);
-    if (!fdGCLock)
-        throw SysError("opening global GC lock %1%", PathFmt(fnGCLock));
-    return toDescriptor(fdGCLock);
+    return openLockFile(fnGCLock, /*create=*/true);
 }
 
 void LocalStore::deleteStorePath(const std::filesystem::path & path, uint64_t & bytesFreed, bool isKnownPath)
@@ -1043,6 +1033,7 @@ void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, Repai
 
     auto realPath = toRealPath(info.path);
 
+    // TODO: make repair more safe: write to a temporary location first before renaming/deleting.
     deletePath(realPath);
 
     /* Maybe free up some disk space (before writing the NAR) so that
@@ -1059,19 +1050,19 @@ void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, Repai
 
     auto hashResult = hashSink.finish();
 
-    if (hashResult.hash != info.narHash)
-        throw Error(
-            "hash mismatch importing path '%s';\n  specified: %s\n  got:       %s",
-            printStorePath(info.path),
-            info.narHash.to_string(HashFormat::SRI, true),
-            hashResult.hash.to_string(HashFormat::SRI, true));
-
     if (hashResult.numBytesDigested != info.narSize)
         throw Error(
             "size mismatch importing path '%s';\n  specified: %s\n  got:       %s",
             printStorePath(info.path),
             info.narSize,
             hashResult.numBytesDigested);
+
+    if (hashResult.hash != info.narHash)
+        throw Error(
+            "hash mismatch importing path '%s';\n  specified: %s\n  got:       %s",
+            printStorePath(info.path),
+            info.narHash.to_string(HashFormat::SRI, true),
+            hashResult.hash.to_string(HashFormat::SRI, true));
 
     if (info.ca) {
         auto & specified = *info.ca;
@@ -1247,6 +1238,13 @@ void LocalStore::addMultipleToStore(
 
             auto & info = item->first;
 
+            /* Make sure that the Source object is destroyed when
+               we're done. In particular, a SinkToSource object must
+               be destroyed to ensure that the destructors on its
+               stack frame are run; this includes
+               LegacySSHStore::narFromPath()'s connection lock. */
+            auto source = std::move(item->second);
+
             MaintainCount<decltype(nrRunning)> mc(nrRunning);
             showProgress();
 
@@ -1270,7 +1268,7 @@ void LocalStore::addMultipleToStore(
                 notice("reusing previously unpacked path at '%s'", printStorePath(info.path));
                 act.setExpected(actCopyPath, bytesExpected -= info.narSize);
             } else {
-                doAddToStore(info, *item->second, repair);
+                doAddToStore(info, *source, repair);
                 /* The path has been unpacked, so mark it as such. */
                 writeFile(unpackedMarker, "");
             }
