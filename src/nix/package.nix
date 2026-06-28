@@ -11,6 +11,7 @@
   sentry-native,
 
   libmicrohttpd,
+  fuse3,
 
   # Configuration Options
 
@@ -82,7 +83,9 @@ mkMesonExecutable (finalAttrs: {
     && stdenv.cc.libcxx != null
     && stdenv.cc.libcxx.isLLVM
   ) llvmPackages.libunwind
-  ++ lib.optional enableSentry sentry-native;
+  ++ lib.optional enableSentry sentry-native
+  # FIXME: minimize the fuse3 closure, get rid of util-linux-minimal-2.41.4-bin
+  ++ lib.optional stdenv.hostPlatform.isLinux fuse3;
 
   mesonFlags = [
     (lib.mesonEnable "sentry" enableSentry)

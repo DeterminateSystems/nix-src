@@ -37,6 +37,9 @@ subdir('nix-meson-build-support/windows-version')
 libmicrohttpd = dependency('libmicrohttpd')
 deps_private += libmicrohttpd
 
+fuse3 = dependency('fuse3')
+deps_private += fuse3
+
 configdata = configuration_data()
 
 # The CLI has a more detailed version string than the libraries; see `nixVersion`
@@ -96,6 +99,7 @@ nix_sources = [ config_priv_h ] + files(
   'flake-prefetch-inputs.cc',
   'flake.cc',
   'formatter.cc',
+  'fuse.cc',
   'hash.cc',
   'log.cc',
   'ls.cc',
