@@ -87,6 +87,17 @@ CanonPath CanonPath::removePrefix(const CanonPath & prefix) const
     return CanonPath(unchecked_t(), path.substr(prefix.path.size()));
 }
 
+CanonPath CanonPath::dropPrefix(size_t n) const
+{
+    size_t pos = 0;
+    for (size_t i = 0; i < n; i++) {
+        pos = path.find('/', pos + 1);
+        if (pos == std::string::npos)
+            return root;
+    }
+    return CanonPath(unchecked_t(), path.substr(pos));
+}
+
 void CanonPath::extend(const CanonPath & x)
 {
     if (x.isRoot())

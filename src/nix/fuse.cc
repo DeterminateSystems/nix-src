@@ -54,7 +54,7 @@ struct NixFs
 
     struct Resolved
     {
-        std::shared_ptr<SourceAccessor> accessor;
+        ref<SourceAccessor> accessor;
         CanonPath subPath;
     };
 
@@ -64,13 +64,16 @@ struct NixFs
        the path does not name a store path. */
     std::optional<Resolved> resolve(const CanonPath & path)
     {
-        auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
+        if (path.isRoot())
+            return std::nullopt;
 
-        auto accessor = getAccessor(storePath);
+        auto accessor = getAccessor(StorePath(*path.begin()));
         if (!accessor)
             return std::nullopt;
 
-        return Resolved{std::move(accessor), std::move(subPath)};
+        /* The subpath within the store path is everything after the
+           first component (the store path name). */
+        return Resolved{ref(accessor), path.dropPrefix()};
     }
 
     /* The Nix store is immutable: once a store path exists, its

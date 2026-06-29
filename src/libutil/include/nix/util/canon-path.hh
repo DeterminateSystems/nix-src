@@ -286,6 +286,14 @@ public:
     CanonPath removePrefix(const CanonPath & prefix) const;
 
     /**
+     * Return this path with its first `n` components removed. For
+     * instance, `CanonPath("/foo/bar/baz").dropPrefix(2)` is
+     * `CanonPath("/baz")`. Returns the root if `n` is greater than or
+     * equal to the number of components.
+     */
+    CanonPath dropPrefix(size_t n = 1) const;
+
+    /**
      * Append another path to this one.
      */
     void extend(const CanonPath & x);
