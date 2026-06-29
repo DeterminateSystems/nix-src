@@ -1,6 +1,7 @@
 #include "nix/cmd/command.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
+#include "nix/util/canon-path.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/signals.hh"
 
@@ -46,13 +47,13 @@ struct NixFs
         return fuse_get_context()->private_data;
     }
 
-    int getattr(const char * path, struct stat * st, struct fuse_file_info *)
+    int getattr(const CanonPath & path, struct stat * st, struct fuse_file_info *)
     {
         debug("getattr: %s", path);
 
         memset(st, 0, sizeof(*st));
 
-        if (strcmp(path, "/") == 0) {
+        if (path.isRoot()) {
             st->st_mode = S_IFDIR | 0555;
             st->st_nlink = 2;
             return 0;
@@ -62,7 +63,7 @@ struct NixFs
     }
 
     int readdir(
-        const char * path,
+        const CanonPath & path,
         void * buf,
         fuse_fill_dir_t filler,
         off_t off,
@@ -71,7 +72,7 @@ struct NixFs
     {
         debug("readdir: %s", path);
 
-        if (strcmp(path, "/") != 0)
+        if (!path.isRoot())
             return -ENOENT;
 
         filler(buf, ".", nullptr, 0, (fuse_fill_dir_flags) 0);
@@ -95,7 +96,7 @@ NixFs & getNixFs()
 
 const fuse_operations nixfsOps = {
     .getattr = [](const char * path, struct stat * st, struct fuse_file_info * info) -> int {
-        return getNixFs().getattr(path, st, info);
+        return getNixFs().getattr(CanonPath(path), st, info);
     },
     .readdir = [](const char * path,
                   void * buf,
@@ -103,7 +104,7 @@ const fuse_operations nixfsOps = {
                   off_t off,
                   struct fuse_file_info * info,
                   enum fuse_readdir_flags flags) -> int {
-        return getNixFs().readdir(path, buf, filler, off, info, flags);
+        return getNixFs().readdir(CanonPath(path), buf, filler, off, info, flags);
     },
     .init = [](struct fuse_conn_info * conn, struct fuse_config * cfg) -> void * {
         return getNixFs().init(conn, cfg);
