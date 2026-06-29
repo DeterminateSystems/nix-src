@@ -21,10 +21,11 @@ struct MountedSourceAccessorImpl : MountedSourceAccessor
         // FIXME: return dummy parent directories automatically?
     }
 
-    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override
+    void readFile(
+        const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback, uint64_t offset, uint64_t len) override
     {
         auto [accessor, subpath] = resolve(path);
-        return accessor->readFile(subpath, sink, sizeCallback);
+        return accessor->readFile(subpath, sink, sizeCallback, offset, len);
     }
 
     Stat lstat(const CanonPath & path) override

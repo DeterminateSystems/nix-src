@@ -14,11 +14,12 @@ struct UnionSourceAccessor : SourceAccessor
         displayPrefix.clear();
     }
 
-    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override
+    void readFile(
+        const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback, uint64_t offset, uint64_t len) override
     {
         for (const auto & [last, accessor] : markLast(accessors))
             if (last || accessor->maybeLstat(path)) {
-                accessor->readFile(path, sink, sizeCallback);
+                accessor->readFile(path, sink, sizeCallback, offset, len);
                 return;
             }
         throw FileNotFound("path '%s' does not exist", showPath(path));

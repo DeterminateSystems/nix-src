@@ -75,10 +75,11 @@ struct LocalStoreAccessor : PosixSourceAccessor
         return PosixSourceAccessor::readDirectory(path);
     }
 
-    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override
+    void readFile(
+        const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback, uint64_t offset, uint64_t len) override
     {
         requireStoreObject(path);
-        return PosixSourceAccessor::readFile(path, sink, sizeCallback);
+        return PosixSourceAccessor::readFile(path, sink, sizeCallback, offset, len);
     }
 
     std::string readLink(const CanonPath & path) override

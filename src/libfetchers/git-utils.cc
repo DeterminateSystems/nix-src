@@ -825,7 +825,13 @@ struct GitSourceAccessor : SourceAccessor
         fingerprint = options.makeFingerprint(rev);
     }
 
-    void readBlob(const CanonPath & path, bool symlink, Sink & sink, std::function<void(uint64_t)> sizeCallback)
+    void readBlob(
+        const CanonPath & path,
+        bool symlink,
+        Sink & sink,
+        std::function<void(uint64_t)> sizeCallback,
+        uint64_t offset = 0,
+        uint64_t len = std::numeric_limits<uint64_t>::max())
     {
         auto state(state_.lock());
 
@@ -845,21 +851,20 @@ struct GitSourceAccessor : SourceAccessor
                     throw;
                 }
                 sizeCallback(s.s.size());
-                StringSource source{s.s};
-                source.drainInto(sink);
+                sink(std::string_view(s.s).substr(std::min<uint64_t>(offset, s.s.size()), len));
                 return;
             }
         }
 
         auto view = std::string_view((const char *) git_blob_rawcontent(blob.get()), git_blob_rawsize(blob.get()));
         sizeCallback(view.size());
-        StringSource source{view};
-        source.drainInto(sink);
+        sink(view.substr(std::min<uint64_t>(offset, view.size()), len));
     }
 
-    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override
+    void readFile(
+        const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback, uint64_t offset, uint64_t len) override
     {
-        return readBlob(path, false, sink, sizeCallback);
+        return readBlob(path, false, sink, sizeCallback, offset, len);
     }
 
     bool pathExists(const CanonPath & path) override

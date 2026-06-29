@@ -114,7 +114,8 @@ struct NarAccessorImpl : NarAccessor
         return res;
     }
 
-    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override
+    void readFile(
+        const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback, uint64_t offset, uint64_t len) override
     {
         auto & i = get(path);
         auto * reg = std::get_if<NarListing::Regular>(&i.raw);
@@ -122,8 +123,15 @@ struct NarAccessorImpl : NarAccessor
             throw Error("path '%1%' inside NAR file is not a regular file", path);
 
         assert(getNarBytes);
-        sizeCallback(reg->contents.fileSize.value());
-        return getNarBytes(reg->contents.narOffset.value(), reg->contents.fileSize.value(), sink);
+
+        auto fileSize = reg->contents.fileSize.value();
+
+        sizeCallback(fileSize);
+
+        /* Clamp the requested range to the actual file size. */
+        auto start = std::min(offset, fileSize);
+        auto n = std::min(len, fileSize - start);
+        return getNarBytes(reg->contents.narOffset.value() + start, n, sink);
     }
 
     std::string readLink(const CanonPath & path) override

@@ -39,7 +39,8 @@ std::filesystem::path PosixSourceAccessor::makeAbsPath(const CanonPath & path)
                            : root / path.rel();
 }
 
-void PosixSourceAccessor::readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback)
+void PosixSourceAccessor::readFile(
+    const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback, uint64_t offset, uint64_t len)
 {
     assertNoSymlinks(path);
 
@@ -63,7 +64,11 @@ void PosixSourceAccessor::readFile(const CanonPath & path, Sink & sink, fun<void
 
     sizeCallback(size);
 
-    drainFD(fd.get(), sink, {.expectedSize = size});
+    /* Clamp the requested range to the actual file size. */
+    auto start = std::min<uint64_t>(offset, size);
+    auto n = std::min<uint64_t>(len, size - start);
+
+    copyFdRange(fd.get(), static_cast<off_t>(start), static_cast<size_t>(n), sink);
 }
 
 bool PosixSourceAccessor::pathExists(const CanonPath & path)

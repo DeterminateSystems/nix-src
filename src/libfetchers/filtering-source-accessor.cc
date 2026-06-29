@@ -11,10 +11,11 @@ std::optional<std::filesystem::path> FilteringSourceAccessor::getPhysicalPath(co
     return next->getPhysicalPath(prefix / path);
 }
 
-void FilteringSourceAccessor::readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback)
+void FilteringSourceAccessor::readFile(
+    const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback, uint64_t offset, uint64_t len)
 {
     checkAccess(path);
-    return next->readFile(prefix / path, sink, sizeCallback);
+    return next->readFile(prefix / path, sink, sizeCallback, offset, len);
 }
 
 bool FilteringSourceAccessor::pathExists(const CanonPath & path)

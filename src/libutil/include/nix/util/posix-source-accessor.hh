@@ -31,7 +31,8 @@ public:
      */
     time_t mtime = 0;
 
-    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override;
+    void readFile(
+        const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback, uint64_t offset, uint64_t len) override;
 
     using SourceAccessor::readFile;
 

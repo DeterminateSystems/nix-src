@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <limits>
 
 #include "nix/util/canon-path.hh"
 #include "nix/util/fun.hh"
@@ -67,9 +68,11 @@ struct SourceAccessor : std::enable_shared_from_this<SourceAccessor>
     std::string readFile(const CanonPath & path);
 
     /**
-     * Write the contents of a file as a sink. `sizeCallback` must be
-     * called with the size of the file before any data is written to
-     * the sink.
+     * Write the contents of a file as a sink. `sizeCallback` is called
+     * with the full size of the file before any data is written.
+     *
+     * Only the byte range `[offset, offset + len)` is written, clamped
+     * to the size of the file. By default the whole file is written.
      *
      * @note Like the other `readFile`, this method should *not* follow
      * symlinks.
@@ -77,8 +80,12 @@ struct SourceAccessor : std::enable_shared_from_this<SourceAccessor>
      * @note subclasses of `SourceAccessor` need to implement at least
      * one of the `readFile()` variants.
      */
-    virtual void
-    readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback = [](uint64_t size) {}) = 0;
+    virtual void readFile(
+        const CanonPath & path,
+        Sink & sink,
+        fun<void(uint64_t)> sizeCallback = [](uint64_t size) {},
+        uint64_t offset = 0,
+        uint64_t len = std::numeric_limits<uint64_t>::max()) = 0;
 
     virtual bool pathExists(const CanonPath & path);
 

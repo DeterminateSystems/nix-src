@@ -18,9 +18,10 @@ struct ForwardingSourceAccessor : SourceAccessor
     {
     }
 
-    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override
+    void readFile(
+        const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback, uint64_t offset, uint64_t len) override
     {
-        next->readFile(path, sink, sizeCallback);
+        next->readFile(path, sink, sizeCallback, offset, len);
     }
 
     std::optional<Stat> maybeLstat(const CanonPath & path) override

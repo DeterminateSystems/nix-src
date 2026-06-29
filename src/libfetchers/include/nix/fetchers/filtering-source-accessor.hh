@@ -36,7 +36,8 @@ struct FilteringSourceAccessor : SourceAccessor
 
     using SourceAccessor::readFile;
 
-    void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override;
+    void readFile(
+        const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback, uint64_t offset, uint64_t len) override;
 
     bool pathExists(const CanonPath & path) override;
 
