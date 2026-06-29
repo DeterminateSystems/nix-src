@@ -21,6 +21,31 @@ struct NixFs
 {
     ref<Store> store;
 
+    /* The Nix store is immutable: once a store path exists, its
+       contents and metadata never change. So we let the kernel cache
+       name lookups, file attributes and file data indefinitely,
+       avoiding round-trips into this filesystem for data we've already
+       served.
+
+       Negative lookups are deliberately *not* cached: a store path that
+       is absent now may appear later (e.g. after a build or an
+       on-demand substitution), so caching its absence would hide it. */
+    void * init(struct fuse_conn_info *, struct fuse_config * cfg)
+    {
+        /* ~100 years; effectively forever. */
+        constexpr double forever = 100.0 * 365 * 24 * 60 * 60;
+        cfg->entry_timeout = forever;
+        cfg->attr_timeout = forever;
+        cfg->negative_timeout = 0;
+
+        /* Keep file data in the kernel page cache across opens instead
+           of dropping it each time a file is (re)opened. */
+        cfg->kernel_cache = 1;
+
+        /* Preserve the `private_data` we passed to `fuse_new`. */
+        return fuse_get_context()->private_data;
+    }
+
     int getattr(const char * path, struct stat * st, struct fuse_file_info *)
     {
         debug("getattr: %s", path);
@@ -79,6 +104,9 @@ const fuse_operations nixfsOps = {
                   struct fuse_file_info * info,
                   enum fuse_readdir_flags flags) -> int {
         return getNixFs().readdir(path, buf, filler, off, info, flags);
+    },
+    .init = [](struct fuse_conn_info * conn, struct fuse_config * cfg) -> void * {
+        return getNixFs().init(conn, cfg);
     }};
 } // namespace
 
