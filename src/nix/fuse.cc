@@ -365,6 +365,8 @@ struct CmdFuse : StoreCommand
 
     void run(ref<Store> store) override
     {
+        logger->stop();
+
         struct fuse_args args = FUSE_ARGS_INIT(0, nullptr);
         Finally freeArgs([&]() { fuse_opt_free_args(&args); });
         /* Mount read-only: the store is immutable, so the kernel rejects
