@@ -3,6 +3,7 @@
 #include "nix/store/store-api.hh"
 #include "nix/util/canon-path.hh"
 #include "nix/util/lru-cache.hh"
+#include "nix/util/serialise.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/finally.hh"
@@ -197,18 +198,13 @@ struct NixFs
         return 0;
     }
 
-    /* State for an open file. Stashed in `fuse_file_info::fh` by
-       `open()` and freed by `release()`. We read the whole file into
-       memory on open and serve `read()` requests from there, so a file
-       opened and read in many chunks is only fetched once.
-
-       FIXME: this buffers the entire file in memory, which is wasteful
-       for large files that are only partially read. In the future we
-       should extend `SourceAccessor` to read a byte range, and serve
-       `read()` requests directly from the accessor. */
+    /* State for an open file: the resolved accessor and subpath, stashed
+       in `fuse_file_info::fh` by `open()` and freed by `release()`. Each
+       `read()` fetches only the requested byte range from the accessor,
+       so we never buffer the whole file. */
     struct FileHandle
     {
-        std::string data;
+        Resolved resolved;
     };
 
     int open(const CanonPath & path, struct fuse_file_info * fi)
@@ -219,9 +215,8 @@ struct NixFs
             auto resolved = resolve(path);
             if (!resolved)
                 return -ENOENT;
-            auto & [accessor, subPath] = *resolved;
 
-            auto stat = accessor->maybeLstat(subPath);
+            auto stat = resolved->accessor->maybeLstat(resolved->subPath);
             if (!stat)
                 return -ENOENT;
             if (stat->type == SourceAccessor::tDirectory)
@@ -229,8 +224,7 @@ struct NixFs
             if (stat->type != SourceAccessor::tRegular)
                 return -EINVAL;
 
-            auto fh = std::make_unique<FileHandle>();
-            fh->data = accessor->readFile(subPath);
+            auto fh = std::make_unique<FileHandle>(std::move(*resolved));
             fi->fh = reinterpret_cast<uint64_t>(fh.release());
         } catch (BadStorePath &) {
             return -ENOENT;
@@ -251,12 +245,23 @@ struct NixFs
 
         if (offset < 0)
             return -EINVAL;
-        if ((size_t) offset >= fh->data.size())
-            return 0;
 
-        auto n = std::min(size, fh->data.size() - (size_t) offset);
-        memcpy(buf, fh->data.data() + offset, n);
-        return n;
+        try {
+            /* Fetch only the requested range, writing each chunk
+               directly into `buf`. */
+            size_t n = 0;
+            LambdaSink sink([&](std::string_view data) {
+                assert(n + data.size() <= size);
+                memcpy(buf + n, data.data(), data.size());
+                n += data.size();
+            });
+            fh->resolved.accessor->readFile(
+                fh->resolved.subPath, sink, [](uint64_t) {}, (uint64_t) offset, (uint64_t) size);
+
+            return n;
+        } catch (...) {
+            return -EIO;
+        }
     }
 
     int release(const CanonPath & path, struct fuse_file_info * fi)
