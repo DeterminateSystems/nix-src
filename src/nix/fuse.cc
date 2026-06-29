@@ -52,6 +52,27 @@ struct NixFs
         return accessor;
     }
 
+    struct Resolved
+    {
+        std::shared_ptr<SourceAccessor> accessor;
+        CanonPath subPath;
+    };
+
+    /* Resolve a mount-relative path (`/<hash>-<name>/<sub>`) to the FS
+       accessor for its store path and the subpath within it. Returns
+       nullopt if the store path is not valid. Throws `BadStorePath` if
+       the path does not name a store path. */
+    std::optional<Resolved> resolve(const CanonPath & path)
+    {
+        auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
+
+        auto accessor = getAccessor(storePath);
+        if (!accessor)
+            return std::nullopt;
+
+        return Resolved{std::move(accessor), std::move(subPath)};
+    }
+
     /* The Nix store is immutable: once a store path exists, its
        contents and metadata never change. So we let the kernel cache
        name lookups, file attributes and file data indefinitely,
@@ -92,11 +113,10 @@ struct NixFs
         try {
             /* Map the mount-relative path (`/<hash>-<name>/<sub>`) to a
                real store path and a subpath within it. */
-            auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
-
-            auto accessor = getAccessor(storePath);
-            if (!accessor)
+            auto resolved = resolve(path);
+            if (!resolved)
                 return -ENOENT;
+            auto & [accessor, subPath] = *resolved;
 
             auto stat = accessor->maybeLstat(subPath);
             if (!stat)
@@ -145,11 +165,10 @@ struct NixFs
             return -EINVAL;
 
         try {
-            auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
-
-            auto accessor = getAccessor(storePath);
-            if (!accessor)
+            auto resolved = resolve(path);
+            if (!resolved)
                 return -ENOENT;
+            auto & [accessor, subPath] = *resolved;
 
             auto stat = accessor->maybeLstat(subPath);
             if (!stat)
@@ -194,11 +213,10 @@ struct NixFs
         debug("open: %s", path);
 
         try {
-            auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
-
-            auto accessor = getAccessor(storePath);
-            if (!accessor)
+            auto resolved = resolve(path);
+            if (!resolved)
                 return -ENOENT;
+            auto & [accessor, subPath] = *resolved;
 
             auto stat = accessor->maybeLstat(subPath);
             if (!stat)
@@ -268,11 +286,10 @@ struct NixFs
             } else {
                 /* A subdirectory within (or the top level of) a store
                    path. */
-                auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
-
-                auto accessor = getAccessor(storePath);
-                if (!accessor)
+                auto resolved = resolve(path);
+                if (!resolved)
                     return -ENOENT;
+                auto & [accessor, subPath] = *resolved;
 
                 for (auto & [name, type] : accessor->readDirectory(subPath))
                     filler(buf, name.c_str(), nullptr, 0, (fuse_fill_dir_flags) 0);
