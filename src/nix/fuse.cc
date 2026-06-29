@@ -2,6 +2,7 @@
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/canon-path.hh"
+#include "nix/util/source-accessor.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/signals.hh"
 
@@ -10,6 +11,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
 
 using namespace nix;
 
@@ -59,7 +61,166 @@ struct NixFs
             return 0;
         }
 
-        return -ENOENT;
+        try {
+            /* Map the mount-relative path (`/<hash>-<name>/<sub>`) to a
+               real store path and a subpath within it. */
+            auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
+
+            auto accessor = store->getFSAccessor(storePath);
+            if (!accessor)
+                return -ENOENT;
+
+            auto stat = accessor->maybeLstat(subPath);
+            if (!stat)
+                return -ENOENT;
+
+            switch (stat->type) {
+            case SourceAccessor::tRegular:
+                st->st_mode = S_IFREG | (stat->isExecutable ? 0555 : 0444);
+                st->st_nlink = 1;
+                if (stat->fileSize)
+                    st->st_size = *stat->fileSize;
+                break;
+            case SourceAccessor::tDirectory:
+                st->st_mode = S_IFDIR | 0555;
+                st->st_nlink = 2;
+                break;
+            case SourceAccessor::tSymlink:
+                st->st_mode = S_IFLNK | 0777;
+                st->st_nlink = 1;
+                /* For a symlink, `st_size` is the length of the target. */
+                st->st_size = accessor->readLink(subPath).size();
+                break;
+            case SourceAccessor::tChar:
+            case SourceAccessor::tBlock:
+            case SourceAccessor::tSocket:
+            case SourceAccessor::tFifo:
+            case SourceAccessor::tUnknown:
+                /* These cannot occur in a NAR-serialised store object. */
+                return -EIO;
+            }
+        } catch (BadStorePath &) {
+            /* The path doesn't name a valid store path. */
+            return -ENOENT;
+        } catch (...) {
+            return -EIO;
+        }
+
+        return 0;
+    }
+
+    int readlink(const CanonPath & path, char * buf, size_t size)
+    {
+        debug("readlink: %s", path);
+
+        if (path.isRoot())
+            return -EINVAL;
+
+        try {
+            auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
+
+            auto accessor = store->getFSAccessor(storePath);
+            if (!accessor)
+                return -ENOENT;
+
+            auto stat = accessor->maybeLstat(subPath);
+            if (!stat)
+                return -ENOENT;
+            if (stat->type != SourceAccessor::tSymlink)
+                return -EINVAL;
+
+            auto target = accessor->readLink(subPath);
+
+            /* Copy the target into the buffer, truncating if it doesn't
+               fit. `size` includes space for the terminating null. */
+            if (size == 0)
+                return 0;
+            auto n = std::min(target.size(), size - 1);
+            memcpy(buf, target.data(), n);
+            buf[n] = '\0';
+        } catch (BadStorePath &) {
+            return -ENOENT;
+        } catch (...) {
+            return -EIO;
+        }
+
+        return 0;
+    }
+
+    /* State for an open file. Stashed in `fuse_file_info::fh` by
+       `open()` and freed by `release()`. We read the whole file into
+       memory on open and serve `read()` requests from there, so a file
+       opened and read in many chunks is only fetched once.
+
+       FIXME: this buffers the entire file in memory, which is wasteful
+       for large files that are only partially read. In the future we
+       should extend `SourceAccessor` to read a byte range, and serve
+       `read()` requests directly from the accessor. */
+    struct FileHandle
+    {
+        std::string data;
+    };
+
+    int open(const CanonPath & path, struct fuse_file_info * fi)
+    {
+        debug("open: %s", path);
+
+        /* This is a read-only filesystem. */
+        if ((fi->flags & O_ACCMODE) != O_RDONLY)
+            return -EROFS;
+
+        try {
+            auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
+
+            auto accessor = store->getFSAccessor(storePath);
+            if (!accessor)
+                return -ENOENT;
+
+            auto stat = accessor->maybeLstat(subPath);
+            if (!stat)
+                return -ENOENT;
+            if (stat->type == SourceAccessor::tDirectory)
+                return -EISDIR;
+            if (stat->type != SourceAccessor::tRegular)
+                return -EINVAL;
+
+            auto fh = std::make_unique<FileHandle>();
+            fh->data = accessor->readFile(subPath);
+            fi->fh = reinterpret_cast<uint64_t>(fh.release());
+        } catch (BadStorePath &) {
+            return -ENOENT;
+        } catch (...) {
+            return -EIO;
+        }
+
+        return 0;
+    }
+
+    int read(const CanonPath & path, char * buf, size_t size, off_t offset, struct fuse_file_info * fi)
+    {
+        debug("read: %s (size=%d, offset=%d)", path, size, offset);
+
+        auto * fh = reinterpret_cast<FileHandle *>(fi->fh);
+        if (!fh)
+            return -EIO;
+
+        if (offset < 0)
+            return -EINVAL;
+        if ((size_t) offset >= fh->data.size())
+            return 0;
+
+        auto n = std::min(size, fh->data.size() - (size_t) offset);
+        memcpy(buf, fh->data.data() + offset, n);
+        return n;
+    }
+
+    int release(const CanonPath & path, struct fuse_file_info * fi)
+    {
+        debug("release: %s", path);
+
+        delete reinterpret_cast<FileHandle *>(fi->fh);
+        fi->fh = 0;
+        return 0;
     }
 
     int readdir(
@@ -72,15 +233,28 @@ struct NixFs
     {
         debug("readdir: %s", path);
 
-        if (!path.isRoot())
-            return -ENOENT;
-
         filler(buf, ".", nullptr, 0, (fuse_fill_dir_flags) 0);
         filler(buf, "..", nullptr, 0, (fuse_fill_dir_flags) 0);
 
         try {
-            for (auto & storePath : store->queryAllValidPaths())
-                filler(buf, std::string(storePath.to_string()).c_str(), nullptr, 0, (fuse_fill_dir_flags) 0);
+            if (path.isRoot()) {
+                /* The root lists every valid store path. */
+                for (auto & storePath : store->queryAllValidPaths())
+                    filler(buf, std::string(storePath.to_string()).c_str(), nullptr, 0, (fuse_fill_dir_flags) 0);
+            } else {
+                /* A subdirectory within (or the top level of) a store
+                   path. */
+                auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
+
+                auto accessor = store->getFSAccessor(storePath);
+                if (!accessor)
+                    return -ENOENT;
+
+                for (auto & [name, type] : accessor->readDirectory(subPath))
+                    filler(buf, name.c_str(), nullptr, 0, (fuse_fill_dir_flags) 0);
+            }
+        } catch (BadStorePath &) {
+            return -ENOENT;
         } catch (...) {
             return -EIO;
         }
@@ -97,6 +271,16 @@ NixFs & getNixFs()
 const fuse_operations nixfsOps = {
     .getattr = [](const char * path, struct stat * st, struct fuse_file_info * info) -> int {
         return getNixFs().getattr(CanonPath(path), st, info);
+    },
+    .readlink = [](const char * path, char * buf, size_t size) -> int {
+        return getNixFs().readlink(CanonPath(path), buf, size);
+    },
+    .open = [](const char * path, struct fuse_file_info * fi) -> int { return getNixFs().open(CanonPath(path), fi); },
+    .read = [](const char * path, char * buf, size_t size, off_t offset, struct fuse_file_info * fi) -> int {
+        return getNixFs().read(CanonPath(path), buf, size, offset, fi);
+    },
+    .release = [](const char * path, struct fuse_file_info * fi) -> int {
+        return getNixFs().release(CanonPath(path), fi);
     },
     .readdir = [](const char * path,
                   void * buf,
