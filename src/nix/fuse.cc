@@ -13,7 +13,6 @@
 
 #include <cerrno>
 #include <cstring>
-#include <fcntl.h>
 
 using namespace nix;
 
@@ -194,10 +193,6 @@ struct NixFs
     {
         debug("open: %s", path);
 
-        /* This is a read-only filesystem. */
-        if ((fi->flags & O_ACCMODE) != O_RDONLY)
-            return -EROFS;
-
         try {
             auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
 
@@ -347,8 +342,11 @@ struct CmdFuse : StoreCommand
     {
         struct fuse_args args = FUSE_ARGS_INIT(0, nullptr);
         Finally freeArgs([&]() { fuse_opt_free_args(&args); });
-        if (fuse_opt_add_arg(&args, "nix") != 0)
-            throw Error("could not set up FUSE arguments");
+        /* Mount read-only: the store is immutable, so the kernel rejects
+           any modifying operation with EROFS at the VFS layer. */
+        for (auto arg : {"nix", "-o", "ro"})
+            if (fuse_opt_add_arg(&args, arg) != 0)
+                throw Error("could not set up FUSE arguments");
 
         NixFs nixfs{.store = store};
 
