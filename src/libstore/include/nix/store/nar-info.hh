@@ -61,6 +61,19 @@ struct NarInfo : ValidPathInfo, UnkeyedNarInfo
     {
     }
 
+    /**
+     * Combine the unkeyed NAR info with its store path. Used to
+     * reconstruct a `NarInfo` from its JSON representation.
+     */
+    NarInfo(UnkeyedNarInfo info, StorePath path)
+        : UnkeyedValidPathInfo{static_cast<UnkeyedValidPathInfo &&>(info)}
+        /* As in `NarInfo(ValidPathInfo)`, only this most-derived
+           constructor initializes the virtual base. */
+        , ValidPathInfo{std::move(path), static_cast<const UnkeyedValidPathInfo &>(*this)}
+        , UnkeyedNarInfo{std::move(info)}
+    {
+    }
+
     NarInfo(const StoreDirConfig & store, StorePath path, Hash narHash)
         : NarInfo{ValidPathInfo{std::move(path), UnkeyedValidPathInfo{store, narHash}}}
     {
@@ -82,6 +95,21 @@ struct NarInfo : ValidPathInfo, UnkeyedNarInfo
     bool operator==(const NarInfo &) const = default;
 
     std::string to_string(const StoreDirConfig & store) const;
+
+    using UnkeyedNarInfo::toJSON;
+
+    /**
+     * Like `UnkeyedNarInfo::toJSON()`, but also includes the store
+     * path (as a `"path"` field), so the result is self-describing.
+     * Always uses the V2 JSON format.
+     */
+    nlohmann::json toJSON(const StoreDirConfig & store, bool includeImpureInfo) const;
+
+    /**
+     * Inverse of `toJSON()`: reconstruct a keyed `NarInfo` (including
+     * its store path) from JSON. Only the V2 format is supported.
+     */
+    static NarInfo fromJSON(const StoreDirConfig & store, const nlohmann::json & json);
 };
 
 } // namespace nix

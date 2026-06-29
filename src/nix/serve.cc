@@ -5,6 +5,8 @@
 #include "nix/util/deleter.hh"
 #include "nix/util/strings.hh"
 #include "nix/store/nar-info.hh"
+
+#include <nlohmann/json.hpp>
 #include "nix/store/binary-cache-store.hh"
 #include "nix/store/log-store.hh"
 #include "nix/util/environment-variables.hh"
@@ -27,7 +29,7 @@ using Response = std::unique_ptr<MHD_Response, Deleter<MHD_destroy_response>>;
  * call. The references and hint of this narinfo are added to
  * `alreadySent` in turn.
  */
-static std::string makeNarInfo(Store & store, const ValidPathInfo & info, StorePathSet & alreadySent)
+static NarInfo makeNarInfo(Store & store, const ValidPathInfo & info, StorePathSet & alreadySent)
 {
     NarInfo ni(info);
     ni.compression = "none";
@@ -46,7 +48,7 @@ static std::string makeNarInfo(Store & store, const ValidPathInfo & info, StoreP
     ni.url =
         "nar/" + std::string(info.path.hashPart()) + "-" + info.narHash.to_string(HashFormat::Nix32, false) + ".nar";
     ni.fileSize = info.narSize;
-    return ni.to_string(store);
+    return ni;
 }
 
 struct CmdServe : StoreCommand
@@ -164,7 +166,7 @@ struct CmdServe : StoreCommand
 
             auto info = store.queryPathInfo(*path);
             StorePathSet alreadySent;
-            auto body = makeNarInfo(store, *info, alreadySent);
+            auto body = makeNarInfo(store, *info, alreadySent).to_string(store);
             response.reset(MHD_create_response_from_buffer(body.size(), body.data(), MHD_RESPMEM_MUST_COPY));
             MHD_add_response_header(response.get(), "Content-Type", "text/x-nix-narinfo");
 
@@ -178,23 +180,22 @@ struct CmdServe : StoreCommand
                     queried.insert(*path);
             }
 
-            /* Concatenate the narinfos of the valid paths, separated
-               by empty lines. The absence of a narinfo denotes that
-               the path is invalid. */
+            /* Return the narinfo of each valid path as a JSON object,
+               one per line (newline-delimited JSON). The absence of a
+               path from the response denotes that it is invalid. */
             auto alreadySent = queried;
             std::string res;
             for (auto & path : queried) {
                 try {
                     auto info = store.queryPathInfo(path);
-                    if (!res.empty())
-                        res += "\n";
-                    res += makeNarInfo(store, *info, alreadySent);
+                    res += makeNarInfo(store, *info, alreadySent).toJSON(store, true).dump();
+                    res += "\n";
                 } catch (InvalidPath &) {
                 }
             }
 
             response.reset(MHD_create_response_from_buffer(res.size(), res.data(), MHD_RESPMEM_MUST_COPY));
-            MHD_add_response_header(response.get(), "Content-Type", "text/x-nix-narinfo");
+            MHD_add_response_header(response.get(), "Content-Type", "application/x-ndjson");
 
         } else if (std::smatch m; std::regex_match(url, m, narUrlRegex)) {
             auto hashPart = m[1].str();

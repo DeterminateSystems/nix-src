@@ -9,6 +9,9 @@
 #include "nix/store/store-registration.hh"
 #include "nix/store/globals.hh"
 #include "nix/util/topo-sort.hh"
+#include "nix/util/strings.hh"
+
+#include <nlohmann/json.hpp>
 
 namespace nix {
 
@@ -359,14 +362,11 @@ asio::awaitable<void> HttpBinaryCacheStore::queryPathInfos(
         throw;
     }
 
-    /* Parse the concatenated narinfos, indexed by hash part. */
+    /* Parse the narinfos (one JSON object per line), indexed by hash
+       part. */
     std::map<std::string, std::shared_ptr<const NarInfo>, std::less<>> received;
-    size_t pos = 0;
-    while (pos < result.data.size()) {
-        auto end = result.data.find("\n\n", pos);
-        auto chunk = result.data.substr(pos, end == std::string::npos ? end : end + 1 - pos);
-        pos = end == std::string::npos ? result.data.size() : end + 2;
-        auto narInfo = std::make_shared<NarInfo>(*this, chunk, request.uri.to_string());
+    for (auto & line : tokenizeString<Strings>(result.data, "\n")) {
+        auto narInfo = std::make_shared<NarInfo>(NarInfo::fromJSON(*this, nlohmann::json::parse(line)));
         stats.narInfoRead++;
         received.insert_or_assign(std::string(narInfo->path.hashPart()), std::move(narInfo));
     }

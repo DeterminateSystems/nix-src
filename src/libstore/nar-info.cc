@@ -173,6 +173,13 @@ UnkeyedNarInfo::toJSON(const StoreDirConfig * store, bool includeImpureInfo, Pat
         }
         if (fileSize)
             jsonObject["downloadSize"] = fileSize;
+        if (!partialClosure.empty()) {
+            auto & jsonPartialClosure = jsonObject["partialClosure"] = json::array();
+            for (auto & p : partialClosure)
+                jsonPartialClosure.emplace_back(
+                    format == PathInfoJsonFormat::V1 ? static_cast<json>(store->printStorePath(p))
+                                                     : static_cast<json>(p));
+        }
     }
 
     return jsonObject;
@@ -204,7 +211,41 @@ UnkeyedNarInfo UnkeyedNarInfo::fromJSON(const StoreDirConfig * store, const nloh
     if (auto * downloadSize = get(obj, "downloadSize"))
         res.fileSize = getUnsigned(*downloadSize);
 
+    if (auto * partialClosure = get(obj, "partialClosure")) {
+        try {
+            for (auto & input : getArray(*partialClosure))
+                res.partialClosure.insert(
+                    format == PathInfoJsonFormat::V1 ? store->parseStorePath(getString(input))
+                                                     : static_cast<StorePath>(input));
+        } catch (Error & e) {
+            e.addTrace({}, "while reading key 'partialClosure'");
+            throw;
+        }
+    }
+
     return res;
+}
+
+nlohmann::json NarInfo::toJSON(const StoreDirConfig & store, bool includeImpureInfo) const
+{
+    auto jsonObject = UnkeyedNarInfo::toJSON(&store, includeImpureInfo, PathInfoJsonFormat::V2);
+    jsonObject["path"] = path;
+    return jsonObject;
+}
+
+NarInfo NarInfo::fromJSON(const StoreDirConfig & store, const nlohmann::json & json)
+{
+    auto & obj = getObject(json);
+
+    PathInfoJsonFormat format = PathInfoJsonFormat::V1;
+    if (auto * version = optionalValueAt(obj, "version"))
+        format = *version;
+    if (format != PathInfoJsonFormat::V2)
+        throw Error("NAR info JSON must use format version 2");
+
+    auto path = static_cast<StorePath>(valueAt(obj, "path"));
+
+    return NarInfo{UnkeyedNarInfo::fromJSON(&store, json), std::move(path)};
 }
 
 } // namespace nix
