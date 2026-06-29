@@ -2,7 +2,9 @@
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/canon-path.hh"
+#include "nix/util/lru-cache.hh"
 #include "nix/util/source-accessor.hh"
+#include "nix/util/sync.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/signals.hh"
 
@@ -23,6 +25,33 @@ namespace {
 struct NixFs
 {
     ref<Store> store;
+
+    using AccessorCache = LRUCache<StorePath, std::shared_ptr<SourceAccessor>>;
+
+    /* A bounded cache of FS accessors keyed by store path. Constructing
+       an accessor re-validates the store path, so caching them avoids
+       that work on every operation. Wrapped in `Sync` because the FUSE
+       callbacks run on multiple threads and `LRUCache` is not
+       thread-safe. */
+    Sync<AccessorCache> accessors{AccessorCache{1024}};
+
+    /* Return the FS accessor for `storePath`, constructing and caching
+       it on a miss. Returns null if `storePath` is not a valid store
+       path; such negative results are not cached, since a path that is
+       invalid now may become valid later. */
+    std::shared_ptr<SourceAccessor> getAccessor(const StorePath & storePath)
+    {
+        if (auto accessor = accessors.lock()->get(storePath))
+            return *accessor;
+
+        auto accessor = store->getFSAccessor(storePath);
+        if (!accessor)
+            return nullptr;
+
+        accessors.lock()->upsert(storePath, accessor);
+
+        return accessor;
+    }
 
     /* The Nix store is immutable: once a store path exists, its
        contents and metadata never change. So we let the kernel cache
@@ -66,7 +95,7 @@ struct NixFs
                real store path and a subpath within it. */
             auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
 
-            auto accessor = store->getFSAccessor(storePath);
+            auto accessor = getAccessor(storePath);
             if (!accessor)
                 return -ENOENT;
 
@@ -119,7 +148,7 @@ struct NixFs
         try {
             auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
 
-            auto accessor = store->getFSAccessor(storePath);
+            auto accessor = getAccessor(storePath);
             if (!accessor)
                 return -ENOENT;
 
@@ -172,7 +201,7 @@ struct NixFs
         try {
             auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
 
-            auto accessor = store->getFSAccessor(storePath);
+            auto accessor = getAccessor(storePath);
             if (!accessor)
                 return -ENOENT;
 
@@ -246,7 +275,7 @@ struct NixFs
                    path. */
                 auto [storePath, subPath] = store->toStorePath(store->storeDir + path.abs());
 
-                auto accessor = store->getFSAccessor(storePath);
+                auto accessor = getAccessor(storePath);
                 if (!accessor)
                     return -ENOENT;
 
