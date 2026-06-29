@@ -14,36 +14,72 @@ using namespace nix;
 
 namespace {
 
-int nixfsGetattr(const char * path, struct stat * st, struct fuse_file_info *)
+/* State shared with the FUSE operation callbacks, passed via
+   `fuse_new`'s `private_data` and retrieved with
+   `fuse_get_context()->private_data`. */
+struct NixFs
 {
-    memset(st, 0, sizeof(*st));
+    ref<Store> store;
 
-    if (strcmp(path, "/") == 0) {
-        st->st_mode = S_IFDIR | 0555;
-        st->st_nlink = 2;
-        return 0;
+    int getattr(const char * path, struct stat * st, struct fuse_file_info *)
+    {
+        debug("getattr: %s", path);
+
+        memset(st, 0, sizeof(*st));
+
+        if (strcmp(path, "/") == 0) {
+            st->st_mode = S_IFDIR | 0555;
+            st->st_nlink = 2;
+            return 0;
+        }
+
+        return -ENOENT;
     }
 
-    return -ENOENT;
-}
+    int readdir(
+        const char * path,
+        void * buf,
+        fuse_fill_dir_t filler,
+        off_t off,
+        struct fuse_file_info * info,
+        enum fuse_readdir_flags flags)
+    {
+        debug("readdir: %s", path);
 
-int nixfsReaddir(
-    const char * path, void * buf, fuse_fill_dir_t filler, off_t, struct fuse_file_info *, enum fuse_readdir_flags)
+        if (strcmp(path, "/") != 0)
+            return -ENOENT;
+
+        filler(buf, ".", nullptr, 0, (fuse_fill_dir_flags) 0);
+        filler(buf, "..", nullptr, 0, (fuse_fill_dir_flags) 0);
+
+        try {
+            for (auto & storePath : store->queryAllValidPaths())
+                filler(buf, std::string(storePath.to_string()).c_str(), nullptr, 0, (fuse_fill_dir_flags) 0);
+        } catch (...) {
+            return -EIO;
+        }
+
+        return 0;
+    }
+};
+
+NixFs & getNixFs()
 {
-    if (strcmp(path, "/") != 0)
-        return -ENOENT;
-
-    filler(buf, ".", nullptr, 0, (fuse_fill_dir_flags) 0);
-    filler(buf, "..", nullptr, 0, (fuse_fill_dir_flags) 0);
-
-    return 0;
+    return *static_cast<NixFs *>(fuse_get_context()->private_data);
 }
 
 const fuse_operations nixfsOps = {
-    .getattr = nixfsGetattr,
-    .readdir = nixfsReaddir,
-};
-
+    .getattr = [](const char * path, struct stat * st, struct fuse_file_info * info) -> int {
+        return getNixFs().getattr(path, st, info);
+    },
+    .readdir = [](const char * path,
+                  void * buf,
+                  fuse_fill_dir_t filler,
+                  off_t off,
+                  struct fuse_file_info * info,
+                  enum fuse_readdir_flags flags) -> int {
+        return getNixFs().readdir(path, buf, filler, off, info, flags);
+    }};
 } // namespace
 
 struct CmdFuse : StoreCommand
@@ -72,7 +108,9 @@ struct CmdFuse : StoreCommand
         if (fuse_opt_add_arg(&args, "nix") != 0)
             throw Error("could not set up FUSE arguments");
 
-        auto * fuse = fuse_new(&args, &nixfsOps, sizeof(nixfsOps), nullptr);
+        NixFs nixfs{.store = store};
+
+        auto * fuse = fuse_new(&args, &nixfsOps, sizeof(nixfsOps), &nixfs);
         if (!fuse)
             throw Error("could not create FUSE filesystem");
         Finally destroyFuse([&]() { fuse_destroy(fuse); });
