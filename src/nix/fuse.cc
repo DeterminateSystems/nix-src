@@ -121,7 +121,11 @@ struct CmdFuse : StoreCommand
 
         notice("Serving the Nix store at '%s'.", mountPoint.string());
 
-        if (fuse_loop(fuse) != 0)
+        /* Process requests on multiple threads. The operation
+           callbacks must be thread-safe. `clone_fd` gives each worker
+           thread its own `/dev/fuse` file descriptor to reduce kernel
+           contention. */
+        if (fuse_loop_mt(fuse, /*clone_fd=*/1) != 0)
             throw Error("FUSE event loop failed");
 
         // FIXME: not reached on Ctrl-C.
