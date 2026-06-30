@@ -158,6 +158,14 @@ static inline void initGCReal()
 
     GC_set_oom_fn(oomHandler);
 
+    /* Tell the GC to expand the heap aggressively instead of
+       collecting frequently.  The default free_space_divisor is 3,
+       meaning the heap grows by ~33% after a collection.  Setting it
+       to 1 makes it double, cutting collection frequency roughly in
+       half.  Callgrind shows GC mark/sweep at ~12% of eval
+       instructions; fewer collections directly reduces this. */
+    GC_set_free_space_divisor(1);
+
     GC_set_sp_corrector(&fixupBoehmStackPointer);
     assert(GC_get_sp_corrector());
 
