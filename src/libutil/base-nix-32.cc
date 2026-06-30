@@ -25,15 +25,18 @@ std::string BaseNix32::encode(std::span<const std::byte> bs)
     size_t len = encodedLength(bs.size());
     assert(len);
 
+    /* Write directly into a pre-sized buffer instead of using
+       push_back (avoids repeated size/capacity checks). */
     std::string s;
-    s.reserve(len);
+    s.resize(len);
+    char * out = s.data();
 
     for (int n = (int) len - 1; n >= 0; n--) {
         unsigned int b = n * 5;
         unsigned int i = b / 8;
         unsigned int j = b % 8;
         std::byte c = (bs.data()[i] >> j) | (i >= bs.size() - 1 ? std::byte{0} : bs.data()[i + 1] << (8 - j));
-        s.push_back(characters[uint8_t(c & std::byte{0x1f})]);
+        *out++ = characters[uint8_t(c & std::byte{0x1f})];
     }
 
     return s;
