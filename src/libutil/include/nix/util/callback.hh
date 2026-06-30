@@ -39,19 +39,32 @@ public:
     void operator()(T && t) noexcept
     {
         auto prev = done.test_and_set();
-        assert(!prev);
-        std::promise<T> promise;
-        promise.set_value(std::move(t));
-        fun(promise.get_future());
+        if (prev)
+            return;
+        try {
+            std::promise<T> promise;
+            promise.set_value(std::move(t));
+            fun(promise.get_future());
+        } catch (...) {
+            // Prevent exceptions from escaping noexcept boundary.
+            // This can happen when fun() throws (e.g. during promise
+            // fulfillment) while being called from a destructor context
+            // like TransferItem::~TransferItem → failEx.
+        }
     }
 
     void rethrow(const std::exception_ptr & exc = std::current_exception()) noexcept
     {
         auto prev = done.test_and_set();
-        assert(!prev);
-        std::promise<T> promise;
-        promise.set_exception(exc);
-        fun(promise.get_future());
+        if (prev)
+            return;
+        try {
+            std::promise<T> promise;
+            promise.set_exception(exc);
+            fun(promise.get_future());
+        } catch (...) {
+            // Prevent exceptions from escaping noexcept boundary.
+        }
     }
 };
 

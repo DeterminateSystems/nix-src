@@ -279,7 +279,12 @@ void HttpBinaryCacheStore::getFile(const std::string & path, Callback<std::optio
 
     try {
         checkEnabled();
+    } catch (...) {
+        callbackPtr->rethrow();
+        return;
+    }
 
+    try {
         auto request(makeRequest(path));
 
         fileTransfer->enqueueFileTransfer(request, {[callbackPtr, this](std::future<FileTransferResult> result) {
