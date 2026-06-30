@@ -902,6 +902,8 @@ struct curlFileTransfer : public FileTransfer
 
         curl_multi_setopt(curlm.get(), CURLMOPT_PIPELINING, CURLPIPE_MULTIPLEX);
         curl_multi_setopt(curlm.get(), CURLMOPT_MAX_TOTAL_CONNECTIONS, settings.httpConnections.get());
+        if (settings.enableHttp2)
+            curl_multi_setopt(curlm.get(), CURLMOPT_MAX_CONCURRENT_STREAMS, settings.maxHttp2Streams.get());
 
         workerThread = std::thread([&]() { workerThreadEntry(); });
     }

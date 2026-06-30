@@ -31,6 +31,19 @@ public:
 
     Setting<bool> enableHttp2{this, true, "http2", "Whether to enable HTTP/2 support."};
 
+    Setting<long> maxHttp2Streams{
+        this,
+        100,
+        "max-http2-streams",
+        R"(
+          Maximum number of concurrent HTTP/2 streams per connection.
+          Set to 1 to disable multiplexing while keeping HTTP/2 framing
+          and header compression. This prevents head-of-line blocking
+          when one stream is paused (e.g. during slow store imports),
+          which would otherwise throttle all multiplexed streams on the
+          same TCP connection. Defaults to 100 (libcurl default).
+        )"};
+
     Setting<std::string> userAgentSuffix{
         this, "", "user-agent-suffix", "String appended to the user agent in HTTP requests."};
 
