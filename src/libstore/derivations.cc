@@ -546,31 +546,65 @@ Derivation parseDerivation(
  */
 static void printString(std::string & res, std::string_view s)
 {
+    /* Pre-reserve: in the common case no escaping is needed, so the output
+       is just 2 quotes + the original string length. Over-reserving slightly
+       is cheaper than repeated reallocations for large derivation strings. */
+    res.reserve(res.size() + s.size() + 2);
     res += '"';
-    static constexpr auto chunkSize = 1024;
-    std::array<char, 2 * chunkSize + 2> buffer;
+
+    /* Scan-and-copy with a lookup table: a single indexed load per
+       character replaces the 5-way comparison chain. Most derivation
+       strings are dominated by safe characters (store paths, hashes),
+       so the scan loop runs many iterations per escapable char. */
+    static constexpr auto needsEscape = []() constexpr {
+        std::array<bool, 256> table{};
+        table['"'] = true;
+        table['\\'] = true;
+        table['\n'] = true;
+        table['\r'] = true;
+        table['\t'] = true;
+        return table;
+    }();
+
     while (!s.empty()) {
-        auto chunk = s.substr(0, /*n=*/chunkSize);
-        s.remove_prefix(chunk.size());
-        char * buf = buffer.data();
-        char * p = buf;
-        for (auto c : chunk)
-            if (c == '\"' || c == '\\') {
-                *p++ = '\\';
-                *p++ = c;
-            } else if (c == '\n') {
-                *p++ = '\\';
-                *p++ = 'n';
-            } else if (c == '\r') {
-                *p++ = '\\';
-                *p++ = 'r';
-            } else if (c == '\t') {
-                *p++ = '\\';
-                *p++ = 't';
-            } else
-                *p++ = c;
-        res.append(buf, p - buf);
+        /* Find the first character that requires escaping. */
+        size_t safe = 0;
+        while (safe < s.size() && !needsEscape[static_cast<unsigned char>(s[safe])])
+            ++safe;
+
+        /* Bulk-copy safe prefix. */
+        if (safe > 0) {
+            res.append(s.data(), safe);
+            s.remove_prefix(safe);
+        }
+
+        /* Escape the special character (if any remain). */
+        if (!s.empty()) {
+            char esc[2] = {'\\', 0};
+            switch (s.front()) {
+            case '"':
+                esc[1] = '"';
+                break;
+            case '\\':
+                esc[1] = '\\';
+                break;
+            case '\n':
+                esc[1] = 'n';
+                break;
+            case '\r':
+                esc[1] = 'r';
+                break;
+            case '\t':
+                esc[1] = 't';
+                break;
+            default:
+                __builtin_unreachable();
+            }
+            res.append(esc, 2);
+            s.remove_prefix(1);
+        }
     }
+
     res += '"';
 }
 
