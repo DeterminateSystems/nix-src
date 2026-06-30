@@ -473,10 +473,10 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
 
         sendPid.writeSide.close();
 
-        if (helper.wait() != 0) {
+        if (auto status = helper.wait(); !statusOk(status)) {
             processSandboxSetupMessages();
             // Only reached if the child process didn't send an exception.
-            throw Error("unable to start build process");
+            throw Error("unable to start build process: %s", statusToString(status));
         }
 
         userNamespaceSync.readSide = -1;
@@ -835,6 +835,9 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
 
     void addDependencyImpl(const StorePath & path) override
     {
+        if (isAllowed(path))
+            return;
+
         auto [source, target] = ChrootDerivationBuilder::addDependencyPrep(path);
 
         /* Bind-mount the path into the sandbox. This requires
@@ -854,8 +857,15 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
         }));
 
         int status = child.wait();
-        if (status != 0)
-            throw Error("could not add path '%s' to sandbox", store.printStorePath(path));
+        if (!statusOk(status))
+            throw Error("could not add path '%s' to sandbox: %s", store.printStorePath(path), statusToString(status));
+    }
+
+    ActiveBuild getActiveBuild() override
+    {
+        auto build = DerivationBuilderImpl::getActiveBuild();
+        build.cgroup = cgroup;
+        return build;
     }
 };
 

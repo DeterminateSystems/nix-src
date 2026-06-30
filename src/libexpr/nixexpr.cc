@@ -13,8 +13,6 @@ namespace nix {
 
 Counter Expr::nrExprs;
 
-ExprBlackHole eBlackHole;
-
 // FIXME: remove, because *symbols* are abstract and do not have a single
 //        textual representation; see printIdentifier()
 std::ostream & operator<<(std::ostream & str, const SymbolStr & symbol)
@@ -626,15 +624,6 @@ void ExprLambda::setDocComment(DocComment docComment)
         // belongs in the same conditional.
         body->setDocComment(docComment);
     }
-};
-
-/* Symbol table. */
-
-size_t SymbolTable::totalSize() const
-{
-    size_t n = 0;
-    dump([&](SymbolStr s) { n += s.size(); });
-    return n;
 }
 
 std::string DocComment::getInnerText(const PosTable & positions) const

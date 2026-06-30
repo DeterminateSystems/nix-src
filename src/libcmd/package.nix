@@ -35,7 +35,7 @@ let
 in
 
 mkMesonLibrary (finalAttrs: {
-  pname = "nix-cmd";
+  pname = "determinate-nix-cmd";
   inherit version;
 
   workDir = ./.;
@@ -49,6 +49,8 @@ mkMesonLibrary (finalAttrs: {
     ./include/nix/cmd/meson.build
     (fileset.fileFilter (file: file.hasExt "cc") ./.)
     (fileset.fileFilter (file: file.hasExt "hh") ./.)
+    ./call-flake-schemas.nix
+    ./builtin-flake-schemas.nix
   ];
 
   buildInputs = [

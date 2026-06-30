@@ -234,7 +234,7 @@ StoreWrapper::exportPaths(int fd, ...)
             StorePathSet paths;
             for (int n = 2; n < items; ++n) paths.insert(THIS->store->parseStorePath(SvPV_nolen(ST(n))));
             FdSink sink(fd);
-            exportPaths(*THIS->store, paths, sink);
+            exportPaths(*THIS->store, paths, sink, 1);
         } catch (Error & e) {
             croak("%s", e.what());
         }
@@ -301,7 +301,7 @@ SV * convertHash(char * algo, char * s, int toBase32)
 SV * signString(char * secretKey_, char * msg)
     PPCODE:
         try {
-            auto sig = SecretKey(secretKey_).signDetached(msg).to_string();
+            auto sig = SecretKey::parse(secretKey_)->signDetached(msg).to_string();
             XPUSHs(sv_2mortal(newSVpv(sig.c_str(), sig.size())));
         } catch (Error & e) {
             croak("%s", e.what());

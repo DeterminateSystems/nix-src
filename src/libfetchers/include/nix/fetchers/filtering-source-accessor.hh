@@ -52,6 +52,8 @@ struct FilteringSourceAccessor : SourceAccessor
 
     std::pair<CanonPath, std::optional<std::string>> getFingerprint(const CanonPath & path) override;
 
+    std::shared_ptr<const Provenance> getProvenance(const CanonPath & path) override;
+
     void invalidateCache(const CanonPath & path) override;
 
     /**

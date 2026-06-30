@@ -34,6 +34,9 @@ subdir('nix-meson-build-support/subprojects')
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
 
+libmicrohttpd = dependency('libmicrohttpd')
+deps_private += libmicrohttpd
+
 configdata = configuration_data()
 
 # The CLI has a more detailed version string than the libraries; see `nixVersion`
@@ -49,6 +52,17 @@ configdata.set_quoted('NIX_BIN_DIR', bindir)
 mandir = get_option('mandir')
 mandir = fs.is_absolute(mandir) ? mandir : prefix / mandir
 configdata.set_quoted('NIX_MAN_DIR', mandir)
+
+sentry_required = get_option('sentry')
+configdata.set('HAVE_SENTRY', sentry_required.enabled().to_int())
+if sentry_required.enabled()
+  crashpad_handler_path = get_option('crashpad-handler')
+  assert(
+    crashpad_handler_path != '',
+    'crashpad-handler path must be set when sentry is enabled',
+  )
+  configdata.set_quoted('CRASHPAD_HANDLER_PATH', crashpad_handler_path)
+endif
 
 config_priv_h = configure_file(
   configuration : configdata,
@@ -68,6 +82,7 @@ nix_sources = [ config_priv_h ] + files(
   'config.cc',
   'copy.cc',
   'crash-handler.cc',
+  'crash.cc',
   'derivation-add.cc',
   'derivation-show.cc',
   'derivation.cc',
@@ -78,6 +93,7 @@ nix_sources = [ config_priv_h ] + files(
   'env.cc',
   'eval.cc',
   'flake-prefetch-inputs.cc',
+  'flake-prefetch-inputs.cc',
   'flake.cc',
   'formatter.cc',
   'hash.cc',
@@ -87,17 +103,21 @@ nix_sources = [ config_priv_h ] + files(
   'make-content-addressed.cc',
   'man-pages.cc',
   'nar.cc',
+  'nario.cc',
   'optimise-store.cc',
   'path-from-hash-part.cc',
   'path-info.cc',
   'prefetch.cc',
   'profile.cc',
+  'provenance.cc',
+  'ps.cc',
   'realisation.cc',
   'registry.cc',
   'repl.cc',
   'run.cc',
   'search.cc',
   'self-exe.cc',
+  'serve.cc',
   'sigs.cc',
   'store-copy-log.cc',
   'store-delete.cc',
@@ -187,7 +207,7 @@ this_exe = executable(
   sources,
   dependencies : deps_private_subproject + deps_private + deps_other,
   include_directories : include_dirs,
-  link_args : linker_export_flags,
+  link_args : linker_export_flags + (sentry_required.enabled() ? [ '-lsentry' ] : []),
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )

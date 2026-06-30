@@ -56,4 +56,12 @@ in
       touch $out
     '';
   };
+
+  test_sandbox_paths_2 = mkDerivation {
+    name = "test-sandbox-paths-2";
+    buildCommand = ''
+      mkdir $out
+      cat /foo/bar > $out/xyzzy
+    '';
+  };
 }

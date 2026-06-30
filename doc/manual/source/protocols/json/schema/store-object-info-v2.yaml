@@ -6,12 +6,6 @@ description: |
 
   This schema describes the JSON representation of store object metadata as returned by commands like [`nix path-info --json`](@docroot@/command-ref/new-cli/nix3-path-info.md).
 
-  > **Warning**
-  >
-  > This JSON format is currently
-  > [**experimental**](@docroot@/development/experimental-features.md#xp-feature-nix-command)
-  > and subject to change.
-
   ### Field Categories
 
   Store object information can come in a few different variations.
@@ -185,6 +179,15 @@ $defs:
           The total size of this store object and every other object in its [closure](@docroot@/glossary.md#gloss-closure).
 
           > This field is not stored at all, but computed by traversing the other fields across all the store objects in a closure.
+
+      provenance:
+        oneOf:
+          - type: "null"
+          - type: object # FIXME
+        title: Provenance
+        description: |
+          An arbitrary JSON object containing provenance information about the store object, or `null` if not available.
+
     additionalProperties: false
 
   narInfo:
@@ -268,4 +271,13 @@ $defs:
           > This is an impure "`.narinfo`" field that may not be included in certain contexts.
 
           > This field is not stored at all, but computed by traversing the other fields across all the store objects in a closure.
+
+      provenance:
+        oneOf:
+          - type: "null"
+          - type: object # FIXME
+        title: Provenance
+        description: |
+          An arbitrary JSON object containing provenance information about the store object, or `null` if not available.
+
     additionalProperties: false

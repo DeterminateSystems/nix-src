@@ -24,6 +24,8 @@ static void runFetchClosureWithRewrite(
     const std::optional<StorePath> & toPathMaybe,
     Value & v)
 {
+    if (toPathMaybe)
+        state.store->addTempRoot(*toPathMaybe);
 
     // establish toPath or throw
 
@@ -75,6 +77,7 @@ static void runFetchClosureWithRewrite(
 static void runFetchClosureWithContentAddressedPath(
     EvalState & state, const PosIdx pos, Store & fromStore, const StorePath & fromPath, Value & v)
 {
+    state.store->addTempRoot(fromPath);
 
     if (!state.store->isValidPath(fromPath))
         copyClosure(fromStore, *state.store, RealisedPath::Set{fromPath});
@@ -104,6 +107,7 @@ static void runFetchClosureWithContentAddressedPath(
 static void runFetchClosureWithInputAddressedPath(
     EvalState & state, const PosIdx pos, Store & fromStore, const StorePath & fromPath, Value & v)
 {
+    state.store->addTempRoot(fromPath);
 
     if (!state.store->isValidPath(fromPath))
         copyClosure(fromStore, *state.store, RealisedPath::Set{fromPath});
@@ -136,7 +140,7 @@ static void prim_fetchClosure(EvalState & state, const PosIdx pos, Value ** args
     std::optional<bool> inputAddressedMaybe;
 
     for (auto & attr : *args[0]->attrs()) {
-        const auto & attrName = state.symbols[attr.name];
+        std::string_view attrName = state.symbols[attr.name];
         auto attrHint = [&]() -> std::string {
             return fmt("while evaluating the attribute '%s' passed to builtins.fetchClosure", attrName);
         };

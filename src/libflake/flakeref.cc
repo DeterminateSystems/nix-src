@@ -26,6 +26,7 @@
 #include "nix/store/outputs-spec.hh"
 #include "nix/util/ref.hh"
 #include "nix/util/types.hh"
+#include "nix/fetchers/fetch-settings.hh"
 
 namespace nix {
 class Store;
@@ -42,12 +43,12 @@ const static std::string subDirElemRegex = "(?:[a-zA-Z0-9_-]+[a-zA-Z0-9._-]*)";
 const static std::string subDirRegex = subDirElemRegex + "(?:/" + subDirElemRegex + ")*";
 #endif
 
-std::string FlakeRef::to_string() const
+std::string FlakeRef::to_string(bool abbreviate) const
 {
     StringMap extraQuery;
     if (subdir != "")
         extraQuery.insert_or_assign("dir", subdir);
-    return input.toURLString(extraQuery);
+    return input.toURLString(extraQuery, abbreviate);
 }
 
 fetchers::Attrs FlakeRef::toAttrs() const
@@ -90,7 +91,8 @@ static std::pair<FlakeRef, std::string>
 fromParsedURL(const fetchers::Settings & fetchSettings, ParsedURL && parsedURL, bool isFlake)
 {
     auto dir = getOr(parsedURL.query, "dir", "");
-    parsedURL.query.erase("dir");
+    if (!fetchSettings.nix219Compat)
+        parsedURL.query.erase("dir");
 
     std::string fragment;
     std::swap(fragment, parsedURL.fragment);

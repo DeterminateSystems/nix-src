@@ -9,18 +9,25 @@ case $system in
         skipTest "Not running Linux";
 esac
 
+TODO_NixOS
+
 set -m # enable job control, needed for kill
 
 programPath=$(nix-build --no-link ./gc-runtime.nix -A program)
 environPath=$(nix-build --no-link ./gc-runtime.nix -A environ)
 openPath=$(nix-build --no-link ./gc-runtime.nix -A open)
 
+fifo="$TEST_ROOT/fifo"
+mkfifo "$fifo"
+
 echo "backgrounding program..."
 export environPath
-"$programPath"/program "$openPath"/open &
-sleep 2 # hack - wait for the program to get started
+"$programPath"/program "$openPath"/open "$fifo" &
 child=$!
 echo PID=$child
+cat "$fifo"
+
+expectStderr 1 nix-store --delete "$openPath" | grepQuiet "Cannot delete path.*because it's referenced by the GC root '/proc/"
 
 nix-store --gc
 

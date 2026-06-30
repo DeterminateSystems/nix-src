@@ -28,7 +28,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
-#include <sys/select.h>
+#include <poll.h>
 #include <errno.h>
 #include <pwd.h>
 #include <grp.h>
@@ -120,13 +120,41 @@ static ssize_t splice(int fd_in, void * off_in, int fd_out, void * off_out, size
 }
 #endif
 
+/* Check for anything that might be a crash. Too many crashes aren't
+   supposed to happen and we should limit the amount if someone is
+   intentionally triggering those as an ASLR bypass attempt (each forked
+   daemon worker has the same address space layout as we do). TODO: Ideally
+   we'd re-exec the daemon worker so that it gets a fresh address space
+   for each connection. Alternatively, we could make the daemon socket use
+   Accept=yes systemd.socket(5). */
+std::atomic<unsigned> crashCount = 0;
+
+/* Sanity check that using the atomic counter is fine in the signal handler. */
+static_assert(crashCount.is_always_lock_free);
+
+/* For now we are just limiting the number of crashes experienced by this
+   daemon instance. systemd (e.g.) would restart us, which would get us
+   a fresh address space layout - which is exactly what we want in case
+   someone is intentionally crashing the daemon to brute-force ASLR. */
+static constexpr unsigned crashLimit = 64;
+
 static void sigChldHandler(int sigNo)
 {
     // Ensure we don't modify errno of whatever we've interrupted
     auto saved_errno = errno;
     //  Reap all dead children.
-    while (waitpid(-1, 0, WNOHANG) > 0)
-        ;
+    int status;
+    while (waitpid(-1, &status, WNOHANG) > 0) {
+        if (!WIFSIGNALED(status))
+            continue;
+        int sig = WTERMSIG(status);
+        for (auto i : {SIGILL, SIGSEGV, SIGBUS, SIGABRT, SIGSYS, SIGFPE}) {
+            if (sig == i) {
+                ++crashCount;
+                break;
+            }
+        }
+    }
     errno = saved_errno;
 }
 
@@ -274,6 +302,9 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
                 .socketMode = 0666,
             },
             [&](AutoCloseFD remote, std::function<void()> closeListeners) {
+                if (crashCount >= crashLimit)
+                    throw unix::AbortServeSocket("too many daemon worker crashes (%1%)", crashLimit);
+
                 unix::closeOnExec(remote.get());
 
                 unix::PeerInfo peer;
@@ -284,9 +315,16 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
                     trusted = *forceTrustClientOpt;
                 else {
                     peer = unix::getPeerInfo(remote.get());
-                    auto [_trusted, _userName] = authPeer(peer);
-                    trusted = _trusted;
-                    userName = _userName;
+                    try {
+                        auto [_trusted, _userName] = authPeer(peer);
+                        trusted = _trusted;
+                        userName = _userName;
+                    } catch (const Error & e) {
+                        // Don't just hang up on the user.
+                        FdSink sink(remote.get());
+                        sink << WORKER_MAGIC_ACCESS_DENIED;
+                        throw;
+                    }
                 };
 
                 printInfo(
@@ -302,6 +340,8 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
                 options.allowVfork = false;
                 startProcess(
                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
+                        setInterrupted(false);
+
                         closeListeners();
 
                         // Background the daemon.
@@ -345,23 +385,27 @@ static void forwardStdioConnection(RemoteStore & store)
     int from = conn->from.fd;
     int to = conn->to.fd;
 
-    Socket fromSock = toSocket(from), stdinSock = toSocket(getStandardInput());
-    auto nfds = std::max(fromSock, stdinSock) + 1;
     while (true) {
-        fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(fromSock, &fds);
-        FD_SET(stdinSock, &fds);
-        if (select(nfds, &fds, nullptr, nullptr, nullptr) == -1)
+        struct pollfd pfds[2];
+        pfds[0].fd = from;
+        pfds[0].events = POLLIN;
+        pfds[0].revents = 0;
+        pfds[1].fd = getStandardInput();
+        pfds[1].events = POLLIN;
+        pfds[1].revents = 0;
+        if (poll(pfds, 2, -1) == -1) {
+            if (errno == EINTR)
+                continue;
             throw SysError("waiting for data from client or server");
-        if (FD_ISSET(fromSock, &fds)) {
+        }
+        if (pfds[0].revents) {
             auto res = splice(from, nullptr, STDOUT_FILENO, nullptr, SSIZE_MAX, SPLICE_F_MOVE);
             if (res == -1)
                 throw SysError("splicing data from daemon socket to stdout");
             else if (res == 0)
                 throw EndOfFile("unexpected EOF from daemon socket");
         }
-        if (FD_ISSET(stdinSock, &fds)) {
+        if (pfds[1].revents) {
             auto res = splice(STDIN_FILENO, nullptr, to, nullptr, SSIZE_MAX, SPLICE_F_MOVE);
             if (res == -1)
                 throw SysError("splicing data from stdin to daemon socket");

@@ -13,6 +13,7 @@ namespace nix {
 
 class Store;
 struct StoreDirConfig;
+struct Provenance;
 
 /**
  * JSON format version for path info output.
@@ -122,6 +123,12 @@ struct UnkeyedValidPathInfo
      * and 'references'. However, we support many types of content addresses.
      */
     std::optional<ContentAddress> ca;
+
+    /**
+     * The provenance of this store path, i.e. a link back to the Nix
+     * expression used to create it.
+     */
+    std::shared_ptr<const Provenance> provenance;
 
     UnkeyedValidPathInfo(const UnkeyedValidPathInfo & other) = default;
 

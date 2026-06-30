@@ -8,7 +8,6 @@
 #include <memory_resource>
 #include <algorithm>
 
-#include "nix/expr/gc-small-vector.hh"
 #include "nix/expr/value.hh"
 #include "nix/expr/symbol-table.hh"
 #include "nix/expr/eval-error.hh"
@@ -91,8 +90,6 @@ typedef std::vector<AttrName> AttrSelectionPath;
 
 std::string showAttrSelectionPath(const SymbolTable & symbols, std::span<const AttrName> attrPath);
 
-using UpdateQueue = SmallTemporaryValueVector<conservativeStackReservation>;
-
 /* Abstract syntax of Nix expressions. */
 
 struct Expr
@@ -123,14 +120,6 @@ struct Expr
      * of thunks allocated.
      */
     virtual Value * maybeThunk(EvalState & state, Env & env);
-
-    /**
-     * Only called when performing an attrset update: `//` or similar.
-     * Instead of writing to a Value &, this function writes to an UpdateQueue.
-     * This allows the expression to perform multiple updates in a delayed manner, gathering up all the updates before
-     * applying them.
-     */
-    virtual void evalForUpdate(EvalState & state, Env & env, UpdateQueue & q, std::string_view errorCtx);
     virtual void setName(Symbol name);
     virtual void setDocComment(DocComment docComment) {};
 
@@ -738,7 +727,7 @@ struct ExprOpNot : Expr
     struct name : Expr            \
     {                             \
         MakeBinOpMembers(name, s) \
-    }
+    };
 
 MakeBinOp(ExprOpEq, "==");
 MakeBinOp(ExprOpNEq, "!=");
@@ -749,14 +738,7 @@ MakeBinOp(ExprOpConcatLists, "++");
 
 struct ExprOpUpdate : Expr
 {
-private:
-    /** Special case for merging of two attrsets. */
-    void eval(EvalState & state, Value & v, Value & v1, Value & v2);
-    void evalForUpdate(EvalState & state, Env & env, UpdateQueue & q);
-
-public:
-    MakeBinOpMembers(ExprOpUpdate, "//");
-    virtual void evalForUpdate(EvalState & state, Env & env, UpdateQueue & q, std::string_view errorCtx) override;
+    MakeBinOpMembers(ExprOpUpdate, "//")
 };
 
 struct ExprConcatStrings : Expr
@@ -811,23 +793,11 @@ struct ExprPos : Expr
     COMMON_METHODS
 };
 
-/* only used to mark thunks as black holes. */
-struct ExprBlackHole : Expr
-{
-    void show(const SymbolTable & symbols, std::ostream & str) const override {}
-
-    void eval(EvalState & state, Env & env, Value & v) override;
-
-    void bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env) override {}
-
-    [[noreturn]] static void throwInfiniteRecursionError(EvalState & state, Value & v);
-};
-
-extern ExprBlackHole eBlackHole;
-
 class Exprs
 {
-    std::pmr::monotonic_buffer_resource buffer;
+    // FIXME: use std::pmr::monotonic_buffer_resource when parallel
+    // eval is disabled?
+    std::pmr::synchronized_pool_resource buffer;
 public:
     std::pmr::polymorphic_allocator<char> alloc{&buffer};
 

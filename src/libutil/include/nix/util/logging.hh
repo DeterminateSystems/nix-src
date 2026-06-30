@@ -40,6 +40,8 @@ typedef enum {
     resSetExpected = 106,
     resPostBuildLogLine = 107,
     resFetchStatus = 108,
+    resHashMismatch = 109,
+    resBuildResult = 110,
 } ResultType;
 
 typedef uint64_t ActivityId;
@@ -60,11 +62,20 @@ struct LoggerSettings : Config
         {},
         "json-log-path",
         R"(
-          A file or unix socket to which JSON records of Nix's log output are
+          A file or Unix domain socket to which JSON records of Nix's log output are
           written, in the same format as `--log-format internal-json`
           (without the `@nix ` prefixes on each line).
           Concurrent writes to the same file by multiple Nix processes are not supported and
           may result in interleaved or corrupted log records.
+        )"};
+
+    Setting<std::string> sessionId{
+        this,
+        "",
+        "session-id",
+        R"(
+          An identifier for the current Nix session, which is included in JSON log output to
+          allow grouping of log messages from the same session. This defaults to a random UUID.
         )"};
 };
 
@@ -159,6 +170,8 @@ public:
 
     virtual void result(ActivityId act, ResultType type, const Fields & fields) {};
 
+    virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) {};
+
     virtual void writeToStdout(std::string_view s);
 
     template<typename... Args>
@@ -223,6 +236,11 @@ struct Activity
         result(resSetExpected, type2, expected);
     }
 
+    void result(ResultType type, const nlohmann::json & json) const
+    {
+        logger.result(id, type, json);
+    }
+
     template<typename... Args>
     void result(ResultType type, const Args &... args) const
     {
@@ -255,7 +273,7 @@ struct PushActivity
     }
 };
 
-extern std::unique_ptr<Logger> logger;
+extern Logger * logger;
 
 std::unique_ptr<Logger> makeSimpleLogger(bool printBuildLogs = true);
 

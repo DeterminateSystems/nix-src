@@ -96,3 +96,30 @@ nix-sandbox-build symlink-derivation.nix -A test_sandbox_paths \
     --option extra-sandbox-paths "/dir=$TEST_ROOT" \
     --option extra-sandbox-paths "/symlinkDir=$symlinkDir" \
     --option extra-sandbox-paths "/symlink=$symlinkcert"
+
+# Nonexistent sandbox paths should error early in the build process
+# shellcheck disable=SC2016
+expectStderr 1 nix-sandbox-build --option extra-sandbox-paths '/does-not-exist' \
+    -E 'with import '"${config_nix}"'; mkDerivation { name = "trivial"; buildCommand = "echo > $out"; }' |
+    grepQuiet "path \"/does-not-exist\" is configured as part of the \`sandbox-paths\` option, but is inaccessible"
+
+# Test pre-build-hook.
+DEST="$TEST_ROOT/hook-output"
+HOOK="$TEST_ROOT/pre-build-hook"
+
+echo foo > "$TEST_ROOT"/fnord
+
+cat > "$HOOK" <<EOF
+#! $SHELL -e
+jq -r .env.name < "\$NIX_DERIVATION_V4" > "$DEST"
+echo "hello from hook!" >&2
+echo "extra-sandbox-paths"
+echo "/foo/bar=$TEST_ROOT/fnord"
+EOF
+chmod +x "$HOOK"
+
+outPath=$(nix-build --no-out-link --sandbox-paths /nix/store --pre-build-hook "$HOOK" symlink-derivation.nix -A test_sandbox_paths_2)
+
+[[ $(cat "$TEST_ROOT/store0/nix/store/$(basename "$outPath")/xyzzy") = foo ]]
+
+[[ "$(cat "$DEST")" == "test-sandbox-paths-2" ]]

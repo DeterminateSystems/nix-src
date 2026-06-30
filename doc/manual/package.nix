@@ -34,7 +34,7 @@ let
 in
 
 mkMesonDerivation (finalAttrs: {
-  pname = "nix-manual";
+  pname = "determinate-nix-manual";
   inherit version;
 
   workDir = ./.;
@@ -42,6 +42,7 @@ mkMesonDerivation (finalAttrs: {
     fileset.difference
       (fileset.unions [
         ../../.version
+        ../../.version-determinate
         # For example JSON
         ../../src/libutil-tests/data/memory-source-accessor
         ../../src/libutil-tests/data/hash

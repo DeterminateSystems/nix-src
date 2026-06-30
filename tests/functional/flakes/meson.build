@@ -34,6 +34,13 @@ suites += {
     'source-paths.sh',
     'old-lockfiles.sh',
     'trace-ifd.sh',
+    'build-time-flake-inputs.sh',
+    'substitution.sh',
+    'shallow.sh',
+    'get-flake.sh',
+    'type-error-fallback.sh',
+    'provenance.sh',
+    'search.sh',
   ],
   'workdir' : meson.current_source_dir(),
 }

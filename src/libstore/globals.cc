@@ -20,6 +20,8 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
+#include <limits.h>
+
 #ifndef _WIN32
 #  include <sys/utsname.h>
 #endif
@@ -288,6 +290,20 @@ const ExternalBuilder * LocalSettings::findExternalDerivationBuilderIfSupported(
     return nullptr;
 }
 
+std::optional<std::string> WorkerSettings::getHostName()
+{
+    if (hostName != "")
+        return hostName;
+
+#ifndef _WIN32
+    char hostname[_POSIX_HOST_NAME_MAX + 1];
+    if (gethostname(hostname, sizeof(hostname)) == 0)
+        return std::string(hostname);
+#endif
+
+    return std::nullopt;
+}
+
 ProfileDirsOptions Settings::getProfileDirsOptions() const
 {
     return {
@@ -297,6 +313,8 @@ ProfileDirsOptions Settings::getProfileDirsOptions() const
 }
 
 std::string nixVersion = PACKAGE_VERSION;
+
+const std::string determinateNixVersion = DETERMINATE_NIX_VERSION;
 
 NLOHMANN_JSON_SERIALIZE_ENUM(
     SandboxMode,
@@ -375,6 +393,27 @@ void from_json(const nlohmann::json & j, ChrootPath & cp)
     cp.optional = j.at("optional").get<bool>();
 }
 
+static nlohmann::json pathsInChrootToJSON(const PathsInChroot & paths)
+{
+    auto j = nlohmann::json::object();
+    for (auto & [target, chrootPath] : paths) {
+        nlohmann::json cp;
+        to_json(cp, chrootPath);
+        j[target.string()] = std::move(cp);
+    }
+    return j;
+}
+
+template<>
+std::map<std::string, nlohmann::json> BaseSetting<PathsInChroot>::toJSONObject() const
+{
+    auto obj = AbstractSetting::toJSONObject();
+    obj.emplace("value", pathsInChrootToJSON(value));
+    obj.emplace("defaultValue", pathsInChrootToJSON(defaultValue));
+    obj.emplace("documentDefault", documentDefault);
+    return obj;
+}
+
 template<>
 PathsInChroot BaseSetting<PathsInChroot>::parse(const std::string & str) const
 {
@@ -443,6 +482,24 @@ std::string BaseSetting<LocalSettings::ExternalBuilders>::to_string() const
 {
     return nlohmann::json(value).dump();
 }
+
+template<typename T>
+T JSONSetting<T>::parse(const std::string & str) const
+{
+    try {
+        return nlohmann::json::parse(str).template get<T>();
+    } catch (std::exception & e) {
+        throw UsageError("parsing setting '%s': %s", BaseSetting<T>::name, e.what());
+    }
+}
+
+template<typename T>
+std::string JSONSetting<T>::to_string() const
+{
+    return nlohmann::json(BaseSetting<T>::get()).dump();
+}
+
+template class JSONSetting<StringMap>;
 
 template<>
 void BaseSetting<PathsInChroot>::appendOrSet(PathsInChroot newValue, bool append)

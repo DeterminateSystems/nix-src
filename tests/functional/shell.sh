@@ -65,6 +65,7 @@ path=$(nix eval --raw -f shell-hello.nix hello)
 
 # Note: we need the sandbox paths to ensure that the shell is
 # visible in the sandbox.
+export NIX_SENTRY_ENDPOINT=file://$TEST_ROOT/sentry-endpoint # test whether Sentry is disabled in the chroot helper
 nix shell --sandbox-build-dir /build-tmp \
     --sandbox-paths '/nix? /bin? /lib? /lib64? /usr?' \
     --store "$TEST_ROOT/store0" -f shell-hello.nix hello -c hello | grep 'Hello World'

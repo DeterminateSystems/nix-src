@@ -126,6 +126,10 @@ config_priv_h = configure_file(
 
 subdir('nix-meson-build-support/common')
 
+if have_cxa_throw
+  deps_other += cxa_throw_dep
+endif
+
 sources = [ config_priv_h ] + files(
   'archive.cc',
   'args.cc',
@@ -164,6 +168,7 @@ sources = [ config_priv_h ] + files(
   'position.cc',
   'posix-source-accessor.cc',
   'processes.cc',
+  'provenance.cc',
   'serialise.cc',
   'signature/local-keys.cc',
   'signature/signer.cc',
@@ -215,7 +220,7 @@ this_library = library(
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,
-  prelink : true, # For C++ static initializers
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )

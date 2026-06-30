@@ -11,6 +11,7 @@ namespace nix {
 
 #define WORKER_MAGIC_1 0x6e697863
 #define WORKER_MAGIC_2 0x6478696f
+#define WORKER_MAGIC_ACCESS_DENIED 0xab9a9ff0 // = 🚫
 
 #define STDERR_NEXT 0x6f6c6d67
 #define STDERR_READ 0x64617461  // data needed from source
@@ -109,6 +110,10 @@ struct WorkerProto
 
     static const Version minimum;
 
+    static constexpr std::string_view featureQueryActiveBuilds = "queryActiveBuilds";
+    static constexpr std::string_view featureProvenance = "provenance";
+    static constexpr std::string_view featureVersionedAddToStoreMultiple = "versionedAddToStoreMultiple";
+
     /**
      * A unidirectional read connection, to be used by the read half of the
      * canonical serializers below.
@@ -117,6 +122,7 @@ struct WorkerProto
     {
         Source & from;
         const Version & version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -127,6 +133,7 @@ struct WorkerProto
     {
         Sink & to;
         const Version & version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -230,6 +237,7 @@ enum struct WorkerProto::Op : uint64_t {
     AddBuildLog = 45,
     BuildPathsWithResults = 46,
     AddPermRoot = 47,
+    QueryActiveBuilds = 48,
 };
 
 struct WorkerProto::ClientHandshakeInfo

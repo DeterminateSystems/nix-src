@@ -73,6 +73,7 @@ startDaemon() {
     fi
     # Start the daemon, wait for the socket to appear.
     rm -f "$NIX_DAEMON_SOCKET_PATH"
+    # TODO: remove the nix-command feature when we're no longer testing against old daemons.
     PATH=$DAEMON_PATH nix --extra-experimental-features 'nix-command' daemon &
     _NIX_TEST_DAEMON_PID=$!
     export _NIX_TEST_DAEMON_PID
@@ -132,11 +133,11 @@ restartDaemon() {
 }
 
 isDaemonNewer () {
-  [[ -n "${NIX_DAEMON_PACKAGE:-}" ]] || return 0
-  local requiredVersion="$1"
-  local daemonVersion
-  daemonVersion=$("$NIX_DAEMON_PACKAGE/bin/nix" daemon --version | cut -d' ' -f3)
-  [[ $(nix eval --expr "builtins.compareVersions ''$daemonVersion'' ''$requiredVersion''") -ge 0 ]]
+    [[ -n "${NIX_DAEMON_PACKAGE:-}" ]] || return 0
+    local requiredVersion="$1"
+    local daemonVersion
+    daemonVersion=$("$NIX_DAEMON_PACKAGE/bin/nix" daemon --version | sed 's/.*) //')
+    [[ $(nix eval --expr "builtins.compareVersions ''$daemonVersion'' ''$requiredVersion''") -ge 0 ]]
 }
 
 skipTest () {

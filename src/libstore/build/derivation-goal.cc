@@ -122,6 +122,7 @@ Goal::Co DerivationGoal::haveDerivation(bool storeDerivation)
                 auto * cap = getDerivationCA(*drv);
                 waitees.insert(upcast_goal(worker.makePathSubstitutionGoal(
                     checkResult->first.outPath,
+                    false,
                     buildMode == bmRepair ? Repair : NoRepair,
                     cap ? std::optional{*cap} : std::nullopt)));
             }
@@ -161,12 +162,16 @@ Goal::Co DerivationGoal::haveDerivation(bool storeDerivation)
     }
 
     auto resolutionGoal = worker.makeDerivationResolutionGoal(drvPath, *drv, buildMode);
+    /* We'll handle the error below. */
+    resolutionGoal->preserveFailure = true;
     {
         Goals waitees{resolutionGoal};
         co_await await(std::move(waitees));
     }
     if (nrFailed != 0) {
-        co_return doneFailure({BuildResult::Failure::DependencyFailed, "Build failed due to failed dependency"});
+        auto * failure = resolutionGoal->buildResult.tryGetFailure();
+        assert(failure);
+        co_return doneFailure(*failure);
     }
 
     if (resolutionGoal->resolvedDrv) {
@@ -376,7 +381,7 @@ Goal::Co DerivationGoal::repairClosure()
             worker.store.printStorePath(drvPath));
         auto drvPath2 = outputsToDrv.find(i);
         if (drvPath2 == outputsToDrv.end())
-            waitees.insert(upcast_goal(worker.makePathSubstitutionGoal(i, Repair)));
+            waitees.insert(upcast_goal(worker.makePathSubstitutionGoal(i, false, Repair)));
         else
             waitees.insert(worker.makeGoal(
                 DerivedPath::Built{
@@ -472,7 +477,7 @@ Goal::Done DerivationGoal::doneSuccess(BuildResult::Success::Status status, Unke
 
     worker.updateProgress();
 
-    return Goal::doneSuccess(
+    auto res = Goal::doneSuccess(
         BuildResult::Success{
             .status = status,
             .builtOutputs = {{
@@ -486,6 +491,15 @@ Goal::Done DerivationGoal::doneSuccess(BuildResult::Success::Status status, Unke
                 },
             }},
         });
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            buildResult,
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+
+    return res;
 }
 
 Goal::Done DerivationGoal::doneFailure(BuildError ex)
@@ -497,6 +511,12 @@ Goal::Done DerivationGoal::doneFailure(BuildError ex)
         worker.failedBuilds++;
 
     worker.updateProgress();
+
+    logger->result(
+        getCurActivity(),
+        resBuildResult,
+        nlohmann::json(KeyedBuildResult(
+            {ex}, DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
 
     return Goal::doneFailure(ecFailed, std::move(ex));
 }

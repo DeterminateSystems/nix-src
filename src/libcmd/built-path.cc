@@ -119,9 +119,10 @@ RealisedPath::Set BuiltPath::toRealisedPaths(Store & store) const
                                 outputName);
                         DrvOutput key{*drvOutput, outputName};
                         auto thisRealisation = store.queryRealisation(key);
-                        assert(thisRealisation); // We’ve built it, so we must
-                                                 // have the realisation
-                        res.insert(Realisation{*thisRealisation, std::move(key)});
+                        if (thisRealisation)
+                            res.insert(Realisation{*thisRealisation, std::move(key)});
+                        else
+                            res.insert(outputPath);
                     } else {
                         res.insert(outputPath);
                     }

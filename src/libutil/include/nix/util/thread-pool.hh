@@ -87,21 +87,27 @@ private:
  * its dependencies have been processed.
  */
 template<typename T>
-void processGraph(const std::set<T> & nodes, fun<std::set<T>(const T &)> getEdges, fun<void(const T &)> processNode)
+void processGraph(
+    const std::set<T> & nodes,
+    fun<std::set<T>(const T &)> getEdges,
+    fun<void(const T &)> processNode,
+    bool discoverNodes = false,
+    size_t maxThreads = 0)
 {
     struct Graph
     {
+        std::set<T> known;
         std::set<T> left;
         std::map<T, std::set<T>> refs, rrefs;
     };
 
-    Sync<Graph> graph_(Graph{nodes, {}, {}});
+    Sync<Graph> graph_(Graph{nodes, nodes, {}, {}});
 
     std::function<void(const T &)> worker;
 
-    /* Create pool last to ensure threads are stopped before other destructors
-     * run */
-    ThreadPool pool;
+    /* Create pool last to ensure threads are stopped before other
+       destructors run. */
+    ThreadPool pool(maxThreads);
 
     worker = [&](const T & node) {
         {
@@ -118,11 +124,19 @@ void processGraph(const std::set<T> & nodes, fun<std::set<T>(const T &)> getEdge
 
         {
             auto graph(graph_.lock());
-            for (auto & ref : refs)
+            for (auto & ref : refs) {
+                if (discoverNodes) {
+                    auto [i, inserted] = graph->known.insert(ref);
+                    if (inserted) {
+                        pool.enqueue(std::bind(worker, std::ref(*i)));
+                        graph->left.insert(ref);
+                    }
+                }
                 if (graph->left.count(ref)) {
                     graph->refs[node].insert(ref);
                     graph->rrefs[ref].insert(node);
                 }
+            }
             if (graph->refs[node].empty())
                 goto doWork;
         }

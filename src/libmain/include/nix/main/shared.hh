@@ -26,6 +26,8 @@ void parseCmdLine(
     const Strings & args,
     fun<bool(Strings::iterator & arg, const Strings::iterator & end)> parseArg);
 
+std::string version();
+
 void printVersion(const std::string & programName);
 
 /**

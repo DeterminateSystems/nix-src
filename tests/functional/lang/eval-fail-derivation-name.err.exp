@@ -16,7 +16,7 @@ error:
        … while calling the 'derivationStrict' builtin
          at «nix-internal»/derivation-internal.nix:<number>:<number>:
      <number>|
-     <number>|   strict = derivationStrict drvAttrs;
+     <number>|   strict = drvFunc drvAttrs;
              |            ^
      <number>|
 

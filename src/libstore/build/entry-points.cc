@@ -65,11 +65,6 @@ std::vector<KeyedBuildResult> Store::buildPathsWithResults(
     results.reserve(state.size());
 
     for (auto & [req, goalPtr] : state) {
-        /* Goals that were never started or were cancelled have exitCode
-           ecBusy and a default buildResult with empty errorMsg. Skip them
-           to avoid reporting spurious failures with empty messages. */
-        if (goalPtr->exitCode == Goal::ecBusy)
-            continue;
         results.emplace_back(
             KeyedBuildResult{
                 goalPtr->buildResult,
@@ -104,7 +99,7 @@ void Store::ensurePath(const StorePath & path)
         return;
 
     Worker worker(*this, *this);
-    GoalPtr goal = worker.makePathSubstitutionGoal(path);
+    GoalPtr goal = worker.makePathSubstitutionGoal(path, true);
     Goals goals = {goal};
 
     worker.run(goals);
@@ -119,7 +114,7 @@ void Store::ensurePath(const StorePath & path)
 void Store::repairPath(const StorePath & path)
 {
     Worker worker(*this, *this);
-    GoalPtr goal = worker.makePathSubstitutionGoal(path, Repair);
+    GoalPtr goal = worker.makePathSubstitutionGoal(path, true, Repair);
     Goals goals = {goal};
 
     worker.run(goals);

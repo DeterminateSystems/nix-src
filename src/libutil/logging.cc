@@ -14,13 +14,17 @@
 #include <nlohmann/json.hpp>
 #include <iostream>
 
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/time_generator_v7.hpp>
+#include <boost/uuid/uuid_io.hpp>
+
 namespace nix {
 
 LoggerSettings loggerSettings;
 
 static GlobalConfig::Register rLoggerSettings(&loggerSettings);
 
-static thread_local ActivityId curActivity = 0;
+[[gnu::tls_model("initial-exec")]] static thread_local ActivityId curActivity = 0;
 
 ActivityId getCurActivity()
 {
@@ -32,7 +36,11 @@ void setCurActivity(const ActivityId activityId)
     curActivity = activityId;
 }
 
-std::unique_ptr<Logger> logger = makeSimpleLogger(true);
+/**
+ * This is a raw pointer to allow it to leak.
+ * Avoids races in activity teardown.
+ */
+Logger * logger = makeSimpleLogger(true).release();
 
 void Logger::warn(const std::string & msg)
 {
@@ -211,6 +219,16 @@ void to_json(nlohmann::json & json, std::shared_ptr<const Pos> pos)
     }
 }
 
+static std::string getSessionId()
+{
+    if (!loggerSettings.sessionId.get().empty())
+        return loggerSettings.sessionId.get();
+
+    // Generate a UUIDv7 as the session ID.
+    static std::string uuid = boost::uuids::to_string(boost::uuids::time_generator_v7()());
+    return uuid;
+}
+
 struct JSONLogger : Logger
 {
     Descriptor fd;
@@ -248,8 +266,10 @@ struct JSONLogger : Logger
 
     Sync<State> _state;
 
-    void write(const nlohmann::json & json)
+    void write(nlohmann::json json)
     {
+        json["sid"] = getSessionId();
+
         auto line = (includeNixPrefix ? "@nix " : "")
                     + json.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 
@@ -275,7 +295,7 @@ struct JSONLogger : Logger
         json["action"] = "msg";
         json["level"] = lvl;
         json["msg"] = s;
-        write(json);
+        write(std::move(json));
     }
 
     void logEI(const ErrorInfo & ei) override
@@ -302,7 +322,7 @@ struct JSONLogger : Logger
             json["trace"] = traces;
         }
 
-        write(json);
+        write(std::move(json));
     }
 
     void startActivity(
@@ -321,7 +341,7 @@ struct JSONLogger : Logger
         json["text"] = s;
         json["parent"] = parent;
         addFields(json, fields);
-        write(json);
+        write(std::move(json));
     }
 
     void stopActivity(ActivityId act) override
@@ -329,7 +349,7 @@ struct JSONLogger : Logger
         nlohmann::json json;
         json["action"] = "stop";
         json["id"] = act;
-        write(json);
+        write(std::move(json));
     }
 
     void result(ActivityId act, ResultType type, const Fields & fields) override
@@ -339,7 +359,17 @@ struct JSONLogger : Logger
         json["id"] = act;
         json["type"] = type;
         addFields(json, fields);
-        write(json);
+        write(std::move(json));
+    }
+
+    void result(ActivityId act, ResultType type, const nlohmann::json & j) override
+    {
+        nlohmann::json json;
+        json["action"] = "result";
+        json["id"] = act;
+        json["type"] = type;
+        json["payload"] = j;
+        write(std::move(json));
     }
 };
 
@@ -377,7 +407,7 @@ void applyJSONLogger()
             std::vector<std::unique_ptr<Logger>> loggers;
             loggers.push_back(makeJSONLogger(*opt, false));
             try {
-                logger = makeTeeLogger(std::move(logger), std::move(loggers));
+                logger = makeTeeLogger(std::unique_ptr<Logger>(logger), std::move(loggers)).release();
             } catch (...) {
                 // `logger` is now gone so give up.
                 abort();

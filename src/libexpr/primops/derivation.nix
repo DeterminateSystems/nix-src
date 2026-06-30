@@ -26,6 +26,7 @@
   Note that `derivation` is very bare-bones, and provides almost no commands during the build.
   Most likely, you'll want to use functions like `stdenv.mkDerivation` in Nixpkgs to set up a basic environment.
 */
+drvFunc:
 drvAttrs@{
   outputs ? [ "out" ],
   ...
@@ -33,7 +34,7 @@ drvAttrs@{
 
 let
 
-  strict = derivationStrict drvAttrs;
+  strict = drvFunc drvAttrs;
 
   commonAttrs =
     drvAttrs

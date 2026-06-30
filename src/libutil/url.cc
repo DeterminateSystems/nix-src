@@ -333,6 +333,15 @@ std::string ParsedURL::renderPath(bool encode) const
     return renderUrlPathNoPctEncoding(path);
 }
 
+std::string ParsedURL::renderSanitized() const
+{
+    auto url = *this;
+    if (url.authority)
+        url.authority->password.reset();
+    url.query.clear();
+    return url.to_string();
+}
+
 std::string ParsedURL::renderAuthorityAndPath() const
 {
     std::string res;

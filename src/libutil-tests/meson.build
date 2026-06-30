@@ -36,15 +36,22 @@ deps_private += gtest
 gmock = dependency('gmock')
 deps_private += gmock
 
+if host_machine.system() == 'windows'
+  # Boost.ASIO needs this unconditionally.
+  socket = cxx.find_library('ws2_32')
+  deps_other += socket
+endif
+
+subdir('nix-meson-build-support/common')
+
 configdata = configuration_data()
 configdata.set_quoted('PACKAGE_VERSION', meson.project_version())
+configdata.set('HAVE_CXA_THROW', have_cxa_throw.to_int())
 
 config_priv_h = configure_file(
   configuration : configdata,
   output : 'util-tests-config.hh',
 )
-
-subdir('nix-meson-build-support/common')
 
 sources = files(
   'alignment.cc',
@@ -67,6 +74,7 @@ sources = files(
   'hash.cc',
   'hilite.cc',
   'json-utils.cc',
+  'local-keys.cc',
   'logging.cc',
   'lru-cache.cc',
   'memory-source-accessor.cc',
@@ -90,6 +98,10 @@ sources = files(
   'util.cc',
   'xml-writer.cc',
 )
+
+if have_cxa_throw
+  sources += files('cxa-throw.cc')
+endif
 
 if host_machine.system() != 'windows'
   subdir('unix')

@@ -162,7 +162,7 @@ struct GitArchiveInputScheme : InputScheme
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         auto owner = getStrAttr(input.attrs, "owner");
         auto repo = getStrAttr(input.attrs, "repo");
@@ -173,7 +173,7 @@ struct GitArchiveInputScheme : InputScheme
         if (ref)
             path.push_back(*ref);
         if (rev)
-            path.push_back(rev->to_string(HashFormat::Base16, false));
+            path.push_back(abbreviate ? rev->gitShortRev() : rev->gitRev());
         auto url = ParsedURL{
             .scheme = std::string{schemeName()},
             .path = path,
@@ -271,7 +271,8 @@ struct GitArchiveInputScheme : InputScheme
         time_t lastModified;
     };
 
-    std::pair<Input, TarballInfo> downloadArchive(const Settings & settings, Store & store, Input input) const
+    std::optional<std::pair<Input, TarballInfo>>
+    downloadArchive(const Settings & settings, Store & store, Input input, bool fastOnly) const
     {
         if (!maybeGetStrAttr(input.attrs, "ref"))
             input.attrs.insert_or_assign("ref", "HEAD");
@@ -299,11 +300,15 @@ struct GitArchiveInputScheme : InputScheme
                 auto treeHash = getRevAttr(*treeHashAttrs, "treeHash");
                 auto lastModified = getIntAttr(*lastModifiedAttrs, "lastModified");
                 if (settings.getTarballCache()->hasObject(treeHash))
-                    return {std::move(input), TarballInfo{.treeHash = treeHash, .lastModified = (time_t) lastModified}};
+                    return {
+                        {std::move(input), TarballInfo{.treeHash = treeHash, .lastModified = (time_t) lastModified}}};
                 else
                     debug("Git tree with hash '%s' has disappeared from the cache, refetching...", treeHash.gitRev());
             }
         }
+
+        if (fastOnly)
+            return std::nullopt;
 
         /* Stream the tarball into the tarball cache. */
         auto url = getDownloadUrl(settings, input);
@@ -340,13 +345,17 @@ struct GitArchiveInputScheme : InputScheme
                 rev->gitRev(), input.to_string(), upstreamTreeHash->gitRev(), tarballInfo.treeHash.gitRev());
 #endif
 
-        return {std::move(input), tarballInfo};
+        return {{std::move(input), tarballInfo}};
     }
 
-    std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, Store & store, const Input & _input) const override
+    std::optional<std::pair<ref<SourceAccessor>, Input>>
+    getAccessor(const Settings & settings, Store & store, const Input & _input, bool fastOnly) const override
     {
-        auto [input, tarballInfo] = downloadArchive(settings, store, _input);
+        auto res = downloadArchive(settings, store, _input, fastOnly);
+        if (fastOnly && !res)
+            return std::nullopt;
+        assert(res);
+        auto [input, tarballInfo] = *res;
 
 #if 0
         input.attrs.insert_or_assign("treeHash", tarballInfo.treeHash.gitRev());
@@ -354,9 +363,16 @@ struct GitArchiveInputScheme : InputScheme
         input.attrs.insert_or_assign("lastModified", uint64_t(tarballInfo.lastModified));
 
         auto accessor =
-            settings.getTarballCache()->getAccessor(tarballInfo.treeHash, {}, "«" + input.to_string() + "»");
+            settings.getTarballCache()->getAccessor(tarballInfo.treeHash, {}, "«" + input.to_string(true) + "»");
 
-        return {accessor, input};
+        if (!settings.trustTarballsFromGitForges)
+            // FIXME: computing the NAR hash here is wasteful if
+            // copyInputToStore() is just going to hash/copy it as
+            // well.
+            input.attrs.insert_or_assign(
+                "narHash", accessor->hashPath(CanonPath::root).to_string(HashFormat::SRI, true));
+
+        return {{accessor, input}};
     }
 
     bool isLocked(const Settings & settings, const Input & input) const override
@@ -368,15 +384,10 @@ struct GitArchiveInputScheme : InputScheme
         return input.getRev().has_value() && (settings.trustTarballsFromGitForges || input.getNarHash().has_value());
     }
 
-    std::optional<ExperimentalFeature> experimentalFeature() const override
-    {
-        return Xp::Flakes;
-    }
-
     std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
     {
         if (auto rev = input.getRev())
-            return rev->gitRev();
+            return "github:" + rev->gitRev();
         else
             return std::nullopt;
     }
@@ -454,8 +465,7 @@ struct GitHubInputScheme : GitArchiveInputScheme
                             : headers.empty()    ? "https://%s/%s/%s/archive/%s.tar.gz"
                                                  : "https://api.%s/repos/%s/%s/tarball/%s";
 
-        const auto url =
-            fmt(urlFmt, host, getOwner(input), getRepo(input), input.getRev()->to_string(HashFormat::Base16, false));
+        const auto url = fmt(urlFmt, host, getOwner(input), getRepo(input), input.getRev()->gitRev());
 
         return DownloadUrl{parseURL(url), headers};
     }
@@ -542,7 +552,7 @@ struct GitLabInputScheme : GitArchiveInputScheme
                 host,
                 getStrAttr(input.attrs, "owner"),
                 getStrAttr(input.attrs, "repo"),
-                input.getRev()->to_string(HashFormat::Base16, false));
+                input.getRev()->gitRev());
 
         Headers headers = makeHeadersWithAuthTokens(settings, host, input);
         return DownloadUrl{parseURL(url), headers};
@@ -638,7 +648,7 @@ struct SourceHutInputScheme : GitArchiveInputScheme
                 host,
                 getStrAttr(input.attrs, "owner"),
                 getStrAttr(input.attrs, "repo"),
-                input.getRev()->to_string(HashFormat::Base16, false));
+                input.getRev()->gitRev());
 
         Headers headers = makeHeadersWithAuthTokens(settings, host, input);
         return DownloadUrl{parseURL(url), headers};

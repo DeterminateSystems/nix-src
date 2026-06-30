@@ -772,7 +772,7 @@ static void opExport(Strings opFlags, Strings opArgs)
         paths.insert(store->followLinksToStorePath(i));
 
     FdSink sink(getStandardOutput());
-    exportPaths(*store, paths, sink);
+    exportPaths(*store, paths, sink, 1);
     sink.flush();
 }
 
@@ -1101,10 +1101,10 @@ static void opGenerateBinaryCacheKey(Strings opFlags, Strings opArgs)
     std::string secretKeyFile = *i++;
     std::string publicKeyFile = *i++;
 
-    auto secretKey = SecretKey::generate(keyName);
+    auto secretKey = SecretKey::generate(keyName, KeyType::Ed25519);
 
-    writeFile(publicKeyFile, secretKey.toPublicKey().to_string(), 0666, FsSync::Yes);
-    writeFile(secretKeyFile, secretKey.to_string(), 0600, FsSync::Yes);
+    writeFile(publicKeyFile, secretKey->toPublicKey()->to_string(), 0666, FsSync::Yes);
+    writeFile(secretKeyFile, secretKey->to_string(), 0600, FsSync::Yes);
 }
 
 static void opVersion(Strings opFlags, Strings opArgs)

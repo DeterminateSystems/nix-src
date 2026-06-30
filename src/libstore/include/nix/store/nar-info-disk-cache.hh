@@ -5,6 +5,9 @@
 #include "nix/store/nar-info.hh"
 #include "nix/store/realisation.hh"
 
+#include <map>
+#include <string>
+
 namespace nix {
 
 struct SQLiteSettings;
@@ -25,15 +28,23 @@ struct NarInfoDiskCache
 
     virtual ~NarInfoDiskCache() {}
 
-    virtual int
-    createCache(const std::string & uri, const std::string & storeDir, bool wantMassQuery, int priority) = 0;
-
     struct CacheInfo
     {
-        int id;
-        bool wantMassQuery;
-        int priority;
+        int id = 0;
+
+        /**
+         * The `nix-cache-info` fields other than `StoreDir`, stored
+         * verbatim (e.g. `WantMassQuery`).  Keeping these generic
+         * means fields we don't (yet) understand are still recorded.
+         */
+        std::map<std::string, std::string> fields;
     };
+
+    /**
+     * Create or update the cached nix-cache-info for the binary cache at `uri`.
+     * Note that `info.id` is ignored. This function returns the id of the cache entry.
+     */
+    virtual int createCache(const std::string & uri, const std::string & storeDir, const CacheInfo & info) = 0;
 
     virtual std::optional<CacheInfo> upToDateCacheExists(const std::string & uri) = 0;
 

@@ -99,6 +99,16 @@ protected:
     BinaryCacheStore(Config &);
 
     /**
+     * Fetch and parse `nix-cache-info`.
+     */
+    std::map<std::string, std::string> parseNixCacheInfo();
+
+    /**
+     * Apply the known `nix-cache-info` fields from `fields` to this store.
+     */
+    void applyCacheInfoFields(const std::map<std::string, std::string> & fields);
+
+    /**
      * Compute the path to the given realisation
      *
      * It's `${realisationsPrefix}/${drvOutput}.doi`.
@@ -106,6 +116,11 @@ protected:
     std::string makeRealisationPath(const DrvOutput & id);
 
 public:
+
+    bool includeInProvenance() override
+    {
+        return true;
+    }
 
     virtual bool fileExists(const std::string & path) = 0;
 
@@ -160,6 +175,23 @@ private:
 
     void writeNarInfo(ref<NarInfo> narInfo);
 
+    /**
+     * Upload the NAR for a path and everything else *except* the
+     * `.narinfo` file (i.e. the compressed NAR, an optional NAR
+     * listing, and optional debuginfo links), and construct the
+     * corresponding `NarInfo`. The returned `NarInfo` is neither signed
+     * nor published yet; call `uploadNarInfo()` to do that.
+     */
+    ref<NarInfo> uploadData(Source & narSource, RepairFlag repair, fun<ValidPathInfo(HashResult)> mkInfo);
+
+    /**
+     * Sign and publish the `.narinfo` file for a path whose NAR has
+     * already been uploaded by `uploadData()`. This is what establishes
+     * the closure invariant, so all of the path's references must
+     * already be valid in the store.
+     */
+    void uploadNarInfo(ref<NarInfo> narInfo);
+
     ref<const ValidPathInfo> addToStoreCommon(
         Source & narSource, RepairFlag repair, CheckSigsFlag checkSigs, fun<ValidPathInfo(HashResult)> mkInfo);
 
@@ -180,6 +212,9 @@ public:
     void
     addToStore(const ValidPathInfo & info, Source & narSource, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
+    void
+    addMultipleToStore(PathsSource && pathsToCopy, Activity & act, RepairFlag repair, CheckSigsFlag checkSigs) override;
+
     StorePath addToStoreFromDump(
         Source & dump,
         std::string_view name,
@@ -187,7 +222,8 @@ public:
         ContentAddressMethod hashMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override;
 
     StorePath addToStore(
         std::string_view name,

@@ -104,7 +104,6 @@ PeerInfo getPeerInfo(Descriptor remote)
                 socklen_t remoteAddrLen = sizeof(remoteAddr);
 
                 AutoCloseFD remote = accept(fd.fd, (struct sockaddr *) &remoteAddr, &remoteAddrLen);
-                checkInterrupt();
                 if (!remote) {
                     if (errno == EINTR)
                         continue;
@@ -114,6 +113,9 @@ PeerInfo getPeerInfo(Descriptor remote)
                 handler(std::move(remote), [&]() { listeningSockets.clear(); });
             }
 
+        } catch (AbortServeSocket &) {
+            /* Explicitly aborted, bail out. */
+            throw;
         } catch (Error & error) {
             auto ei = error.info();
             // FIXME: add to trace?

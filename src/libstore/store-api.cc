@@ -14,12 +14,10 @@
 #include "nix/util/callback.hh"
 #include "nix/util/git.hh"
 #include "nix/util/posix-source-accessor.hh"
-// FIXME this should not be here, see TODO below on
-// `addMultipleToStore`.
-#include "nix/store/worker-protocol.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/file-system.hh"
+#include "nix/store/provenance.hh"
 
 #include "store-config-private.hh"
 
@@ -27,8 +25,6 @@
 #include <nlohmann/json.hpp>
 
 #include "nix/util/strings.hh"
-
-using json = nlohmann::json;
 
 namespace nix {
 
@@ -140,9 +136,14 @@ StorePath Store::addToStore(
     std::optional<StorePath> storePath;
     auto sink = sourceToSink([&](Source & source) {
         LengthSource lengthSource(source);
-        storePath = addToStoreFromDump(lengthSource, name, fsm, method, hashAlgo, references, repair);
-        if (settings.warnLargePathThreshold && lengthSource.total >= settings.warnLargePathThreshold)
-            warn("copied large path '%s' to the store (%s)", path, renderSize(lengthSource.total));
+        storePath =
+            addToStoreFromDump(lengthSource, name, fsm, method, hashAlgo, references, repair, path.getProvenance());
+        if (settings.warnLargePathThreshold && lengthSource.total >= settings.warnLargePathThreshold) {
+            static bool failOnLargePath = getEnv("_NIX_TEST_FAIL_ON_LARGE_PATH").value_or("") == "1";
+            if (failOnLargePath)
+                throw Error("doesn't copy large path '%s' to the store (%d)", path, renderSize(lengthSource.total));
+            warn("copied large path '%s' to the store (%d)", path, renderSize(lengthSource.total));
+        }
     });
     dumpPath(path, *sink, fsm, filter);
     sink->finish();
@@ -218,23 +219,6 @@ void Store::addMultipleToStore(PathsSource && pathsToCopy, Activity & act, Repai
             nrDone++;
             showProgress();
         });
-}
-
-void Store::addMultipleToStore(Source & source, RepairFlag repair, CheckSigsFlag checkSigs)
-{
-    auto expected = readNum<uint64_t>(source);
-    for (uint64_t i = 0; i < expected; ++i) {
-        // FIXME we should not be using the worker protocol here, let
-        // alone the worker protocol with a hard-coded version!
-        auto info = WorkerProto::Serialise<ValidPathInfo>::read(
-            *this,
-            WorkerProto::ReadConn{
-                .from = source,
-                .version = {.number = {.major = 1, .minor = 16}},
-            });
-        info.ultimate = false;
-        addToStore(info, source, repair, checkSigs);
-    }
 }
 
 /*
@@ -322,6 +306,7 @@ ValidPathInfo Store::addToStoreSlow(
             }),
         narHash);
     info.narSize = narSize;
+    info.provenance = srcPath.getProvenance();
 
     if (!isValidPath(info.path)) {
         auto source = sinkToSource([&](Sink & scratchpadSink) { srcPath.dumpPath(scratchpadSink); });
@@ -441,72 +426,6 @@ StorePathSet Store::queryDerivationOutputs(const StorePath & path)
     return outputPaths;
 }
 
-void Store::querySubstitutablePathInfos(const StorePathCAMap & paths, SubstitutablePathInfos & infos)
-{
-    if (!settings.getWorkerSettings().useSubstitutes)
-        return;
-
-    for (auto & path : paths) {
-        std::optional<Error> lastStoresException = std::nullopt;
-        for (auto & sub : getDefaultSubstituters()) {
-            if (lastStoresException.has_value()) {
-                logError(lastStoresException->info());
-                lastStoresException.reset();
-            }
-
-            auto subPath(path.first);
-
-            // Recompute store path so that we can use a different store root.
-            if (path.second) {
-                subPath = makeFixedOutputPathFromCA(
-                    path.first.name(), ContentAddressWithReferences::withoutRefs(*path.second));
-                if (sub->storeDir == storeDir)
-                    assert(subPath == path.first);
-                if (subPath != path.first)
-                    debug(
-                        "replaced path '%s' with '%s' for substituter '%s'",
-                        printStorePath(path.first),
-                        sub->printStorePath(subPath),
-                        sub->config.getHumanReadableURI());
-            } else if (sub->storeDir != storeDir)
-                continue;
-
-            debug(
-                "checking substituter '%s' for path '%s'",
-                sub->config.getHumanReadableURI(),
-                sub->printStorePath(subPath));
-            try {
-                auto info = sub->queryPathInfo(subPath);
-
-                if (sub->storeDir != storeDir && !(info->isContentAddressed(*sub) && info->references.empty()))
-                    continue;
-
-                auto narInfo = std::dynamic_pointer_cast<const NarInfo>(std::shared_ptr<const ValidPathInfo>(info));
-                infos.insert_or_assign(
-                    path.first,
-                    SubstitutablePathInfo{
-                        .deriver = info->deriver,
-                        .references = info->references,
-                        .downloadSize = narInfo ? narInfo->fileSize : 0,
-                        .narSize = info->narSize,
-                    });
-
-                break; /* We are done. */
-            } catch (InvalidPath &) {
-            } catch (SubstituterDisabled &) {
-            } catch (Error & e) {
-                lastStoresException = std::make_optional(std::move(e));
-            }
-        }
-        if (lastStoresException.has_value()) {
-            if (!settings.getWorkerSettings().tryFallback) {
-                throw *lastStoresException;
-            } else
-                logError(lastStoresException->info());
-        }
-    }
-}
-
 StorePathSet Store::querySubstitutablePaths(const StorePathSet & paths)
 {
     if (!settings.getWorkerSettings().useSubstitutes)
@@ -591,6 +510,23 @@ ref<const ValidPathInfo> Store::queryPathInfo(const StorePath & storePath)
     queryPathInfo(storePath, {[&](std::future<ref<const ValidPathInfo>> result) {
                       try {
                           promise.set_value(result.get());
+                      } catch (...) {
+                          promise.set_exception(std::current_exception());
+                      }
+                  }});
+
+    return promise.get_future().get();
+}
+
+std::shared_ptr<const ValidPathInfo> Store::maybeQueryPathInfo(const StorePath & storePath)
+{
+    std::promise<std::shared_ptr<const ValidPathInfo>> promise;
+
+    queryPathInfo(storePath, {[&](std::future<ref<const ValidPathInfo>> result) {
+                      try {
+                          promise.set_value(result.get());
+                      } catch (InvalidPath &) {
+                          promise.set_value(nullptr);
                       } catch (...) {
                           promise.set_exception(std::current_exception());
                       }
@@ -920,13 +856,26 @@ makeCopyPathMessage(const StoreConfig & srcCfg, const StoreConfig & dstCfg, std:
         "copying path '%s' from '%s' to '%s'", storePath, srcCfg.getHumanReadableURI(), dstCfg.getHumanReadableURI());
 }
 
-void copyStorePath(
+/**
+ * Wrap upstream provenance in a "copied" provenance record to record
+ * where the path was copied from. But uninformative origins like
+ * LocalStore are omitted.
+ */
+static std::shared_ptr<const Provenance>
+addCopiedProvenance(std::shared_ptr<const Provenance> provenance, Store & srcStore)
+{
+    if (!srcStore.includeInProvenance())
+        return provenance;
+    return std::make_shared<const CopiedProvenance>(srcStore.config.getReference().render(false), provenance);
+}
+
+std::shared_ptr<const ValidPathInfo> copyStorePath(
     Store & srcStore, Store & dstStore, const StorePath & storePath, RepairFlag repair, CheckSigsFlag checkSigs)
 {
     /* Bail out early (before starting a download from srcStore) if
        dstStore already has this path. */
     if (!repair && dstStore.isValidPath(storePath))
-        return;
+        return nullptr;
 
     const auto & srcCfg = srcStore.config;
     const auto & dstCfg = dstStore.config;
@@ -939,25 +888,25 @@ void copyStorePath(
         {storePathS, srcCfg.getHumanReadableURI(), dstCfg.getHumanReadableURI()});
     PushActivity pact(act.id);
 
-    auto info = srcStore.queryPathInfo(storePath);
+    auto srcInfo = srcStore.queryPathInfo(storePath);
+    auto info = std::make_shared<ValidPathInfo>(*srcInfo);
 
     uint64_t total = 0;
 
     // recompute store path on the chance dstStore does it differently
     if (info->ca && info->references.empty()) {
-        auto info2 = make_ref<ValidPathInfo>(*info);
-        info2->path =
+        info->path =
             dstStore.makeFixedOutputPathFromCA(info->path.name(), info->contentAddressWithReferences().value());
         if (dstStore.storeDir == srcStore.storeDir)
-            assert(info->path == info2->path);
-        info = info2;
+            assert(info->path == srcInfo->path);
     }
 
-    if (info->ultimate) {
-        auto info2 = make_ref<ValidPathInfo>(*info);
-        info2->ultimate = false;
-        info = info2;
-    }
+    info->ultimate = false;
+
+    info->provenance = addCopiedProvenance(info->provenance, srcStore);
+
+    if (getEnv("_NIX_TEST_CONCURRENT_SUBSTITUTION"))
+        std::this_thread::sleep_for(std::chrono::seconds(1));
 
     auto source = sinkToSource(
         [&](Sink & sink) {
@@ -976,6 +925,8 @@ void copyStorePath(
         });
 
     dstStore.addToStore(*info, *source, repair, checkSigs);
+
+    return info;
 }
 
 std::map<StorePath, StorePath> copyPaths(
@@ -1023,12 +974,19 @@ std::map<StorePath, StorePath> copyPaths(
     CheckSigsFlag checkSigs,
     SubstituteFlag substitute)
 {
+    for (auto & path : storePaths)
+        dstStore.addTempRoot(path);
+
     auto valid = dstStore.queryValidPaths(storePaths, substitute);
 
     StorePathSet missing;
     for (auto & path : storePaths)
         if (!valid.count(path))
             missing.insert(path);
+
+    /* Don't start an activity if there's no work to do. */
+    if (missing.empty())
+        return {};
 
     Activity act(*logger, lvlInfo, actCopyPaths, fmt("copying %d paths", missing.size()));
 
@@ -1069,6 +1027,7 @@ std::map<StorePath, StorePath> copyPaths(
 
         ValidPathInfo infoForDst = *info;
         infoForDst.path = storePathForDst;
+        infoForDst.provenance = addCopiedProvenance(info->provenance, srcStore);
 
         auto source = sinkToSource([&, narSize = info->narSize](Sink & sink) {
             // We can reasonably assume that the copy will happen whenever we
@@ -1251,8 +1210,7 @@ void Store::signPathInfo(ValidPathInfo & info)
     auto secretKeyFiles = settings.secretKeyFiles;
 
     for (auto & secretKeyFile : secretKeyFiles.get()) {
-        SecretKey secretKey(readFile(secretKeyFile));
-        LocalSigner signer(std::move(secretKey));
+        LocalSigner signer(SecretKey::parse(readFile(secretKeyFile)));
         info.sign(*this, signer);
     }
 }
@@ -1264,8 +1222,7 @@ void Store::signRealisation(Realisation & realisation)
     auto secretKeyFiles = settings.secretKeyFiles;
 
     for (auto & secretKeyFile : secretKeyFiles.get()) {
-        SecretKey secretKey(readFile(secretKeyFile));
-        LocalSigner signer(std::move(secretKey));
+        LocalSigner signer(SecretKey::parse(readFile(secretKeyFile)));
         realisation.sign(realisation.id, signer);
     }
 }

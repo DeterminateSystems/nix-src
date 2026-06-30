@@ -171,7 +171,7 @@ ReplExitStatus NixRepl::mainLoop()
         if (state->debugRepl) {
             debuggerNotice = " debugger";
         }
-        notice("Nix %1%%2%\nType :? for help.", nixVersion, debuggerNotice);
+        notice("Nix %s\nType :? for help.", version(), debuggerNotice);
     }
 
     isFirstRepl = false;
@@ -311,6 +311,7 @@ StorePath NixRepl::getDerivationPath(Value & v)
     auto drvPath = packageInfo->queryDrvPath();
     if (!drvPath)
         throw Error("expression did not evaluate to a valid derivation (no 'drvPath' attribute)");
+    state->waitForPath(*drvPath);
     if (!state->store->isValidPath(*drvPath))
         throw Error("expression evaluated to invalid derivation '%s'", state->store->printStorePath(*drvPath));
     return *drvPath;
@@ -659,6 +660,8 @@ ProcessLineResult NixRepl::processLine(std::string line)
         ExprAttrs * bindings = nullptr;
         try {
             bindings = parseReplBindings(line);
+        } catch (IncompleteReplExpr &) {
+            throw;
         } catch (ParseError &) {
         }
 
@@ -875,7 +878,13 @@ ExprAttrs * NixRepl::parseReplBindings(std::string s)
     // Use original source (s) for error messages, not s + ";"
     try {
         return state->parseReplBindings(s + ";", s, basePath, staticEnv);
-    } catch (ParseError &) {
+    } catch (ParseError & e) {
+        // All binding parse attempts failed. If the last error indicates
+        // incomplete input (e.g. unclosed multi-line string), signal the
+        // mainLoop to read continuation lines instead of falling through
+        // to expression parsing which would produce a misleading error.
+        if (e.msg().find("unexpected end of file") != std::string::npos)
+            throw IncompleteReplExpr(e.msg());
         // Semicolon retry failed; rethrow the original bindings error
         std::rethrow_exception(bindingsError);
     }

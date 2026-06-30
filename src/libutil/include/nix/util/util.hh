@@ -246,6 +246,11 @@ void ignoreExceptionInDestructor(Verbosity lvl = lvlError);
 void ignoreExceptionExceptInterrupt(Verbosity lvl = lvlError);
 
 /**
+ * Like ignoreExceptionExceptInterrupt(), but specifies the error prefix.
+ */
+void logExceptionExceptInterrupt(std::string_view prefix = "error: ", Verbosity lvl = lvlError);
+
+/**
  * Tree formatting.
  */
 constexpr char treeConn[] = "├───";
@@ -316,9 +321,15 @@ typename T::mapped_type * get(T & map, const K & key)
 template<class T, typename K>
 typename T::mapped_type * get(T && map, const K & key) = delete;
 
-/**
- * Look up a value in a `boost::concurrent_flat_map`.
- */
+template<class T>
+std::optional<typename T::mapped_type> getOptional(const T & map, const typename T::key_type & key)
+{
+    auto i = map.find(key);
+    if (i == map.end())
+        return std::nullopt;
+    return {i->second};
+}
+
 template<class T>
 std::optional<typename T::mapped_type> getConcurrent(const T & map, const typename T::key_type & key)
 {
@@ -421,6 +432,20 @@ constexpr auto enumerate(R && range)
 {
     /* Not std::views::enumerate because it uses difference_type for the index. */
     return std::views::zip(std::views::iota(size_t{0}), std::forward<R>(range));
+}
+
+/**
+ * An iterator adapter that enumerates the elements of a range,
+ * pairing each element with a boolean indicating whether it is the
+ * last element.
+ */
+template<std::ranges::viewable_range R>
+    requires std::ranges::sized_range<R>
+constexpr auto markLast(R && range)
+{
+    auto n = std::ranges::size(range);
+    return std::views::zip(
+        std::views::iota(size_t{1}) | std::views::transform([n](size_t i) { return i == n; }), std::forward<R>(range));
 }
 
 /**

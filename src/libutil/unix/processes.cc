@@ -51,11 +51,13 @@ Pid::Pid(pid_t pid)
 }
 
 Pid::~Pid()
-try {
-    if (pid != -1)
-        kill(/*allowInterrupts=*/false);
-} catch (...) {
-    ignoreExceptionInDestructor();
+{
+    try {
+        if (pid != -1)
+            kill(/*allowInterrupts=*/false);
+    } catch (...) {
+        ignoreExceptionInDestructor();
+    }
 }
 
 void Pid::operator=(pid_t pid)
@@ -210,16 +212,15 @@ static int childEntry(void * arg)
 
 pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
 {
-    auto newLogger = makeSimpleLogger();
+    auto newLogger = makeSimpleLogger().release();
     ChildWrapperFunction wrapper = [&] {
         if (!options.allowVfork) {
-            /* Set a simple logger, while releasing (not destroying)
+            /* Set a simple logger, while leaking (not destroying)
                the parent logger. We don't want to run the parent
                logger's destructor since that will crash (e.g. when
                ~ProgressBar() tries to join a thread that doesn't
                exist. */
-            logger.release();
-            logger = std::move(newLogger);
+            logger = newLogger;
         }
         try {
 #ifdef __linux__
