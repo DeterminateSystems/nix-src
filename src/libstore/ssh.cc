@@ -259,8 +259,17 @@ std::optional<std::filesystem::path> SSHMaster::startMaster()
 
             close(out.readSide.get());
 
+            int nullFd = open("/dev/null", O_RDWR);
+            if (nullFd == -1)
+                throw SysError("opening /dev/null");
+
             if (dup2(out.writeSide.get(), STDOUT_FILENO) == -1)
                 throw SysError("duping over stdout");
+            if (dup2(nullFd, STDIN_FILENO) == -1)
+                throw SysError("duping over stdin");
+            if (dup2(logFD != -1 ? logFD : nullFd, STDERR_FILENO) == -1)
+                throw SysError("duping over stderr");
+            unix::closeExtraFDs();
 
             OsStrings args = {"ssh", hostnameAndUser.c_str(), "-M", "-N", "-oControlPersist=no"};
             if (verbosity >= lvlChatty)
