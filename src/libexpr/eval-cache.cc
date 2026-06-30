@@ -652,6 +652,43 @@ string_t AttrCursor::getStringWithContext()
         root->state.error<TypeError>("'%s' is not a string but %s", getAttrPathStr(), showType(v)).debugThrow();
 }
 
+std::optional<string_t> AttrCursor::cachedGetStringWithContext()
+{
+    if (!root->db)
+        return std::nullopt;
+
+    fetchCachedValue();
+
+    if (!cachedValue || std::get_if<placeholder_t>(&cachedValue->second))
+        return std::nullopt;
+
+    auto s = std::get_if<string_t>(&cachedValue->second);
+    if (!s)
+        return std::nullopt;
+
+    /* Verify that all store paths referenced by the string context are
+       still valid.  If any have been garbage-collected, return nullopt
+       so the caller falls through to full evaluation which will
+       recreate them. */
+    for (auto & c : s->second) {
+        const StorePath * path = std::visit(
+            overloaded{
+                [&](const NixStringContextElem::DrvDeep & d) -> const StorePath * { return &d.drvPath; },
+                [&](const NixStringContextElem::Built & b) -> const StorePath * {
+                    return &b.drvPath->getBaseStorePath();
+                },
+                [&](const NixStringContextElem::Opaque & o) -> const StorePath * { return &o.path; },
+                [&](const NixStringContextElem::Path & p) -> const StorePath * { return &p.storePath; },
+            },
+            c.raw);
+        if (path && !root->state.store->isValidPath(*path))
+            return std::nullopt;
+    }
+
+    debug("using cached string attribute '%s'", getAttrPathStr());
+    return *s;
+}
+
 bool AttrCursor::getBool()
 {
     if (root->db) {

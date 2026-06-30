@@ -1,10 +1,13 @@
 #include "nix/cmd/command-installable-value.hh"
+#include "nix/cmd/installable-flake.hh"
 #include "nix/main/common-args.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
 #include "nix/expr/eval.hh"
 #include "nix/expr/eval-inline.hh"
+#include "nix/expr/eval-cache.hh"
 #include "nix/expr/value-to-json.hh"
+#include "nix/expr/print.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -63,6 +66,40 @@ struct CmdEval : MixJSON, InstallableValueCommand, MixReadOnlyOption
             throw UsageError("--raw and --json are mutually exclusive");
 
         auto state = getEvalState();
+
+        /* Fast path: if this is a simple flake string attribute eval (no --apply,
+           no --write-to), try to serve it directly from the eval cache.
+           This avoids the expensive derivationStrict computation when the flake
+           inputs haven't changed. */
+        if (!apply && !writeTo) {
+            if (auto flakeInstallable = dynamic_cast<InstallableFlake *>(&*installable)) {
+                try {
+                    auto cursor = flakeInstallable->getCursor(*state);
+                    /* Use cachedGetStringWithContext() which only returns a
+                       result on a true eval-cache hit.  Unlike getStringWithContext(),
+                       it does NOT fall through to forceValue() on cache miss,
+                       so we are guaranteed to only use genuinely cached values. */
+                    auto cachedStr = cursor->cachedGetStringWithContext();
+                    if (cachedStr) {
+                        if (raw) {
+                            logger->stop();
+                            writeFull(getStandardOutput(), cachedStr->first);
+                        } else if (json) {
+                            printJSON(nlohmann::json(cachedStr->first));
+                        } else {
+                            /* Use Nix-style string escaping (printLiteralString) to
+                               match the normal ValuePrinter output path exactly. */
+                            std::ostringstream out;
+                            printLiteralString(out, cachedStr->first);
+                            logger->cout("%s", out.str());
+                        }
+                        return;
+                    }
+                } catch (...) {
+                    /* Cache miss or error — fall through to full evaluation. */
+                }
+            }
+        }
 
         auto [v, pos] = installable->toValue(*state);
         NixStringContext context;

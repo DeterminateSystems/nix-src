@@ -166,6 +166,14 @@ public:
 
     string_t getStringWithContext();
 
+    /**
+     * Like getStringWithContext(), but only returns a result if the
+     * value is already present in the eval cache database.  Returns
+     * std::nullopt on cache miss instead of falling through to
+     * forceValue().  Used by the nix-eval fast path.
+     */
+    std::optional<string_t> cachedGetStringWithContext();
+
     bool getBool();
 
     NixInt getInt();
