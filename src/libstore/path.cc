@@ -1,3 +1,4 @@
+#include <array>
 #include <nlohmann/json.hpp>
 
 #include "nix/store/store-dir-config.hh"
@@ -27,9 +28,23 @@ void checkName(std::string_view name)
                     "name '%s' is not valid: first dash-separated component must not be '%s'", name, "..");
         }
     }
+    /* Use a constexpr 256-byte lookup table instead of a per-character
+       9-way comparison chain.  The table maps each byte to
+       1 (valid) or 0 (invalid). */
+    static constexpr auto validChar = []() constexpr {
+        std::array<bool, 256> table{};
+        for (int c = '0'; c <= '9'; ++c)
+            table[c] = true;
+        for (int c = 'a'; c <= 'z'; ++c)
+            table[c] = true;
+        for (int c = 'A'; c <= 'Z'; ++c)
+            table[c] = true;
+        for (auto c : {'+', '-', '.', '_', '?', '='})
+            table[(unsigned char) c] = true;
+        return table;
+    }();
     for (auto c : name)
-        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '+' || c == '-'
-              || c == '.' || c == '_' || c == '?' || c == '='))
+        if (!validChar[static_cast<unsigned char>(c)])
             throw BadStorePathName("name '%s' contains illegal character '%s'", name, c);
 }
 
