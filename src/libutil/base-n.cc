@@ -10,13 +10,30 @@ namespace nix {
 
 constexpr static const std::array<char, 16> base16Chars = "0123456789abcdef"_arrayNoNull;
 
+/* Use a 256-entry lookup table so each input byte produces two hex
+   characters in a single indexed load instead of two separate
+   nibble lookups + push_back calls. Also write directly into the
+   string's buffer instead of using push_back (avoids repeated
+   size/capacity checks). */
+static constexpr auto hexTable = []() constexpr {
+    std::array<std::array<char, 2>, 256> table{};
+    constexpr const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < 256; ++i) {
+        table[i][0] = digits[i >> 4];
+        table[i][1] = digits[i & 0x0f];
+    }
+    return table;
+}();
+
 std::string base16::encode(std::span<const std::byte> b)
 {
     std::string buf;
-    buf.reserve(b.size() * 2);
-    for (size_t i = 0; i < b.size(); i++) {
-        buf.push_back(base16Chars[(uint8_t) b.data()[i] >> 4]);
-        buf.push_back(base16Chars[(uint8_t) b.data()[i] & 0x0f]);
+    buf.resize(b.size() * 2);
+    char * out = buf.data();
+    for (size_t i = 0; i < b.size(); ++i) {
+        auto & pair = hexTable[static_cast<uint8_t>(b[i])];
+        out[i * 2] = pair[0];
+        out[i * 2 + 1] = pair[1];
     }
     return buf;
 }
