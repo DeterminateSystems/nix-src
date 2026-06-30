@@ -148,7 +148,7 @@ std::pair<FlakeRef, std::string> parsePathFlakeRefWithFragment(
                 // Save device to detect filesystem boundary
                 dev_t device = lstat(path).st_dev;
                 bool found = false;
-                while (path != "/") {
+                while (path.parent_path() != path) {
                     if (pathExists(path / "flake.nix")) {
                         found = true;
                         break;
@@ -173,7 +173,7 @@ std::pair<FlakeRef, std::string> parsePathFlakeRefWithFragment(
             auto flakeRoot = path;
             std::string subdir;
 
-            while (flakeRoot != "/") {
+            while (flakeRoot.parent_path() != flakeRoot) {
                 if (pathExists(flakeRoot / ".git")) {
                     auto parsedURL = ParsedURL{
                         .scheme = "git+file",

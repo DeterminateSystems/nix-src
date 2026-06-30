@@ -61,6 +61,7 @@ test(
   env : {
     '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
     'HOME' : meson.current_build_dir() / 'test-home',
+    'NIX_STORE' : '',
   },
   protocol : 'gtest',
 )
