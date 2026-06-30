@@ -29,14 +29,29 @@ namespace nix {
 BinaryCacheStore::BinaryCacheStore(Config & config)
     : config{config}
 {
-    if (!config.secretKeyFile.get().empty())
-        signers.push_back(std::make_unique<LocalSigner>(SecretKey::parse(readFile(config.secretKeyFile.get()))));
+    auto keystoreEnabled = experimentalFeatureSettings.isEnabled(Xp::Keystore);
+    if (!config.secretKeyFile.get().empty()) {
+        auto isUri = keystoreEnabled && !std::get<0>(splitColon(config.secretKeyFile.get().string())).empty();
+        signers.push_back(
+            std::make_unique<LocalSigner>(
+                SecretKey::parse(
+                    isUri ? config.secretKeyFile.get().string() : readFile(config.secretKeyFile.get()),
+                    isUri
+                )
+            )
+        );
+    }
 
     if (config.secretKeyFiles != "") {
         std::stringstream ss(config.secretKeyFiles);
         std::string keyPath;
         while (std::getline(ss, keyPath, ',')) {
-            signers.push_back(std::make_unique<LocalSigner>(SecretKey::parse(readFile(keyPath))));
+            auto isUri = keystoreEnabled && !std::get<0>(splitColon(keyPath)).empty();
+            signers.push_back(
+                std::make_unique<LocalSigner>(
+                    SecretKey::parse(isUri ? keyPath : readFile(keyPath), isUri)
+                )
+            );
         }
     }
 
