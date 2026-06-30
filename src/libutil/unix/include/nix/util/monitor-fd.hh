@@ -116,13 +116,13 @@ inline void MonitorFdHup::runThread(int watchFd, int notifyFd)
             }
         }
 
-        if (fds[0].revents & POLLHUP) {
+        if (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
             unix::triggerInterrupt();
             break;
         }
 
-        if (fds[1].revents & POLLHUP) {
-            // Notify pipe closed, exit thread
+        if (fds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+            // Notify pipe closed or became invalid, exit thread.
             break;
         }
     }

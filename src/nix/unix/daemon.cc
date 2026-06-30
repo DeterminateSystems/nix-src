@@ -348,6 +348,17 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
                         if (setsid() == -1)
                             throw SysError("creating a new session");
 
+                        // The parent's sigwait thread does not survive fork(), but
+                        // the worker inherits the daemon's *blocked* signal mask.
+                        // Determinate Nix's startSignalHandlerThread() saves the
+                        // current mask unconditionally, so restore the mask saved
+                        // at daemon startup first; otherwise the blocked mask is
+                        // persisted and later reapplied to build/exec children via
+                        // restoreProcessContext(), leaving SIGTERM/SIGPIPE blocked
+                        // in builders.
+                        unix::restoreSignals();
+                        unix::startSignalHandlerThread();
+
                         // Restore normal handling of SIGCHLD.
                         setSigChldAction(false);
 
