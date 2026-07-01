@@ -83,20 +83,44 @@ struct NixFs
        avoiding round-trips into this filesystem for data we've already
        served.
 
-       Negative lookups are deliberately *not* cached: a store path that
-       is absent now may appear later (e.g. after a build or an
-       on-demand substitution), so caching its absence would hide it. */
-    void * init(struct fuse_conn_info *, struct fuse_config * cfg)
+       We also cache negative lookups. Strictly speaking a store path
+       that is absent now may appear later (e.g. after a build or an
+       on-demand substitution), so caching the absence of a top-level
+       store path could hide it. But the high-level FUSE API applies a
+       single `negative_timeout` to all lookups, and the overwhelming
+       majority of negative lookups are for *subpaths* of an already
+       valid store path (e.g. the dynamic linker probing
+       `<glibc>/lib/glibc-hwcaps`), which are immutable and safe — and
+       expensive to re-resolve. In the intended overlayfs setup a
+       newly-built store path lives in the writable upper layer, which
+       overlayfs consults regardless of what this lower layer reports,
+       so caching negatives here is acceptable.
+
+       TODO: switch to the low-level API so we can cache negatives only
+       for immutable subpaths and never for top-level store paths. */
+    void * init(struct fuse_conn_info * conn, struct fuse_config * cfg)
     {
         /* ~100 years; effectively forever. */
         constexpr double forever = 100.0 * 365 * 24 * 60 * 60;
         cfg->entry_timeout = forever;
         cfg->attr_timeout = forever;
-        cfg->negative_timeout = 0;
+        cfg->negative_timeout = forever;
 
         /* Keep file data in the kernel page cache across opens instead
            of dropping it each time a file is (re)opened. */
         cfg->kernel_cache = 1;
+
+        /* Let the kernel cache symlink targets. Like all store contents,
+           symlinks are immutable, so this is safe and avoids repeated
+           `readlink` round-trips. */
+        if (conn->capable & FUSE_CAP_CACHE_SYMLINKS)
+            conn->want |= FUSE_CAP_CACHE_SYMLINKS;
+
+        /* Don't invalidate cached file data when attributes (e.g. mtime)
+           change; the store is immutable, so cached data never goes
+           stale and the kernel can hold onto it indefinitely. */
+        if (conn->capable & FUSE_CAP_EXPLICIT_INVAL_DATA)
+            conn->want |= FUSE_CAP_EXPLICIT_INVAL_DATA;
 
         /* Preserve the `private_data` we passed to `fuse_new`. */
         return fuse_get_context()->private_data;
@@ -226,6 +250,7 @@ struct NixFs
 
             auto fh = std::make_unique<FileHandle>(std::move(*resolved));
             fi->fh = reinterpret_cast<uint64_t>(fh.release());
+            fi->keep_cache = 1;
         } catch (BadStorePath &) {
             return -ENOENT;
         } catch (...) {
@@ -301,6 +326,9 @@ struct NixFs
 
                 for (auto & [name, type] : accessor->readDirectory(subPath))
                     filler(buf, name.c_str(), nullptr, 0, (fuse_fill_dir_flags) 0);
+
+                info->keep_cache = 1;
+                info->cache_readdir = 1;
             }
         } catch (BadStorePath &) {
             return -ENOENT;
