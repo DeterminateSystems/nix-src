@@ -302,6 +302,28 @@ void HttpBinaryCacheStore::getFile(const std::string & path, Callback<std::optio
     }
 }
 
+BinaryCacheStore::ConditionalGetResult
+HttpBinaryCacheStore::getFileConditional(const std::string & path, const std::string & expectedETag)
+{
+    checkEnabled();
+    auto request(makeRequest(path));
+    request.expectedETag = expectedETag;
+    try {
+        auto result = fileTransfer->download(request);
+        return ConditionalGetResult{
+            .data = result.cached ? std::optional<std::string>(std::string{})
+                                  : std::optional<std::string>(std::move(result.data)),
+            .etag = std::move(result.etag),
+            .notModified = result.cached,
+        };
+    } catch (FileTransferError & e) {
+        if (e.error == FileTransfer::NotFound || e.error == FileTransfer::Forbidden)
+            return ConditionalGetResult{.data = std::nullopt, .etag = "", .notModified = false};
+        maybeDisable();
+        throw;
+    }
+}
+
 std::optional<std::string> HttpBinaryCacheStore::getNixCacheInfo()
 {
     try {

@@ -1,10 +1,12 @@
 #include "nix/cmd/command.hh"
 #include "nix/util/file-system.hh"
+#include "nix/util/hash.hh"
 #include "nix/util/serialise.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/deleter.hh"
 #include "nix/store/nar-info.hh"
 #include "nix/store/binary-cache-store.hh"
+#include "nix/store/bloom-filter.hh"
 #include "nix/store/log-store.hh"
 #include "nix/util/environment-variables.hh"
 
@@ -24,6 +26,7 @@ struct CmdServe : StoreCommand
     std::string listenAddress = "127.0.0.1";
     std::optional<int> priority;
     std::optional<std::filesystem::path> portFile;
+    double bloomFalsePositiveRate = 0.01;
 
     CmdServe()
     {
@@ -52,6 +55,13 @@ struct CmdServe : StoreCommand
             .description = "Priority of this cache (overrides the store's default).",
             .labels = {"priority"},
             .handler = {[this](std::string s) { priority = std::stoi(s); }},
+        });
+        addFlag({
+            .longName = "false-positive-rate",
+            .description = "Target false-positive rate for the Bloom filter "
+                           "served at `/bloom-filter` (default: 0.01).",
+            .labels = {"rate"},
+            .handler = {[this](std::string s) { bloomFalsePositiveRate = std::stod(s); }},
         });
     }
 
@@ -110,7 +120,8 @@ struct CmdServe : StoreCommand
             auto body = std::make_unique<std::string>(
                         "StoreDir: " + store.storeDir + "\n"
                         "WantMassQuery: " + (store.config.wantMassQuery ? "1" : "0") + "\n"
-                        "Priority: " + std::to_string(priority.value_or(store.config.priority)) + "\n");
+                        "Priority: " + std::to_string(priority.value_or(store.config.priority)) + "\n"
+                        "BloomFilter: /bloom-filter\n");
             response.reset(MHD_create_response_from_buffer(body->size(), body->data(), MHD_RESPMEM_MUST_COPY));
             MHD_add_response_header(response.get(), "Content-Type", "text/x-nix-cache-info");
 
@@ -211,6 +222,25 @@ struct CmdServe : StoreCommand
 
             response.reset(MHD_create_response_from_buffer(log->size(), log->data(), MHD_RESPMEM_MUST_COPY));
             MHD_add_response_header(response.get(), "Content-Type", "text/plain; charset=utf-8");
+        }
+
+        else if (url == "/bloom-filter") {
+            auto body =
+                std::make_unique<std::string>(buildBloomFilter(store.queryAllValidPaths(), bloomFalsePositiveRate));
+            auto etag =
+                "\"" + hashString(HashAlgorithm::SHA512, *body).to_string(HashFormat::Base16, /*includePrefix=*/false)
+                + "\"";
+
+            if (auto * inm = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "If-None-Match");
+                inm && etag == inm) {
+                response.reset(MHD_create_response_from_buffer(0, (void *) "", MHD_RESPMEM_PERSISTENT));
+                MHD_add_response_header(response.get(), "ETag", etag.c_str());
+                return MHD_queue_response(connection, MHD_HTTP_NOT_MODIFIED, response.get());
+            }
+
+            response.reset(MHD_create_response_from_buffer(body->size(), body->data(), MHD_RESPMEM_MUST_COPY));
+            MHD_add_response_header(response.get(), "Content-Type", "application/octet-stream");
+            MHD_add_response_header(response.get(), "ETag", etag.c_str());
         } else
             return notFound();
 

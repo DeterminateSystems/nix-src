@@ -14,11 +14,16 @@
 #include "nix/util/signals.hh"
 #include "nix/util/archive.hh"
 #include "nix/util/util.hh"
+#include "nix/util/users.hh"
+#include "nix/store/bloom-filter.hh"
+#include "nix/store/pathlocks.hh"
 
 #include <chrono>
+#include <cstring>
 #include <future>
 #include <regex>
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <variant>
 
@@ -86,11 +91,118 @@ void BinaryCacheStore::applyCacheInfoFields(const std::map<std::string, std::str
         if (auto priority = string2Int<int>(*value))
             config.priority.setDefault(*priority);
     }
+    if (auto * value = get(fields, "BloomFilter"))
+        bloomFilterUrl = *value;
 }
 
 void BinaryCacheStore::init()
 {
     applyCacheInfoFields(parseNixCacheInfo());
+}
+
+BinaryCacheStore::ConditionalGetResult
+BinaryCacheStore::getFileConditional(const std::string & path, const std::string & /*expectedETag*/)
+{
+    /* Default: no ETag support; just do an ordinary fetch. */
+    auto data = getFile(path);
+    return ConditionalGetResult{.data = std::move(data), .etag = "", .notModified = false};
+}
+
+bool BinaryCacheStore::fetchBloomFilter(const std::string & uri)
+{
+    /* Disable the Bloom filter for this cache for a short cooldown, so an
+       unavailable/broken filter doesn't cause a fetch on every query. */
+    auto disable = [&] {
+        auto state(bloomState.lock());
+        if (state->enabled) {
+            int t = 60;
+            debug("disabling Bloom filter for cache '%s' for %d seconds", uri, t);
+            state->enabled = false;
+            state->disabledUntil = std::chrono::steady_clock::now() + std::chrono::seconds(t);
+        }
+        return false;
+    };
+
+    auto expectedETag = diskCache->getBloomFilterETag(uri).value_or("");
+
+    /* `*bloomFilterUrl` can be a full (absolute) URL or a path relative to
+       the cache root; either way the resolution is done by `getFile()` /
+       `makeRequest()`, the same as for NAR URLs in `.narinfo` files. */
+    ConditionalGetResult res;
+    try {
+        res = getFileConditional(*bloomFilterUrl, expectedETag);
+    } catch (Error & e) {
+        warn("failed to fetch Bloom filter from cache '%s': %s; disabling for now", uri, e.message());
+        return disable();
+    }
+
+    if (res.notModified) {
+        debug("Bloom filter for '%s' unchanged (304 Not Modified)", uri);
+        diskCache->touchBloomFilter(uri, res.etag.empty() ? expectedETag : res.etag);
+        return true;
+    }
+
+    if (!res.data) {
+        warn("Bloom filter at '%s' returned 404; disabling for now", uri);
+        return disable();
+    }
+
+    const auto & body = *res.data;
+    auto params = parseBloomFilterHeader(body);
+    if (!params || body.size() != bloomFilterHeaderLen + params->mBits / 8) {
+        warn("Bloom filter from cache '%s' is malformed; disabling for now", uri);
+        return disable();
+    }
+
+    diskCache->upsertBloomFilter(uri, res.etag, {reinterpret_cast<const std::byte *>(body.data()), body.size()});
+    return true;
+}
+
+bool BinaryCacheStore::isDefinitelyMissing(const StorePath & storePath)
+{
+    if (!diskCache || !bloomFilterUrl || !config.useBloomFilter)
+        return false;
+
+    const auto uri = config.getReference().render(/*withParams=*/false);
+
+    /* Per-process cooldown after a failed fetch, so an unavailable filter
+       doesn't cause a fetch on every query. */
+    {
+        auto state(bloomState.lock());
+        if (!state->enabled) {
+            if (std::chrono::steady_clock::now() < state->disabledUntil)
+                return false;
+            state->enabled = true; // cooldown elapsed; try again
+        }
+    }
+
+    auto r = diskCache->probeBloomFilter(uri, storePath);
+
+    if (!r) {
+        /* No fresh filter cached. Acquire a cross-process file lock so
+           concurrent first-probers don't all hit the network, then
+           re-check and fetch. */
+        auto lockDir = getCacheDir() / "bloom-filter-locks";
+        std::filesystem::create_directories(lockDir);
+        auto lockFile =
+            lockDir / hashString(HashAlgorithm::SHA256, uri).to_string(HashFormat::Base16, /*includePrefix=*/false);
+        PathLocks fetchLock(
+            {lockFile.string()}, fmt("waiting for another Nix process to fetch Bloom filter for '%s'...", uri));
+
+        r = diskCache->probeBloomFilter(uri, storePath);
+        if (!r) {
+            if (!fetchBloomFilter(uri))
+                return false;
+            r = diskCache->probeBloomFilter(uri, storePath);
+        }
+    }
+
+    if (!r)
+        return false;
+
+    if (!*r)
+        debug("Bloom filter for '%s' ruled out '%s'", uri, printStorePath(storePath));
+    return !*r;
 }
 
 std::optional<std::string> BinaryCacheStore::getNixCacheInfo()
@@ -547,6 +659,8 @@ StorePath BinaryCacheStore::addToStoreFromDump(
 
 bool BinaryCacheStore::isValidPathUncached(const StorePath & storePath)
 {
+    if (isDefinitelyMissing(storePath))
+        return false;
     // FIXME: this only checks whether a .narinfo with a matching hash
     // part exists. So ‘f4kb...-foo’ matches ‘f4kb...-bar’, even
     // though they shouldn't. Not easily fixed.
@@ -600,6 +714,9 @@ void BinaryCacheStore::queryPathInfoUncached(
     auto callbackPtr = std::make_shared<decltype(callback)>(std::move(callback));
 
     try {
+        if (isDefinitelyMissing(storePath))
+            return (*callbackPtr)({});
+
         auto uri = config.getReference().render(/*FIXME withParams=*/false);
         auto storePathS = printStorePath(storePath);
         auto act = std::make_shared<Activity>(

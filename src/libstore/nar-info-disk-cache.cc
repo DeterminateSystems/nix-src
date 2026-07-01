@@ -1,6 +1,8 @@
 #include "nix/store/nar-info-disk-cache.hh"
+#include "nix/store/bloom-filter.hh"
 #include "nix/util/users.hh"
 #include "nix/util/sync.hh"
+#include "nix/util/finally.hh"
 #include "nix/store/sqlite.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/provenance.hh"
@@ -20,6 +22,14 @@ create table if not exists BinaryCaches (
     timestamp integer not null,
     storeDir  text not null,
     fields    text not null
+);
+
+create table if not exists BloomFilters (
+    cache     integer primary key not null,
+    timestamp integer not null,
+    etag      text,
+    blob      blob not null, -- full filter body (header + bit array)
+    foreign key (cache) references BinaryCaches(id) on delete cascade
 );
 
 create table if not exists NARs (
@@ -74,7 +84,8 @@ struct NarInfoDiskCacheImpl : NarInfoDiskCache
     {
         SQLite db;
         SQLiteStmt insertCache, queryCache, insertNAR, insertMissingNAR, queryNAR, insertRealisation,
-            insertMissingRealisation, queryRealisation, purgeCache;
+            insertMissingRealisation, queryRealisation, purgeCache, queryBloomFilterETag, insertBloomFilter,
+            touchBloomFilter, queryFreshBloomFilter;
         std::map<std::string, Cache> caches;
     };
 
@@ -102,6 +113,18 @@ struct NarInfoDiskCacheImpl : NarInfoDiskCache
 
         state->queryCache.create(
             state->db, "select id, storeDir, fields from BinaryCaches where url = ? and timestamp > ?");
+
+        state->queryBloomFilterETag.create(state->db, "select etag from BloomFilters where cache = ?");
+
+        /* `>=` (not `>`) so a filter (re)fetched and stamped at the probe's
+           reference time still counts as fresh; see `probeBloomFilter`. */
+        state->queryFreshBloomFilter.create(
+            state->db, "select rowid from BloomFilters where cache = ? and timestamp >= ?");
+
+        state->insertBloomFilter.create(
+            state->db, "insert or replace into BloomFilters(cache, timestamp, etag, blob) values (?, ?, ?, ?)");
+
+        state->touchBloomFilter.create(state->db, "update BloomFilters set timestamp = ?, etag = ? where cache = ?");
 
         state->insertNAR.create(
             state->db,
@@ -394,6 +417,95 @@ public:
                 .apply(id.to_string())
                 .apply(time(nullptr))
                 .exec();
+        });
+    }
+
+    std::optional<bool> probeBloomFilter(const std::string & uri, const StorePath & path) override
+    {
+        return retrySQLite<std::optional<bool>>([&]() -> std::optional<bool> {
+            auto state(_state.lock());
+            auto & cache(getCache(*state, uri));
+
+            /* Use a fixed reference time (captured at the first probe in
+               this process) rather than the moving wall clock. Otherwise a
+               filter we (re)fetched and stamped a moment ago could already
+               read as "stale" — especially under `--refresh`, which sets
+               `ttlNegative` to 0 — and we'd re-fetch the shared filter on
+               every query. With a fixed `startTime`, a filter stamped at or
+               after `startTime` stays fresh for the rest of the process. */
+            static auto startTime = time(nullptr);
+
+            int64_t rowid;
+            {
+                auto q(state->queryFreshBloomFilter.use().apply(cache.info.id).apply(startTime - settings.ttlNegative));
+                if (!q.next())
+                    return std::nullopt; // no filter cached, or stale
+                rowid = q.getInt(0);
+            }
+
+            sqlite3_blob * blob = nullptr;
+            if (sqlite3_blob_open(state->db, "main", "BloomFilters", "blob", rowid, /*write=*/0, &blob) != SQLITE_OK)
+                SQLiteError::throw_(state->db, "opening bloom-filter blob");
+            Finally _closeBlob([&] {
+                if (blob)
+                    sqlite3_blob_close(blob);
+            });
+
+            /* Read and parse the header to get the filter parameters. */
+            char header[bloomFilterHeaderLen];
+            if (sqlite3_blob_bytes(blob) < (int) bloomFilterHeaderLen
+                || sqlite3_blob_read(blob, header, bloomFilterHeaderLen, 0) != SQLITE_OK)
+                return std::nullopt; // corrupt; treat as absent so we refetch
+            auto params = parseBloomFilterHeader({header, bloomFilterHeaderLen});
+            if (!params)
+                return std::nullopt;
+
+            bool allSet = true;
+            forEachBloomBitPosition(path, params->k, params->mBits, [&](uint64_t pos) {
+                if (!allSet)
+                    return;
+                unsigned char byte = 0;
+                if (sqlite3_blob_read(blob, &byte, 1, (int) (bloomFilterHeaderLen + pos / 8)) != SQLITE_OK)
+                    SQLiteError::throw_(state->db, "reading bloom-filter blob");
+                if (!((byte >> (pos % 8)) & 1))
+                    allSet = false;
+            });
+            return allSet;
+        });
+    }
+
+    void upsertBloomFilter(const std::string & uri, const std::string & etag, std::span<const std::byte> blob) override
+    {
+        retrySQLite<void>([&]() {
+            auto state(_state.lock());
+            auto & cache(getCache(*state, uri));
+            state->insertBloomFilter.use()
+                .apply(cache.info.id)
+                .apply(time(nullptr))
+                .apply(etag, !etag.empty())
+                .apply(reinterpret_cast<const unsigned char *>(blob.data()), blob.size())
+                .exec();
+        });
+    }
+
+    void touchBloomFilter(const std::string & uri, const std::string & etag) override
+    {
+        retrySQLite<void>([&]() {
+            auto state(_state.lock());
+            auto & cache(getCache(*state, uri));
+            state->touchBloomFilter.use().apply(time(nullptr)).apply(etag, !etag.empty()).apply(cache.info.id).exec();
+        });
+    }
+
+    std::optional<std::string> getBloomFilterETag(const std::string & uri) override
+    {
+        return retrySQLite<std::optional<std::string>>([&]() -> std::optional<std::string> {
+            auto state(_state.lock());
+            auto & cache(getCache(*state, uri));
+            auto q(state->queryBloomFilterETag.use().apply(cache.info.id));
+            if (!q.next() || q.isNull(0))
+                return std::nullopt;
+            return q.getStr(0);
         });
     }
 };

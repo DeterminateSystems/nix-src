@@ -6,8 +6,10 @@
 #include "nix/store/log-store.hh"
 
 #include "nix/util/pool.hh"
+#include "nix/util/sync.hh"
 
 #include <atomic>
+#include <chrono>
 
 namespace nix {
 
@@ -66,6 +68,17 @@ struct BinaryCacheStoreConfig : virtual StoreConfig
           The meaning and accepted values depend on the compression method selected.
           `-1` specifies that the default compression level should be used.
         )"};
+
+    Setting<bool> useBloomFilter{
+        this,
+        true,
+        "use-bloom-filter",
+        R"(
+          Whether to use the Bloom filter advertised by this binary cache (if
+          any) to avoid querying `.narinfo` files for store paths that are
+          definitely not in the cache. Set to `false` to disable this
+          optimization.
+        )"};
 };
 
 /**
@@ -84,8 +97,38 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
      */
     Config & config;
 
+    /**
+     * URL of the Bloom filter advertised by this cache (from the
+     * `BloomFilter:` field in `nix-cache-info`), as written by the server.
+     * Absolute URL or path relative to the cache root. `nullopt` if the
+     * cache doesn't advertise a Bloom filter. Populated by `init()` on
+     * the cold path or restored from the disk-cache by subclasses on the
+     * warm path.
+     */
+    std::optional<std::string> bloomFilterUrl;
+
 private:
     std::vector<std::unique_ptr<Signer>> signers;
+
+    /**
+     * Per-process cooldown that suppresses Bloom filter use after a failed
+     * fetch, so we don't re-hit an unavailable filter on every query. Mirrors
+     * `HttpBinaryCacheStore::maybeDisable()`.
+     */
+    struct BloomState
+    {
+        bool enabled = true;
+        std::chrono::steady_clock::time_point disabledUntil;
+    };
+
+    Sync<BloomState> bloomState;
+
+    /**
+     * Fetch (with a conditional GET), validate, and store the Bloom filter in
+     * the disk cache. Returns false if the filter is unavailable/invalid (and
+     * disables it for a cooldown). Caller must hold the fetch lock.
+     */
+    bool fetchBloomFilter(const std::string & uri);
 
 protected:
 
@@ -163,9 +206,42 @@ public:
 
     std::optional<std::string> getFile(const std::string & path);
 
+    /**
+     * Result of a conditional HTTP-style GET. Returned by
+     * `BinaryCacheStore::getFileConditional`.
+     */
+    struct ConditionalGetResult
+    {
+        /** Response body. Empty if `notModified`. `nullopt` if the file does not exist (404). */
+        std::optional<std::string> data;
+
+        /** ETag returned by the server. Empty if no ETag was sent. */
+        std::string etag;
+
+        /** True if the server replied 304 Not Modified to our If-None-Match. */
+        bool notModified = false;
+    };
+
+    /**
+     * Fetch a file with an HTTP-style conditional GET. The default
+     * implementation just forwards to `getFile()` (no ETag support).
+     * `HttpBinaryCacheStore` overrides this to use `If-None-Match` and
+     * to surface 304 responses.
+     */
+    virtual ConditionalGetResult getFileConditional(const std::string & path, const std::string & expectedETag);
+
 public:
 
     virtual void init() override;
+
+    /**
+     * Return true if this cache definitely does not contain `storePath`.
+     * Consults the Bloom filter advertised by the cache; lazily fetches
+     * and caches the filter on first call. Returns false in every other
+     * case (no filter advertised, filter disabled after a failure,
+     * filter says "possibly present"). Never throws.
+     */
+    bool isDefinitelyMissing(const StorePath & storePath);
 
 private:
 

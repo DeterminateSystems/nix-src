@@ -123,6 +123,8 @@ protected:
 
     void getFile(const std::string & path, Callback<std::optional<std::string>> callback) noexcept override;
 
+    ConditionalGetResult getFileConditional(const std::string & path, const std::string & expectedETag) override;
+
     std::optional<std::string> getNixCacheInfo() override;
 
     std::optional<TrustedFlag> isTrustedClient() override;

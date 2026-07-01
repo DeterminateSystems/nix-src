@@ -96,6 +96,7 @@ nix_sources = [ config_priv_h ] + files(
   'flake-prefetch-inputs.cc',
   'flake.cc',
   'formatter.cc',
+  'generate-bloom-filter.cc',
   'hash.cc',
   'log.cc',
   'ls.cc',

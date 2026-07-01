@@ -60,6 +60,40 @@ struct NarInfoDiskCache
     lookupRealisation(const std::string & uri, const DrvOutput & id) = 0;
 
     /**
+     * Probe `path` against the cached Bloom filter for `uri`.
+     *
+     * Returns `std::nullopt` if there is no Bloom filter cached for this
+     * cache, or the cached one is stale (older than the negative TTL) — the
+     * caller should (re)fetch and try again. Otherwise returns whether the
+     * filter says the path is *possibly present* (`true`) or *definitely not
+     * present* (`false`).
+     *
+     * The filter parameters (`k`, `mBits`) and the bits are read from the
+     * same stored blob in a single transaction, so they cannot drift.
+     */
+    virtual std::optional<bool> probeBloomFilter(const std::string & uri, const StorePath & path) = 0;
+
+    /**
+     * Store a freshly fetched Bloom filter blob (the full response body:
+     * header + bit array).
+     */
+    virtual void
+    upsertBloomFilter(const std::string & uri, const std::string & etag, std::span<const std::byte> blob) = 0;
+
+    /**
+     * Refresh the timestamp (and optionally the etag) of an existing Bloom filter
+     * after a successful conditional GET returned 304 Not Modified.
+     */
+    virtual void touchBloomFilter(const std::string & uri, const std::string & etag) = 0;
+
+    /**
+     * Return the etag of the currently cached Bloom filter for `uri`
+     * (regardless of its age), or nullopt if none is cached or it has no
+     * etag. Used to send `If-None-Match` when refetching.
+     */
+    virtual std::optional<std::string> getBloomFilterETag(const std::string & uri) = 0;
+
+    /**
      * Return a singleton cache object that can be used concurrently by
      * multiple threads.
      *

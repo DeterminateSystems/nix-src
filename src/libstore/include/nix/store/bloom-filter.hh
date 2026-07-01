@@ -1,0 +1,69 @@
+#pragma once
+///@file
+
+#include "nix/store/path.hh"
+#include "nix/util/base-nix-32.hh"
+#include "nix/util/util.hh"
+
+#include <cassert>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+
+namespace nix {
+
+/**
+ * Size of the Bloom filter blob header: magic(8) + version(8) + k(8) + mBits(8).
+ * See `doc/manual/source/protocols/binary-cache-bloom-filter.md`.
+ */
+constexpr size_t bloomFilterHeaderLen = 8 + 8 + 8 + 8;
+
+/**
+ * The parameters of a Bloom filter, as encoded in its header.
+ */
+struct BloomFilterParams
+{
+    uint32_t k;
+    uint64_t mBits;
+};
+
+/**
+ * Parse and validate the `bloomFilterHeaderLen`-byte header at the start
+ * of a Bloom filter blob: magic `NixBloom`, version 1, `mBits != 0` and a
+ * multiple of 8. Returns `std::nullopt` if the header is too short or
+ * invalid. Does *not* check that the total body length matches `mBits`;
+ * the caller does that when it has the whole body.
+ */
+std::optional<BloomFilterParams> parseBloomFilterHeader(std::string_view header);
+
+/**
+ * Build a bloom-filter blob (`bloomFilterHeaderLen`-byte header + raw bit
+ * array, see `doc/manual/source/protocols/binary-cache-bloom-filter.md`)
+ * from a set of store paths.
+ */
+std::string buildBloomFilter(const StorePathSet & paths, double falsePositiveRate);
+
+/**
+ * Invoke `f(uint64_t pos)` for each of the `k` bit positions in an
+ * `mBits`-sized Bloom filter that correspond to `path`.
+ *
+ * Kirsch-Mitzenmacher double hashing over the 160 bits of the path's
+ * `hashPart`; intermediate arithmetic wraps modulo 2^64 before the
+ * final modulo by `mBits`. See
+ * `doc/manual/source/protocols/binary-cache-bloom-filter.md` for the
+ * full specification.
+ */
+template<typename F>
+void forEachBloomBitPosition(const StorePath & path, uint32_t k, uint64_t mBits, F && f)
+{
+    auto raw = BaseNix32::decode(std::string(path.hashPart()));
+    assert(raw.size() == 20);
+    auto * b = reinterpret_cast<unsigned char *>(raw.data());
+    uint64_t h1 = readLittleEndian<uint64_t>(b);
+    uint64_t h2 = readLittleEndian<uint64_t>(b + 8);
+    for (uint32_t i = 0; i < k; ++i)
+        f((h1 + uint64_t(i) * h2) % mBits);
+}
+
+} // namespace nix

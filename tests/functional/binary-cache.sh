@@ -63,7 +63,9 @@ stopNixServe() {
 startNixServe() {
     local portFile="$TEST_ROOT/nix-serve-port"
     rm -f "$portFile"
-    nix serve --port 0 --port-file "$portFile" "$@" &
+    nixServeLog="$TEST_ROOT/nix-serve.log"
+    rm -f "$nixServeLog"
+    nix serve --port 0 --port-file "$portFile" "$@" > "$nixServeLog" 2>&1 &
     nixServePid="$!"
     while [[ ! -e "$portFile" ]]; do
         if ! kill -0 "$nixServePid" 2>/dev/null; then
@@ -143,6 +145,45 @@ unset _NIX_TEST_NIX_SERVE_TRUNCATE_NAR
 restartNixServe
 nix path-info -vvvv --store "$httpBinaryCacheUrl" "$bigFile" 2> "$TEST_ROOT/log"
 [[ $(grep -c "downloading.*narinfo'" "$TEST_ROOT/log") -eq 1 ]]
+
+
+# Bloom filter advertised by `nix serve` should rule out random store paths.
+# Any fixed hashpart can hit a false positive, so loop generating fakes
+# until one is ruled out. The counter sits in the last 6 chars of the
+# hashpart because Nix32 decode reverse-iterates: low-order chars feed the
+# bytes that drive `h1` in the double-hashing scheme; varying the leading
+# chars wouldn't change `h1` or `h2` at all.
+clearCacheCache
+restartNixServe
+ruledOut=0
+for n in $(seq 0 100); do
+    fake="$NIX_STORE_DIR/00000000000000000000000000$(printf '%06d' "$n")-fake-not-in-cache"
+    nix path-info --debug --store "$httpBinaryCacheUrl" "$fake" 2> "$TEST_ROOT/bloom-log" || true
+    if grep -q "Bloom filter for.*ruled out.*$fake" "$TEST_ROOT/bloom-log"; then
+        ruledOut=1
+        break
+    fi
+done
+[[ $ruledOut -eq 1 ]]
+
+
+# The Bloom filter should have been fetched exactly once across all the
+# loop iterations, proving the disk-cache reuse path works.
+[[ $(grep -c "url=/bloom-filter" "$nixServeLog") -eq 1 ]]
+
+
+# `--refresh` should force the cached filter to be treated as stale; the
+# client must re-fetch with `If-None-Match` and the server should reply 304
+# Not Modified instead of resending the body.
+# Sleep so the cached entry is stamped strictly before this --refresh
+# process starts (freshness is at 1-second resolution).
+sleep 1
+prev=$(grep -c "url=/bloom-filter" "$nixServeLog")
+nix path-info --debug --refresh --store "$httpBinaryCacheUrl" "$fake" 2> "$TEST_ROOT/bloom-log3" || true
+# One additional /bloom-filter request was made.
+[[ $(grep -c "url=/bloom-filter" "$nixServeLog") -eq $((prev + 1)) ]]
+# And the client logged the 304 Not Modified branch.
+grepQuiet "Bloom filter for.*unchanged.*304 Not Modified" "$TEST_ROOT/bloom-log3"
 
 
 # Test that multiple concurrent substitutions do only one download.
