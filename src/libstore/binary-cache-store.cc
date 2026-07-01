@@ -86,6 +86,8 @@ void BinaryCacheStore::applyCacheInfoFields(const std::map<std::string, std::str
         if (auto priority = string2Int<int>(*value))
             config.priority.setDefault(*priority);
     }
+    if (auto * endpoint = get(fields, "GetNarInfosV1"))
+        getNarInfosV1 = *endpoint;
 }
 
 void BinaryCacheStore::init()

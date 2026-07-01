@@ -1,6 +1,7 @@
 #include "nix/store/http-binary-cache-store.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/store/globals.hh"
+#include "nix/store/nar-info.hh"
 #include "nix/store/nar-info-disk-cache.hh"
 #include "nix/store/sqlite.hh"
 #include "nix/util/callback.hh"
@@ -8,6 +9,9 @@
 #include "nix/store/store-registration.hh"
 #include "nix/store/globals.hh"
 #include "nix/util/topo-sort.hh"
+#include "nix/util/strings.hh"
+
+#include <nlohmann/json.hpp>
 
 namespace nix {
 
@@ -300,6 +304,89 @@ void HttpBinaryCacheStore::getFile(const std::string & path, Callback<std::optio
         callbackPtr->rethrow();
         return;
     }
+}
+
+asio::awaitable<void> HttpBinaryCacheStore::queryPathInfos(
+    const std::set<StorePath> & paths,
+    fun<void(std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>>)> callback)
+{
+    using Result = std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>;
+
+    checkEnabled();
+
+    /* Fall back to per-path queries unless the cache advertises an
+       endpoint for fetching multiple narinfos at once (the path to
+       POST to). */
+    if (!getNarInfosV1) {
+        co_await Store::queryPathInfos(paths, std::move(callback));
+        co_return;
+    }
+
+    /* Check the client-side caches first and report the hits; collect
+       the misses to fetch from the server. */
+    std::vector<Result> cached;
+    std::vector<StorePath> misses;
+    for (auto & path : paths) {
+        if (auto r = queryPathInfoFromClientCache(path))
+            cached.emplace_back(path, *r);
+        else
+            misses.push_back(path);
+    }
+    if (!cached.empty())
+        callback(std::move(cached));
+
+    if (misses.empty())
+        co_return;
+
+    /* Fetch the misses in a single request. `body` and `source` live
+       in the coroutine frame, so they stay alive across the
+       `co_await` while the transfer (which holds a raw pointer to
+       `source`) runs. */
+    std::string body;
+    for (auto & path : misses)
+        body += std::string(path.hashPart()) + "\n";
+    StringSource source{body};
+
+    auto request = makeRequest(*getNarInfosV1);
+    request.method = HttpMethod::Post;
+    request.data = {body.size(), source};
+    request.mimeType = "text/plain";
+    request.activityText = fmt("querying info on %d paths from '%s'", misses.size(), request.uri);
+
+    FileTransferResult result;
+    try {
+        result = co_await callbackToAwaitable<FileTransferResult>(
+            [&](Callback<FileTransferResult> cb) { fileTransfer->enqueueFileTransfer(request, std::move(cb)); });
+    } catch (FileTransferError &) {
+        maybeDisable();
+        throw;
+    }
+
+    /* Parse the narinfos (one JSON object per line), indexed by hash
+       part. */
+    std::map<std::string, std::shared_ptr<const NarInfo>, std::less<>> received;
+    for (auto & line : tokenizeString<Strings>(result.data, "\n")) {
+        auto narInfo = std::make_shared<NarInfo>(NarInfo::fromJSON(*this, nlohmann::json::parse(line)));
+        stats.narInfoRead++;
+        received.insert_or_assign(std::string(narInfo->path.hashPart()), std::move(narInfo));
+    }
+
+    /* Match each miss against the received narinfos, cache the result
+       (including negative entries), and report it. */
+    auto cacheKey = config->getReference().render(/*FIXME withParams=*/false);
+
+    std::vector<Result> results;
+    for (auto & path : misses) {
+        std::shared_ptr<const ValidPathInfo> info;
+        if (auto i = received.find(path.hashPart());
+            i != received.end() && (path.name() == MissingName || i->second->path == path))
+            info = i->second;
+        if (diskCache)
+            diskCache->upsertNarInfo(cacheKey, std::string(path.hashPart()), info);
+        pathInfoCache->lock()->upsert(path, PathInfoCacheValue{.value = info});
+        results.emplace_back(path, info);
+    }
+    callback(std::move(results));
 }
 
 std::optional<std::string> HttpBinaryCacheStore::getNixCacheInfo()

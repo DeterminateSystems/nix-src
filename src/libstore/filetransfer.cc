@@ -384,7 +384,8 @@ struct curlFileTransfer : public FileTransfer
                     *logger,
                     lvlTalkative,
                     actFileTransfer,
-                    fmt("%s '%s'", request.verb(/*continuous=*/true), request.uri),
+                    request.activityText ? *request.activityText
+                                         : fmt("%s '%s'", request.verb(/*continuous=*/true), request.uri),
                     Logger::Fields{request.uri.to_string()},
                     request.parentAct);
                 // Reset the start time to when we actually started the download.

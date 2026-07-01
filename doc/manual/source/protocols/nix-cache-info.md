@@ -36,12 +36,44 @@ error: binary cache 'https://example.com' is for Nix stores with prefix '/nix/st
 
 Integer. Sets the default for [`priority`](@docroot@/store/types/http-binary-cache-store.md#store-http-binary-cache-store-priority).
 
+### `GetNarInfosV1`
+
+The path (relative to the cache URL) of an endpoint for fetching the
+metadata of multiple store paths in a single request. If this field is
+present, a client may send a `POST` request to this path whose body is
+a list of store path hash parts (one per line). The server responds
+with one JSON object per line (newline-delimited JSON), each being the
+[version 2 JSON representation](@docroot@/protocols/json/store-object-info.md)
+of a store path's metadata, extended with a `"path"` field holding the
+store path it describes. This lets a client fetch the metadata for many
+paths in one request instead of one request per path. A path whose
+object is absent from the response is not available in the cache.
+
+Each object may also contain a `"partialClosure"` field: an array of
+store paths that are (some of) the path's indirect references. This is
+a hint that lets a client start fetching the metadata of an entire
+closure without waiting for the intervening objects; it need not be
+complete and is not covered by the signature.
+
+If the field is absent, the client falls back to fetching each
+`.narinfo` individually.
+
+## Other fields
+
+Any field not listed above is stored verbatim in the client's
+[on-disk cache](#caching-behavior) of `nix-cache-info` but is otherwise
+ignored. This keeps the format forward-compatible: a newer server can
+advertise a capability that an older client persists, and a later
+client version can start using it without the server's metadata having
+to be re-fetched.
+
 ## Example
 
-```
+```text
 StoreDir: /nix/store
 WantMassQuery: 1
 Priority: 30
+GetNarInfosV1: /get-narinfos-v1
 ```
 
 ## Caching Behavior

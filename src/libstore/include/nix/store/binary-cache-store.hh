@@ -84,6 +84,14 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
      */
     Config & config;
 
+    /**
+     * The endpoint (relative to the cache URL) advertised by the
+     * cache's `nix-cache-info` `GetNarInfosV1` field for fetching
+     * multiple `.narinfo` files in one request, if any. Discovered at
+     * `init()` time.
+     */
+    std::optional<std::string> getNarInfosV1;
+
 private:
     std::vector<std::unique_ptr<Signer>> signers;
 

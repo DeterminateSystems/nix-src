@@ -3,7 +3,10 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/deleter.hh"
+#include "nix/util/strings.hh"
 #include "nix/store/nar-info.hh"
+
+#include <nlohmann/json.hpp>
 #include "nix/store/binary-cache-store.hh"
 #include "nix/store/log-store.hh"
 #include "nix/util/environment-variables.hh"
@@ -17,6 +20,36 @@
 using namespace nix;
 
 using Response = std::unique_ptr<MHD_Response, Deleter<MHD_destroy_response>>;
+
+/**
+ * Render the narinfo for `info`, including a `PartialClosure` hint.
+ * Paths in `alreadySent` are omitted from the hint, since the hint
+ * only serves to let the client discover paths to traverse, so
+ * there is no need to send a path more than once in the same HTTP
+ * call. The references and hint of this narinfo are added to
+ * `alreadySent` in turn.
+ */
+static NarInfo makeNarInfo(Store & store, const ValidPathInfo & info, StorePathSet & alreadySent)
+{
+    NarInfo ni(info);
+    ni.compression = "none";
+    StorePathSet closure;
+    try {
+        store.computeFSClosure(info.path, closure);
+    } catch (InvalidPath &) {
+    }
+    std::erase_if(closure, [&](const StorePath & p) {
+        return p == info.path || info.references.contains(p) || alreadySent.contains(p);
+    });
+    alreadySent.insert(info.references.begin(), info.references.end());
+    alreadySent.insert(closure.begin(), closure.end());
+    ni.partialClosure = std::move(closure);
+    // FIXME: would be nicer to use just the NAR hash, but we can't look up NARs by NAR hash.
+    ni.url =
+        "nar/" + std::string(info.path.hashPart()) + "-" + info.narHash.to_string(HashFormat::Nix32, false) + ".nar";
+    ni.fileSize = info.narSize;
+    return ni;
+}
 
 struct CmdServe : StoreCommand
 {
@@ -72,8 +105,12 @@ struct CmdServe : StoreCommand
             ;
     }
 
-    MHD_Result
-    handleRequest(Store & store, MHD_Connection * connection, const std::string & url, std::string_view method)
+    MHD_Result handleRequest(
+        Store & store,
+        MHD_Connection * connection,
+        const std::string & url,
+        std::string_view method,
+        std::string_view body)
     try {
         std::string clientAddr = "unknown";
         if (auto * info = MHD_get_connection_info(connection, MHD_CONNECTION_INFO_CLIENT_ADDRESS)) {
@@ -99,18 +136,25 @@ struct CmdServe : StoreCommand
         static const std::regex narUrlRegex{R"(^/nar/([0-9a-z]+)-([0-9a-z]+)\.nar$)"};
         static const std::regex logUrlRegex{R"(^/log/([0-9a-z]+-[0-9a-zA-Z+\-._?=]+)$)"};
 
-        if (method != MHD_HTTP_METHOD_GET && method != MHD_HTTP_METHOD_HEAD) {
-            std::string_view body = "405 method not allowed\n";
+        auto methodNotAllowed = [&](const char * allow) {
+            static constexpr std::string_view body = "405 method not allowed\n";
             response.reset(MHD_create_response_from_buffer(body.size(), (void *) body.data(), MHD_RESPMEM_PERSISTENT));
-            MHD_add_response_header(response.get(), "Allow", "GET, HEAD");
+            MHD_add_response_header(response.get(), "Allow", allow);
             return MHD_queue_response(connection, MHD_HTTP_METHOD_NOT_ALLOWED, response.get());
-        }
+        };
+
+        if (url == "/get-narinfos-v1") {
+            if (method != MHD_HTTP_METHOD_POST)
+                return methodNotAllowed("POST");
+        } else if (method != MHD_HTTP_METHOD_GET && method != MHD_HTTP_METHOD_HEAD)
+            return methodNotAllowed("GET, HEAD");
 
         if (url == "/nix-cache-info") {
             auto body = std::make_unique<std::string>(
                         "StoreDir: " + store.storeDir + "\n"
                         "WantMassQuery: " + (store.config.wantMassQuery ? "1" : "0") + "\n"
-                        "Priority: " + std::to_string(priority.value_or(store.config.priority)) + "\n");
+                        "Priority: " + std::to_string(priority.value_or(store.config.priority)) + "\n"
+                        "GetNarInfosV1: /get-narinfos-v1\n");
             response.reset(MHD_create_response_from_buffer(body->size(), body->data(), MHD_RESPMEM_MUST_COPY));
             MHD_add_response_header(response.get(), "Content-Type", "text/x-nix-cache-info");
 
@@ -121,15 +165,37 @@ struct CmdServe : StoreCommand
                 return notFound();
 
             auto info = store.queryPathInfo(*path);
-            NarInfo ni(*info);
-            ni.compression = "none";
-            // FIXME: would be nicer to use just the NAR hash, but we can't look up NARs by NAR hash.
-            ni.url = "nar/" + std::string(info->path.hashPart()) + "-"
-                     + info->narHash.to_string(HashFormat::Nix32, false) + ".nar";
-            ni.fileSize = info->narSize;
-            auto body = ni.to_string(store);
+            StorePathSet alreadySent;
+            auto body = makeNarInfo(store, *info, alreadySent).to_string(store);
             response.reset(MHD_create_response_from_buffer(body.size(), body.data(), MHD_RESPMEM_MUST_COPY));
             MHD_add_response_header(response.get(), "Content-Type", "text/x-nix-narinfo");
+
+        } else if (url == "/get-narinfos-v1") {
+            /* Resolve all requested hash parts first, so that the
+               queried paths can be excluded from each other's
+               `PartialClosure` hint. */
+            StorePathSet queried;
+            for (auto & hashPart : tokenizeString<Strings>(std::string(body), "\n\r \t")) {
+                if (auto path = store.queryPathFromHashPart(hashPart))
+                    queried.insert(*path);
+            }
+
+            /* Return the narinfo of each valid path as a JSON object,
+               one per line (newline-delimited JSON). The absence of a
+               path from the response denotes that it is invalid. */
+            auto alreadySent = queried;
+            std::string res;
+            for (auto & path : queried) {
+                try {
+                    auto info = store.queryPathInfo(path);
+                    res += makeNarInfo(store, *info, alreadySent).toJSON(store, true).dump();
+                    res += "\n";
+                } catch (InvalidPath &) {
+                }
+            }
+
+            response.reset(MHD_create_response_from_buffer(res.size(), res.data(), MHD_RESPMEM_MUST_COPY));
+            MHD_add_response_header(response.get(), "Content-Type", "application/x-ndjson");
 
         } else if (std::smatch m; std::regex_match(url, m, narUrlRegex)) {
             auto hashPart = m[1].str();
@@ -217,9 +283,9 @@ struct CmdServe : StoreCommand
         return MHD_queue_response(connection, MHD_HTTP_OK, response.get());
 
     } catch (const Error & e) {
-        auto body = fmt("500 Internal Server Error\n\nError: %s", e.message());
+        auto errorBody = fmt("500 Internal Server Error\n\nError: %s", e.message());
         Response response;
-        response.reset(MHD_create_response_from_buffer(body.size(), body.data(), MHD_RESPMEM_MUST_COPY));
+        response.reset(MHD_create_response_from_buffer(errorBody.size(), errorBody.data(), MHD_RESPMEM_MUST_COPY));
         MHD_add_response_header(response.get(), "Content-Type", "text/plain");
         return MHD_queue_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, response.get());
     }
@@ -234,6 +300,13 @@ struct CmdServe : StoreCommand
 
         Ctx ctx{*store, *this};
 
+        /* Per-request state for accumulating the request body, since
+           microhttpd invokes the handler multiple times per request. */
+        struct RequestState
+        {
+            std::string body;
+        };
+
         auto handler = [](void * cls,
                           MHD_Connection * connection,
                           const char * url,
@@ -245,8 +318,24 @@ struct CmdServe : StoreCommand
             auto & ctx = *static_cast<Ctx *>(cls);
             auto & store = ctx.store;
             auto & cmd = ctx.cmd;
-            return cmd.handleRequest(store, connection, std::string(url), method);
+            if (!*con_cls) {
+                *con_cls = new RequestState;
+                return MHD_YES;
+            }
+            auto & reqState = *static_cast<RequestState *>(*con_cls);
+            if (*upload_data_size) {
+                reqState.body.append(upload_data, *upload_data_size);
+                *upload_data_size = 0;
+                return MHD_YES;
+            }
+            return cmd.handleRequest(store, connection, std::string(url), method, reqState.body);
         };
+
+        auto requestCompleted =
+            [](void * cls, MHD_Connection * connection, void ** con_cls, MHD_RequestTerminationCode toe) {
+                delete static_cast<RequestState *>(*con_cls);
+                *con_cls = nullptr;
+            };
 
         sockaddr_in addr4{};
         sockaddr_in6 addr6{};
@@ -266,7 +355,18 @@ struct CmdServe : StoreCommand
             throw Error("invalid listen address '%s'", listenAddress);
 
         auto * daemon = MHD_start_daemon(
-            flags, port, nullptr, nullptr, handler, &ctx, MHD_OPTION_SOCK_ADDR, sockAddr, MHD_OPTION_END);
+            flags,
+            port,
+            nullptr,
+            nullptr,
+            handler,
+            &ctx,
+            MHD_OPTION_SOCK_ADDR,
+            sockAddr,
+            MHD_OPTION_NOTIFY_COMPLETED,
+            static_cast<MHD_RequestCompletedCallback>(requestCompleted),
+            nullptr,
+            MHD_OPTION_END);
 
         if (!daemon)
             throw Error("failed to start HTTP daemon on %s:%d", listenAddress, port);

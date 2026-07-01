@@ -139,6 +139,7 @@ querySubstitutablePathInfosAsync(Store & store, const StorePathCAMap & paths, Su
                         .references = info->references,
                         .downloadSize = narInfo ? narInfo->fileSize : 0,
                         .narSize = info->narSize,
+                        .partialClosure = narInfo ? narInfo->partialClosure : StorePathSet{},
                     });
 
                 break; /* We are done. */
@@ -157,6 +158,7 @@ querySubstitutablePathInfosAsync(Store & store, const StorePathCAMap & paths, Su
     });
 }
 
+// FIXME: remove this, queryMissing() no longer uses it.
 void Store::querySubstitutablePathInfos(const StorePathCAMap & paths, SubstitutablePathInfos & infos)
 {
     asio::io_context ctx;
@@ -167,171 +169,217 @@ void Store::querySubstitutablePathInfos(const StorePathCAMap & paths, Substituta
         std::rethrow_exception(ex);
 }
 
-static void collectDerivedPaths(
-    std::set<DerivedPath> & out, ref<SingleDerivedPath> inputDrv, const DerivedPathMap<StringSet>::ChildNode & node)
-{
-    if (!node.value.empty())
-        out.insert(DerivedPath::Built{inputDrv, node.value});
-    for (const auto & [outputName, childNode] : node.childMap)
-        collectDerivedPaths(
-            out, make_ref<SingleDerivedPath>(SingleDerivedPath::Built{inputDrv, outputName}), childNode);
-}
-
 MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
 {
     Activity act(*logger, lvlDebug, actUnknown, "querying info about missing paths");
 
     MissingPaths res;
 
-    auto mustBuildDrv = [&](const StorePath & drvPath, const Derivation & drv, std::set<DerivedPath> & edges) {
-        res.willBuild.insert(drvPath);
-        for (const auto & [inputDrv, inputNode] : drv.inputDrvs.map)
-            collectDerivedPaths(edges, makeConstantStorePathRef(inputDrv), inputNode);
+    auto collectDerivedPaths = [&](this auto & collectDerivedPaths,
+                                   std::set<DerivedPath> & out,
+                                   ref<SingleDerivedPath> inputDrv,
+                                   const DerivedPathMap<StringSet>::ChildNode & node) -> void {
+        if (!node.value.empty())
+            out.insert(DerivedPath::Built{inputDrv, node.value});
+        for (const auto & [outputName, childNode] : node.childMap)
+            collectDerivedPaths(
+                out, make_ref<SingleDerivedPath>(SingleDerivedPath::Built{inputDrv, outputName}), childNode);
     };
 
-    GetEdgesAsync<DerivedPath> getEdges = [&](const DerivedPath & req) -> asio::awaitable<std::set<DerivedPath>> {
-        std::set<DerivedPath> edges;
+    auto mustBuildDrv = [&](const StorePath & drvPath, const Derivation & drv, std::set<DerivedPath> & out) {
+        res.willBuild.insert(drvPath);
+        for (const auto & [inputDrv, inputNode] : drv.inputDrvs.map)
+            collectDerivedPaths(out, makeConstantStorePathRef(inputDrv), inputNode);
+    };
 
-        co_await std::visit(
-            overloaded{
-                [&](const DerivedPath::Built & bfd) -> asio::awaitable<void> {
-                    auto drvPathP = std::get_if<DerivedPath::Opaque>(&*bfd.drvPath);
-                    if (!drvPathP) {
-                        // TODO make work in this case.
-                        warn(
-                            "Ignoring dynamic derivation %s while querying missing paths; not yet implemented",
-                            bfd.drvPath->to_string(*this));
-                        co_return;
-                    }
-                    auto & drvPath = drvPathP->path;
+    asio::io_context ctx;
+    std::exception_ptr ex;
 
-                    if (!isValidPath(drvPath)) {
-                        // FIXME: we could try to substitute the derivation.
-                        res.unknown.insert(drvPath);
-                        co_return;
-                    }
+    std::set<DerivedPath> done;
 
-                    StorePathSet invalid;
-                    /* true for regular derivations, and CA derivations for which we
-                       have a trust mapping for all wanted outputs. */
-                    auto knownOutputPaths = true;
-                    for (auto & [outputName, pathOpt] : queryPartialDerivationOutputMap(drvPath)) {
-                        if (!pathOpt) {
-                            knownOutputPaths = false;
-                            break;
+    auto subs = getDefaultSubstituters();
+
+    std::function<asio::awaitable<void>(std::set<DerivedPath>)> doPaths;
+    doPaths = [&](std::set<DerivedPath> paths) -> asio::awaitable<void> {
+        debug("working on batch of %d paths", paths.size());
+
+        std::set<StorePath> pathsToQuery;
+
+        std::map<StorePath, std::map<StorePath, ref<Derivation>>> outPathsToDrvs;
+
+        while (!paths.empty()) {
+            auto p = *paths.begin();
+            paths.erase(paths.begin());
+            if (!done.insert(p).second)
+                continue;
+            std::visit(
+                overloaded{
+                    [&](const DerivedPath::Built & bfd) -> void {
+                        auto drvPathP = std::get_if<DerivedPath::Opaque>(&*bfd.drvPath);
+                        if (!drvPathP) {
+                            // TODO make work in this case.
+                            warn(
+                                "Ignoring dynamic derivation %s while querying missing paths; not yet implemented",
+                                bfd.drvPath->to_string(*this));
+                            return;
                         }
-                        if (bfd.outputs.contains(outputName) && !isValidPath(*pathOpt))
-                            invalid.insert(*pathOpt);
-                    }
-                    if (knownOutputPaths && invalid.empty())
-                        co_return;
+                        auto & drvPath = drvPathP->path;
 
-                    auto drv = make_ref<Derivation>(derivationFromPath(drvPath));
-                    DerivationOptions<SingleDerivedPath> drvOptions;
-                    try {
-                        // FIXME: this is a lot of work just to get the value
-                        // of `allowSubstitutes`.
-                        drvOptions = derivationOptionsFromStructuredAttrs(
-                            *this, drv->inputDrvs, drv->env, get(drv->structuredAttrs));
-                    } catch (Error & e) {
-                        e.addTrace({}, "while parsing derivation '%s'", printStorePath(drvPath));
-                        throw;
-                    }
+                        if (!isValidPath(drvPath)) {
+                            // FIXME: we could try to substitute the derivation.
+                            res.unknown.insert(drvPath);
+                            return;
+                        }
 
-                    if (!knownOutputPaths && settings.getWorkerSettings().useSubstitutes
-                        && drvOptions.substitutesAllowed(settings.getWorkerSettings())) {
-                        experimentalFeatureSettings.require(Xp::CaDerivations);
-
-                        // If there are unknown output paths, attempt to find if the
-                        // paths are known to substituters through a realisation.
-                        auto outputHashes = staticOutputHashes(*this, *drv);
-                        knownOutputPaths = true;
-
-                        for (auto [outputName, hash] : outputHashes) {
-                            if (!bfd.outputs.contains(outputName))
-                                continue;
-
-                            bool found = false;
-                            for (auto & sub : getDefaultSubstituters()) {
-                                /* TODO: Asyncify this. */
-                                auto realisation = sub->queryRealisation({hash, outputName});
-                                if (!realisation)
-                                    continue;
-                                found = true;
-                                if (!isValidPath(realisation->outPath))
-                                    invalid.insert(realisation->outPath);
-                                break;
-                            }
-                            if (!found) {
-                                // Some paths did not have a realisation, this must be built.
+                        StorePathSet invalid;
+                        /* true for regular derivations, and CA derivations for which we
+                           have a trust mapping for all wanted outputs. */
+                        auto knownOutputPaths = true;
+                        for (auto & [outputName, pathOpt] : queryPartialDerivationOutputMap(drvPath)) {
+                            if (!pathOpt) {
                                 knownOutputPaths = false;
                                 break;
                             }
+                            if (bfd.outputs.contains(outputName) && !isValidPath(*pathOpt))
+                                invalid.insert(*pathOpt);
+                        }
+                        if (knownOutputPaths && invalid.empty())
+                            return;
+
+                        auto drv = make_ref<Derivation>(derivationFromPath(drvPath));
+                        DerivationOptions<SingleDerivedPath> drvOptions;
+                        try {
+                            // FIXME: this is a lot of work just to get the value
+                            // of `allowSubstitutes`.
+                            drvOptions = derivationOptionsFromStructuredAttrs(
+                                *this, drv->inputDrvs, drv->env, get(drv->structuredAttrs));
+                        } catch (Error & e) {
+                            e.addTrace({}, "while parsing derivation '%s'", printStorePath(drvPath));
+                            throw;
+                        }
+
+                        if (!knownOutputPaths && settings.getWorkerSettings().useSubstitutes
+                            && drvOptions.substitutesAllowed(settings.getWorkerSettings())) {
+                            experimentalFeatureSettings.require(Xp::CaDerivations);
+
+                            // If there are unknown output paths, attempt to find if the
+                            // paths are known to substituters through a realisation.
+                            auto outputHashes = staticOutputHashes(*this, *drv);
+                            knownOutputPaths = true;
+
+                            for (auto [outputName, hash] : outputHashes) {
+                                if (!bfd.outputs.contains(outputName))
+                                    continue;
+
+                                bool found = false;
+                                for (auto & sub : getDefaultSubstituters()) {
+                                    /* TODO: Asyncify this. */
+                                    auto realisation = sub->queryRealisation({hash, outputName});
+                                    if (!realisation)
+                                        continue;
+                                    found = true;
+                                    if (!isValidPath(realisation->outPath))
+                                        invalid.insert(realisation->outPath);
+                                    break;
+                                }
+                                if (!found) {
+                                    // Some paths did not have a realisation, this must be built.
+                                    knownOutputPaths = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (knownOutputPaths && settings.getWorkerSettings().useSubstitutes
+                            && drvOptions.substitutesAllowed(settings.getWorkerSettings()) && !subs.empty()) {
+                            for (auto & p : invalid) {
+                                pathsToQuery.insert(p);
+                                outPathsToDrvs[p].insert_or_assign(drvPath, drv);
+                            }
+                        } else
+                            mustBuildDrv(drvPath, *drv, paths);
+                    },
+                    [&](const DerivedPath::Opaque & bo) -> void {
+                        // FIXME: this should probably be an async call, but for a local store we probably don't want to
+                        // bother.
+                        if (!maybeQueryPathInfo(bo.path)) {
+                            if (settings.getWorkerSettings().useSubstitutes && !subs.empty())
+                                pathsToQuery.insert(bo.path);
+                            else
+                                res.unknown.insert(bo.path);
+                        }
+                    },
+                },
+                p.raw());
+        }
+
+        if (pathsToQuery.empty())
+            co_return;
+
+        auto executor = co_await asio::this_coro::executor;
+
+        std::unordered_map<StorePath, size_t> negativeResultsPerPath;
+
+        /* Query all substituters concurrently. FIXME: this may not be desirable. */
+        co_await forEachAsync(subs, [&](const ref<Store> & sub) -> asio::awaitable<void> {
+            debug("querying %d paths on '%s'", pathsToQuery.size(), sub->config.getHumanReadableURI());
+            return sub->queryPathInfos(
+                pathsToQuery, [&](std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>> infos) {
+                    debug("got %d paths from %s", infos.size(), sub->config.getHumanReadableURI());
+
+                    std::set<DerivedPath> todo;
+
+                    for (auto & [path, info] : infos) {
+                        if (info) {
+                            if (!res.willSubstitute.insert(path).second)
+                                continue;
+                            res.willSubstitute.insert(path);
+                            res.narSize += info->narSize;
+
+                            for (auto & ref : info->references)
+                                todo.insert(DerivedPath::Opaque{ref});
+
+                            if (auto narInfo = std::dynamic_pointer_cast<const NarInfo>(info)) {
+                                res.downloadSize += narInfo->fileSize;
+
+                                /* Recurse into the partial closure hint as well,
+                                   so we don't have to wait for the narinfos of
+                                   the direct references to discover the rest of
+                                   the closure. */
+                                for (auto & ref : narInfo->partialClosure)
+                                    todo.insert(DerivedPath::Opaque{ref});
+                            }
+                        } else {
+                            if (++negativeResultsPerPath[path] == subs.size()) {
+                                if (auto i = outPathsToDrvs.find(path); i != outPathsToDrvs.end()) {
+                                    for (auto & [drvPath, drv] : i->second)
+                                        mustBuildDrv(drvPath, *drv, todo);
+                                } else
+                                    /* This path is not a derivation output, so there is no way to produce it. */
+                                    res.unknown.insert(path);
+                            }
                         }
                     }
 
-                    if (knownOutputPaths && settings.getWorkerSettings().useSubstitutes
-                        && drvOptions.substitutesAllowed(settings.getWorkerSettings())) {
-                        bool mustBuild = false;
-                        StorePathSet substitutable;
-                        auto * cap = getDerivationCA(*drv);
-
-                        /* Query all outputs concurrently (but not in parallel,
-                           computeClosure runs on a strand). If any one is not
-                           substitutable then discard all other outputs. */
-                        co_await forEachAsync(invalid, [&](const StorePath & outPath) -> asio::awaitable<void> {
-                            if (mustBuild)
-                                co_return;
-
-                            SubstitutablePathInfos infos;
-                            co_await querySubstitutablePathInfosAsync(
-                                *this, {{outPath, cap ? std::optional{*cap} : std::nullopt}}, infos);
-
-                            if (infos.empty())
-                                mustBuild = true;
-                            else
-                                substitutable.insert(outPath);
+                    if (!todo.empty())
+                        asio::co_spawn(executor, std::bind(doPaths, todo), [&](std::exception_ptr e) {
+                            if (e)
+                                ex = e;
                         });
+                });
+        });
 
-                        if (mustBuild)
-                            mustBuildDrv(drvPath, *drv, edges);
-                        else
-                            for (auto & path : substitutable)
-                                edges.insert(DerivedPath::Opaque{path});
-                    } else {
-                        mustBuildDrv(drvPath, *drv, edges);
-                    }
-                },
-                [&](const DerivedPath::Opaque & bo) -> asio::awaitable<void> {
-                    if (maybeQueryPathInfo(bo.path))
-                        co_return;
-
-                    SubstitutablePathInfos infos;
-                    co_await querySubstitutablePathInfosAsync(*this, {{bo.path, std::nullopt}}, infos);
-
-                    if (infos.empty()) {
-                        res.unknown.insert(bo.path);
-                        co_return;
-                    }
-
-                    auto info = infos.find(bo.path);
-                    assert(info != infos.end());
-                    res.willSubstitute.insert(bo.path);
-                    res.downloadSize += info->second.downloadSize;
-                    res.narSize += info->second.narSize;
-
-                    for (auto & ref : info->second.references)
-                        edges.insert(DerivedPath::Opaque{ref});
-                },
-            },
-            req.raw());
-
-        co_return edges;
+        co_return;
     };
 
-    std::set<DerivedPath> startElts(targets.begin(), targets.end());
-    std::set<DerivedPath> visited;
-    computeClosure(std::move(startElts), visited, std::move(getEdges));
+    asio::co_spawn(
+        ctx, std::bind(doPaths, std::set<DerivedPath>(targets.begin(), targets.end())), [&](std::exception_ptr e) {
+            ex = e;
+        });
+
+    ctx.run();
+    if (ex)
+        std::rethrow_exception(ex);
 
     return res;
 }

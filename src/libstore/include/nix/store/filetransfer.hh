@@ -184,6 +184,7 @@ struct FileTransferRequest
     HttpMethod method = HttpMethod::Get;
     unsigned int baseRetryTimeMs = RETRY_TIME_MS_DEFAULT;
     ActivityId parentAct;
+    std::optional<std::string> activityText;
     bool decompress = true;
 
     /**

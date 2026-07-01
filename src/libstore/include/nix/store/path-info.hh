@@ -43,6 +43,11 @@ struct SubstitutablePathInfo
      * 0 = unknown
      */
     uint64_t narSize;
+    /**
+     * A hint containing (some of) the indirect references of this
+     * path, see `UnkeyedNarInfo::partialClosure`.
+     */
+    StorePathSet partialClosure;
 };
 
 using SubstitutablePathInfos = std::map<StorePath, SubstitutablePathInfo>;

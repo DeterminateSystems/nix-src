@@ -75,6 +75,12 @@ NarInfo::NarInfo(const StoreDirConfig & store, const std::string & s, const std:
                 throw corrupt("extra References");
             for (auto & r : refs)
                 references.insert(StorePath(r));
+        } else if (name == "PartialClosure") {
+            auto refs = tokenizeString<Strings>(value, " ");
+            if (!partialClosure.empty())
+                throw corrupt("extra PartialClosure");
+            for (auto & r : refs)
+                partialClosure.insert(StorePath(r));
         } else if (name == "Deriver") {
             if (value != "unknown-deriver")
                 deriver = StorePath(value);
@@ -125,6 +131,13 @@ std::string NarInfo::to_string(const StoreDirConfig & store) const
 
     res += "References: " + concatStringsSep(" ", shortRefs()) + "\n";
 
+    if (!partialClosure.empty()) {
+        Strings ss;
+        for (auto & p : partialClosure)
+            ss.push_back(std::string(p.to_string()));
+        res += "PartialClosure: " + concatStringsSep(" ", ss) + "\n";
+    }
+
     if (deriver)
         res += "Deriver: " + std::string(deriver->to_string()) + "\n";
 
@@ -160,6 +173,13 @@ UnkeyedNarInfo::toJSON(const StoreDirConfig * store, bool includeImpureInfo, Pat
         }
         if (fileSize)
             jsonObject["downloadSize"] = fileSize;
+        if (!partialClosure.empty()) {
+            auto & jsonPartialClosure = jsonObject["partialClosure"] = json::array();
+            for (auto & p : partialClosure)
+                jsonPartialClosure.emplace_back(
+                    format == PathInfoJsonFormat::V1 ? static_cast<json>(store->printStorePath(p))
+                                                     : static_cast<json>(p));
+        }
     }
 
     return jsonObject;
@@ -191,7 +211,41 @@ UnkeyedNarInfo UnkeyedNarInfo::fromJSON(const StoreDirConfig * store, const nloh
     if (auto * downloadSize = get(obj, "downloadSize"))
         res.fileSize = getUnsigned(*downloadSize);
 
+    if (auto * partialClosure = get(obj, "partialClosure")) {
+        try {
+            for (auto & input : getArray(*partialClosure))
+                res.partialClosure.insert(
+                    format == PathInfoJsonFormat::V1 ? store->parseStorePath(getString(input))
+                                                     : static_cast<StorePath>(input));
+        } catch (Error & e) {
+            e.addTrace({}, "while reading key 'partialClosure'");
+            throw;
+        }
+    }
+
     return res;
+}
+
+nlohmann::json NarInfo::toJSON(const StoreDirConfig & store, bool includeImpureInfo) const
+{
+    auto jsonObject = UnkeyedNarInfo::toJSON(&store, includeImpureInfo, PathInfoJsonFormat::V2);
+    jsonObject["path"] = path;
+    return jsonObject;
+}
+
+NarInfo NarInfo::fromJSON(const StoreDirConfig & store, const nlohmann::json & json)
+{
+    auto & obj = getObject(json);
+
+    PathInfoJsonFormat format = PathInfoJsonFormat::V1;
+    if (auto * version = optionalValueAt(obj, "version"))
+        format = *version;
+    if (format != PathInfoJsonFormat::V2)
+        throw Error("NAR info JSON must use format version 2");
+
+    auto path = static_cast<StorePath>(valueAt(obj, "path"));
+
+    return NarInfo{UnkeyedNarInfo::fromJSON(&store, json), std::move(path)};
 }
 
 } // namespace nix
