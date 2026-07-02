@@ -228,7 +228,7 @@ struct CmdNarioList : Command, MixJSON, MixLongListing
         struct Config : StoreConfig
         {
             Config(const Params & params)
-                : StoreConfig(params)
+                : StoreConfig(params, FilePathType::Unix)
             {
             }
 
