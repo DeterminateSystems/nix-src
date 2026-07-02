@@ -23,6 +23,8 @@ enum class PathInfoJsonFormat {
     V1 = 1,
     /// New format with structured hashes and store path base names
     V2 = 2,
+    /// New format with structured signatures
+    V3 = 3,
 };
 
 /**
