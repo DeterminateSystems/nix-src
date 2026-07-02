@@ -64,6 +64,7 @@ let
         "nix-cli"
         "nix-functional-tests"
         "nix-json-schema-checks"
+        "nix-clang-tidy-plugin"
       ]
       ++ lib.optionals enableBindings [
         "nix-perl-bindings"
@@ -125,6 +126,24 @@ rec {
   shellInputs = removeAttrs (forAllSystems (
     system: self.devShells.${system}.default.inputDerivation
   )) [ "i686-linux" ];
+
+  # Static analysis with clang-tidy
+  clangTidy = lib.genAttrs linux64BitSystems (
+    system:
+    let
+      pkgs = nixpkgsFor.${system}.nativeForStdenv.clangStdenv;
+      tidyScope = pkgs.nixComponents2.overrideScope (
+        self: super: {
+          withClangTidy = true;
+          # nix-everything is built via callPackage (not the layer system), so
+          # enableClangTidyLayer's doCheck=false doesn't reach it. Set it here
+          # so checkInputs (the *-tests.tests.run derivations) aren't pulled in.
+          nix-everything = super.nix-everything.overrideAttrs { doCheck = false; };
+        }
+      );
+    in
+    tidyScope.nix-everything
+  );
 
   # Perl bindings for various platforms.
   perlBindings = forAllSystems (system: nixpkgsFor.${system}.native.nixComponents2.nix-perl-bindings);

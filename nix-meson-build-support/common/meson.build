@@ -91,3 +91,6 @@ endif
 subdir('assert-fail')
 subdir('asan-options')
 subdir('cxa-throw')
+if not meson.is_subproject()
+  subdir('clang-tidy')
+endif
