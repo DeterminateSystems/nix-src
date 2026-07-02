@@ -38,7 +38,7 @@ fi
 clearStore
 nix build -vv --file dependencies.nix --no-link --json-log-path "$TEST_ROOT/log.json" 2>&1 | grepQuiet 'building.*dependencies-top.drv'
 grep '{"action":"start","fields":\[".*-dependencies-top.drv","",1,1\],"id":.*,"level":3,"parent":0' "$TEST_ROOT/log.json" >&2
-grep -E '{"action":"result","id":[^,]+,"payload":{"builtOutputs":{"out":{"dependentRealisations":\{\},"id":"[^"]+","outPath":"[^-]+-dependencies-top".*"status":"Built".*"success":true' "$TEST_ROOT/log.json" >&2
+grep -E '{"action":"result","id":[^,]+,"payload":{"builtOutputs":{"out":{"outPath":"[^-]+-dependencies-top".*"status":"Built".*"success":true' "$TEST_ROOT/log.json" >&2
 (( $(grep -c '{"action":"msg","level":5,"msg":"executing builder .*"}' "$TEST_ROOT/log.json" ) == 5 ))
 
 rm "$TEST_ROOT/log.json"
