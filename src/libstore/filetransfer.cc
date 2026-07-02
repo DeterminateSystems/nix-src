@@ -929,12 +929,14 @@ struct curlFileTransfer : public FileTransfer
                     return false;
                 if (attempt >= effAttempts)
                     return false;
-                // If we've already streamed bytes to the callback, we can only
-                // resume via a Range request. That requires the server to accept
-                // byte ranges AND the response to be uncompressed (the Range
-                // applies to the encoded stream, but the sink saw decoded bytes).
+                // If we've already streamed bytes to the callback, we can
+                // resume via a Range request (if the server accepts byte
+                // ranges), or start over and discard the data we've already
+                // received. Neither works if the response is compressed (the
+                // Range applies to the encoded stream, but the sink saw
+                // decoded bytes).
                 if (request.dataCallback && writtenToSink != 0)
-                    return acceptRanges && !hasContentEncoding;
+                    return !hasContentEncoding;
                 return true;
             }();
 
