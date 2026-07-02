@@ -18,6 +18,7 @@ headers = [ config_pub_h ] + files(
   'async.hh',
   'base-n.hh',
   'base-nix-32.hh',
+  'bump-memory-resource.hh',
   'callback.hh',
   'canon-path.hh',
   'checked-arithmetic.hh',
