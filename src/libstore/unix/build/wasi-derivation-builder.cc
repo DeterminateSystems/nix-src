@@ -46,7 +46,7 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
             wasiConfig.env(env2);
         }
         if (!wasiConfig.preopen_dir(
-                store.config->realStoreDir.get(),
+                store.config->realStoreDir.get().string(),
                 store.storeDir,
                 WASMTIME_WASI_DIR_PERMS_READ | WASMTIME_WASI_DIR_PERMS_WRITE,
                 WASMTIME_WASI_FILE_PERMS_READ | WASMTIME_WASI_FILE_PERMS_WRITE))

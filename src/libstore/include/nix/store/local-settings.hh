@@ -536,7 +536,7 @@ public:
      * Get the diff hook path if run-diff-hook is enabled.
      * @return Pointer to path if enabled, nullptr otherwise.
      */
-    const std::filesystem::path * getDiffHook() const
+    const AbsolutePath * getDiffHook() const
     {
         if (!runDiffHook.get()) {
             return nullptr;
