@@ -1475,7 +1475,7 @@ std::pair<std::filesystem::path, AutoCloseFD> LocalStore::createTempDirInStore()
            We'll repeat until 'tmpDir' exists and we've locked it.
            Make the directory accessible only to the current user. */
         tmpDirFn = createTempDir(std::filesystem::path{config->realStoreDir.get()}, "tmp", /*mode=*/0700);
-        tmpDirFd = openDirectory(tmpDirFn);
+        tmpDirFd = openDirectory(tmpDirFn, FinalSymlink::DontFollow);
         if (!tmpDirFd) {
             continue;
         }
