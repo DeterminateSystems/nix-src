@@ -606,6 +606,8 @@ void LocalStore::upgradeDBSchema(State & state)
 #include "ca-specific-schema.sql.gen.hh"
         );
 
+    doUpgrade("20260309-drop-redundant-indexreferrer", "drop index if exists IndexReferrer");
+
     if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
         doUpgrade("20241024-provenance", "alter table ValidPaths add column provenance text");
 }
