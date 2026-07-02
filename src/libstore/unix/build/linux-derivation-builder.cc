@@ -272,9 +272,6 @@ struct LinuxDerivationBuilder : virtual DerivationBuilderImpl
             .system = drv.platform,
             .impersonateLinux26 = localSettings.impersonateLinux26,
         });
-
-        /* Close all other file descriptors. */
-        unix::closeExtraFDs();
     }
 };
 
