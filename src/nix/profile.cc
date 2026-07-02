@@ -693,7 +693,7 @@ struct CmdProfileRemove : virtual EvalCommand, MixProfileElementMatchers
     }
 };
 
-struct CmdProfileUpgrade : virtual SourceExprCommand, MixProfileElementMatchers
+struct CmdProfileUpgrade : virtual SourceExprCommand, MixProfileElementMatchers, MixDryRun
 {
     std::string description() override
     {
@@ -787,6 +787,9 @@ struct CmdProfileUpgrade : virtual SourceExprCommand, MixProfileElementMatchers
             warn("Found some packages but none of them could be upgraded.");
             return;
         }
+
+        if (dryRun)
+            return;
 
         auto buildResults = Installable::build2(getEvalStore(), store, Realise::Outputs, installables, bmNormal);
         Installable::throwBuildErrors(buildResults, *store);
