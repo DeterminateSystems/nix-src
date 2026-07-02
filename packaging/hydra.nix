@@ -241,6 +241,13 @@ rec {
             "NIX_CONFIG" = "lazy-trees = true";
           })
       );
+
+      filetransfer-retry-backoff = forAllSystems (
+        system:
+        nixpkgsFor.${system}.native.callPackage ../tests/filetransfer-retry-backoff {
+          nix = nixpkgsFor.${system}.native.nixComponents2.nix-cli;
+        }
+      );
     };
 
   metrics.nixpkgs = import "${nixpkgs-regression}/pkgs/top-level/metrics.nix" {
