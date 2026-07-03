@@ -93,12 +93,13 @@ void Executor::worker()
         while (true) {
             auto state(state_.lock());
             if (quit) {
-                // Set an `Interrupted` exception on all promises so
-                // we get a nicer error than "std::future_error:
-                // Broken promise".
+                // Record an `Interrupted` exception for all queued
+                // items so that `FutureVector::finishAll()` wakes up
+                // and reports a nice error.
                 auto ex = std::make_exception_ptr(Interrupted("interrupted by the user"));
                 for (auto & item : state->queue)
-                    item.second.promise.set_exception(ex);
+                    if (item.second.completion)
+                        item.second.completion->finish(ex);
                 state->queue.clear();
                 return;
             }
@@ -110,30 +111,28 @@ void Executor::worker()
             state.wait(wakeup);
         }
 
+        std::exception_ptr ex;
         try {
             item.work();
-            item.promise.set_value();
         } catch (const Interrupted &) {
             quit = true;
-            item.promise.set_exception(std::current_exception());
+            ex = std::current_exception();
         } catch (...) {
-            item.promise.set_exception(std::current_exception());
+            ex = std::current_exception();
         }
+        if (item.completion)
+            item.completion->finish(std::move(ex));
     }
 }
 
-std::vector<std::future<void>> Executor::spawn(WorkItems && items)
+void Executor::spawn(WorkItems && items, std::shared_ptr<Completion> completion)
 {
     if (items.empty())
-        return {};
-
-    std::vector<std::future<void>> futures;
+        return;
 
     {
         auto state(state_.lock());
         for (auto & item : items) {
-            std::promise<void> promise;
-            futures.push_back(promise.get_future());
             /* Note: this uses a cheap PRNG rather than std::random_device,
                since the latter costs hundreds of cycles per call (RDRAND or
                /dev/urandom), which adds up when spawning many work items. The
@@ -143,7 +142,7 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
             [[gnu::tls_model("initial-exec")]] static thread_local std::uniform_int_distribution<uint64_t> dist(
                 0, 1ULL << 48);
             auto key = (uint64_t(item.second) << 48) | dist(rng);
-            state->queue.emplace(key, Item{.promise = std::move(promise), .work = std::move(item.first)});
+            state->queue.emplace(key, Item{.work = std::move(item.first), .completion = completion});
         }
     }
 
@@ -151,8 +150,6 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
         wakeup.notify_one();
     else
         wakeup.notify_all();
-
-    return futures;
 }
 
 FutureVector::~FutureVector()
@@ -166,34 +163,34 @@ FutureVector::~FutureVector()
 
 void FutureVector::spawn(Executor::WorkItems && work)
 {
-    auto futures = executor.spawn(std::move(work));
-    auto state(state_.lock());
-    for (auto & future : futures)
-        state->futures.push_back(std::move(future));
+    /* Increment the pending count before queueing the items, since
+       they may finish immediately. */
+    completion->pending.fetch_add(work.size(), std::memory_order_relaxed);
+    executor.spawn(std::move(work), completion);
 }
 
 void FutureVector::finishAll()
 {
+    std::vector<std::exception_ptr> exceptions;
+
+    {
+        auto state(completion->state_.lock());
+        while (completion->pending.load(std::memory_order_acquire) != 0)
+            state.wait(completion->cv);
+        std::swap(exceptions, state->exceptions);
+    }
+
     std::exception_ptr ex;
-    while (true) {
-        std::vector<std::future<void>> futures;
-        {
-            auto state(state_.lock());
-            std::swap(futures, state->futures);
-        }
-        debug("got %d futures", futures.size());
-        if (futures.empty())
-            break;
-        for (auto & future : futures)
-            try {
-                future.get();
-            } catch (...) {
-                if (ex) {
-                    if (!getInterrupted())
-                        logExceptionExceptInterrupt();
-                } else
-                    ex = std::current_exception();
-            }
+    for (auto & ex2 : exceptions) {
+        if (ex) {
+            if (!getInterrupted())
+                try {
+                    std::rethrow_exception(ex2);
+                } catch (...) {
+                    logExceptionExceptInterrupt();
+                }
+        } else
+            ex = ex2;
     }
     if (ex)
         std::rethrow_exception(ex);
