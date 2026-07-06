@@ -109,11 +109,6 @@ const StringData & StringData::make(EvalMemory & mem, std::string_view s)
     return res;
 }
 
-RootValue allocRootValue(Value * v)
-{
-    return std::allocate_shared<Value *>(traceable_allocator<Value *>(), v);
-}
-
 // Pretty print types for assertion errors
 std::ostream & operator<<(std::ostream & os, const ValueType t)
 {
@@ -580,7 +575,7 @@ Value * EvalState::addPrimOp(PrimOp && primOp)
     v->mkPrimOp(new PrimOp(primOp));
 
     if (primOp.internal)
-        internalPrimOps.emplace(primOp.name, v);
+        internalPrimOps.emplace(primOp.name, UniqueRootValue(v));
     else {
         staticBaseEnv->vars.emplace_back(envName, baseEnvDispl);
         baseEnv.values[baseEnvDispl++] = v;
@@ -754,11 +749,11 @@ void mapStaticEnvBindings(const SymbolTable & st, const StaticEnv & se, const En
         if (se.isWith && env.values[0]->isFinished()) {
             // add 'with' bindings.
             for (auto & j : *env.values[0]->attrs())
-                vm.insert_or_assign(std::string(st[j.name]), j.value);
+                vm.insert_or_assign(std::string(st[j.name]), UniqueRootValue(j.value));
         } else {
             // iterate through staticenv bindings and add them.
             for (auto & i : se.vars)
-                vm.insert_or_assign(std::string(st[i.first]), env.values[i.second]);
+                vm.insert_or_assign(std::string(st[i.first]), UniqueRootValue(env.values[i.second]));
         }
     }
 }
@@ -1167,10 +1162,14 @@ void EvalState::evalFile(const SourcePath & path, Value & v, bool mustBeTrivial)
         importResolutionCache->emplace(path, *resolvedPath);
     }
 
-    if (auto v2 = getConcurrent(*fileEvalCache, *resolvedPath)) {
-        forceValue(**v2, noPos);
-        v = **v2;
-        return;
+    {
+        Value * v2 = nullptr;
+        fileEvalCache->cvisit(*resolvedPath, [&](auto & i) { v2 = *i.second; });
+        if (v2) {
+            forceValue(*v2, noPos);
+            v = *v2;
+            return;
+        }
     }
 
     Value * vExpr;
@@ -1178,13 +1177,13 @@ void EvalState::evalFile(const SourcePath & path, Value & v, bool mustBeTrivial)
 
     fileEvalCache->try_emplace_and_cvisit(
         *resolvedPath,
-        nullptr,
+        UniqueRootValue(nullptr),
         [&](auto & i) {
             vExpr = allocValue();
             vExpr->mkThunk(&baseEnv, &expr);
-            i.second = vExpr;
+            *i.second = vExpr;
         },
-        [&](auto & i) { vExpr = i.second; });
+        [&](auto & i) { vExpr = *i.second; });
 
     forceValue(*vExpr, noPos);
 
@@ -1366,7 +1365,12 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
         sort = true;
     }
 
-    bindings.bindings->pos = pos;
+    /* Empty attrsets share the static Bindings::emptyBindings, which we
+       must not write to: apart from being a data race, it causes false
+       sharing on emptyBindings' cache line (which may also hold other hot
+       globals such as Counter::enabled) between all evaluator threads. */
+    if (bindings.bindings != &Bindings::emptyBindings)
+        bindings.bindings->pos = pos;
 
     v.mkAttrs(sort ? bindings.finish() : bindings.alreadySorted());
 }
@@ -3137,14 +3141,16 @@ SourcePath resolveExprPath(SourcePath path, bool addDefaultNix)
         // Basic cycle/depth limit to avoid infinite loops.
         if (++followCount >= maxFollow)
             throw Error("too many symbolic links encountered while traversing the path '%s'", path);
-        auto p = path.parent().resolveSymlinks() / path.baseName();
-        if (p.lstat().type != SourceAccessor::tSymlink)
+        auto parent = path.path.parent().value_or(CanonPath::root);
+        auto p = path.accessor->resolveSymlinks(parent) / *path.path.baseName();
+        if (path.accessor->lstat(p).type != SourceAccessor::tSymlink)
             break;
-        path = {path.accessor, CanonPath(p.readLink(), path.path.parent().value_or(CanonPath::root))};
+        path.path = CanonPath(path.accessor->readLink(p), parent);
     }
 
     /* If `path' refers to a directory, append `/default.nix'. */
-    if (addDefaultNix && path.resolveSymlinks().lstat().type == SourceAccessor::tDirectory)
+    if (addDefaultNix
+        && path.accessor->lstat(path.accessor->resolveSymlinks(path.path)).type == SourceAccessor::tDirectory)
         return path / "default.nix";
 
     return path;
@@ -3157,7 +3163,9 @@ Expr * EvalState::parseExprFromFile(const SourcePath & path)
 
 Expr * EvalState::parseExprFromFile(const SourcePath & path, const std::shared_ptr<StaticEnv> & staticEnv)
 {
-    auto buffer = path.resolveSymlinks().readFile();
+    /* Avoid a SourcePath temporary (accessor ref + path string copy);
+       this runs once per parsed file. */
+    auto buffer = path.accessor->readFile(path.accessor->resolveSymlinks(path.path));
     // readFile hopefully have left some extra space for terminators
     buffer.append("\0\0", 2);
     return parse(buffer.data(), buffer.size(), Pos::Origin(path), path.parent(), staticEnv);

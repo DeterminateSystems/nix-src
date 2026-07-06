@@ -22,30 +22,43 @@ scope: {
       inherit stdenv;
     }).overrideAttrs
       (attrs: {
-        # Increase the initial mark stack size to avoid stack
-        # overflows, since these inhibit parallel marking (see
-        # GC_mark_some()). To check whether the mark stack is too
-        # small, run Nix with GC_PRINT_STATS=1 and look for messages
-        # such as `Mark stack overflow`, `No room to copy back mark
-        # stack`, and `Grew mark stack to ... frames`.
-        NIX_CFLAGS_COMPILE = [
-          "-DINITIAL_MARK_STACK_SIZE=1048576"
-        ]
-        # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
-        # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
-        # Issue: https://github.com/NixOS/nixpkgs/issues/177129
-        ++
-          lib.optionals
-            (
-              stdenv.cc.isClang
-              && stdenv.hostPlatform.isStatic
-              && stdenv.cc.libcxx != null
-              && stdenv.cc.libcxx.isLLVM
-            )
+        # Reduce contention on the GC allocation lock during parallel
+        # evaluation by handing out multiple heap blocks worth of
+        # objects per lock acquisition in GC_generic_malloc_many().
+        # The default batch size is set via GC_MANY_BLOCKS_DEFAULT
+        # below and can be overridden at runtime through the
+        # GC_MALLOC_MANY_BLOCKS environment variable.
+        patches = (attrs.patches or [ ]) ++ [ ./patches/boehmgc-batch-malloc-many.patch ];
+
+        env = (attrs.env or { }) // {
+          # Increase the initial mark stack size to avoid stack
+          # overflows, since these inhibit parallel marking (see
+          # GC_mark_some()). To check whether the mark stack is too
+          # small, run Nix with GC_PRINT_STATS=1 and look for messages
+          # such as `Mark stack overflow`, `No room to copy back mark
+          # stack`, and `Grew mark stack to ... frames`.
+          NIX_CFLAGS_COMPILE = toString (
             [
-              "-rtlib=compiler-rt"
-              "-unwindlib=libunwind"
-            ];
+              "-DINITIAL_MARK_STACK_SIZE=1048576"
+              "-DGC_MANY_BLOCKS_DEFAULT=64"
+            ]
+            # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
+            # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
+            # Issue: https://github.com/NixOS/nixpkgs/issues/177129
+            ++
+              lib.optionals
+                (
+                  stdenv.cc.isClang
+                  && stdenv.hostPlatform.isStatic
+                  && stdenv.cc.libcxx != null
+                  && stdenv.cc.libcxx.isLLVM
+                )
+                [
+                  "-rtlib=compiler-rt"
+                  "-unwindlib=libunwind"
+                ]
+          );
+        };
 
         buildInputs =
           (attrs.buildInputs or [ ])

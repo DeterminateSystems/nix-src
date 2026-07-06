@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <new>
 
 #include "nix/util/canon-path.hh"
 #include "nix/util/fun.hh"
@@ -43,8 +44,18 @@ MakeError(NotARegularFile, SourceAccessorError);
  * evaluator and elsewhere for accessing sources in various
  * filesystem-like entities (such as the real filesystem, tarballs or
  * Git repositories).
+ *
+ * Note: the cache line alignment ensures that the object (in
+ * particular its vtable pointer, which is read by every virtual call
+ * during evaluation) does not share a cache line with the preceding
+ * std::shared_ptr control block when allocated with
+ * make_ref/make_shared. The control block's reference count is
+ * updated by every SourcePath copy on every thread, which would
+ * otherwise invalidate the object's cache line as well ("false
+ * sharing").
  */
-struct SourceAccessor : std::enable_shared_from_this<SourceAccessor>
+struct alignas(std::hardware_destructive_interference_size) SourceAccessor
+    : std::enable_shared_from_this<SourceAccessor>
 {
     const size_t number;
 

@@ -784,10 +784,12 @@ struct CompareValues
     }
 };
 
-typedef std::list<Value *, gc_allocator<Value *>> ValueList;
-
 static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
+    /* The values are rooted via UniqueRootValue, so the lists themselves
+       don't need to be visible to the GC. */
+    using ValueList = std::list<UniqueRootValue>;
+
     state.forceAttrs(*args[0], noPos, "while evaluating the first argument passed to builtins.genericClosure");
 
     /* Get the start set. */
@@ -801,7 +803,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
 
     ValueList workSet;
     for (auto elem : startSet->value->listView())
-        workSet.push_back(elem);
+        workSet.push_back(UniqueRootValue(elem));
 
     if (startSet->value->listSize() == 0) {
         v = *startSet->value;
@@ -822,7 +824,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
     auto cmp = CompareValues(state, noPos, "");
     std::map<Value *, Value *, decltype(cmp)> keyToElem(cmp);
     while (!workSet.empty()) {
-        Value * e = *(workSet.begin());
+        Value * e = **workSet.begin();
         workSet.pop_front();
 
         try {
@@ -867,7 +869,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
             }
             throw;
         }
-        res.push_back(e);
+        res.push_back(UniqueRootValue(e));
 
         /* Call the `operator' function with `e' as argument. */
         Value newElements;
@@ -882,7 +884,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
             for (auto elem : newElements.listView()) {
                 state.forceValue(*elem, noPos); // "while evaluating one one of the elements returned by the `operator`
                                                 // passed to builtins.genericClosure");
-                workSet.push_back(elem);
+                workSet.push_back(UniqueRootValue(elem));
             }
         } catch (Error & err) {
             err.addTrace(
@@ -897,7 +899,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
     /* Create the result list. */
     auto list = state.buildList(res.size());
     for (const auto & [n, i] : enumerate(res))
-        list[n] = i;
+        list[n] = *i;
     v.mkList(list);
 }
 
@@ -3698,57 +3700,96 @@ static RegisterPrimOp primop_filterAttrs({
     .impl = prim_filterAttrs,
 });
 
+/**
+ * A (name, value) pair collected by primops that group values by name
+ * (`zipAttrsWith`, `groupBy`).
+ *
+ * Note that vectors of these can be invisible to the GC (provided that
+ * the values are reachable in some other way for the duration of the
+ * primop, e.g. from the primop's arguments), which avoids allocating
+ * GC-visible (uncollectable) storage for temporaries. The latter is
+ * expensive and a source of GC allocation lock contention during
+ * parallel evaluation.
+ */
+struct NameValue
+{
+    Symbol name;
+    Value * value;
+};
+
+/**
+ * Stably sort `items` by name, so that the values of equal names form
+ * contiguous runs in their original relative order, and return the
+ * number of distinct names. The resulting order is the same as that of
+ * a std::map<Symbol, ...>.
+ */
+static size_t sortByName(std::vector<NameValue> & items)
+{
+    std::stable_sort(
+        items.begin(), items.end(), [](const NameValue & a, const NameValue & b) { return a.name < b.name; });
+
+    size_t nrNames = 0;
+    for (size_t i = 0; i < items.size(); ++i)
+        if (i == 0 || items[i - 1].name != items[i].name)
+            nrNames++;
+    return nrNames;
+}
+
+/**
+ * Call `f(name, list)` for every distinct name in `items` (which must
+ * have been sorted with `sortByName()`), where `list` is a ListBuilder
+ * containing the values associated with that name.
+ */
+template<typename F>
+static void forEachByName(EvalState & state, const std::vector<NameValue> & items, F f)
+{
+    for (size_t i = 0; i < items.size();) {
+        auto sym = items[i].name;
+        size_t j = i;
+        while (j < items.size() && items[j].name == sym)
+            j++;
+        auto list = state.buildList(j - i);
+        for (size_t k = i; k < j; ++k)
+            list[k - i] = items[k].value;
+        f(sym, list);
+        i = j;
+    }
+}
+
 static void prim_zipAttrsWith(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
-    // we will first count how many values are present for each given key.
-    // we then allocate a single attrset and pre-populate it with lists of
-    // appropriate sizes, stash the pointers to the list elements of each,
-    // and populate the lists. after that we replace the list in the every
-    // attribute with the merge function application. this way we need not
-    // use (slightly slower) temporary storage the GC does not know about.
-
-    struct Item
-    {
-        size_t size = 0;
-        size_t pos = 0;
-        std::optional<ListBuilder> list;
-    };
-
-    std::map<Symbol, Item, std::less<Symbol>, traceable_allocator<std::pair<const Symbol, Item>>> attrsSeen;
-
     state.forceFunction(*args[0], pos, "while evaluating the first argument passed to builtins.zipAttrsWith");
     state.forceList(*args[1], pos, "while evaluating the second argument passed to builtins.zipAttrsWith");
     const auto listItems = args[1]->listView();
 
+    size_t nrAttrs = 0;
     for (auto & vElem : listItems) {
         state.forceAttrs(
             *vElem, noPos, "while evaluating a value of the list passed as second argument to builtins.zipAttrsWith");
+        nrAttrs += vElem->attrs()->size();
+    }
+
+    /* The vector is invisible to the GC, but that's fine: the values are
+       kept alive by the attrsets in *args[1]. */
+    std::vector<NameValue> attrsSeen;
+    attrsSeen.reserve(nrAttrs);
+
+    for (auto & vElem : listItems)
         for (auto & attr : *vElem->attrs())
-            attrsSeen.try_emplace(attr.name).first->second.size++;
-    }
+            attrsSeen.push_back({attr.name, attr.value});
 
-    for (auto & [sym, elem] : attrsSeen)
-        elem.list.emplace(state.buildList(elem.size));
+    auto attrs = state.buildBindings(sortByName(attrsSeen));
 
-    for (auto & vElem : listItems) {
-        for (auto & attr : *vElem->attrs()) {
-            auto & item = attrsSeen.at(attr.name);
-            (*item.list)[item.pos++] = attr.value;
-        }
-    }
-
-    auto attrs = state.buildBindings(attrsSeen.size());
-
-    for (auto & [sym, elem] : attrsSeen) {
+    forEachByName(state, attrsSeen, [&](Symbol sym, ListBuilder & list) {
         auto name = Value::toPtr(state.symbols[sym]);
         auto call1 = state.allocValue();
         call1->mkApp(args[0], name);
         auto call2 = state.allocValue();
         auto arg = state.allocValue();
-        arg->mkList(*elem.list);
+        arg->mkList(list);
         call2->mkApp(call1, arg);
         attrs.insert(sym, call2);
-    }
+    });
 
     v.mkAttrs(attrs.alreadySorted());
 }
@@ -4331,26 +4372,24 @@ static void prim_groupBy(EvalState & state, const PosIdx pos, Value ** args, Val
     state.forceFunction(*args[0], pos, "while evaluating the first argument passed to builtins.groupBy");
     state.forceList(*args[1], pos, "while evaluating the second argument passed to builtins.groupBy");
 
-    ValueVectorMap attrs;
+    const auto listItems = args[1]->listView();
 
-    for (auto vElem : args[1]->listView()) {
+    /* The vector is invisible to the GC, but that's fine: the values are
+       kept alive by the list in *args[1]. */
+    std::vector<NameValue> items;
+    items.reserve(listItems.size());
+
+    for (auto vElem : listItems) {
         Value res;
         state.callFunction(*args[0], *vElem, res, pos);
         auto name = state.forceStringNoCtx(
             res, pos, "while evaluating the return value of the grouping function passed to builtins.groupBy");
-        auto sym = state.symbols.create(name);
-        auto vector = attrs.try_emplace<ValueVector>(sym, {}).first;
-        vector->second.push_back(vElem);
+        items.push_back({state.symbols.create(name), vElem});
     }
 
-    auto attrs2 = state.buildBindings(attrs.size());
+    auto attrs2 = state.buildBindings(sortByName(items));
 
-    for (auto & i : attrs) {
-        auto size = i.second.size();
-        auto list = state.buildList(size);
-        memcpy(list.elems, i.second.data(), sizeof(Value *) * size);
-        attrs2.alloc(i.first).mkList(list);
-    }
+    forEachByName(state, items, [&](Symbol sym, ListBuilder & list) { attrs2.alloc(sym).mkList(list); });
 
     v.mkAttrs(attrs2.alreadySorted());
 }
@@ -5627,7 +5666,7 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
 
     if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
         callFunction(
-            *vDerivationValue, **get(internalPrimOps, "derivationStrictWithMeta"), *vDerivationWithMeta, PosIdx());
+            *vDerivationValue, ***get(internalPrimOps, "derivationStrictWithMeta"), *vDerivationWithMeta, PosIdx());
 }
 
 } // namespace nix

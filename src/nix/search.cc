@@ -90,6 +90,7 @@ struct CmdSearch : InstallableValueCommand, MixJSON
             jsonOut.emplace(json::object());
 
         std::atomic<uint64_t> results = 0;
+        std::atomic<uint64_t> total = 0;
 
         FutureVector futures(*state->executor);
 
@@ -113,11 +114,19 @@ struct CmdSearch : InstallableValueCommand, MixJSON
                             work,
                             std::string_view(state->symbols[attr]).find("Packages") != std::string_view::npos ? 0 : 2,
                             [cursor2, attrPath2, visit]() { visit(*cursor2, attrPath2, false); });
+                        /* Spawn incrementally rather than after the whole
+                           enumeration, so that idle worker threads can start
+                           on the first attributes while we're still
+                           enumerating the rest. */
+                        if (work.size() >= 256)
+                            futures.spawn(std::exchange(work, {}));
                     }
                     futures.spawn(std::move(work));
                 };
 
                 if (cursor.isDerivation()) {
+                    total++;
+
                     DrvName name(cursor.getAttr(state->s.name)->getString());
 
                     auto aMeta = cursor.maybeGetAttr(state->s.meta);
@@ -209,7 +218,7 @@ struct CmdSearch : InstallableValueCommand, MixJSON
         if (!json && !results)
             throw Error("no results for the given search term(s)!");
 
-        notice("Found %d matching packages.", results);
+        notice("Found %d out of %d matching packages.", results, total);
     }
 };
 
