@@ -3177,14 +3177,16 @@ SourcePath resolveExprPath(SourcePath path, bool addDefaultNix)
         // Basic cycle/depth limit to avoid infinite loops.
         if (++followCount >= maxFollow)
             throw Error("too many symbolic links encountered while traversing the path '%s'", path);
-        auto p = path.parent().resolveSymlinks() / path.baseName();
-        if (p.lstat().type != SourceAccessor::tSymlink)
+        auto parent = path.path.parent().value_or(CanonPath::root);
+        auto p = path.accessor->resolveSymlinks(parent) / *path.path.baseName();
+        if (path.accessor->lstat(p).type != SourceAccessor::tSymlink)
             break;
-        path = {path.accessor, CanonPath(p.readLink(), path.path.parent().value_or(CanonPath::root))};
+        path.path = CanonPath(path.accessor->readLink(p), parent);
     }
 
     /* If `path' refers to a directory, append `/default.nix'. */
-    if (addDefaultNix && path.resolveSymlinks().lstat().type == SourceAccessor::tDirectory)
+    if (addDefaultNix
+        && path.accessor->lstat(path.accessor->resolveSymlinks(path.path)).type == SourceAccessor::tDirectory)
         return path / "default.nix";
 
     return path;
@@ -3197,7 +3199,9 @@ Expr * EvalState::parseExprFromFile(const SourcePath & path)
 
 Expr * EvalState::parseExprFromFile(const SourcePath & path, const std::shared_ptr<StaticEnv> & staticEnv)
 {
-    auto buffer = path.resolveSymlinks().readFile();
+    /* Avoid a SourcePath temporary (accessor ref + path string copy);
+       this runs once per parsed file. */
+    auto buffer = path.accessor->readFile(path.accessor->resolveSymlinks(path.path));
     // readFile hopefully have left some extra space for terminators
     buffer.append("\0\0", 2);
     return parse(buffer.data(), buffer.size(), Pos::Origin(path), path.parent(), staticEnv);
