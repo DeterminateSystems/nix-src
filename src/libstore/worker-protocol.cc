@@ -26,6 +26,8 @@ const WorkerProto::Version WorkerProto::latest = {
             std::string{WorkerProto::featureQueryActiveBuilds},
             std::string{WorkerProto::featureProvenance},
             std::string{WorkerProto::featureVersionedAddToStoreMultiple},
+            std::string{WorkerProto::featureAddTempRoots},
+            std::string{WorkerProto::featureQueryPathInfos},
         },
 };
 

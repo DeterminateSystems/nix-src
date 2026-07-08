@@ -62,6 +62,10 @@ struct RemoteStore : public virtual Store,
     void queryPathInfoUncached(
         const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override;
 
+    asio::awaitable<void> queryPathInfos(
+        const std::set<StorePath> & paths,
+        fun<void(std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>>)> callback) override;
+
     void queryReferrers(const StorePath & path, StorePathSet & referrers) override;
 
     StorePathSet queryValidDerivers(const StorePath & path) override;
@@ -121,7 +125,7 @@ struct RemoteStore : public virtual Store,
 
     void ensurePath(const StorePath & path) override;
 
-    void addTempRoot(const StorePath & path) override;
+    void addTempRoots(const StorePathSet & paths) override;
 
     Roots findRoots(bool censor) override;
 
