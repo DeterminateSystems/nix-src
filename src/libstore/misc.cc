@@ -77,6 +77,13 @@ void Store::computeFSClosure(
                                 todo.insert(ref);
                             }
 
+                        if (auto narInfo = std::dynamic_pointer_cast<const NarInfo>(info)) {
+                            for (auto & ref : narInfo->partialClosure) {
+                                required.insert(ref);
+                                todo.insert(ref);
+                            }
+                        }
+
                         if (includeOutputs && path.isDerivation())
                             // FIXME: need an async, multiple-path version of queryPartialDerivationOutputMap().
                             for (auto & [_, maybeOutPath] : queryPartialDerivationOutputMap(path))
@@ -85,9 +92,6 @@ void Store::computeFSClosure(
 
                         if (includeDerivers && info->deriver)
                             todo.insert(*info->deriver);
-
-                        // FIXME: process partialClosure when we merge
-                        // https://github.com/DeterminateSystems/nix-src/pull/523.
                     }
 
                     if (!todo.empty())
