@@ -158,6 +158,7 @@ enum struct HttpMethod {
     Head,
     Post,
     Delete,
+    Query, // RFC 10008
 };
 
 /**
@@ -257,6 +258,9 @@ struct FileTransferRequest
         case HttpMethod::Post:
             assert(data);
             return continuous ? "uploading" : "upload";
+        case HttpMethod::Query:
+            assert(data);
+            return continuous ? "querying" : "query";
         case HttpMethod::Delete:
             return continuous ? "deleting" : "delete";
         }
@@ -273,6 +277,9 @@ struct FileTransferRequest
         case HttpMethod::Post:
             assert(data);
             return "upload";
+        case HttpMethod::Query:
+            assert(data);
+            return "query";
         case HttpMethod::Delete:
             return "deletion";
         }

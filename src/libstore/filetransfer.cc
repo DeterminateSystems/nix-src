@@ -561,6 +561,12 @@ struct curlFileTransfer : public FileTransfer
                 if (request.method == HttpMethod::Post) {
                     curl_easy_setopt(req, CURLOPT_POST, 1L);
                     curl_easy_setopt(req, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t) request.data->sizeHint);
+                } else if (request.method == HttpMethod::Query) {
+                    /* Send the body as for a POST, but override the
+                       method name (RFC 10008). */
+                    curl_easy_setopt(req, CURLOPT_POST, 1L);
+                    curl_easy_setopt(req, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t) request.data->sizeHint);
+                    curl_easy_setopt(req, CURLOPT_CUSTOMREQUEST, "QUERY");
                 } else if (request.method == HttpMethod::Put) {
                     curl_easy_setopt(req, CURLOPT_UPLOAD, 1L);
                     curl_easy_setopt(req, CURLOPT_INFILESIZE_LARGE, (curl_off_t) request.data->sizeHint);

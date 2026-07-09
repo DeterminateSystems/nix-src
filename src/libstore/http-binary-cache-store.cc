@@ -316,7 +316,7 @@ asio::awaitable<void> HttpBinaryCacheStore::queryPathInfos(
 
     /* Fall back to per-path queries unless the cache advertises an
        endpoint for fetching multiple narinfos at once (the path to
-       POST to). */
+       send a QUERY request to). */
     if (!getNarInfosV1) {
         co_await Store::queryPathInfos(paths, std::move(callback));
         co_return;
@@ -348,7 +348,7 @@ asio::awaitable<void> HttpBinaryCacheStore::queryPathInfos(
     StringSource source{body};
 
     auto request = makeRequest(*getNarInfosV1);
-    request.method = HttpMethod::Post;
+    request.method = HttpMethod::Query;
     request.data = {body.size(), source};
     request.mimeType = "text/plain";
     request.activityText = fmt("querying info on %d paths from '%s'", misses.size(), request.uri);

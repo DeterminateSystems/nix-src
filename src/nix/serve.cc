@@ -150,8 +150,10 @@ struct CmdServe : StoreCommand
         };
 
         if (url == "/get-narinfos-v1") {
-            if (method != MHD_HTTP_METHOD_POST)
-                return methodNotAllowed("POST");
+            /* QUERY (RFC 10008): safe method with a request body.
+               libmicrohttpd doesn't define a constant for it. */
+            if (method != "QUERY")
+                return methodNotAllowed("QUERY");
         } else if (method != MHD_HTTP_METHOD_GET && method != MHD_HTTP_METHOD_HEAD)
             return methodNotAllowed("GET, HEAD");
 

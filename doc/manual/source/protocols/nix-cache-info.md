@@ -40,8 +40,8 @@ Integer. Sets the default for [`priority`](@docroot@/store/types/http-binary-cac
 
 The path (relative to the cache URL) of an endpoint for fetching the
 metadata of multiple store paths in a single request. If this field is
-present, a client may send a `POST` request to this path whose body is
-a list of store path hash parts (one per line). The server responds
+present, a client may send a `QUERY` request ([RFC 10008]) to this
+path whose body is a list of store path hash parts (one per line). The server responds
 with one JSON object per line (newline-delimited JSON), each being the
 [version 2 JSON representation](@docroot@/protocols/json/store-object-info.md)
 of a store path's metadata, extended with a `"path"` field holding the
@@ -57,6 +57,8 @@ complete and is not covered by the signature.
 
 If the field is absent, the client falls back to fetching each
 `.narinfo` individually.
+
+[RFC 10008]: https://www.rfc-editor.org/rfc/rfc10008.html
 
 ## Other fields
 
