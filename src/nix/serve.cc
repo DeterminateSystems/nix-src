@@ -11,6 +11,7 @@
 #include "nix/store/log-store.hh"
 #include "nix/util/environment-variables.hh"
 
+#include <chrono>
 #include <future>
 #include <regex>
 
@@ -20,6 +21,37 @@
 using namespace nix;
 
 using Response = std::unique_ptr<MHD_Response, Deleter<MHD_destroy_response>>;
+
+/**
+ * Per-request state, since microhttpd invokes the handler multiple
+ * times per request. Also carries the info needed to log the request
+ * once it has completed.
+ */
+struct RequestState
+{
+    std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
+    std::string clientAddr = "unknown";
+    std::string method;
+    std::string url;
+    std::string body;
+    /**
+     * The status of the queued response, if any.
+     */
+    std::optional<unsigned int> status;
+};
+
+static std::string getClientAddr(MHD_Connection * connection)
+{
+    if (auto * info = MHD_get_connection_info(connection, MHD_CONNECTION_INFO_CLIENT_ADDRESS)) {
+        char buf[INET6_ADDRSTRLEN];
+        auto * addr = info->client_addr;
+        const void * src = addr->sa_family == AF_INET6 ? (void *) &((sockaddr_in6 *) addr)->sin6_addr
+                                                       : (void *) &((sockaddr_in *) addr)->sin_addr;
+        if (inet_ntop(addr->sa_family, src, buf, sizeof(buf)))
+            return buf;
+    }
+    return "unknown";
+}
 
 /**
  * Render the narinfo for `info`, including a `PartialClosure` hint.
@@ -111,31 +143,23 @@ struct CmdServe : StoreCommand
             ;
     }
 
-    MHD_Result handleRequest(
-        Store & store,
-        MHD_Connection * connection,
-        const std::string & url,
-        std::string_view method,
-        std::string_view body)
+    MHD_Result handleRequest(Store & store, MHD_Connection * connection, RequestState & reqState)
     try {
-        std::string clientAddr = "unknown";
-        if (auto * info = MHD_get_connection_info(connection, MHD_CONNECTION_INFO_CLIENT_ADDRESS)) {
-            char buf[INET6_ADDRSTRLEN];
-            auto * addr = info->client_addr;
-            const void * src = addr->sa_family == AF_INET6 ? (void *) &((sockaddr_in6 *) addr)->sin6_addr
-                                                           : (void *) &((sockaddr_in *) addr)->sin_addr;
-            if (inet_ntop(addr->sa_family, src, buf, sizeof(buf)))
-                clientAddr = buf;
-        }
-
-        notice("request: client=%s, method=%s, url=%s", clientAddr, method, url);
+        auto & url = reqState.url;
+        auto & method = reqState.method;
+        auto & body = reqState.body;
 
         Response response;
+
+        auto queueResponse = [&](unsigned int status) {
+            reqState.status = status;
+            return MHD_queue_response(connection, status, response.get());
+        };
 
         auto notFound = [&] {
             static constexpr std::string_view body = "404 not found\n";
             response.reset(MHD_create_response_from_buffer(body.size(), (void *) body.data(), MHD_RESPMEM_PERSISTENT));
-            return MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response.get());
+            return queueResponse(MHD_HTTP_NOT_FOUND);
         };
 
         static const std::regex narInfoUrlRegex{R"(^/([0-9a-z]+)\.narinfo$)"};
@@ -146,7 +170,7 @@ struct CmdServe : StoreCommand
             static constexpr std::string_view body = "405 method not allowed\n";
             response.reset(MHD_create_response_from_buffer(body.size(), (void *) body.data(), MHD_RESPMEM_PERSISTENT));
             MHD_add_response_header(response.get(), "Allow", allow);
-            return MHD_queue_response(connection, MHD_HTTP_METHOD_NOT_ALLOWED, response.get());
+            return queueResponse(MHD_HTTP_METHOD_NOT_ALLOWED);
         };
 
         if (url == "/get-narinfos-v1") {
@@ -289,13 +313,14 @@ struct CmdServe : StoreCommand
         } else
             return notFound();
 
-        return MHD_queue_response(connection, MHD_HTTP_OK, response.get());
+        return queueResponse(MHD_HTTP_OK);
 
     } catch (const Error & e) {
         auto errorBody = fmt("500 Internal Server Error\n\nError: %s", e.message());
         Response response;
         response.reset(MHD_create_response_from_buffer(errorBody.size(), errorBody.data(), MHD_RESPMEM_MUST_COPY));
         MHD_add_response_header(response.get(), "Content-Type", "text/plain");
+        reqState.status = MHD_HTTP_INTERNAL_SERVER_ERROR;
         return MHD_queue_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, response.get());
     }
 
@@ -309,13 +334,6 @@ struct CmdServe : StoreCommand
 
         Ctx ctx{*store, *this};
 
-        /* Per-request state for accumulating the request body, since
-           microhttpd invokes the handler multiple times per request. */
-        struct RequestState
-        {
-            std::string body;
-        };
-
         auto handler = [](void * cls,
                           MHD_Connection * connection,
                           const char * url,
@@ -325,10 +343,12 @@ struct CmdServe : StoreCommand
                           size_t * upload_data_size,
                           void ** con_cls) -> MHD_Result {
             auto & ctx = *static_cast<Ctx *>(cls);
-            auto & store = ctx.store;
-            auto & cmd = ctx.cmd;
             if (!*con_cls) {
-                *con_cls = new RequestState;
+                auto * reqState = new RequestState;
+                reqState->clientAddr = getClientAddr(connection);
+                reqState->method = method;
+                reqState->url = url;
+                *con_cls = reqState;
                 return MHD_YES;
             }
             auto & reqState = *static_cast<RequestState *>(*con_cls);
@@ -337,13 +357,27 @@ struct CmdServe : StoreCommand
                 *upload_data_size = 0;
                 return MHD_YES;
             }
-            return cmd.handleRequest(store, connection, std::string(url), method, reqState.body);
+            return ctx.cmd.handleRequest(ctx.store, connection, reqState);
         };
 
+        /* Log the request now that it has completed, i.e. the
+           response (if any) has been sent. */
         auto requestCompleted =
             [](void * cls, MHD_Connection * connection, void ** con_cls, MHD_RequestTerminationCode toe) {
-                delete static_cast<RequestState *>(*con_cls);
-                *con_cls = nullptr;
+                if (auto * reqState = static_cast<RequestState *>(*con_cls)) {
+                    auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() - reqState->startTime)
+                                          .count();
+                    notice(
+                        "request: client=%s, method=%s, url=%s, status=%s, duration=%d ms",
+                        reqState->clientAddr,
+                        reqState->method,
+                        reqState->url,
+                        reqState->status ? std::to_string(*reqState->status) : "none",
+                        durationMs);
+                    delete reqState;
+                    *con_cls = nullptr;
+                }
             };
 
         sockaddr_in addr4{};
