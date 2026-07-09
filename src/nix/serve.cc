@@ -29,20 +29,26 @@ using Response = std::unique_ptr<MHD_Response, Deleter<MHD_destroy_response>>;
  * call. The references and hint of this narinfo are added to
  * `alreadySent` in turn.
  */
-static NarInfo makeNarInfo(Store & store, const ValidPathInfo & info, StorePathSet & alreadySent)
+static NarInfo
+makeNarInfo(Store & store, const ValidPathInfo & info, StorePathSet & alreadyKnown, StorePathSet & alreadyClosed)
 {
     NarInfo ni(info);
     ni.compression = "none";
     StorePathSet closure;
     try {
-        store.computeFSClosure(info.path, closure);
+        // FIXME: this can be pretty slow. That's okay because `nix serve` is mostly for testing right now. But we
+        // should optimize this (e.g. by only returning info that's already cached in memory).
+        if (!alreadyClosed.contains(info.path))
+            store.computeFSClosure(info.path, closure);
     } catch (InvalidPath &) {
     }
     std::erase_if(closure, [&](const StorePath & p) {
-        return p == info.path || info.references.contains(p) || alreadySent.contains(p);
+        return p == info.path || info.references.contains(p) || alreadyKnown.contains(p);
     });
-    alreadySent.insert(info.references.begin(), info.references.end());
-    alreadySent.insert(closure.begin(), closure.end());
+    alreadyKnown.insert(info.references.begin(), info.references.end());
+    alreadyKnown.insert(closure.begin(), closure.end());
+    alreadyClosed.insert(info.references.begin(), info.references.end());
+    alreadyClosed.insert(closure.begin(), closure.end());
     ni.partialClosure = std::move(closure);
     // FIXME: would be nicer to use just the NAR hash, but we can't look up NARs by NAR hash.
     ni.url =
@@ -165,8 +171,8 @@ struct CmdServe : StoreCommand
                 return notFound();
 
             auto info = store.queryPathInfo(*path);
-            StorePathSet alreadySent;
-            auto body = makeNarInfo(store, *info, alreadySent).to_string(store);
+            StorePathSet alreadyKnown, alreadyClosed;
+            auto body = makeNarInfo(store, *info, alreadyKnown, alreadyClosed).to_string(store);
             response.reset(MHD_create_response_from_buffer(body.size(), body.data(), MHD_RESPMEM_MUST_COPY));
             MHD_add_response_header(response.get(), "Content-Type", "text/x-nix-narinfo");
 
@@ -183,12 +189,13 @@ struct CmdServe : StoreCommand
             /* Return the narinfo of each valid path as a JSON object,
                one per line (newline-delimited JSON). The absence of a
                path from the response denotes that it is invalid. */
-            auto alreadySent = queried;
+            auto alreadyKnown = queried;
+            StorePathSet alreadyClosed;
             std::string res;
             for (auto & path : queried) {
                 try {
                     auto info = store.queryPathInfo(path);
-                    res += makeNarInfo(store, *info, alreadySent).toJSON(store, true).dump();
+                    res += makeNarInfo(store, *info, alreadyKnown, alreadyClosed).toJSON(store, true).dump();
                     res += "\n";
                 } catch (InvalidPath &) {
                 }
