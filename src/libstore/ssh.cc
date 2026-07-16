@@ -6,6 +6,11 @@
 #include "nix/util/exec.hh"
 #include "nix/util/base-n.hh"
 
+#ifndef _WIN32
+#  include <sys/wait.h>
+#  include <cerrno>
+#endif
+
 namespace nix {
 
 static std::string parsePublicHostKey(std::string_view host, std::string_view sshPublicHostKey)
@@ -193,6 +198,16 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
                 if (verbosity >= lvlChatty)
                     args.push_back("-v");
                 args.splice(args.end(), std::move(extraSshArgs));
+                // Override LocalCommand to no-op on command SSHs; master
+                // already consumed "started". On fallback, "echo started"
+                // would leak into the nix protocol stream. #441
+                if (useMaster) {
+                    for (auto & arg : args) {
+                        if (arg.starts_with(OS_STR("-oLocalCommand="))) {
+                            arg = OS_STR("-oLocalCommand=true");
+                        }
+                    }
+                }
                 args.push_back("--");
             }
 
@@ -208,9 +223,9 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
     in.readSide = INVALID_DESCRIPTOR;
     out.writeSide = INVALID_DESCRIPTOR;
 
-    // Wait for the SSH connection to be established,
-    // So that we don't overwrite the password prompt with our progress bar.
-    if (!fakeSSH && !(socketPath && isMasterRunning(*socketPath))) {
+    // Skip readLine when useMaster: SSH connects via master socket, or
+    // falls back to direct connection where LocalCommand is now a no-op.
+    if (!fakeSSH && !useMaster && !(socketPath && isMasterRunning(*socketPath))) {
         std::string reply;
         try {
             reply = readLine(out.readSide.get());
@@ -239,8 +254,21 @@ std::optional<std::filesystem::path> SSHMaster::startMaster()
 
     auto state(state_.lock());
 
-    if (state->sshMaster != INVALID_DESCRIPTOR)
-        return state->socketPath;
+    if (state->sshMaster != INVALID_DESCRIPTOR) {
+        // Check if master is still alive before returning cached socket.
+        pid_t result = waitpid(state->sshMaster, nullptr, WNOHANG);
+        if (result == 0)
+            return state->socketPath;
+        if (result == -1) {
+            if (errno == EINTR)
+                return state->socketPath; // assume alive; worst case SSH falls back
+            if (errno != ECHILD)
+                warn("waitpid failed for SSH master %d: %s",
+                     (pid_t) state->sshMaster, strerror(errno));
+        }
+        // Master gone — release Pid to avoid kill()/wait() on already-reaped child.
+        state->sshMaster.release();
+    }
 
     state->socketPath = tmpDir->path() / "ssh.sock";
 
