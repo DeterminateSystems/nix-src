@@ -175,6 +175,15 @@ void initNix(bool loadConfig)
     act.sa_handler = sigHandler;
     if (sigaction(SIGUSR1, &act, 0))
         throw SysError("handling SIGUSR1");
+
+    /* Reset SIGQUIT to its default disposition. In particular, this
+       unregisters any crash handler installed by `sentry_init()`
+       (which runs before us): SIGQUIT is a user-initiated "quit with
+       core dump" action (e.g. Ctrl-\ at a terminal), not a crash, so
+       it should not be reported. */
+    act.sa_handler = SIG_DFL;
+    if (sigaction(SIGQUIT, &act, 0))
+        throw SysError("handling SIGQUIT");
 #endif
 
 #ifdef __APPLE__
@@ -198,8 +207,6 @@ void initNix(bool loadConfig)
         throw SysError("handling SIGHUP");
     if (sigaction(SIGPIPE, &act, 0))
         throw SysError("handling SIGPIPE");
-    if (sigaction(SIGQUIT, &act, 0))
-        throw SysError("handling SIGQUIT");
     if (sigaction(SIGTRAP, &act, 0))
         throw SysError("handling SIGTRAP");
 #endif
