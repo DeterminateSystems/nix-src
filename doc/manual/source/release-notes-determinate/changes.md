@@ -222,9 +222,3 @@ This section lists the differences between upstream Nix 2.34 and Determinate Nix
 <!-- Determinate Nix version 3.21.7 -->
 
 <!-- Determinate Nix version 3.21.8 -->
-
-* Fix libgit2 ll_find_delta leaking worker threads by @edolstra in [DeterminateSystems/nix-src#568](https://github.com/DeterminateSystems/nix-src/pull/568)
-
-* Don't report SIGQUIT to Sentry by @edolstra in [DeterminateSystems/nix-src#570](https://github.com/DeterminateSystems/nix-src/pull/570)
-
-* Don't abort if NIX_GET_COMPLETIONS is out of range by @edolstra in [DeterminateSystems/nix-src#571](https://github.com/DeterminateSystems/nix-src/pull/571)
