@@ -228,7 +228,7 @@ struct StaticEvalSymbols
         line, column, functor, toString, right, wrong, structuredAttrs, json, allowedReferences, allowedRequisites,
         disallowedReferences, disallowedRequisites, maxSize, maxClosureSize, builder, args, contentAddressed, impure,
         outputHash, outputHashAlgo, outputHashMode, recurseForDerivations, description, self, epsilon, startSet,
-        operator_, key, path, prefix, outputSpecified, __meta;
+        operator_, key, path, prefix, outputSpecified, __meta, drvAttrs;
 
     Expr::AstSymbols exprSymbols;
 
@@ -282,6 +282,7 @@ struct StaticEvalSymbols
             .prefix = alloc.create("prefix"),
             .outputSpecified = alloc.create("outputSpecified"),
             .__meta = alloc.create("__meta"),
+            .drvAttrs = alloc.create("drvAttrs"),
             .exprSymbols = {
                 .sub = alloc.create("__sub"),
                 .lessThan = alloc.create("__lessThan"),
@@ -674,6 +675,12 @@ public:
      */
     void forceValueDeep(Value & v);
 
+    /**
+     * Force a value, then recursively force list elements and attributes in parallel. For derivations, we recurse into
+     * `drvAttrs` but no other attributes (e.g. `meta` and `passthru` are not evaluated).
+     *
+     * This function does nothing if parallel evaluation is disabled.
+     */
     void forceValueDeepParallel(Value & v, PosIdx pos);
 
     /**
