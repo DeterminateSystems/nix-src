@@ -1,6 +1,10 @@
-#include "derivation-builder-impl.hh"
+#include "store-config-private.hh"
 
-#include <wasmtime.hh>
+#if NIX_USE_WASMTIME
+
+#  include "derivation-builder-impl.hh"
+
+#  include <wasmtime.hh>
 
 namespace nix {
 
@@ -90,3 +94,5 @@ DerivationBuilderUnique makeWasiDerivationBuilder(
 }
 
 } // namespace nix
+
+#endif // NIX_USE_WASMTIME
