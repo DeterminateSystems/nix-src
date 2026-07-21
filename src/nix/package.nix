@@ -30,7 +30,12 @@
   # workloads (~10-15% on large evaluations).
   # mimalloc is disabled on FreeBSD due to a crash in nixpkgs 25.11.
   # Once the nixpkgs flake is updated, mimalloc can be enabled again.
-  withMimalloc ? !stdenv.hostPlatform.isWindows && !stdenv.hostPlatform.isFreeBSD,
+  # It's also disabled on static aarch64-darwin because of a duplicate
+  # `reallocarray` symbol in libmimalloc.a and lowdown's compats.o.
+  withMimalloc ?
+    !stdenv.hostPlatform.isWindows
+    && !stdenv.hostPlatform.isFreeBSD
+    && !(stdenv.hostPlatform.isStatic && stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isAarch64),
 
   # Whether to embed the public C API into the `nix` executable so plugins can
   # resolve those symbols without linking Nix libraries directly.
