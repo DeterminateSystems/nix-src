@@ -46,7 +46,6 @@ TEST(NarInfoDiskCacheImpl, create_and_read)
         // Check that the fields are saved and returned correctly. This does not test
         // the select statement yet, because of in-memory caching.
         savedId = cache->createCache("http://foo", "/nix/storedir", {.fields = mkFields(wantMassQuery, prio)});
-        ;
         {
             auto r = cache->upToDateCacheExists("http://foo");
             ASSERT_TRUE(r);

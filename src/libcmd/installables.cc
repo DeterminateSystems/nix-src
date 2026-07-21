@@ -1,3 +1,4 @@
+#include "nix/cmd/built-path.hh"
 #include "nix/store/globals.hh"
 #include "nix/cmd/installables.hh"
 #include "nix/cmd/installable-derived-path.hh"
@@ -13,18 +14,13 @@
 #include "nix/expr/eval-inline.hh"
 #include "nix/expr/eval.hh"
 #include "nix/expr/eval-settings.hh"
-#include "nix/expr/get-drvs.hh"
 #include "nix/store/store-api.hh"
 #include "nix/main/shared.hh"
 #include "nix/flake/flake.hh"
 #include "nix/expr/eval-cache.hh"
-#include "nix/util/url.hh"
 #include "nix/fetchers/registry.hh"
 #include "nix/store/build-result.hh"
 #include "nix/util/exit.hh"
-
-#include <regex>
-#include <queue>
 
 #include <nlohmann/json.hpp>
 
@@ -471,28 +467,6 @@ ref<Installable> SourceExprCommand::parseInstallable(ref<Store> store, const std
     return installables.front();
 }
 
-static SingleBuiltPath getBuiltPath(ref<Store> evalStore, ref<Store> store, const SingleDerivedPath & b)
-{
-    return std::visit(
-        overloaded{
-            [&](const SingleDerivedPath::Opaque & bo) -> SingleBuiltPath { return SingleBuiltPath::Opaque{bo.path}; },
-            [&](const SingleDerivedPath::Built & bfd) -> SingleBuiltPath {
-                auto drvPath = getBuiltPath(evalStore, store, *bfd.drvPath);
-                // Resolving this instead of `bfd` will yield the same result, but avoid duplicative work.
-                SingleDerivedPath::Built truncatedBfd{
-                    .drvPath = makeConstantStorePathRef(drvPath.outPath()),
-                    .output = bfd.output,
-                };
-                auto outputPath = resolveDerivedPath(*store, truncatedBfd, &*evalStore);
-                return SingleBuiltPath::Built{
-                    .drvPath = make_ref<SingleBuiltPath>(std::move(drvPath)),
-                    .output = {bfd.output, outputPath},
-                };
-            },
-        },
-        b.raw());
-}
-
 const BuiltPathWithResult & InstallableWithBuildResult::getSuccess() const
 {
     if (auto * failure = std::get_if<Failure>(&result)) {
@@ -627,34 +601,15 @@ std::vector<InstallableWithBuildResult> Installable::build2(
                 }
                 continue;
             }
-            auto & success = std::get<nix::BuildResult::Success>(buildResult.inner);
             for (auto & aux : backmap[buildResult.path]) {
-                std::visit(
-                    overloaded{
-                        [&](const DerivedPath::Built & bfd) {
-                            std::map<std::string, StorePath> outputs;
-                            for (auto & [outputName, realisation] : success.builtOutputs)
-                                outputs.emplace(outputName, realisation.outPath);
-                            res.push_back(
-                                {.installable = aux.installable,
-                                 .result = InstallableWithBuildResult::Success{
-                                     .path =
-                                         BuiltPath::Built{
-                                             .drvPath = make_ref<SingleBuiltPath>(
-                                                 getBuiltPath(evalStore, store, *bfd.drvPath)),
-                                             .outputs = outputs,
-                                         },
-                                     .info = aux.info,
-                                     .result = buildResult}});
-                        },
-                        [&](const DerivedPath::Opaque & bo) {
-                            res.push_back(
-                                {.installable = aux.installable,
-                                 .result = InstallableWithBuildResult::Success{
-                                     .path = BuiltPath::Opaque{bo.path}, .info = aux.info, .result = buildResult}});
-                        },
+                res.push_back({
+                    aux.installable,
+                    BuiltPathWithResult{
+                        .path = toBuiltPath(buildResult, evalStore, store),
+                        .info = aux.info,
+                        .result = buildResult,
                     },
-                    buildResult.path.raw());
+                });
             }
         }
 

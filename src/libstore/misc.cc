@@ -1,11 +1,10 @@
 #include "nix/store/derivations.hh"
-#include "nix/util/fun.hh"
+#include "nix/store/outputs-query.hh"
 #include "nix/store/parsed-derivations.hh"
 #include "nix/store/derivation-options.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/store-open.hh"
 #include "nix/store/nar-info.hh"
-#include "nix/util/thread-pool.hh"
 #include "nix/store/realisation.hh"
 #include "nix/util/topo-sort.hh"
 #include "nix/util/callback.hh"
@@ -191,7 +190,7 @@ querySubstitutablePathInfosAsync(Store & store, const StorePathCAMap & paths, Su
         }
         if (lastStoresException.has_value()) {
             if (!settings.getWorkerSettings().tryFallback) {
-                throw *lastStoresException;
+                throw std::move(*lastStoresException);
             } else
                 logError(lastStoresException->info());
         }
@@ -285,17 +284,16 @@ MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
 
                         // If there are unknown output paths, attempt to find if the
                         // paths are known to substituters through a realisation.
-                        auto outputHashes = staticOutputHashes(*this, *drv);
                         knownOutputPaths = true;
 
-                        for (auto [outputName, hash] : outputHashes) {
+                        for (auto & [outputName, _] : drv->outputs) {
                             if (!bfd.outputs.contains(outputName))
                                 continue;
 
                             bool found = false;
                             for (auto & sub : getDefaultSubstituters()) {
                                 /* TODO: Asyncify this. */
-                                auto realisation = sub->queryRealisation({hash, outputName});
+                                auto realisation = sub->queryRealisation({drvPath, outputName});
                                 if (!realisation)
                                     continue;
                                 found = true;
@@ -404,7 +402,7 @@ OutputPathMap resolveDerivedPath(Store & store, const DerivedPath::Built & bfd, 
 {
     auto drvPath = resolveDerivedPath(store, *bfd.drvPath, evalStore_);
 
-    auto outputsOpt_ = store.queryPartialDerivationOutputMap(drvPath, evalStore_);
+    auto outputsOpt_ = deepQueryPartialDerivationOutputMap(store, drvPath, evalStore_);
 
     auto outputsOpt = std::visit(
         overloaded{
@@ -432,7 +430,7 @@ OutputPathMap resolveDerivedPath(Store & store, const DerivedPath::Built & bfd, 
     OutputPathMap outputs;
     for (auto & [outputName, outputPathOpt] : outputsOpt) {
         if (!outputPathOpt)
-            throw MissingRealisation(bfd.drvPath->to_string(store), outputName);
+            throw MissingRealisation(store, *bfd.drvPath, drvPath, outputName);
         auto & outputPath = *outputPathOpt;
         outputs.insert_or_assign(outputName, outputPath);
     }
@@ -441,23 +439,15 @@ OutputPathMap resolveDerivedPath(Store & store, const DerivedPath::Built & bfd, 
 
 StorePath resolveDerivedPath(Store & store, const SingleDerivedPath & req, Store * evalStore_)
 {
-    auto & evalStore = evalStore_ ? *evalStore_ : store;
-
     return std::visit(
         overloaded{
             [&](const SingleDerivedPath::Opaque & bo) { return bo.path; },
             [&](const SingleDerivedPath::Built & bfd) {
                 auto drvPath = resolveDerivedPath(store, *bfd.drvPath, evalStore_);
-                auto outputPaths = evalStore.queryPartialDerivationOutputMap(drvPath, evalStore_);
-                if (outputPaths.count(bfd.output) == 0)
-                    throw Error(
-                        "derivation '%s' does not have an output named '%s'",
-                        store.printStorePath(drvPath),
-                        bfd.output);
-                auto & optPath = outputPaths.at(bfd.output);
-                if (!optPath)
-                    throw MissingRealisation(bfd.drvPath->to_string(store), bfd.output);
-                return *optPath;
+                auto outPath = deepQueryPartialDerivationOutput(store, drvPath, bfd.output, evalStore_);
+                if (!outPath)
+                    throw MissingRealisation(store, *bfd.drvPath, drvPath, bfd.output);
+                return *outPath;
             },
         },
         req.raw());
@@ -466,7 +456,7 @@ StorePath resolveDerivedPath(Store & store, const SingleDerivedPath & req, Store
 OutputPathMap resolveDerivedPath(Store & store, const DerivedPath::Built & bfd)
 {
     auto drvPath = resolveDerivedPath(store, *bfd.drvPath);
-    auto outputMap = store.queryDerivationOutputMap(drvPath);
+    auto outputMap = deepQueryDerivationOutputMap(store, drvPath);
     auto outputsLeft = std::visit(
         overloaded{
             [&](const OutputsSpec::All &) { return StringSet{}; },

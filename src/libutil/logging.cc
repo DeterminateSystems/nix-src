@@ -4,7 +4,6 @@
 #include "nix/util/terminal.hh"
 #include "nix/util/util.hh"
 #include "nix/util/config-global.hh"
-#include "nix/util/source-path.hh"
 #include "nix/util/position.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/unix-domain-socket.hh"
@@ -12,13 +11,14 @@
 #include <atomic>
 #include <sstream>
 #include <nlohmann/json.hpp>
-#include <iostream>
 
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/time_generator_v7.hpp>
 #include <boost/uuid/uuid_io.hpp>
 
 namespace nix {
+
+void LoggerSettings::anchor() {}
 
 LoggerSettings loggerSettings;
 
@@ -41,6 +41,8 @@ void setCurActivity(const ActivityId activityId)
  * Avoids races in activity teardown.
  */
 Logger * logger = makeSimpleLogger(true).release();
+
+Logger::~Logger() {}
 
 void Logger::warn(const std::string & msg) noexcept
 {
@@ -66,6 +68,8 @@ std::optional<Logger::Suspension> Logger::suspendIf(bool cond)
         return suspend();
     return {};
 }
+
+namespace {
 
 class SimpleLogger : public Logger
 {
@@ -156,6 +160,8 @@ public:
     }
 };
 
+} // namespace
+
 Verbosity verbosity = lvlInfo;
 
 static void writeFullLogging(Descriptor fd, std::string_view s) noexcept
@@ -219,7 +225,9 @@ void to_json(nlohmann::json & json, std::shared_ptr<const Pos> pos)
     }
 }
 
-static std::string getSessionId()
+namespace {
+
+std::string getSessionId()
 {
     if (!loggerSettings.sessionId.get().empty())
         return loggerSettings.sessionId.get();
@@ -373,6 +381,8 @@ struct JSONLogger : Logger
     }
 };
 
+} // namespace
+
 std::unique_ptr<Logger> makeJSONLogger(Descriptor fd, bool includeNixPrefix)
 {
     return std::make_unique<JSONLogger>(fd, includeNixPrefix);
@@ -391,9 +401,15 @@ std::unique_ptr<Logger> makeJSONLogger(const std::filesystem::path & path, bool 
         }
     };
 
-    AutoCloseFD fd = std::filesystem::is_socket(path)
-                         ? connect(path)
-                         : toDescriptor(open(path.string().c_str(), O_CREAT | O_APPEND | O_WRONLY, 0644));
+    AutoCloseFD fd = std::filesystem::is_socket(path) ? connect(path)
+                                                      : toDescriptor(open(
+                                                            path.string().c_str(),
+                                                            O_CREAT | O_APPEND | O_WRONLY
+#ifndef _WIN32
+                                                                | O_CLOEXEC
+#endif
+                                                            ,
+                                                            0644));
     if (!fd)
         throw SysError("opening log file %1%", PathFmt(path));
 

@@ -1,21 +1,23 @@
 #include "nix/store/local-store.hh"
-#include "nix/store/globals.hh"
+#include "nix/store/local-settings.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/thread-pool.hh"
 #include "nix/store/posix-fs-canonicalise.hh"
-#include "nix/util/posix-source-accessor.hh"
+#include "nix/util/source-accessor.hh"
 #include "nix/util/file-system.hh"
 
 #include <boost/unordered/concurrent_flat_set.hpp>
 
 #include <cstdlib>
 #include <cstring>
+#ifdef __APPLE__
+#  include <regex>
+#endif
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
-#include <stdio.h>
-#include <regex>
 
 #include "store-config-private.hh"
 
@@ -158,20 +160,14 @@ void LocalStore::optimisePath_(
        Also note that if `path' is a symlink, then we're hashing the
        contents of the symlink (i.e. the result of readlink()), not
        the contents of the target (which may not even exist). */
-    Hash hash = ({
-        hashPath(
-            {make_ref<PosixSourceAccessor>(), CanonPath(path.string())},
-            FileSerialisationMethod::NixArchive,
-            HashAlgorithm::SHA256)
-            .hash;
-    });
+    Hash hash = hashPath(makeFSSourceAccessor(path), FileSerialisationMethod::NixArchive, HashAlgorithm::SHA256).hash;
     debug("%s has hash '%s'", PathFmt(path), hash.to_string(HashFormat::Nix32, true));
 
     /* Check if this is a known hash. */
     std::filesystem::path linkPath = std::filesystem::path{linksDir} / hash.to_string(HashFormat::Nix32, false);
 
     /* Maybe delete the link, if it has been corrupted. */
-    if (std::filesystem::exists(std::filesystem::symlink_status(linkPath))) {
+    if (pathExists(linkPath)) {
         auto stLink = lstat(linkPath);
         if (st.st_size != stLink.st_size || (repair && hash != ({
                                                            hashPath(
@@ -185,11 +181,11 @@ void LocalStore::optimisePath_(
             warn(
                 "There may be more corrupted paths."
                 "\nYou should run `nix-store --verify --check-contents --repair` to fix them all");
-            std::filesystem::remove(linkPath);
+            unlinkIfExists(linkPath);
         }
     }
 
-    if (!std::filesystem::exists(std::filesystem::symlink_status(linkPath))) {
+    if (!pathExists(linkPath)) {
         /* Nope, create a hard link in the links directory. */
         try {
             std::filesystem::create_hard_link(path, linkPath);
@@ -217,9 +213,15 @@ void LocalStore::optimisePath_(
 
     /* Yes!  We've seen a file with the same contents.  Replace the
        current file with a hard link to that file. */
-    auto stLink = lstat(linkPath);
+    auto stLink = maybeLstat(linkPath);
 
-    if (st.st_ino == stLink.st_ino) {
+    /* A concurrent garbage collection may have removed the link in the
+       links directory between the existence check above and now. Skip
+       optimising this path; a later pass will dedup it. */
+    if (!stLink)
+        return;
+
+    if (st.st_ino == stLink->st_ino) {
         debug("%1% is already linked to %2%", PathFmt(path), PathFmt(linkPath));
         return;
     }
@@ -250,6 +252,12 @@ void LocalStore::optimisePath_(
                Just shrug and ignore. */
             if (st.st_size)
                 printInfo("%1% has maximum number of links", PathFmt(linkPath));
+            return;
+        }
+        if (e.code() == std::errc::no_such_file_or_directory) {
+            /* A concurrent garbage collection removed the link in the
+               links directory. Skip optimising this path; a later pass
+               will dedup it. */
             return;
         }
         throw SystemError(e.code(), "creating hard link from %1% to %2%", PathFmt(linkPath), PathFmt(tempLink));

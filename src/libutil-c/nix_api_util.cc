@@ -79,7 +79,11 @@ public:
             return;
         vtable.result_string(userdata, act, static_cast<nix_result_type>(type), fields[0].s.c_str());
     }
+
+    virtual void anchor();
 };
+
+void CallbackLogger::anchor() {}
 
 extern "C" {
 

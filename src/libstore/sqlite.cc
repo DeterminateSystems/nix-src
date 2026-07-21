@@ -1,5 +1,5 @@
 #include "nix/store/sqlite.hh"
-#include "nix/store/globals.hh"
+#include "nix/util/environment-variables.hh"
 #include "nix/util/util.hh"
 #include "nix/util/url.hh"
 #include "nix/util/signals.hh"
@@ -10,7 +10,6 @@
 
 #include <sqlite3.h>
 
-#include <atomic>
 #include <thread>
 
 namespace nix {
@@ -34,6 +33,10 @@ SQLiteError::SQLiteError(
         path ? path : "(in-memory)");
 }
 
+void SQLiteError::anchor() {}
+
+void SQLiteBusy::anchor() {}
+
 [[noreturn]] void SQLiteError::throw_(sqlite3 * db, HintFmt && hf)
 {
     int err = sqlite3_errcode(db);
@@ -48,7 +51,7 @@ SQLiteError::SQLiteError(
         exp.err.msg = HintFmt(
             err == SQLITE_PROTOCOL ? "SQLite database '%s' is busy (SQLITE_PROTOCOL)" : "SQLite database '%s' is busy",
             path ? path : "(in-memory)");
-        throw exp;
+        throw std::move(exp);
     } else
         throw SQLiteError(path, errMsg, err, exterr, offset, std::move(hf));
 }
@@ -178,7 +181,7 @@ SQLiteStmt::Use::~Use()
 SQLiteStmt::Use & SQLiteStmt::Use::apply(std::string_view value, bool notNull)
 {
     if (notNull) {
-        if (sqlite3_bind_text(stmt, curArg++, value.data(), -1, SQLITE_TRANSIENT) != SQLITE_OK)
+        if (sqlite3_bind_text(stmt, curArg++, value.data(), value.size(), SQLITE_TRANSIENT) != SQLITE_OK)
             SQLiteError::throw_(stmt.db, "binding argument");
     } else
         bind();
@@ -236,6 +239,7 @@ bool SQLiteStmt::Use::next()
 std::string SQLiteStmt::Use::getStr(int col)
 {
     auto s = (const char *) sqlite3_column_text(stmt, col);
+    // FIXME: Don't crash on nulls?
     assert(s);
     return s;
 }

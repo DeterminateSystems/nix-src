@@ -1,5 +1,4 @@
 #include "nix/store/ssh.hh"
-#include "nix/util/finally.hh"
 #include "nix/util/current-process.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/os-string.hh"
@@ -21,12 +20,15 @@ static std::string parsePublicHostKey(std::string_view host, std::string_view ss
 
 class InvalidSSHAuthority final : public CloneableError<InvalidSSHAuthority, Error>
 {
+    void anchor() override;
 public:
     InvalidSSHAuthority(const ParsedURL::Authority & authority, std::string_view reason)
         : CloneableError("invalid SSH authority: '%s': %s", authority.to_string(), reason)
     {
     }
 };
+
+void InvalidSSHAuthority::anchor() {}
 
 /**
  * Checks if the hostname/username are valid for use with ssh.
@@ -66,7 +68,7 @@ OsStrings getNixSshOpts()
 
 SSHMaster::SSHMaster(
     const ParsedURL::Authority & authority,
-    std::filesystem::path keyFile,
+    std::optional<std::filesystem::path> keyFile,
     std::string_view sshPublicHostKey,
     bool useMaster,
     bool compress,
@@ -95,8 +97,8 @@ void SSHMaster::addCommonSSHOpts(OsStrings & args, std::optional<std::filesystem
     auto sshArgs = getNixSshOpts();
     args.insert(args.end(), sshArgs.begin(), sshArgs.end());
 
-    if (!keyFile.empty())
-        args.insert(args.end(), {OS_STR("-i"), keyFile.native()});
+    if (keyFile)
+        args.insert(args.end(), {OS_STR("-i"), keyFile->native()});
     if (!sshPublicHostKey.empty()) {
         std::filesystem::path fileName = tmpDir->path() / "host-key";
         writeFile(fileName, authority.host + " " + sshPublicHostKey + "\n");

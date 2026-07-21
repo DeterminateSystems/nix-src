@@ -6,6 +6,7 @@
 #include "nix/expr/symbol-table.hh"
 #include "nix/expr/value.hh"
 #include "nix/util/exit.hh"
+#include "nix/util/signals.hh"
 #include "nix/util/types.hh"
 #include "nix/util/util.hh"
 #include "nix/util/environment-variables.hh"
@@ -44,6 +45,7 @@
 #include <fstream>
 #include <functional>
 #include <ranges>
+#include <mutex>
 
 #include <nlohmann/json.hpp>
 #include <boost/container/small_vector.hpp>
@@ -298,6 +300,9 @@ EvalState::EvalState(
                             ? storeFS.cast<SourceAccessor>()
                             : makeUnionSourceAccessor({getFSSourceAccessor(), storeFS}, storeFS.cast<SourceAccessor>());
 
+        /* Cache positive lstat/readlink results to speed up resolveSymlinks. */
+        accessor = makeCachingSourceAccessor(accessor);
+
         /* Apply access control if needed. */
         if (settings.restrictEval || settings.pureEval)
             accessor = AllowListSourceAccessor::create(
@@ -344,6 +349,17 @@ EvalState::EvalState(
     , attrSelects(make_ref<decltype(attrSelects)::element_type>())
     , executor{make_ref<Executor>(settings)}
 {
+#ifndef _WIN32
+    static std::once_flag stackSizeBumped;
+    std::call_once(stackSizeBumped, []() {
+        // Increase the default stack size for the evaluator and for
+        // libstdc++'s std::regex.
+        // This used to be 64 MiB, but macOS as deployed on GitHub Actions has a
+        // hard limit slightly under that, so we round it down a bit.
+        nix::ensureStackSizeAtLeast(60 * 1024 * 1024);
+    });
+#endif
+
     corepkgsFS->setPathDisplay("<nix", ">");
     internalFS->setPathDisplay("«nix-internal»", "");
 
@@ -680,27 +696,34 @@ std::optional<EvalState::Doc> EvalState::getDoc(Value & v)
     return {};
 }
 
+static StaticEnv::Vars lexicographicOrder(const SymbolTable & st, StaticEnv::Vars vars)
+{
+    std::ranges::sort(vars, [&st](const auto & lhs, const auto & rhs) {
+        return std::string_view(st[lhs.first]) < std::string_view(st[rhs.first]);
+    });
+    return vars;
+}
+
 // just for the current level of StaticEnv, not the whole chain.
-void printStaticEnvBindings(const SymbolTable & st, const StaticEnv & se)
+static void printStaticEnvBindings(const SymbolTable & st, const StaticEnv & se)
 {
     std::cout << ANSI_MAGENTA;
-    for (auto & i : se.vars)
-        std::cout << st[i.first] << " ";
+    for (auto & [name, displacement] : lexicographicOrder(st, se.vars))
+        std::cout << st[name] << " ";
     std::cout << ANSI_NORMAL;
     std::cout << std::endl;
 }
 
 // just for the current level of Env, not the whole chain.
-void printWithBindings(const SymbolTable & st, const Env & env)
+static void printWithBindings(const SymbolTable & st, const Env & env)
 {
     if (env.values[0]->isFinished()) {
         std::cout << "with: ";
         std::cout << ANSI_MAGENTA;
-        auto j = env.values[0]->attrs()->begin();
-        while (j != env.values[0]->attrs()->end()) {
-            std::cout << st[j->name] << " ";
-            ++j;
-        }
+        auto * bindings = env.values[0]->attrs();
+        /* TODO: Don't print the whole attribute set, since it can be quite large. */
+        for (const Attr * attr : bindings->lexicographicOrder(st))
+            std::cout << st[attr->name] << " ";
         std::cout << ANSI_NORMAL;
         std::cout << std::endl;
     }
@@ -721,7 +744,7 @@ void printEnvBindings(const SymbolTable & st, const StaticEnv & se, const Env & 
         std::cout << ANSI_MAGENTA;
         // for the top level, don't print the double underscore ones;
         // they are in builtins.
-        for (auto & i : se.vars)
+        for (auto & i : lexicographicOrder(st, se.vars))
             if (!hasPrefix(st[i.first], "__"))
                 std::cout << st[i.first] << " ";
         std::cout << ANSI_NORMAL;
@@ -1113,6 +1136,8 @@ Value * ExprPath::maybeThunk(EvalState & state, Env & env)
     return &v;
 }
 
+namespace {
+
 /**
  * A helper `Expr` class to lets us parse and evaluate Nix expressions
  * from a thunk, ensuring that every file is parsed/evaluated only
@@ -1154,6 +1179,8 @@ struct ExprParseFile : Expr
         }
     }
 };
+
+} // namespace
 
 void EvalState::evalFile(const SourcePath & path, Value & v, bool mustBeTrivial)
 {
@@ -1197,7 +1224,8 @@ void EvalState::resetFileCache()
     importResolutionCache->clear();
     fileEvalCache->clear();
     inputCache->clear();
-    positions.clear();
+    lookupPathResolved->clear();
+    rootFS->invalidateCache();
 }
 
 void EvalState::eval(Expr * e, Value & v)
@@ -2055,22 +2083,21 @@ void ExprOpConcatLists::eval(EvalState & state, Env & env, Value & v)
     Value v2;
     e2->eval(state, env, v2);
     Value * lists[2] = {&v1, &v2};
-    state.concatLists(v, 2, lists, pos, "while evaluating one of the elements to concatenate");
+    state.concatLists(v, lists, pos, "while evaluating one of the elements to concatenate");
 }
 
-void EvalState::concatLists(
-    Value & v, size_t nrLists, Value * const * lists, const PosIdx pos, std::string_view errorCtx)
+void EvalState::concatLists(Value & v, std::span<Value * const> lists, const PosIdx pos, std::string_view errorCtx)
 {
     nrListConcats++;
 
-    Value * nonEmpty = 0;
+    Value * nonEmpty = nullptr;
     size_t len = 0;
-    for (size_t n = 0; n < nrLists; ++n) {
-        forceList(*lists[n], pos, errorCtx);
-        auto l = lists[n]->listSize();
+    for (auto * list : lists) {
+        forceList(*list, pos, errorCtx);
+        auto l = list->listSize();
         len += l;
         if (l)
-            nonEmpty = lists[n];
+            nonEmpty = list;
     }
 
     if (nonEmpty && len == nonEmpty->listSize()) {
@@ -2080,12 +2107,13 @@ void EvalState::concatLists(
 
     auto list = buildList(len);
     auto out = list.elems;
-    for (size_t n = 0, pos = 0; n < nrLists; ++n) {
-        auto listView = lists[n]->listView();
-        auto l = listView.size();
-        if (l)
-            memcpy(out + pos, listView.data(), l * sizeof(Value *));
-        pos += l;
+    size_t pos2 = 0;
+    for (auto * l : lists) {
+        auto listView = l->listView();
+        auto n = listView.size();
+        if (n)
+            memcpy(out + pos2, listView.data(), n * sizeof(Value *));
+        pos2 += n;
     }
     v.mkList(list);
 }
@@ -2543,7 +2571,7 @@ StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePat
         fetchSettings,
         *store,
         path.resolveSymlinks(SymlinkResolution::Ancestors),
-        settings.readOnlyMode ? FetchMode::DryRun : FetchMode::Copy,
+        settings.isReadOnly() ? FetchMode::DryRun : FetchMode::Copy,
         computeBaseName(path, pos),
         ContentAddressMethod::Raw::NixArchive,
         nullptr,
@@ -2583,7 +2611,7 @@ SourcePath EvalState::coerceToPath(const PosIdx pos, Value & v, NixStringContext
     auto path = coerceToString(pos, v, context, errorCtx, false, false, true).toOwned();
     if (path == "" || path[0] != '/')
         error<EvalError>("string '%1%' doesn't represent an absolute path", path).withTrace(pos, errorCtx).debugThrow();
-    return rootPath(path);
+    return rootPath(CanonPath(path));
 }
 
 StorePath
@@ -3237,14 +3265,28 @@ SourcePath EvalState::findFile(const LookupPath & lookupPath, const std::string_
             continue;
         auto r = *rOpt;
 
-        auto res = (r / CanonPath(suffix)).resolveSymlinks();
-        if (res.pathExists())
+        auto suffixPath = CanonPath(suffix);
+        if (auto cachedRes = getConcurrent(*rOpt->resolvedPaths, suffixPath)) {
+            if (*cachedRes)
+                return **cachedRes;
+            else
+                // Cached negative lookup.
+                continue;
+        }
+
+        auto res = (r.path / suffixPath).resolveSymlinks();
+        if (res.pathExists()) {
+            r.resolvedPaths->emplace(suffixPath, res);
             return res;
+        }
 
         // Backward compatibility hack: throw an exception if access
         // to this path is not allowed.
         if (auto accessor = res.accessor.dynamic_pointer_cast<FilteringSourceAccessor>())
             accessor->checkAccess(res.path);
+
+        // Cache negative lookups too.
+        r.resolvedPaths->emplace(suffixPath, std::nullopt);
     }
 
     if (hasPrefix(path, "nix/"))
@@ -3258,17 +3300,22 @@ SourcePath EvalState::findFile(const LookupPath & lookupPath, const std::string_
         .debugThrow();
 }
 
-std::optional<SourcePath> EvalState::resolveLookupPathPath(const LookupPath::Path & value0, bool initAccessControl)
+std::shared_ptr<EvalState::LookupPathResolvedState>
+EvalState::resolveLookupPathPath(const LookupPath::Path & value0, bool initAccessControl)
 {
     auto & value = value0.s;
     if (auto cached = getConcurrent(*lookupPathResolved, value))
         return *cached;
 
-    auto finish = [&](std::optional<SourcePath> res) {
-        if (res)
-            debug("resolved search path element '%s' to '%s'", value, *res);
-        else
+    auto finish = [&](std::optional<SourcePath> maybePath) {
+        std::shared_ptr<LookupPathResolvedState> res;
+        if (maybePath) {
+            debug("resolved search path element '%s' to '%s'", value, *maybePath);
+            res = std::make_shared<LookupPathResolvedState>(
+                *maybePath, make_ref<decltype(LookupPathResolvedState::resolvedPaths)::element_type>());
+        } else {
             debug("failed to resolve search path element '%s'", value);
+        }
         lookupPathResolved->emplace(std::string(value), res);
         return res;
     };
@@ -3413,7 +3460,7 @@ void forceNoNullByte(std::string_view s, std::function<Pos()> pos)
         if (pos) {
             error.atPos(pos());
         }
-        throw error;
+        throw std::move(error);
     }
 }
 

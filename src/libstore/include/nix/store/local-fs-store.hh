@@ -10,6 +10,8 @@ namespace nix {
 struct LocalFSStoreConfig : virtual StoreConfig
 {
 private:
+    void anchor() override;
+
     static Setting<std::optional<AbsolutePath>>
     makeRootDirSetting(LocalFSStoreConfig & self, std::optional<AbsolutePath> defaultValue)
     {
@@ -22,7 +24,10 @@ private:
     }
 
 public:
-    using StoreConfig::StoreConfig;
+    LocalFSStoreConfig(const Params & params)
+        : StoreConfig(params, FilePathType::Native)
+    {
+    }
 
     /**
      * Used to override the `root` settings. Can't be done via modifying
@@ -35,42 +40,48 @@ public:
 
     Setting<std::optional<AbsolutePath>> rootDir = makeRootDirSetting(*this, std::nullopt);
 
-private:
-
-    /**
-     * An indirection so that we don't need to refer to global settings
-     * in headers.
-     */
-    static std::filesystem::path getDefaultStateDir();
-
-    /**
-     * An indirection so that we don't need to refer to global settings
-     * in headers.
-     */
-    static std::filesystem::path getDefaultLogDir();
-
-public:
-
     Setting<AbsolutePath> stateDir{
         this,
-        rootDir.get() ? *rootDir.get() / "nix" / "var" / "nix" : getDefaultStateDir(),
+        rootDir.get() ? *rootDir.get() / "nix" / "var" / "nix" : StoreConfig::getStateDir(),
         "state",
-        "Directory where Nix stores state.",
+        R"(
+          Directory where Nix stores state.
+
+          Defaults to [`NIX_STATE_DIR`](@docroot@/command-ref/env-common.md#env-NIX_STATE_DIR) when [`root`](#@store-slug@-root) is not set.
+        )",
     };
 
     Setting<AbsolutePath> logDir{
         this,
-        rootDir.get() ? *rootDir.get() / "nix" / "var" / "log" / "nix" : getDefaultLogDir(),
+        rootDir.get() ? *rootDir.get() / "nix" / "var" / "log" / "nix" : StoreConfig::getLogDir(),
         "log",
-        "directory where Nix stores log files.",
+        R"(
+          Directory where Nix stores log files.
+
+          Defaults to [`NIX_LOG_DIR`](@docroot@/command-ref/env-common.md#env-NIX_LOG_DIR) when [`root`](#@store-slug@-root) is not set.
+        )",
     };
 
     Setting<AbsolutePath> realStoreDir{
         this,
         rootDir.get() ? *rootDir.get() / "nix" / "store" : std::filesystem::path{storeDir},
         "real",
-        "Physical path of the Nix store.",
+        R"(
+          Physical path of the Nix store.
+
+          Defaults to [`store`](#@store-slug@-store) when [`root`](#@store-slug@-root) is not set.
+        )",
     };
+
+    const std::filesystem::path & getStateDir() const override
+    {
+        return stateDir.get();
+    }
+
+    const std::filesystem::path & getLogDir() const override
+    {
+        return logDir.get();
+    }
 };
 
 struct alignas(8) /* Work around ASAN failures on i686-linux. */
@@ -78,6 +89,10 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
                    virtual GcStore,
                    virtual LogStore
 {
+private:
+    void anchor() override;
+
+public:
     using Config = LocalFSStoreConfig;
 
     const Config & config;

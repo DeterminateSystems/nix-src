@@ -10,6 +10,8 @@
 
 namespace nix::eval_cache {
 
+void CachedEvalError::anchor() {}
+
 CachedEvalError::CachedEvalError(ref<AttrCursor> cursor, Symbol attr)
     : CloneableError(cursor->root->state, "cached failure of attribute '%s'", cursor->getAttrPathStr(attr))
     , cursor(cursor)
@@ -106,7 +108,7 @@ struct AttrDb
     }
 
     template<typename F>
-    AttrId doSQLite(F && fun)
+    AttrId doSQLite(const F & fun)
     {
         if (failed)
             return 0;
@@ -779,14 +781,17 @@ StorePath AttrCursor::forceDerivation()
     auto aDrvPath = getAttr(root->state.s.drvPath);
     auto drvPath = root->state.store->parseStorePath(aDrvPath->getString());
     drvPath.requireDerivation();
-    if (!root->state.store->isValidPath(drvPath) && !settings.readOnlyMode) {
-        /* The eval cache contains 'drvPath', but the actual path has
-           been garbage-collected. So force it to be regenerated. */
-        aDrvPath->forceValue();
-        root->state.waitForPath(drvPath);
-        if (!root->state.store->isValidPath(drvPath))
-            throw Error(
-                "don't know how to recreate store derivation '%s'!", root->state.store->printStorePath(drvPath));
+    if (!settings.readOnlyMode) {
+        root->state.store->addTempRoot(drvPath);
+        if (!root->state.store->isValidPath(drvPath)) {
+            /* The eval cache contains 'drvPath', but the actual path has
+               been garbage-collected. So force it to be regenerated. */
+            aDrvPath->forceValue();
+            root->state.waitForPath(drvPath);
+            if (!root->state.store->isValidPath(drvPath))
+                throw Error(
+                    "don't know how to recreate store derivation '%s'!", root->state.store->printStorePath(drvPath));
+        }
     }
     return drvPath;
 }

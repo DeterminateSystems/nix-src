@@ -16,6 +16,8 @@ struct OverrideProvenanceSourceAccessor : ForwardingSourceAccessor
     {
         return provenance;
     }
+
+    void anchor() override;
 };
 
 } // namespace nix

@@ -1,4 +1,3 @@
-#include <iostream>
 #include <cstring>
 
 #include <blake3.h>
@@ -8,7 +7,6 @@
 
 #include "nix/util/args.hh"
 #include "nix/util/hash.hh"
-#include "nix/util/archive.hh"
 #include "nix/util/configuration.hh"
 #include "nix/util/split.hh"
 #include "nix/util/base-n.hh"
@@ -22,6 +20,12 @@
 #include <sodium.h>
 
 namespace nix {
+
+void BadHash::anchor() {}
+
+void AbstractHashSink::anchor() {}
+
+void HashSink::anchor() {}
 
 const StringSet hashAlgorithms = {"blake3", "md5", "sha1", "sha256", "sha512"};
 

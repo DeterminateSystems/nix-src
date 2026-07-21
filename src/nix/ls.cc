@@ -6,7 +6,7 @@
 
 #include "ls.hh"
 
-using namespace nix;
+namespace nix {
 
 struct MixLs : virtual Args, MixJSON, MixLongListing
 {
@@ -154,3 +154,5 @@ struct CmdLsNar : Command, MixLs
 
 static auto rCmdLsStore = registerCommand2<CmdLsStore>({"store", "ls"});
 static auto rCmdLsNar = registerCommand2<CmdLsNar>({"nar", "ls"});
+
+} // namespace nix

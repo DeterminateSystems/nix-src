@@ -131,7 +131,7 @@ EOF
 git -C "$flakeFollowsA" add flake.nix
 
 expect 1 nix flake lock "$flakeFollowsA" 2>&1 | grep '/flakeB.*is forbidden in pure evaluation mode'
-expect 1 nix flake lock --impure "$flakeFollowsA" 2>&1 | grep "error: 'flakeB' is too short to be a valid store path"
+expect 1 nix flake lock --impure "$flakeFollowsA" 2>&1 | grep '/flakeB.*does not exist'
 
 # Test relative non-flake inputs.
 cat > "$flakeFollowsA"/flake.nix <<EOF
@@ -153,7 +153,7 @@ nix flake lock "$flakeFollowsA"
 
 [[ $(nix eval --json "$flakeFollowsA"#e) = 123 ]]
 
-# Non-existant follows should print a warning.
+# Non-existent follows should print a warning.
 cat >"$flakeFollowsA"/flake.nix <<EOF
 {
     description = "Flake A";

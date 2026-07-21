@@ -10,7 +10,7 @@ project(
     'unity=on',
     'unity_size=1024',
   ],
-  meson_version : '>= 1.1',
+  meson_version : '>= 1.8',
   license : 'LGPL-2.1-or-later',
 )
 

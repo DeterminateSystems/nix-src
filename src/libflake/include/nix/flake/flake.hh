@@ -261,12 +261,4 @@ void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & v);
 
 } // namespace flake
 
-void emitTreeAttrs(
-    EvalState & state,
-    const StorePath & storePath,
-    const fetchers::Input & input,
-    Value & v,
-    bool emptyRevFallback = false,
-    bool forceDirty = false);
-
 } // namespace nix

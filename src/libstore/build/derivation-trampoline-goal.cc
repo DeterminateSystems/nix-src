@@ -49,18 +49,17 @@ void DerivationTrampolineGoal::commonInit()
 
 DerivationTrampolineGoal::~DerivationTrampolineGoal() {}
 
-static StorePath pathPartOfReq(const SingleDerivedPath & req)
-{
-    return std::visit(
-        overloaded{
-            [&](const SingleDerivedPath::Opaque & bo) { return bo.path; },
-            [&](const SingleDerivedPath::Built & bfd) { return pathPartOfReq(*bfd.drvPath); },
-        },
-        req.raw());
-}
-
 std::string DerivationTrampolineGoal::key()
 {
+    auto pathPartOfReq = [](this const auto & self, const SingleDerivedPath & req) -> StorePath {
+        return std::visit(
+            overloaded{
+                [&](const SingleDerivedPath::Opaque & bo) { return bo.path; },
+                [&](const SingleDerivedPath::Built & bfd) { return self(*bfd.drvPath); },
+            },
+            req.raw());
+    };
+
     return "da$" + std::string(pathPartOfReq(*drvReq).name()) + "$" + DerivedPath::Built{
         .drvPath = drvReq,
         .outputs = wantedOutputs,
@@ -155,8 +154,10 @@ Goal::Co DerivationTrampolineGoal::haveDerivation(StorePath drvPath, Derivation 
 
     /* Build this step! */
 
+    auto sharedDrv = make_ref<const Derivation>(std::move(drv));
+
     for (auto & output : resolvedWantedOutputs) {
-        auto g = upcast_goal(worker.makeDerivationGoal(drvPath, drv, output, buildMode, false));
+        auto g = upcast_goal(worker.makeDerivationGoal(drvPath, sharedDrv, output, buildMode, false));
         g->preserveFailure = true;
         /* We will finish with it ourselves, as if we were the derivational goal. */
         concreteDrvGoals.insert(std::move(g));

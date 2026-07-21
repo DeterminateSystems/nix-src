@@ -24,7 +24,14 @@ class RemoteFSAccessor;
 
 struct RemoteStoreConfig : virtual StoreConfig
 {
-    using StoreConfig::StoreConfig;
+private:
+    void anchor() override;
+
+public:
+    RemoteStoreConfig(const Params & params, FilePathType pathType)
+        : StoreConfig(params, pathType)
+    {
+    }
 
     Setting<int> maxConnections{
         this, 64, "max-connections", "Maximum number of concurrent connections to the Nix daemon."};
@@ -45,6 +52,10 @@ struct RemoteStore : public virtual Store,
                      public virtual LogStore,
                      public virtual QueryActiveBuildsStore
 {
+private:
+    void anchor() override;
+
+public:
     using Config = RemoteStoreConfig;
 
     const Config & config;
