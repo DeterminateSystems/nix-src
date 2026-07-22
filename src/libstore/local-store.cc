@@ -110,6 +110,7 @@ struct LocalStore::State::Stmts
     SQLiteStmt UpdatePathInfo;
     SQLiteStmt AddReference;
     SQLiteStmt QueryPathInfo;
+    SQLiteStmt QueryValidPathId;
     SQLiteStmt QueryReferences;
     SQLiteStmt QueryReferrers;
     SQLiteStmt InvalidatePath;
@@ -367,6 +368,7 @@ LocalStore::LocalStore(ref<const Config> config)
         state->db,
         fmt("select id, hash, registrationTime, deriver, narSize, ultimate, sigs, ca%s from ValidPaths where path = ?;",
             experimentalFeatureSettings.isEnabled(Xp::Provenance) ? ", provenance" : ""));
+    state->stmts->QueryValidPathId.create(state->db, "select id from ValidPaths where path = ?;");
     state->stmts->QueryReferences.create(
         state->db, "select path from Refs join ValidPaths on reference = id where referrer = ?;");
     state->stmts->QueryReferrers.create(
@@ -857,7 +859,7 @@ void LocalStore::updatePathInfo(State & state, const ValidPathInfo & info)
 
 uint64_t LocalStore::queryValidPathId(State & state, const StorePath & path)
 {
-    auto use(state.stmts->QueryPathInfo.use().apply(printStorePath(path)));
+    auto use(state.stmts->QueryValidPathId.use().apply(printStorePath(path)));
     if (!use.next())
         throw InvalidPath("path '%s' is not valid", printStorePath(path));
     return use.getInt(0);
@@ -865,7 +867,7 @@ uint64_t LocalStore::queryValidPathId(State & state, const StorePath & path)
 
 bool LocalStore::isValidPath_(State & state, const StorePath & path)
 {
-    return state.stmts->QueryPathInfo.use().apply(printStorePath(path)).next();
+    return state.stmts->QueryValidPathId.use().apply(printStorePath(path)).next();
 }
 
 bool LocalStore::isValidPathUncached(const StorePath & path)
