@@ -198,6 +198,9 @@ scope: {
         "--with-url"
         "--with-thread"
       ];
+      patches = [
+        ./patches/0001-Fix-uncaught_exceptions-not-accounting-for-forced_un.patch
+      ];
       enableIcu = false;
       inherit stdenv;
     }).overrideAttrs
