@@ -119,7 +119,11 @@ struct LocalStorePathInfo : ValidPathInfo
         , id(id)
     {
     }
+
+    void anchor() override;
 };
+
+void LocalStorePathInfo::anchor() {}
 
 struct LocalStore::State::Stmts
 {
