@@ -103,6 +103,24 @@ bool LocalStoreConfig::getDefaultRequireSigs()
     return settings.requireSigs;
 }
 
+/**
+ * A `ValidPathInfo` that also records the id of the corresponding row
+ * in the `ValidPaths` table of the SQLite database. This allows
+ * `queryValidPathId()` to return the id from `pathInfoCache` without
+ * consulting the database.
+ */
+struct LocalStorePathInfo : ValidPathInfo
+{
+    uint64_t id;
+
+    LocalStorePathInfo(ValidPathInfo info, uint64_t id)
+        : UnkeyedValidPathInfo(info)
+        , ValidPathInfo(std::move(info))
+        , id(id)
+    {
+    }
+};
+
 struct LocalStore::State::Stmts
 {
     /* Some precompiled SQLite statements. */
@@ -773,7 +791,8 @@ uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)
         }
     }
 
-    pathInfoCache->lock()->upsert(info.path, PathInfoCacheValue{.value = std::make_shared<const ValidPathInfo>(info)});
+    pathInfoCache->lock()->upsert(
+        info.path, PathInfoCacheValue{.value = std::make_shared<const LocalStorePathInfo>(info, id)});
 
     return id;
 }
@@ -808,7 +827,7 @@ std::shared_ptr<const ValidPathInfo> LocalStore::queryPathInfoInternal(State & s
         throw Error("invalid-path entry for '%s': %s", printStorePath(path), e.what());
     }
 
-    auto info = std::make_shared<ValidPathInfo>(path, UnkeyedValidPathInfo(*this, narHash));
+    auto info = std::make_shared<LocalStorePathInfo>(ValidPathInfo(path, UnkeyedValidPathInfo(*this, narHash)), id);
 
     info->registrationTime = useQueryPathInfo.getInt(2);
 
@@ -859,6 +878,14 @@ void LocalStore::updatePathInfo(State & state, const ValidPathInfo & info)
 
 uint64_t LocalStore::queryValidPathId(State & state, const StorePath & path)
 {
+    /* Avoid a database query if the id is in `pathInfoCache`. */
+    {
+        auto cache(pathInfoCache->lock());
+        if (auto res = cache->getOrNullptr(path))
+            if (auto info = dynamic_cast<const LocalStorePathInfo *>(res->value.get()))
+                return info->id;
+    }
+
     auto use(state.stmts->QueryValidPathId.use().apply(printStorePath(path)));
     if (!use.next())
         throw InvalidPath("path '%s' is not valid", printStorePath(path));
@@ -1016,6 +1043,10 @@ void LocalStore::registerValidPaths(const ValidPathInfos & infos)
             auto referrer = ids.at(i.path);
             for (auto & j : i.references) {
                 auto k = ids.find(j);
+                /* Note that queryValidPathId() uses pathInfoCache, so it's possible that path `j` has been
+                 * garbage-collected. But that's fine: the foreign key constraint on Refs will detect that the ID is no
+                 * longer valid. Path IDs are never reused so there is no possibility that ID now refers to another
+                 * path. */
                 state->stmts->AddReference.use()
                     .apply(referrer)
                     .apply(k != ids.end() ? k->second : queryValidPathId(*state, j))
