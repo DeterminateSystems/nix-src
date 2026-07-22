@@ -144,6 +144,11 @@ uint64_t SQLite::getLastInsertedRowId()
     return sqlite3_last_insert_rowid(db);
 }
 
+void SQLite::setLastInsertedRowId(uint64_t id)
+{
+    sqlite3_set_last_insert_rowid(db, id);
+}
+
 void SQLiteStmt::create(sqlite3 * db, const std::string & sql)
 {
     checkInterrupt();

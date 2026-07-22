@@ -355,7 +355,9 @@ LocalStore::LocalStore(ref<const Config> config)
     /* Prepare SQL statements. */
     state->stmts->RegisterValidPath.create(
         state->db,
-        fmt("insert into ValidPaths (path, hash, registrationTime, deriver, narSize, ultimate, sigs, ca%s) values (?, ?, ?, ?, ?, ?, ?, ?%s);",
+        fmt("insert into ValidPaths (path, hash, registrationTime, deriver, narSize, ultimate, sigs, ca%s) values (?, ?, ?, ?, ?, ?, ?, ?%s) "
+            "on conflict (path) do update set hash = excluded.hash, narSize = excluded.narSize, ultimate = excluded.ultimate, sigs = excluded.sigs, ca = excluded.ca "
+            "returning id;",
             experimentalFeatureSettings.isEnabled(Xp::Provenance) ? ", provenance" : "",
             experimentalFeatureSettings.isEnabled(Xp::Provenance) ? ", ?" : ""));
     state->stmts->UpdatePathInfo.create(
@@ -734,8 +736,18 @@ uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)
                      .apply(renderContentAddress(info.ca), (bool) info.ca);
     if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
         query.apply(info.provenance ? info.provenance->to_json_str() : "", (bool) info.provenance);
-    query.exec();
-    uint64_t id = state.db.getLastInsertedRowId();
+    /* Valid ids start at 1, so a last-inserted rowid of 0 signals
+       that the upsert did an update rather than an insert. */
+    state.db.setLastInsertedRowId(0);
+    if (!query.next())
+        throw Error("registering path '%s' in the Nix database did not return an id", printStorePath(info.path));
+    uint64_t id = query.getInt(0);
+
+    /* If the path was already valid (i.e. the upsert did an update
+       rather than an insert), the derivation outputs have already
+       been registered, so we're done. */
+    if (state.db.getLastInsertedRowId() != id)
+        return id;
 
     /* If this is a derivation, then store the derivation outputs in
        the database.  This is useful for the garbage collector: it can
@@ -990,20 +1002,23 @@ void LocalStore::registerValidPaths(const ValidPathInfos & infos)
 
         SQLiteTxn txn(state->db);
         StorePathSet paths;
+        std::unordered_map<StorePath, uint64_t> ids;
 
         for (auto & [_, i] : infos) {
             assert(i.narHash.algo == HashAlgorithm::SHA256);
-            if (isValidPath_(*state, i.path))
-                updatePathInfo(*state, i);
-            else
-                addValidPath(*state, i);
+            ids.insert_or_assign(i.path, addValidPath(*state, i));
             paths.insert(i.path);
         }
 
         for (auto & [_, i] : infos) {
-            auto referrer = queryValidPathId(*state, i.path);
-            for (auto & j : i.references)
-                state->stmts->AddReference.use().apply(referrer).apply(queryValidPathId(*state, j)).exec();
+            auto referrer = ids.at(i.path);
+            for (auto & j : i.references) {
+                auto k = ids.find(j);
+                state->stmts->AddReference.use()
+                    .apply(referrer)
+                    .apply(k != ids.end() ? k->second : queryValidPathId(*state, j))
+                    .exec();
+            }
         }
 
         /* Do a topological sort of the paths.  This will throw an
