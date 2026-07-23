@@ -7,8 +7,6 @@ project(
     # TODO(Qyriad): increase the warning level
     'warning_level=1',
     'errorlogs=true', # Please print logs for tests that fail
-    'unity=on',
-    'unity_size=1024',
   ],
   meson_version : '>= 1.8',
   license : 'LGPL-2.1-or-later',
