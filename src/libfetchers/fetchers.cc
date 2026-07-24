@@ -310,6 +310,21 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         storePath = computeStorePath(store);
 
     auto makeStoreAccessor = [&]() -> std::pair<ref<SourceAccessor>, Input> {
+        auto narHash = store.queryPathInfo(*storePath)->narHash;
+
+        /* If the store path is input-addressed (i.e. it comes from a
+           `storePath` attribute rather than being computed from the
+           NAR hash), its validity does not imply that it has the
+           expected contents, so verify the NAR hash. */
+        if (narHash != *getNarHash())
+            throw Error(
+                (unsigned int) 102,
+                "NAR hash mismatch in input '%s' at '%s', expected '%s' but got '%s'",
+                to_string(),
+                store.printStorePath(*storePath),
+                getNarHash()->to_string(HashFormat::SRI, true),
+                narHash.to_string(HashFormat::SRI, true));
+
         auto accessor = store.requireStoreObjectAccessor(*storePath);
 
         // FIXME: use the NAR hash for fingerprinting Git trees since it may have a .gitattributes file and we don't
@@ -324,7 +339,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
             settings.getCache()->upsert(
                 makeSourcePathToHashCacheKey(
                     *accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, CanonPath::root),
-                {{"hash", store.queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
+                {{"hash", narHash.to_string(HashFormat::SRI, true)}});
         }
 
         accessor->provenance = std::make_shared<TreeProvenance>(*this);
@@ -427,6 +442,12 @@ std::string Input::getName() const
 
 StorePath Input::computeStorePath(Store & store) const
 {
+    /* If the input records the resolved store path (which may be
+       input-addressed and thus not computable from the NAR hash), use
+       it directly. */
+    if (auto storePath = maybeGetStrAttr(attrs, "storePath"))
+        return store.parseStorePath(*storePath);
+
     auto narHash = getNarHash();
     if (!narHash)
         throw Error("cannot compute store path for unlocked input '%s'", to_string());
