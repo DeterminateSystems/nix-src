@@ -1,8 +1,8 @@
 #include "nix/fetchers/fetchers.hh"
 #include "nix/fetchers/fetch-settings.hh"
+#include "nix/store/filetransfer.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/logging.hh"
-#include "nix/util/processes.hh"
 #include "nix/util/strings.hh"
 
 #include <nlohmann/json.hpp>
@@ -11,10 +11,13 @@ namespace nix::fetchers {
 
 /* A fetcher that resolves a FlakeHub output reference like
    `DeterminateSystems/nix-wasm-rust/^0#packages.x86_64-linux.default`
-   to a prebuilt store path, using the `fh` CLI. The store path is
-   substituted rather than fetched as a source tree, so this provides
-   a convenient way for flakes to depend on prebuilt binary artifacts
-   (such as WASM plugins). */
+   to a prebuilt store path by querying api.flakehub.com. The store
+   path is substituted rather than fetched as a source tree, so this
+   provides a convenient way for flakes to depend on prebuilt binary
+   artifacts (such as WASM plugins).
+
+   Access to private flakes uses the credentials for api.flakehub.com
+   in the user's netrc file. */
 struct FhResolveInputScheme : InputScheme
 {
     std::string_view schemeName() const override
@@ -152,16 +155,18 @@ struct FhResolveInputScheme : InputScheme
             if (fastOnly)
                 return std::nullopt;
 
-            auto fhRef =
-                fmt("%s/%s/%s#%s",
-                    getStrAttr(input.attrs, "org"),
-                    getStrAttr(input.attrs, "project"),
-                    getStrAttr(input.attrs, "version"),
-                    getStrAttr(input.attrs, "output"));
+            Activity act(
+                *logger, lvlTalkative, actUnknown, fmt("resolving FlakeHub reference '%s'", input.to_string()));
 
-            Activity act(*logger, lvlTalkative, actUnknown, fmt("resolving FlakeHub reference '%s'", fhRef));
+            FileTransferRequest request(
+                fmt("https://api.flakehub.com/f/%s/%s/%s/output/%s",
+                    percentEncode(getStrAttr(input.attrs, "org")),
+                    percentEncode(getStrAttr(input.attrs, "project")),
+                    percentEncode(getStrAttr(input.attrs, "version")),
+                    percentEncode(getStrAttr(input.attrs, "output"))));
+            request.headers = {{"Accept", "application/json"}};
 
-            auto json = nlohmann::json::parse(runProgram("fh", true, {"resolve", "--json", fhRef}));
+            auto json = nlohmann::json::parse(getFileTransfer()->download(request).data);
 
             storePath = store.parseStorePath(json.at("store_path").get<std::string>());
             store.addTempRoot(*storePath);
