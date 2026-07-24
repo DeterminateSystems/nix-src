@@ -140,17 +140,11 @@ struct FhResolveInputScheme : InputScheme
         std::optional<StorePath> storePath;
 
         if (auto storePathS = maybeGetStrAttr(input.attrs, "storePath")) {
-            /* Use the previously resolved store path, substituting it
-               if it's not already valid. Note: for final locked inputs,
-               `Input::getAccessorUnchecked()` will usually have done
-               this already via `computeStorePath()`. */
+            /* Use the previously resolved store path. Note: for final
+               locked inputs, `Input::getAccessorUnchecked()` will
+               usually have done this already via
+               `computeStorePath()`. */
             storePath = store.parseStorePath(*storePathS);
-            store.addTempRoot(*storePath);
-            if (!store.isValidPath(*storePath)) {
-                if (fastOnly)
-                    return std::nullopt;
-                store.ensurePath(*storePath);
-            }
         } else {
             if (fastOnly)
                 return std::nullopt;
@@ -169,11 +163,16 @@ struct FhResolveInputScheme : InputScheme
             auto json = nlohmann::json::parse(getFileTransfer()->download(request).data);
 
             storePath = store.parseStorePath(json.at("store_path").get<std::string>());
-            store.addTempRoot(*storePath);
-            if (!store.isValidPath(*storePath))
-                store.ensurePath(*storePath);
 
             input.attrs.insert_or_assign("storePath", store.printStorePath(*storePath));
+        }
+
+        store.addTempRoot(*storePath);
+        if (!store.isValidPath(*storePath)) {
+            if (fastOnly)
+                return std::nullopt;
+            /* Substitute the store path. */
+            store.ensurePath(*storePath);
         }
 
         auto info = store.queryPathInfo(*storePath);
