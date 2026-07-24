@@ -258,28 +258,37 @@ void Input::checkLocks(Input specified, Input & result)
         return;
     }
 
-    if (auto prevNarHash = specified.getNarHash()) {
-        if (result.getNarHash() != prevNarHash) {
-            if (result.getNarHash())
-                throw Error(
-                    (unsigned int) 102,
-                    "NAR hash mismatch in input '%s', expected '%s' but got '%s'",
-                    specified.to_string(),
-                    prevNarHash->to_string(HashFormat::SRI, true),
-                    result.getNarHash()->to_string(HashFormat::SRI, true));
-            else
-                throw Error(
-                    (unsigned int) 102,
-                    "NAR hash mismatch in input '%s', expected '%s' but got none",
-                    specified.to_string(),
-                    prevNarHash->to_string(HashFormat::SRI, true));
-        }
-    }
+    specified.checkNarHash(result.getNarHash());
 
     if (auto prevRev = specified.getRev()) {
         if (result.getRev() != prevRev)
             throw Error("'rev' attribute mismatch in input '%s', expected %s", result.to_string(), prevRev->gitRev());
     }
+}
+
+void Input::checkNarHash(const std::optional<Hash> & narHash, const std::optional<std::string> & storePath) const
+{
+    auto expected = getNarHash();
+    if (!expected || (narHash && *narHash == *expected))
+        return;
+
+    auto location = storePath ? fmt(" at '%s'", *storePath) : "";
+
+    if (narHash)
+        throw Error(
+            (unsigned int) 102,
+            "NAR hash mismatch in input '%s'%s, expected '%s' but got '%s'",
+            to_string(),
+            location,
+            expected->to_string(HashFormat::SRI, true),
+            narHash->to_string(HashFormat::SRI, true));
+    else
+        throw Error(
+            (unsigned int) 102,
+            "NAR hash mismatch in input '%s'%s, expected '%s' but got none",
+            to_string(),
+            location,
+            expected->to_string(HashFormat::SRI, true));
 }
 
 std::pair<ref<SourceAccessor>, Input> Input::getAccessor(const Settings & settings, Store & store) const
@@ -316,14 +325,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
            `storePath` attribute rather than being computed from the
            NAR hash), its validity does not imply that it has the
            expected contents, so verify the NAR hash. */
-        if (narHash != *getNarHash())
-            throw Error(
-                (unsigned int) 102,
-                "NAR hash mismatch in input '%s' at '%s', expected '%s' but got '%s'",
-                to_string(),
-                store.printStorePath(*storePath),
-                getNarHash()->to_string(HashFormat::SRI, true),
-                narHash.to_string(HashFormat::SRI, true));
+        checkNarHash(narHash, store.printStorePath(*storePath));
 
         auto accessor = store.requireStoreObjectAccessor(*storePath);
 

@@ -173,26 +173,16 @@ struct FhResolveInputScheme : InputScheme
 
         auto info = store.queryPathInfo(*storePath);
 
-        if (auto expected = input.getNarHash())
-            if (info->narHash != *expected)
-                throw Error(
-                    (unsigned int) 102,
-                    "NAR hash mismatch in input '%s' at '%s', expected '%s' but got '%s'",
-                    input.to_string(),
-                    store.printStorePath(*storePath),
-                    expected->to_string(HashFormat::SRI, true),
-                    info->narHash.to_string(HashFormat::SRI, true));
+        input.checkNarHash(info->narHash, store.printStorePath(*storePath));
 
         if (!info->references.empty())
             throw Error(
                 "store path '%s' of input '%s' has references (%s), which is not supported by 'fh-resolve' inputs",
                 store.printStorePath(*storePath),
                 input.to_string(),
-                concatStringsSep(
-                    ", ",
-                    info->references | std::views::transform([&](const StorePath & p) {
-                        return store.printStorePath(p);
-                    }) | std::ranges::to<std::vector<std::string>>()));
+                concatStringsSep(", ", info->references | std::views::transform([&](const StorePath & p) {
+                                           return store.printStorePath(p);
+                                       }) | std::ranges::to<std::vector<std::string>>()));
 
         input.attrs.insert_or_assign("narHash", info->narHash.to_string(HashFormat::SRI, true));
 

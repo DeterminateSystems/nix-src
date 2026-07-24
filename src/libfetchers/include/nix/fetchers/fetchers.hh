@@ -129,6 +129,17 @@ public:
     static void checkLocks(Input specified, Input & result);
 
     /**
+     * If this input has a `narHash` attribute, check that `narHash`
+     * matches it, and throw a NAR hash mismatch error (exit code 102)
+     * otherwise.
+     *
+     * @param storePath Optional printed store path of the object that
+     * was hashed, for the error message.
+     */
+    void checkNarHash(
+        const std::optional<Hash> & narHash, const std::optional<std::string> & storePath = std::nullopt) const;
+
+    /**
      * Return a `SourceAccessor` that allows access to files in the
      * input without copying it to the store. Also return a possibly
      * unlocked input.
