@@ -3,7 +3,7 @@
 
 #include "nix/util/types.hh"
 #include "nix/flake/flakeref.hh"
-#include "nix/flake/lockfile.hh"
+#include "nix/flake/lockfile-v7.hh"
 #include "nix/expr/value.hh"
 #include "nix/expr/eval-cache.hh"
 
@@ -139,7 +139,7 @@ typedef Hash Fingerprint;
 struct LockedFlake
 {
     Flake flake;
-    LockFile lockFile;
+    LockFileV7 lockFile;
 
     /**
      * Source tree accessors for nodes that have been fetched in
