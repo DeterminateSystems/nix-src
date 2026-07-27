@@ -11,6 +11,7 @@
 #include "nix/util/users.hh"
 #include "nix/store/pathlocks.hh"
 #include "nix/util/environment-variables.hh"
+#include "nix/util/strings.hh"
 
 #include <nlohmann/json.hpp>
 #include <thread>
@@ -291,6 +292,18 @@ void Input::checkNarHash(const std::optional<Hash> & narHash, const std::optiona
             expected->to_string(HashFormat::SRI, true));
 }
 
+void Input::checkStorePath(Store & store, const ValidPathInfo & info) const
+{
+    checkNarHash(info.narHash, store.printStorePath(info.path));
+
+    if (!info.references.empty())
+        throw Error(
+            "store path '%s' of input '%s' has references (%s), which is not supported",
+            store.printStorePath(info.path),
+            to_string(),
+            concatStringsSep(", ", store.printStorePathSet(info.references)));
+}
+
 std::pair<ref<SourceAccessor>, Input> Input::getAccessor(const Settings & settings, Store & store) const
 {
     try {
@@ -319,13 +332,13 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         storePath = computeStorePath(store);
 
     auto makeStoreAccessor = [&]() -> std::pair<ref<SourceAccessor>, Input> {
-        auto narHash = store.queryPathInfo(*storePath)->narHash;
+        auto info = store.queryPathInfo(*storePath);
 
         /* If the store path is input-addressed (i.e. it comes from a
            `storePath` attribute rather than being computed from the
            NAR hash), its validity does not imply that it has the
            expected contents, so verify the NAR hash. */
-        checkNarHash(narHash, store.printStorePath(*storePath));
+        checkStorePath(store, *info);
 
         auto accessor = store.requireStoreObjectAccessor(*storePath);
 
@@ -341,7 +354,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
             settings.getCache()->upsert(
                 makeSourcePathToHashCacheKey(
                     *accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, CanonPath::root),
-                {{"hash", narHash.to_string(HashFormat::SRI, true)}});
+                {{"hash", info->narHash.to_string(HashFormat::SRI, true)}});
         }
 
         accessor->provenance = std::make_shared<TreeProvenance>(*this);

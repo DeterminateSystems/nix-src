@@ -3,7 +3,6 @@
 #include "nix/store/filetransfer.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/logging.hh"
-#include "nix/util/strings.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -177,16 +176,7 @@ struct FhResolveInputScheme : InputScheme
 
         auto info = store.queryPathInfo(*storePath);
 
-        input.checkNarHash(info->narHash, store.printStorePath(*storePath));
-
-        if (!info->references.empty())
-            throw Error(
-                "store path '%s' of input '%s' has references (%s), which is not supported by 'fh-resolve' inputs",
-                store.printStorePath(*storePath),
-                input.to_string(),
-                concatStringsSep(", ", info->references | std::views::transform([&](const StorePath & p) {
-                                           return store.printStorePath(p);
-                                       }) | std::ranges::to<std::vector<std::string>>()));
+        input.checkStorePath(store, *info);
 
         input.attrs.insert_or_assign("narHash", info->narHash.to_string(HashFormat::SRI, true));
 
