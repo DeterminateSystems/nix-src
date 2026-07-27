@@ -44,6 +44,7 @@ sources = files(
   'flake-primops.cc',
   'flake.cc',
   'flakeref.cc',
+  'lockfile-v7.cc',
   'lockfile.cc',
   'provenance.cc',
   'settings.cc',
