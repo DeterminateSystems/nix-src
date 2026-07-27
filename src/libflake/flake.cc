@@ -25,7 +25,7 @@
 #include "nix/expr/eval.hh"
 #include "nix/expr/eval-cache.hh"
 #include "nix/expr/eval-settings.hh"
-#include "nix/flake/lockfile.hh"
+#include "nix/flake/lockfile-v7.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/store/store-api.hh"
 #include "nix/fetchers/fetchers.hh"
@@ -420,10 +420,10 @@ Flake getFlake(
     return getFlake(state, originalRef, useRegistries, {}, requireLockable);
 }
 
-static LockFile readLockFile(const fetchers::Settings & fetchSettings, const SourcePath & lockFilePath)
+static LockFileV7 readLockFile(const fetchers::Settings & fetchSettings, const SourcePath & lockFilePath)
 {
-    return lockFilePath.pathExists() ? LockFile(fetchSettings, lockFilePath.readFile(), fmt("%s", lockFilePath))
-                                     : LockFile();
+    return lockFilePath.pathExists() ? LockFileV7(fetchSettings, lockFilePath.readFile(), fmt("%s", lockFilePath))
+                                     : LockFileV7();
 }
 
 LockedFlake lockFlake(
@@ -475,7 +475,7 @@ LockedFlake lockFlake(
             explicitCliOverrides.insert(i.first);
         }
 
-        LockFile newLockFile;
+        LockFileV7 newLockFile;
 
         std::vector<FlakeRef> parents;
 
@@ -850,7 +850,7 @@ LockedFlake lockFlake(
         /* Check whether we need to / can write the new lock file. */
         if (newLockFile != oldLockFile || lockFlags.outputLockFilePath) {
 
-            auto diff = LockFile::diff(oldLockFile, newLockFile);
+            auto diff = LockFileV7::diff(oldLockFile, newLockFile);
 
             if (lockFlags.writeLockFile) {
                 if (sourcePath || lockFlags.outputLockFilePath) {
