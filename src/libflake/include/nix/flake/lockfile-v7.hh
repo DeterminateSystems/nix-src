@@ -68,7 +68,7 @@ struct LockFileV7
     ref<Node> root = make_ref<Node>();
 
     LockFileV7() {};
-    LockFileV7(const fetchers::Settings & fetchSettings, std::string_view contents, std::string_view path);
+    LockFileV7(const fetchers::Settings & fetchSettings, const nlohmann::json & json, std::string_view path);
 
     typedef std::map<ref<const Node>, std::string> KeyMap;
 
@@ -87,8 +87,6 @@ struct LockFileV7
     std::shared_ptr<Node> findInput(const InputAttrPath & path) const;
 
     std::map<InputAttrPath, Node::Edge> getAllInputs() const;
-
-    static std::string diff(const LockFileV7 & oldLocks, const LockFileV7 & newLocks);
 
     /**
      * Check that every 'follows' input target exists.
@@ -115,6 +113,13 @@ struct LockedFlakeV7 : LockedFlake
     {
     }
 
+    /**
+     * Construct from the JSON contents of a lock file (which must be
+     * null if the lock file doesn't exist).
+     */
+    LockedFlakeV7(
+        const fetchers::Settings & fetchSettings, Flake flake, const nlohmann::json & json, std::string_view path);
+
     std::vector<FlakeId> getInputNames(const InputAttrPath & prefix) const override;
 
     std::optional<InputInfo> findInput(const InputAttrPath & path) const override;
@@ -123,7 +128,21 @@ struct LockedFlakeV7 : LockedFlake
 
     std::optional<FlakeRef> isUnlocked(const fetchers::Settings & fetchSettings) const override;
 
+    std::string diff(const LockedFlake & oldLockFile) const override;
+
     nlohmann::json toJSON() const override;
+
+    /**
+     * Compute a lock file for `flake`, reusing entries from
+     * `oldLockFile` (which must be a `LockedFlakeV7`) where
+     * possible. Note: this does not write the new lock file.
+     */
+    static std::unique_ptr<LockedFlake> lockFlake(
+        const Settings & settings,
+        EvalState & state,
+        const LockFlags & lockFlags,
+        Flake flake,
+        const LockedFlake & oldLockFile);
 };
 
 } // namespace nix::flake
