@@ -14,7 +14,7 @@ namespace nix::flake_schemas {
 using namespace eval_cache;
 using namespace flake;
 
-static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
+static std::unique_ptr<LockedFlake> getBuiltinDefaultSchemasFlake(EvalState & state)
 {
     auto accessor = make_ref<MemorySourceAccessor>();
 
@@ -53,11 +53,11 @@ ref<EvalCache> call(
 #include "call-flake-schemas.nix.gen.hh"
         ;
 
-    auto lockedDefaultSchemasFlake = defaultSchemasFlake
-                                         ? flake::lockFlake(flakeSettings, state, *defaultSchemasFlake, {})
-                                         : getBuiltinDefaultSchemasFlake(state);
+    std::shared_ptr<LockedFlake> lockedDefaultSchemasFlake =
+        defaultSchemasFlake ? flake::lockFlake(flakeSettings, state, *defaultSchemasFlake, {})
+                            : getBuiltinDefaultSchemasFlake(state);
     auto lockedDefaultSchemasFlakeFingerprint =
-        lockedDefaultSchemasFlake.getFingerprint(*state.store, state.fetchSettings);
+        lockedDefaultSchemasFlake->getFingerprint(*state.store, state.fetchSettings);
 
     std::optional<Fingerprint> fingerprint2;
     if (allowEvalCache && evalSettings.useEvalCache && evalSettings.pureEval && fingerprint
@@ -88,7 +88,7 @@ ref<EvalCache> call(
             if (vFlake->type() == nAttrs && vFlake->attrs()->get(state.symbols.create("schemas")))
                 vDefaultSchemasFlake->mkNull();
             else
-                flake::callFlake(state, lockedDefaultSchemasFlake, *vDefaultSchemasFlake);
+                flake::callFlake(state, *lockedDefaultSchemasFlake, *vDefaultSchemasFlake);
 
             auto vRes = state.allocValue();
             Value * args[] = {vDefaultSchemasFlake, vFlake};
