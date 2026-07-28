@@ -601,9 +601,25 @@ void callFlake(EvalState & state, const LockedFlake & _lockedFlake, Value & vRes
 
     auto [lockFileStr, keyMap] = lockedFlake.lockFile.to_string();
 
-    auto overrides = state.buildBindings(lockedFlake.nodePaths.size());
+    /* Gather the source paths of the nodes that have been fetched
+       (i.e. the root and the nodes fetched during locking). */
+    std::map<ref<const Node>, SourcePath> nodePaths;
 
-    for (auto & [node, sourcePath] : lockedFlake.nodePaths) {
+    nodePaths.emplace(lockedFlake.lockFile.root, lockedFlake.flake.path.parent());
+
+    [&](this const auto & recurse, ref<Node> node) -> void {
+        for (auto & [id, input] : node->inputs) {
+            if (auto child = std::get_if<0>(&input)) {
+                if (auto sourcePath = *(*child)->sourcePath.lock())
+                    nodePaths.emplace(*child, *sourcePath);
+                recurse(*child);
+            }
+        }
+    }(lockedFlake.lockFile.root);
+
+    auto overrides = state.buildBindings(nodePaths.size());
+
+    for (auto & [node, sourcePath] : nodePaths) {
         auto override = state.buildBindings(2);
 
         auto & vSourceInfo = override.alloc(state.symbols.create("sourceInfo"));
