@@ -3,6 +3,7 @@
 
 #include "nix/util/types.hh"
 #include "nix/flake/flakeref.hh"
+#include "nix/flake/input-attr-path.hh"
 #include "nix/flake/lockfile-v7.hh"
 #include "nix/expr/value.hh"
 #include "nix/expr/eval-cache.hh"
