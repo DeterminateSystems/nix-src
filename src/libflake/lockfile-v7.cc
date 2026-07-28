@@ -414,6 +414,52 @@ std::optional<LockedFlake::InputInfo> LockedFlakeV7::findInput(const InputAttrPa
     return std::nullopt;
 }
 
+SourcePath LockedFlakeV7::getSourcePath(EvalState & state, const InputAttrPath & inputAttrPath) const
+{
+    /* The root node. */
+    if (inputAttrPath.empty())
+        return flake.path.parent();
+
+    auto node = lockFile.findInput(inputAttrPath);
+    if (!node)
+        throw Error("flake input '%s' does not exist", printInputAttrPath(inputAttrPath));
+
+    auto lockedNode = std::dynamic_pointer_cast<LockedNode>(node);
+    assert(lockedNode);
+
+    {
+        auto sourcePath(lockedNode->sourcePath.lock());
+        if (*sourcePath)
+            return **sourcePath;
+    }
+
+    /* Note: we fetch without holding the `sourcePath` lock, so
+       concurrent calls don't get serialized. Racing fetches of the
+       same node are harmless since they produce the same path. */
+    auto path = [&]() -> SourcePath {
+        if (auto relativePath = lockedNode->lockedRef.input.isRelative()) {
+            /* Resolve relative path inputs against the source path of
+               their parent flake. */
+            auto parentPath = getSourcePath(state, lockedNode->parentInputAttrPath.value());
+            return {parentPath.accessor, CanonPath(relativePath->string(), parentPath.path)};
+        } else {
+            /* Note: `lockedRef` is a copy since `mountInput()` may
+               modify the input (e.g. adding a `narHash` attribute). */
+            auto lockedRef = lockedNode->lockedRef;
+            auto accessor =
+                state.inputCache
+                    ->getAccessor(state.fetchSettings, *state.store, lockedRef.input, fetchers::UseRegistries::No)
+                    .accessor;
+            return state.storePath(state.mountInput(lockedRef.input, lockedNode->lockedRef.input, accessor, true, true))
+                   / CanonPath(lockedRef.subdir);
+        }
+    }();
+
+    *lockedNode->sourcePath.lock() = path;
+
+    return path;
+}
+
 void LockedFlakeV7::visit(VisitCallback callback) const
 {
     if (!callback({}, InputInfo{.lockedRef = flake.lockedRef}))
@@ -495,7 +541,6 @@ std::unique_ptr<LockedFlake> LockedFlakeV7::lockFlake(
     std::set<NonEmptyInputAttrPath> explicitCliOverrides;
     std::set<NonEmptyInputAttrPath> overridesUsed;
     std::set<InputAttrPath> updatesUsed;
-    std::map<ref<Node>, SourcePath> nodePaths;
 
     for (auto & i : lockFlags.inputOverrides) {
         overrides.emplace(
@@ -728,7 +773,7 @@ std::unique_ptr<LockedFlake> LockedFlakeV7::lockFlake(
 
                     if (mustRefetch) {
                         auto inputFlake = getInputFlake(oldLock->lockedRef, useRegistriesInputs);
-                        nodePaths.emplace(childNode, inputFlake.path.parent());
+                        *childNode->sourcePath.lock() = inputFlake.path.parent();
                         computeLocks(
                             inputFlake.inputs,
                             childNode,
@@ -800,7 +845,7 @@ std::unique_ptr<LockedFlake> LockedFlakeV7::lockFlake(
 
                         /* Recursively process the inputs of this
                            flake, using its own lock file. */
-                        nodePaths.emplace(childNode, inputFlake.path.parent());
+                        *childNode->sourcePath.lock() = inputFlake.path.parent();
                         computeLocks(
                             inputFlake.inputs,
                             childNode,
@@ -837,7 +882,7 @@ std::unique_ptr<LockedFlake> LockedFlakeV7::lockFlake(
                         auto childNode =
                             make_ref<LockedNode>(lockedRef, ref, false, input.buildTime, overriddenParentPath);
 
-                        nodePaths.emplace(childNode, path);
+                        *childNode->sourcePath.lock() = path;
 
                         node->inputs.insert_or_assign(id, childNode);
                     }
@@ -849,8 +894,6 @@ std::unique_ptr<LockedFlake> LockedFlakeV7::lockFlake(
             }
         }
     };
-
-    nodePaths.emplace(newLockFile.root, flake.path.parent());
 
     computeLocks(
         flake.inputs,
@@ -872,7 +915,7 @@ std::unique_ptr<LockedFlake> LockedFlakeV7::lockFlake(
     /* Check 'follows' inputs. */
     newLockFile.check();
 
-    return std::make_unique<LockedFlakeV7>(std::move(flake), std::move(newLockFile), std::move(nodePaths));
+    return std::make_unique<LockedFlakeV7>(std::move(flake), std::move(newLockFile));
 }
 
 } // namespace nix::flake
