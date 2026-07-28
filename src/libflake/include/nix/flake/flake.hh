@@ -4,9 +4,10 @@
 #include "nix/util/types.hh"
 #include "nix/flake/flakeref.hh"
 #include "nix/flake/input-attr-path.hh"
-#include "nix/flake/lockfile-v7.hh"
 #include "nix/expr/value.hh"
 #include "nix/expr/eval-cache.hh"
+
+#include <functional>
 
 namespace nix {
 
@@ -87,7 +88,8 @@ struct Flake
     FlakeRef resolvedRef;
 
     /**
-     * the specific local store result of invoking the fetcher
+     * The flakeref returned by the fetcher. Note that this is a misnomer and it might not actually be locked (e.g. a
+     * dirty Git repo).
      */
     FlakeRef lockedRef;
 
@@ -140,17 +142,71 @@ typedef Hash Fingerprint;
 struct LockedFlake
 {
     Flake flake;
-    LockFileV7 lockFile;
+
+    LockedFlake(Flake && flake)
+        : flake(std::move(flake))
+    {
+    }
+
+    virtual ~LockedFlake();
 
     /**
-     * Source tree accessors for nodes that have been fetched in
-     * lockFlake(); in particular, the root node and the overridden
-     * inputs.
+     * Return the names of the inputs of the input denoted by
+     * `prefix`, or of the top-level flake if `prefix` is empty.
      */
-    std::map<ref<Node>, SourcePath> nodePaths;
+    virtual std::vector<FlakeId> getInputNames(const InputAttrPath & prefix) const = 0;
+
+    /**
+     * Information about a locked input.
+     */
+    struct InputInfo
+    {
+        FlakeRef lockedRef;
+        bool isFlake = true;
+        bool buildTime = false;
+    };
+
+    /**
+     * Return information about the input denoted by `path`, resolving
+     * 'follows' indirections. Returns std::nullopt if the input does
+     * not exist.
+     */
+    virtual std::optional<InputInfo> findInput(const InputAttrPath & path) const = 0;
+
+    /**
+     * Callback for `visit()`. The second argument is either an
+     * `InputInfo` for locked inputs, or, for "follows" inputs, the
+     * input attribute path of the target of the "follows" (relative
+     * to the top-level flake). The return value denotes whether
+     * `visit()` should recurse into the inputs of this input.
+     */
+    using VisitCallback =
+        std::function<bool(const InputAttrPath & inputAttrPath, const std::variant<InputInfo, InputAttrPath> & input)>;
+
+    /**
+     * Call `callback` for every transitive input of this flake,
+     * including the root (which has the empty input attribute
+     * path). Inputs are visited in depth-first order, parents before
+     * children. If the callback returns false, we do not recurse into
+     * the inputs of that input. We never recurse into "follows"
+     * inputs; their targets are visited under their own paths.
+     */
+    virtual void visit(VisitCallback callback) const = 0;
 
     std::optional<Fingerprint> getFingerprint(Store & store, const fetchers::Settings & fetchSettings) const;
+
+    /**
+     * Check whether the lock file has any unlocked or non-final
+     * inputs. If so, return one.
+     */
+    virtual std::optional<FlakeRef> isUnlocked(const fetchers::Settings & fetchSettings) const = 0;
+
+    virtual nlohmann::json toJSON() const = 0;
+
+    std::string to_string() const;
 };
+
+std::ostream & operator<<(std::ostream & stream, const LockedFlake & lockedFlake);
 
 struct LockFlags
 {
@@ -249,13 +305,13 @@ Flake readFlake(
  * Compute an in-memory lock file for the specified top-level flake, and optionally write it to file, if the flake is
  * writable.
  */
-LockedFlake
+std::unique_ptr<LockedFlake>
 lockFlake(const Settings & settings, EvalState & state, const FlakeRef & flakeRef, const LockFlags & lockFlags);
 
-LockedFlake lockFlake(
+std::unique_ptr<LockedFlake> lockFlake(
     const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags, Flake flake);
 
-LockedFlake
+std::unique_ptr<LockedFlake>
 lockFlake(const Settings & settings, EvalState & state, const SourcePath & flakeDir, const LockFlags & lockFlags);
 
 void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & v);
