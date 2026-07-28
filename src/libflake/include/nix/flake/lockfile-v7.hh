@@ -1,7 +1,7 @@
 #pragma once
 ///@file
 
-#include "nix/flake/lockfile.hh"
+#include "nix/flake/input-attr-path.hh"
 
 #include <nlohmann/json_fwd.hpp>
 
