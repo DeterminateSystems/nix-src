@@ -124,7 +124,7 @@ doFind(const ref<Node> & root, const InputAttrPath & path, std::vector<InputAttr
     return pos;
 }
 
-std::shared_ptr<Node> LockFileV7::findInput(const InputAttrPath & path)
+std::shared_ptr<Node> LockFileV7::findInput(const InputAttrPath & path) const
 {
     std::vector<InputAttrPath> visited;
     return doFind(root, path, visited);
@@ -251,12 +251,6 @@ std::pair<std::string, LockFileV7::KeyMap> LockFileV7::to_string() const
 {
     auto [json, nodeKeys] = toJSON();
     return {json.dump(2), std::move(nodeKeys)};
-}
-
-std::ostream & operator<<(std::ostream & stream, const LockFileV7 & lockFile)
-{
-    stream << lockFile.toJSON().first.dump(2);
-    return stream;
 }
 
 std::optional<FlakeRef> LockFileV7::isUnlocked(const fetchers::Settings & fetchSettings) const
@@ -394,6 +388,60 @@ void LockFileV7::check()
                     printInputAttrPath(*follows));
         }
     }
+}
+
+std::vector<FlakeId> LockedFlakeV7::getInputNames(const InputAttrPath & prefix) const
+{
+    std::vector<FlakeId> res;
+    if (auto node = lockFile.findInput(prefix))
+        for (auto & [id, input] : node->inputs)
+            res.push_back(id);
+    return res;
+}
+
+std::optional<LockedFlake::InputInfo> LockedFlakeV7::findInput(const InputAttrPath & path) const
+{
+    if (auto node = std::dynamic_pointer_cast<const LockedNode>(lockFile.findInput(path)))
+        return InputInfo{
+            .lockedRef = node->lockedRef,
+            .isFlake = node->isFlake,
+        };
+    return std::nullopt;
+}
+
+void LockedFlakeV7::visit(VisitCallback callback) const
+{
+    if (!callback({}, InputInfo{.lockedRef = flake.lockedRef}))
+        return;
+
+    [&](this const auto & recurse, const InputAttrPath & prefix, ref<Node> node) -> void {
+        for (auto & [id, input] : node->inputs) {
+            auto inputAttrPath(prefix);
+            inputAttrPath.push_back(id);
+            if (auto child = std::get_if<0>(&input)) {
+                if (callback(
+                        inputAttrPath,
+                        InputInfo{
+                            .lockedRef = (*child)->lockedRef,
+                            .isFlake = (*child)->isFlake,
+                            .buildTime = (*child)->buildTime,
+                        }))
+                    recurse(inputAttrPath, *child);
+            } else if (auto follows = std::get_if<1>(&input)) {
+                callback(inputAttrPath, *follows);
+            }
+        }
+    }({}, lockFile.root);
+}
+
+std::optional<FlakeRef> LockedFlakeV7::isUnlocked(const fetchers::Settings & fetchSettings) const
+{
+    return lockFile.isUnlocked(fetchSettings);
+}
+
+nlohmann::json LockedFlakeV7::toJSON() const
+{
+    return lockFile.toJSON().first;
 }
 
 } // namespace nix::flake
