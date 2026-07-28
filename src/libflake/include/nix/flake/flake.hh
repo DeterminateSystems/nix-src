@@ -134,6 +134,13 @@ struct Flake
 Flake getFlake(
     EvalState & state, const FlakeRef & flakeRef, fetchers::UseRegistries useRegistries, bool requireLockable = true);
 
+Flake getFlake(
+    EvalState & state,
+    const FlakeRef & originalRef,
+    fetchers::UseRegistries useRegistries,
+    const InputAttrPath & lockRootAttrPath,
+    bool requireLockable);
+
 /**
  * Fingerprint of a locked flake; used as a cache key.
  */
@@ -200,6 +207,12 @@ struct LockedFlake
      * inputs. If so, return one.
      */
     virtual std::optional<FlakeRef> isUnlocked(const fetchers::Settings & fetchSettings) const = 0;
+
+    /**
+     * Return a human-readable description of the differences between
+     * the (older) `oldLockFile` and the lock file of this flake.
+     */
+    virtual std::string diff(const LockedFlake & oldLockFile) const = 0;
 
     virtual nlohmann::json toJSON() const = 0;
 
