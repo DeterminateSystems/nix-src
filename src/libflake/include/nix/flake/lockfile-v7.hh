@@ -2,6 +2,7 @@
 ///@file
 
 #include "nix/flake/flake.hh"
+#include "nix/util/sync.hh"
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -40,6 +41,14 @@ struct LockedNode : Node
     /* The node relative to which relative source paths
        (e.g. 'path:../foo') are interpreted. */
     std::optional<InputAttrPath> parentInputAttrPath;
+
+    /**
+     * The source path of this node, if it has been fetched. Set by
+     * `LockedFlakeV7::lockFlake()` for nodes fetched during locking,
+     * and by `LockedFlakeV7::getSourcePath()` for nodes fetched on
+     * demand.
+     */
+    mutable Sync<std::optional<SourcePath>> sourcePath;
 
     LockedNode(
         const FlakeRef & lockedRef,
@@ -98,18 +107,9 @@ struct LockedFlakeV7 : LockedFlake
 {
     LockFileV7 lockFile;
 
-    /**
-     * Source tree accessors for nodes that have been fetched in
-     * lockFlake(); in particular, the root node and the overridden
-     * inputs.
-     * FIXME: move into lockFile?
-     */
-    std::map<ref<Node>, SourcePath> nodePaths;
-
-    LockedFlakeV7(Flake && flake, LockFileV7 && lockFile, std::map<ref<Node>, SourcePath> && nodePaths)
+    LockedFlakeV7(Flake && flake, LockFileV7 && lockFile)
         : LockedFlake(std::move(flake))
         , lockFile(std::move(lockFile))
-        , nodePaths(std::move(nodePaths))
     {
     }
 
@@ -123,6 +123,8 @@ struct LockedFlakeV7 : LockedFlake
     std::vector<FlakeId> getInputNames(const InputAttrPath & prefix) const override;
 
     std::optional<InputInfo> findInput(const InputAttrPath & path) const override;
+
+    SourcePath getSourcePath(EvalState & state, const InputAttrPath & inputAttrPath) const override;
 
     void visit(VisitCallback callback) const override;
 
