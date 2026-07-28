@@ -181,6 +181,16 @@ struct LockedFlake
     virtual std::optional<InputInfo> findInput(const InputAttrPath & path) const = 0;
 
     /**
+     * Return the source path of the input denoted by `inputAttrPath`
+     * (or of the top-level flake if `inputAttrPath` is empty),
+     * fetching it if necessary. Note: the returned path is backed by
+     * `EvalState::rootFS` (i.e. it's a store path, possibly a virtual
+     * one that has the input's accessor mounted on it if lazy trees
+     * are enabled), not by the input's original accessor.
+     */
+    virtual SourcePath getSourcePath(EvalState & state, const InputAttrPath & inputAttrPath) const = 0;
+
+    /**
      * Callback for `visit()`. The second argument is either an
      * `InputInfo` for locked inputs, or, for "follows" inputs, the
      * input attribute path of the target of the "follows" (relative
