@@ -175,23 +175,24 @@ MixFlakeOptions::MixFlakeOptions()
         .labels = {"flake-url"},
         .handler = {[&](std::string flakeRef) {
             auto evalState = getEvalState();
-            auto flake = flake::lockFlake(
+            auto lockedFlake = flake::lockFlake(
                 flakeSettings,
                 *evalState,
                 parseFlakeRef(fetchSettings, flakeRef, absPath(getCommandBaseDir()).string()),
                 {.writeLockFile = false});
-            for (auto & [inputName, input] : flake.lockFile.root->inputs) {
-                auto input2 = flake.lockFile.findInput({inputName}); // resolve 'follows' nodes
-                if (auto input3 = std::dynamic_pointer_cast<const flake::LockedNode>(input2)) {
+
+            for (auto & inputName : lockedFlake->getInputNames({})) {
+                // Note: findInput() resolves 'follows' nodes.
+                if (auto input = lockedFlake->findInput({inputName})) {
                     fetchers::Attrs extraAttrs;
 
-                    if (!input3->lockedRef.subdir.empty()) {
-                        extraAttrs["dir"] = input3->lockedRef.subdir;
+                    if (!input->lockedRef.subdir.empty()) {
+                        extraAttrs["dir"] = input->lockedRef.subdir;
                     }
 
                     overrideRegistry(
                         fetchers::Input::fromAttrs(fetchSettings, {{"type", "indirect"}, {"id", inputName}}),
-                        input3->lockedRef.input,
+                        input->lockedRef.input,
                         extraAttrs);
                 }
             }

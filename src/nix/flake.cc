@@ -56,7 +56,7 @@ FlakeRef FlakeCommand::getFlakeRef()
     return parseFlakeRef(fetchSettings, flakeUrl, std::filesystem::current_path().string()); // FIXME
 }
 
-flake::LockedFlake FlakeCommand::lockFlake()
+std::unique_ptr<flake::LockedFlake> FlakeCommand::lockFlake()
 {
     return flake::lockFlake(flakeSettings, *getEvalState(), getFlakeRef(), lockFlags);
 }
@@ -195,7 +195,7 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
     {
         lockFlags.requireLockable = false;
         auto lockedFlake = lockFlake();
-        auto & flake = lockedFlake.flake;
+        auto & flake = lockedFlake->flake;
 
         /* Hack to show the store path if available. */
         std::optional<StorePath> storePath;
@@ -227,8 +227,8 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                 j["lastModified"] = *lastModified;
             if (storePath)
                 j["path"] = store->printStorePath(*storePath);
-            j["locks"] = lockedFlake.lockFile.toJSON().first;
-            if (auto fingerprint = lockedFlake.getFingerprint(*store, fetchSettings))
+            j["locks"] = lockedFlake->toJSON();
+            if (auto fingerprint = lockedFlake->getFingerprint(*store, fetchSettings))
                 j["fingerprint"] = fingerprint->to_string(HashFormat::Base16, false);
             printJSON(j);
         } else {
@@ -249,41 +249,56 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                 logger->cout(
                     ANSI_BOLD "Last modified:" ANSI_NORMAL " %s",
                     std::put_time(std::localtime(&*lastModified), "%F %T"));
-            if (auto fingerprint = lockedFlake.getFingerprint(*store, fetchSettings))
+            if (auto fingerprint = lockedFlake->getFingerprint(*store, fetchSettings))
                 logger->cout(
                     ANSI_BOLD "Fingerprint:" ANSI_NORMAL "   %s", fingerprint->to_string(HashFormat::Base16, false));
 
-            if (!lockedFlake.lockFile.root->inputs.empty())
+            /* Gather the inputs into a tree, since we need to know
+               the children of a node before we can print it. */
+            struct TreeNode
+            {
+                std::optional<std::variant<flake::LockedFlake::InputInfo, flake::InputAttrPath>> input;
+                std::map<FlakeId, TreeNode> children;
+            };
+
+            TreeNode root;
+
+            lockedFlake->visit([&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
+                if (!inputAttrPath.empty()) {
+                    auto * node = &root;
+                    for (auto & elem : inputAttrPath)
+                        node = &node->children[elem];
+                    node->input = input;
+                }
+                return true;
+            });
+
+            if (!root.children.empty())
                 logger->cout(ANSI_BOLD "Inputs:" ANSI_NORMAL);
 
-            std::set<ref<flake::Node>> visited{lockedFlake.lockFile.root};
-
-            [&](this const auto & recurse, const flake::Node & node, const std::string & prefix) -> void {
-                for (const auto & [last, input] : markLast(node.inputs)) {
-                    if (auto lockedNode = std::get_if<0>(&input.second)) {
+            [&](this const auto & recurse, const TreeNode & node, const std::string & prefix) -> void {
+                for (const auto & [last, child] : markLast(node.children)) {
+                    if (auto inputInfo = std::get_if<flake::LockedFlake::InputInfo>(&*child.second.input)) {
                         std::string lastModifiedStr = "";
-                        if (auto lastModified = (*lockedNode)->lockedRef.input.getLastModified())
+                        if (auto lastModified = inputInfo->lockedRef.input.getLastModified())
                             lastModifiedStr = fmt(" (%s)", std::put_time(std::gmtime(&*lastModified), "%F %T"));
                         logger->cout(
                             "%s" ANSI_BOLD "%s" ANSI_NORMAL ": %s%s",
                             prefix + (last ? treeLast : treeConn),
-                            input.first,
-                            (*lockedNode)->lockedRef.to_string(true),
+                            child.first,
+                            inputInfo->lockedRef.to_string(true),
                             lastModifiedStr);
 
-                        bool firstVisit = visited.insert(*lockedNode).second;
-
-                        if (firstVisit)
-                            recurse(**lockedNode, prefix + (last ? treeNull : treeLine));
-                    } else if (auto follows = std::get_if<1>(&input.second)) {
+                        recurse(child.second, prefix + (last ? treeNull : treeLine));
+                    } else if (auto follows = std::get_if<flake::InputAttrPath>(&*child.second.input)) {
                         logger->cout(
                             "%s" ANSI_BOLD "%s" ANSI_NORMAL " follows input '%s'",
                             prefix + (last ? treeLast : treeConn),
-                            input.first,
+                            child.first,
                             flake::printInputAttrPath(*follows));
                     }
                 }
-            }(*lockedFlake.lockFile.root, "");
+            }(root, "");
         }
     }
 };
@@ -370,7 +385,7 @@ struct CmdFlakeCheck : FlakeCommand, MixPrintOutPaths, MixOutLinkBase, MixFlakeS
         auto state = getEvalState();
 
         lockFlags.applyNixConfig = true;
-        auto flake = std::make_shared<flake::LockedFlake>(lockFlake());
+        std::shared_ptr<flake::LockedFlake> flake(lockFlake());
         auto localSystem = std::string(settings.thisSystem.get());
 
         auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas());
@@ -812,45 +827,42 @@ struct CmdFlakeArchive : FlakeCommand, MixJSON, MixDryRun, MixNoCheckSigs
 
         StorePathSet sources;
 
-        auto storePath = dryRun ? flake.flake.lockedRef.input.computeStorePath(*store)
-                                : std::get<StorePath>(flake.flake.lockedRef.input.fetchToStore(fetchSettings, *store));
+        nlohmann::json jsonRoot;
 
-        sources.insert(storePath);
-
-        // FIXME: use graph output, handle cycles.
-        auto traverse =
-            [&, json = json, dryRun = dryRun](this const auto & self, const flake::Node & node) -> nlohmann::json {
-            nlohmann::json jsonObj2 = json ? nlohmann::json::object() : nlohmann::json(nullptr);
-            for (auto & [inputName, input] : node.inputs) {
-                if (auto inputNode = std::get_if<0>(&input)) {
-                    std::optional<StorePath> storePath;
-                    if (!(*inputNode)->lockedRef.input.isRelative()) {
-                        storePath = dryRun ? (*inputNode)->lockedRef.input.computeStorePath(*store)
-                                           : std::get<StorePath>(
-                                                 (*inputNode)->lockedRef.input.fetchToStore(fetchSettings, *store));
-                        sources.insert(*storePath);
-                    }
-                    if (json) {
-                        auto & jsonObj3 = jsonObj2[inputName];
-                        if (storePath)
-                            jsonObj3["path"] = store->printStorePath(*storePath);
-                        jsonObj3["inputs"] = self(**inputNode);
-                    } else
-                        self(**inputNode);
-                }
-            }
-            return jsonObj2;
+        /* Return the JSON object for the input denoted by
+           `inputAttrPath`, creating it if necessary. */
+        auto getJsonObj = [&](const flake::InputAttrPath & inputAttrPath) -> nlohmann::json & {
+            auto * jsonObj = &jsonRoot;
+            for (auto & elem : inputAttrPath)
+                jsonObj = &(*jsonObj)["inputs"][elem];
+            return *jsonObj;
         };
 
-        if (json) {
-            nlohmann::json jsonRoot = {
-                {"path", store->printStorePath(storePath)},
-                {"inputs", traverse(*flake.lockFile.root)},
-            };
+        flake->visit([&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
+            /* Skip "follows" inputs; their targets are visited under
+               their own paths. */
+            auto inputInfo = std::get_if<flake::LockedFlake::InputInfo>(&input);
+            if (!inputInfo)
+                return false;
+
+            std::optional<StorePath> storePath;
+            if (!inputInfo->lockedRef.input.isRelative()) {
+                storePath = dryRun
+                                ? inputInfo->lockedRef.input.computeStorePath(*store)
+                                : std::get<StorePath>(inputInfo->lockedRef.input.fetchToStore(fetchSettings, *store));
+                sources.insert(*storePath);
+            }
+            if (json) {
+                auto & jsonObj = getJsonObj(inputAttrPath);
+                if (storePath)
+                    jsonObj["path"] = store->printStorePath(*storePath);
+                jsonObj["inputs"] = nlohmann::json::object();
+            }
+            return true;
+        });
+
+        if (json)
             printJSON(jsonRoot);
-        } else {
-            traverse(*flake.lockFile.root);
-        }
 
         if (!dryRun && dstUri) {
             ref<Store> dstStore = openStore(StoreReference{*dstUri});
@@ -918,7 +930,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
             throw UsageError("The '--drv-paths' flag requires '--json'.");
 
         auto state = getEvalState();
-        auto flake = make_ref<flake::LockedFlake>(lockFlake());
+        std::shared_ptr<flake::LockedFlake> flake(lockFlake());
         auto localSystem = std::string(settings.thisSystem.get());
 
         auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas());

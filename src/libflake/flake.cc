@@ -426,7 +426,7 @@ static LockFileV7 readLockFile(const fetchers::Settings & fetchSettings, const S
                                      : LockFileV7();
 }
 
-LockedFlake lockFlake(
+std::unique_ptr<LockedFlake> lockFlake(
     const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags, Flake flake)
 {
     auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
@@ -446,7 +446,7 @@ LockedFlake lockFlake(
         auto oldLockFile =
             readLockFile(state.fetchSettings, lockFlags.referenceLockFilePath.value_or(flake.lockFilePath()));
 
-        debug("old lock file: %s", oldLockFile);
+        debug("old lock file: %s", oldLockFile.to_string().first);
 
         struct OverrideTarget
         {
@@ -843,7 +843,7 @@ LockedFlake lockFlake(
         /* Check 'follows' inputs. */
         newLockFile.check();
 
-        debug("new lock file: %s", newLockFile);
+        debug("new lock file: %s", newLockFile.to_string().first);
 
         auto sourcePath = topRef.input.getSourcePath();
 
@@ -872,7 +872,7 @@ LockedFlake lockFlake(
                                 "flake '%s' requires lock file changes but they're not allowed due to '--no-update-lock-file'",
                                 topRef);
 
-                        auto newLockFileS = fmt("%s\n", newLockFile);
+                        auto newLockFileS = fmt("%s\n", newLockFile.to_string().first);
 
                         if (lockFlags.outputLockFilePath) {
                             if (lockFlags.commitLockFile)
@@ -934,8 +934,7 @@ LockedFlake lockFlake(
             }
         }
 
-        return LockedFlake{
-            .flake = std::move(flake), .lockFile = std::move(newLockFile), .nodePaths = std::move(nodePaths)};
+        return std::make_unique<LockedFlakeV7>(std::move(flake), std::move(newLockFile), std::move(nodePaths));
 
     } catch (Error & e) {
         e.addTrace({}, "while updating the lock file of flake '%s'", flake.lockedRef.to_string());
@@ -943,7 +942,7 @@ LockedFlake lockFlake(
     }
 }
 
-LockedFlake
+std::unique_ptr<LockedFlake>
 lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags)
 {
     auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
@@ -952,7 +951,7 @@ lockFlake(const Settings & settings, EvalState & state, const FlakeRef & topRef,
     return lockFlake(settings, state, topRef, lockFlags, getFlake(state, topRef, useRegistriesTop, {}, false));
 }
 
-LockedFlake
+std::unique_ptr<LockedFlake>
 lockFlake(const Settings & settings, EvalState & state, const SourcePath & flakeDir, const LockFlags & lockFlags)
 {
     /* We need a fake flakeref to put in the `Flake` struct, but it's not used for anything. */
@@ -981,8 +980,10 @@ static Value * requireInternalFile(EvalState & state, CanonPath path)
     return v;
 }
 
-void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & vRes)
+void callFlake(EvalState & state, const LockedFlake & _lockedFlake, Value & vRes)
 {
+    auto & lockedFlake = dynamic_cast<const LockedFlakeV7 &>(_lockedFlake);
+
     auto [lockFileStr, keyMap] = lockedFlake.lockFile.to_string();
 
     auto overrides = state.buildBindings(lockedFlake.nodePaths.size());
@@ -1023,16 +1024,28 @@ void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & vRes)
     state.callFunction(*vCallFlake, args, vRes, noPos);
 }
 
+LockedFlake::~LockedFlake() {}
+
+std::string LockedFlake::to_string() const
+{
+    return toJSON().dump(2);
+}
+
+std::ostream & operator<<(std::ostream & stream, const LockedFlake & lockedFlake)
+{
+    return stream << lockedFlake.to_string();
+}
+
 std::optional<Fingerprint> LockedFlake::getFingerprint(Store & store, const fetchers::Settings & fetchSettings) const
 {
-    if (lockFile.isUnlocked(fetchSettings))
+    if (isUnlocked(fetchSettings))
         return std::nullopt;
 
     auto fingerprint = flake.lockedRef.input.getFingerprint(store);
     if (!fingerprint)
         return std::nullopt;
 
-    *fingerprint += fmt(";%s;%s", flake.lockedRef.subdir, lockFile);
+    *fingerprint += fmt(";%s;%s", flake.lockedRef.subdir, *this);
 
     if (auto revCount = get(flake.lockedRef.input.attrs, "revCount")) {
         if (std::get_if<fetchers::LazyAttr>(revCount)) {

@@ -730,7 +730,7 @@ void NixRepl::loadFlake(const std::string & flakeRefS)
 
     flake::callFlake(
         *state,
-        flake::lockFlake(
+        *flake::lockFlake(
             flakeSettings,
             *state,
             flakeRef,

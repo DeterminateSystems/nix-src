@@ -1,7 +1,7 @@
 #pragma once
 ///@file
 
-#include "nix/flake/input-attr-path.hh"
+#include "nix/flake/flake.hh"
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -84,7 +84,7 @@ struct LockFileV7
 
     bool operator==(const LockFileV7 & other) const;
 
-    std::shared_ptr<Node> findInput(const InputAttrPath & path);
+    std::shared_ptr<Node> findInput(const InputAttrPath & path) const;
 
     std::map<InputAttrPath, Node::Edge> getAllInputs() const;
 
@@ -96,6 +96,34 @@ struct LockFileV7
     void check();
 };
 
-std::ostream & operator<<(std::ostream & stream, const LockFileV7 & lockFile);
+struct LockedFlakeV7 : LockedFlake
+{
+    LockFileV7 lockFile;
+
+    /**
+     * Source tree accessors for nodes that have been fetched in
+     * lockFlake(); in particular, the root node and the overridden
+     * inputs.
+     * FIXME: move into lockFile?
+     */
+    std::map<ref<Node>, SourcePath> nodePaths;
+
+    LockedFlakeV7(Flake && flake, LockFileV7 && lockFile, std::map<ref<Node>, SourcePath> && nodePaths)
+        : LockedFlake(std::move(flake))
+        , lockFile(std::move(lockFile))
+        , nodePaths(std::move(nodePaths))
+    {
+    }
+
+    std::vector<FlakeId> getInputNames(const InputAttrPath & prefix) const override;
+
+    std::optional<InputInfo> findInput(const InputAttrPath & path) const override;
+
+    void visit(VisitCallback callback) const override;
+
+    std::optional<FlakeRef> isUnlocked(const fetchers::Settings & fetchSettings) const override;
+
+    nlohmann::json toJSON() const override;
+};
 
 } // namespace nix::flake
