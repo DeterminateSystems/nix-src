@@ -4,7 +4,7 @@
 #include <string_view>
 #include <vector>
 
-#include "nix/flake/lockfile.hh"
+#include "nix/flake/input-attr-path.hh"
 #include "nix/flake/flakeref.hh"
 #include "nix/util/error.hh"
 #include "nix/util/strings.hh"
