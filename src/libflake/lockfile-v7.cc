@@ -94,9 +94,6 @@ struct LockedNode : Node
     FlakeRef lockedRef, originalRef;
     bool isFlake = true;
     bool buildTime = false;
-
-    /* The node relative to which relative source paths
-       (e.g. 'path:../foo') are interpreted. */
     std::optional<InputAttrPath> parentInputAttrPath;
 
     /**

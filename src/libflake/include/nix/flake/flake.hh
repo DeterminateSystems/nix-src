@@ -185,8 +185,12 @@ struct LockedFlake
         bool buildTime = false;
 
         /**
-         * For relative path inputs, the input attribute path of the
-         * flake relative to which the path is interpreted.
+         * For relative path inputs (e.g. 'path:./foo'), the input
+         * attribute path, relative to the top-level flake, of the
+         * flake against whose source tree the path is resolved. This
+         * is the flake whose `flake.nix` *declares* the relative
+         * path: for an overridden input, that's the flake that
+         * declares the override, not necessarily the input's parent.
          */
         std::optional<InputAttrPath> parentInputAttrPath;
     };
