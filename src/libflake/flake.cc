@@ -453,11 +453,11 @@ std::unique_ptr<LockedFlake> lockFlake(
         }
 
         // FIXME: dispatch on the lock file version here.
-        LockedFlakeV7 oldLockedFlake(state.fetchSettings, flake, oldLockFileJson, fmt("%s", lockFilePath));
+        auto oldLockedFlake = parseLockFileV7(state.fetchSettings, flake, oldLockFileJson, fmt("%s", lockFilePath));
 
-        debug("old lock file: %s", oldLockedFlake.to_string());
+        debug("old lock file: %s", oldLockedFlake->to_string());
 
-        auto lockedFlake = LockedFlakeV7::lockFlake(settings, state, lockFlags, std::move(flake), oldLockedFlake);
+        auto lockedFlake = lockFlakeV7(settings, state, lockFlags, std::move(flake), *oldLockedFlake);
 
         debug("new lock file: %s", lockedFlake->to_string());
 
@@ -465,9 +465,9 @@ std::unique_ptr<LockedFlake> lockFlake(
 
         /* Check whether we need to / can write the new lock file. */
         auto lockedFlakeJson = lockedFlake->toJSON();
-        if (lockedFlakeJson != oldLockedFlake.toJSON() || lockFlags.outputLockFilePath) {
+        if (lockedFlakeJson != oldLockedFlake->toJSON() || lockFlags.outputLockFilePath) {
 
-            auto diff = lockedFlake->diff(oldLockedFlake);
+            auto diff = lockedFlake->diff(*oldLockedFlake);
 
             if (lockFlags.writeLockFile) {
                 if (sourcePath || lockFlags.outputLockFilePath) {
