@@ -40,6 +40,8 @@
 #include "nix/expr/attr-set.hh"
 #include "nix/expr/eval-error.hh"
 #include "nix/expr/fetch-tree.hh"
+#include "nix/expr/json-to-value.hh"
+#include "nix/expr/primops.hh"
 #include "nix/expr/nixexpr.hh"
 #include "nix/expr/symbol-table.hh"
 #include "nix/expr/value.hh"
@@ -595,67 +597,192 @@ static Value * requireInternalFile(EvalState & state, CanonPath path)
     return v;
 }
 
-void callFlake(EvalState & state, const LockedFlake & _lockedFlake, Value & vRes)
+/**
+ * An external value wrapping a `LockedFlake`, passed as an argument
+ * to `call-flake.nix` and consumed by the `listFlakeInputs` and
+ * `fetchFlakeInput` primops.
+ */
+class LockedFlakeValue : public ExternalValueBase, public gc_cleanup
 {
-    auto & lockedFlake = dynamic_cast<const LockedFlakeV7 &>(_lockedFlake);
+public:
+    const std::shared_ptr<const LockedFlake> lockedFlake;
 
-    auto [lockFileStr, keyMap] = lockedFlake.lockFile.to_string();
+    LockedFlakeValue(std::shared_ptr<const LockedFlake> lockedFlake)
+        : lockedFlake(std::move(lockedFlake))
+    {
+    }
 
-    /* Gather the source paths of the nodes that have been fetched
-       (i.e. the root and the nodes fetched during locking). */
-    std::map<ref<const Node>, SourcePath> nodePaths;
+    std::string showType() const override
+    {
+        return "a locked flake";
+    }
 
-    nodePaths.emplace(lockedFlake.lockFile.root, lockedFlake.flake.path.parent());
+    std::string typeOf() const override
+    {
+        return "lockedFlake";
+    }
 
-    [&](this const auto & recurse, ref<Node> node) -> void {
-        for (auto & [id, input] : node->inputs) {
-            if (auto child = std::get_if<0>(&input)) {
-                if (auto sourcePath = *(*child)->sourcePath.lock())
-                    nodePaths.emplace(*child, *sourcePath);
-                recurse(*child);
-            }
+protected:
+    std::ostream & print(std::ostream & str) const override
+    {
+        return str << "«locked flake»";
+    }
+};
+
+static const LockedFlake & requireLockedFlake(EvalState & state, Value & v, const PosIdx pos)
+{
+    state.forceValue(v, pos);
+    if (v.type() == nExternal)
+        if (auto * ext = dynamic_cast<LockedFlakeValue *>(v.external()))
+            return *ext->lockedFlake;
+    state.error<TypeError>("expected a locked flake but found %1%", showType(v)).atPos(pos).debugThrow();
+}
+
+static InputAttrPath getInputAttrPathArg(EvalState & state, Value & v, const PosIdx pos)
+{
+    state.forceList(v, pos, "while evaluating an input attribute path");
+    InputAttrPath path;
+    for (auto elem : v.listView())
+        path.push_back(
+            std::string(state.forceStringNoCtx(*elem, pos, "while evaluating an input attribute path element")));
+    return path;
+}
+
+static void prim_listFlakeInputs(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+{
+    auto & lockedFlake = requireLockedFlake(state, *args[0], pos);
+    auto prefix = getInputAttrPathArg(state, *args[1], pos);
+
+    auto targets = lockedFlake.getInputTargets(prefix);
+
+    auto attrs = state.buildBindings(targets.size());
+
+    for (auto & [id, target] : targets) {
+        auto & vTarget = attrs.alloc(state.symbols.create(id));
+        if (!target)
+            vTarget.mkNull();
+        else {
+            auto list = state.buildList(target->size());
+            for (const auto & [n, elem] : enumerate(*target))
+                (list[n] = state.allocValue())->mkString(elem, state.mem);
+            vTarget.mkList(list);
         }
-    }(lockedFlake.lockFile.root);
+    }
 
-    auto overrides = state.buildBindings(nodePaths.size());
+    v.mkAttrs(attrs);
+}
 
-    for (auto & [node, sourcePath] : nodePaths) {
-        auto override = state.buildBindings(2);
+static RegisterPrimOp primop_listFlakeInputs({
+    .name = "__listFlakeInputs",
+    .args = {"lockedFlake", "inputAttrPath"},
+    .doc = R"(
+      For the flake input of *lockedFlake* denoted by *inputAttrPath*
+      (a list of strings, where the empty list denotes the top-level
+      flake), return an attribute set mapping the names of its inputs
+      to either null (for a regular input) or the input attribute path
+      of the target of a "follows" input.
+    )",
+    .impl = prim_listFlakeInputs,
+    .internal = true,
+});
 
-        auto & vSourceInfo = override.alloc(state.symbols.create("sourceInfo"));
+static void prim_fetchFlakeInput(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+{
+    auto & lockedFlake = requireLockedFlake(state, *args[0], pos);
+    auto path = getInputAttrPathArg(state, *args[1], pos);
 
-        auto lockedNode = node.dynamic_pointer_cast<const LockedNode>();
+    std::optional<LockedFlake::InputInfo> info;
+    if (!path.empty()) {
+        info = lockedFlake.findInput(path);
+        if (!info)
+            state.error<EvalError>("flake input '%s' does not exist", printInputAttrPath(path)).atPos(pos).debugThrow();
+    }
 
+    auto attrs = state.buildBindings(4);
+
+    attrs.alloc("flake").mkBool(info ? info->isFlake : true);
+    attrs.alloc("buildTime").mkBool(info && info->buildTime);
+
+    if (info && info->buildTime) {
+        /* Build-time inputs are not fetched at evaluation time;
+           return the locked input attributes so that call-flake.nix
+           can construct a `builtin:fetch-tree` derivation. */
+        parseJSON(state, fetchers::attrsToJSON(info->lockedRef.toAttrs()).dump(), attrs.alloc("locked"));
+    } else {
+        if (info && !info->lockedRef.input.isRelative())
+            state.checkURI(info->lockedRef.input.toURLString());
+
+        auto sourcePath = lockedFlake.getSourcePath(state, path);
         auto [storePath, subdir] = state.store->toStorePath(sourcePath.path.abs());
+
+        /* Relative path inputs have the same source tree as their
+           parent flake, so their `sourceInfo` metadata comes from the
+           nearest non-relative ancestor. */
+        auto info2 = info;
+        while (info2 && info2->lockedRef.input.isRelative()) {
+            assert(info2->parentInputAttrPath);
+            if (info2->parentInputAttrPath->empty())
+                /* The parent is the top-level flake. */
+                info2.reset();
+            else
+                info2 = lockedFlake.findInput(*info2->parentInputAttrPath);
+        }
 
         emitTreeAttrs(
             state,
             storePath,
-            lockedNode ? lockedNode->lockedRef.input : lockedFlake.flake.lockedRef.input,
-            vSourceInfo,
+            info2 ? info2->lockedRef.input : lockedFlake.flake.lockedRef.input,
+            attrs.alloc("sourceInfo"),
             false,
-            !lockedNode && lockedFlake.flake.forceDirty);
+            !info2 && lockedFlake.flake.forceDirty);
 
-        auto key = keyMap.find(node);
-        assert(key != keyMap.end());
-
-        override.alloc(state.symbols.create("dir")).mkString(CanonPath(subdir).rel(), state.mem);
-
-        overrides.alloc(state.symbols.create(key->second)).mkAttrs(override);
+        attrs.alloc("dir").mkString(CanonPath(subdir).rel(), state.mem);
     }
 
-    auto & vOverrides = state.allocValue()->mkAttrs(overrides);
+    v.mkAttrs(attrs);
+}
+
+static RegisterPrimOp primop_fetchFlakeInput({
+    .name = "__fetchFlakeInput",
+    .args = {"lockedFlake", "inputAttrPath"},
+    .doc = R"(
+      Fetch the flake input of *lockedFlake* denoted by *inputAttrPath*
+      (a list of strings, where the empty list denotes the top-level
+      flake) and return an attribute set describing it: `flake`
+      (whether it's a flake), `buildTime` (whether it's fetched at
+      build time), and either `locked` (the locked input attributes,
+      for build-time inputs, which are not fetched) or `sourceInfo`
+      (the fetched tree's metadata) and `dir` (the subdirectory of the
+      flake within `sourceInfo`).
+    )",
+    .impl = prim_fetchFlakeInput,
+    .internal = true,
+});
+
+void callFlake(EvalState & state, std::shared_ptr<const LockedFlake> lockedFlake, Value & vRes)
+{
+    auto vLockedFlake = state.allocValue();
+    vLockedFlake->mkExternal(new LockedFlakeValue(std::move(lockedFlake)));
 
     Value * vCallFlake = requireInternalFile(state, CanonPath("call-flake.nix"));
 
-    auto vLocks = state.allocValue();
-    vLocks->mkString(lockFileStr, state.mem);
-
-    Value * args[] = {vLocks, &vOverrides};
+    Value * args[] = {
+        vLockedFlake,
+        **get(state.internalPrimOps, "listFlakeInputs"),
+        **get(state.internalPrimOps, "fetchFlakeInput"),
+    };
     state.callFunction(*vCallFlake, args, vRes, noPos);
 }
 
 LockedFlake::~LockedFlake() {}
+
+std::vector<FlakeId> LockedFlake::getInputNames(const InputAttrPath & prefix) const
+{
+    std::vector<FlakeId> res;
+    for (auto & [name, target] : getInputTargets(prefix))
+        res.push_back(name);
+    return res;
+}
 
 std::string LockedFlake::to_string() const
 {
