@@ -25,7 +25,6 @@
 #include "nix/expr/eval.hh"
 #include "nix/expr/eval-cache.hh"
 #include "nix/expr/eval-settings.hh"
-#include "nix/flake/lockfile-v7.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/store/store-api.hh"
 #include "nix/fetchers/fetchers.hh"

@@ -6,7 +6,6 @@ headers = files(
   'flake.hh',
   'flakeref.hh',
   'input-attr-path.hh',
-  'lockfile-v7.hh',
   'provenance.hh',
   'settings.hh',
   'url-name.hh',
