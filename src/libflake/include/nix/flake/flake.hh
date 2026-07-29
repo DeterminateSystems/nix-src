@@ -158,10 +158,22 @@ struct LockedFlake
     virtual ~LockedFlake();
 
     /**
+     * For the input denoted by `prefix` (or the top-level flake if
+     * `prefix` is empty), return a map from the names of its inputs
+     * to the target of that input: for a regular input, std::nullopt;
+     * for a "follows" input, the input attribute path (relative to
+     * the top-level flake) of the immediate target of the
+     * "follows". Note that the target may itself denote a "follows"
+     * input. Throws an error if `prefix` does not denote an existing
+     * input.
+     */
+    virtual std::map<FlakeId, std::optional<InputAttrPath>> getInputTargets(const InputAttrPath & prefix) const = 0;
+
+    /**
      * Return the names of the inputs of the input denoted by
      * `prefix`, or of the top-level flake if `prefix` is empty.
      */
-    virtual std::vector<FlakeId> getInputNames(const InputAttrPath & prefix) const = 0;
+    std::vector<FlakeId> getInputNames(const InputAttrPath & prefix) const;
 
     /**
      * Information about a locked input.
@@ -171,6 +183,12 @@ struct LockedFlake
         FlakeRef lockedRef;
         bool isFlake = true;
         bool buildTime = false;
+
+        /**
+         * For relative path inputs, the input attribute path of the
+         * flake relative to which the path is interpreted.
+         */
+        std::optional<InputAttrPath> parentInputAttrPath;
     };
 
     /**
@@ -337,7 +355,7 @@ std::unique_ptr<LockedFlake> lockFlake(
 std::unique_ptr<LockedFlake>
 lockFlake(const Settings & settings, EvalState & state, const SourcePath & flakeDir, const LockFlags & lockFlags);
 
-void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & v);
+void callFlake(EvalState & state, std::shared_ptr<const LockedFlake> lockedFlake, Value & v);
 
 } // namespace flake
 
