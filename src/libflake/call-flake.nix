@@ -1,79 +1,64 @@
 # This is a helper to callFlake() to lazily fetch flake inputs.
 
-# The contents of the lock file, in JSON format.
-lockFileStr:
+# An external value wrapping the C++ `LockedFlake` object.
+lockedFlake:
 
-# A mapping of lock file node IDs to { sourceInfo, subdir } attrsets,
-# with sourceInfo.outPath providing an SourceAccessor to a previously
-# fetched tree. This is necessary for possibly unlocked inputs, in
-# particular the root input, but also --override-inputs pointing to
-# unlocked trees.
-overrides:
+# A primop that, given the locked flake and the input attribute path
+# of an input, returns an attribute set mapping the names of its
+# inputs to either null (for a regular input) or the input attribute
+# path of the target of a "follows" input.
+listFlakeInputs:
+
+# A primop that, given the locked flake and the input attribute path
+# of an input, fetches that input and returns an attribute set
+# describing it.
+fetchFlakeInput:
 
 let
-  inherit (builtins) mapAttrs;
+  inherit (builtins) mapAttrs foldl';
 
-  lockFile = builtins.fromJSON lockFileStr;
-
-  # Resolve a input spec into a node name. An input spec is
-  # either a node name, or a 'follows' path from the root
-  # node.
-  resolveInput =
-    inputSpec: if builtins.isList inputSpec then getInputByPath lockFile.root inputSpec else inputSpec;
-
-  # Follow an input attrpath (e.g. ["dwarffs" "nixpkgs"]) from the
-  # root node, returning the final node.
-  getInputByPath =
-    nodeName: path:
-    if path == [ ] then
-      nodeName
-    else
-      getInputByPath
-        # Since this could be a 'follows' input, call resolveInput.
-        (resolveInput lockFile.nodes.${nodeName}.inputs.${builtins.head path})
-        (builtins.tail path);
-
-  allNodes = mapAttrs (
-    key: node:
+  # Construct the input denoted by the input attribute path
+  # `inputAttrPath` (where `[ ]` denotes the top-level flake). This returns `edges`
+  # (mapping each input name of this input to the input it denotes,
+  # following "follows" indirections) and `result` (the value of this
+  # input, i.e. what ends up in the `inputs` attribute of a flake).
+  mkInput =
+    inputAttrPath:
     let
-      hasOverride = overrides ? ${key};
-      isRelative = node.locked.type or null == "path" && builtins.substring 0 1 node.locked.path != "/";
-
-      parentNode = allNodes.${getInputByPath lockFile.root node.parent};
+      info = fetchFlakeInput lockedFlake inputAttrPath;
 
       sourceInfo =
-        if node.buildTime or false then
+        if info.buildTime then
           derivation {
             name = "source";
             builder = "builtin:fetch-tree";
             system = "builtin";
             __structuredAttrs = true;
-            input = node.locked;
+            input = info.locked;
             outputHashMode = "recursive";
-            outputHash = node.locked.narHash;
+            outputHash = info.locked.narHash;
           }
-        else if hasOverride then
-          overrides.${key}.sourceInfo
-        else if isRelative then
-          parentNode.sourceInfo
         else
-          # FIXME: remove obsolete node.info.
-          # Note: lock file entries are always final.
-          builtins.fetchTree (node.info or { } // removeAttrs node.locked [ "dir" ]);
+          info.sourceInfo;
 
-      subdir = overrides.${key}.dir or node.locked.dir or "";
+      subdir = if info.buildTime then info.locked.dir or "" else info.dir;
 
-      outPath =
-        if !hasOverride && isRelative then
-          parentNode.outPath + (if node.locked.path == "" then "" else "/" + node.locked.path)
-        else
-          sourceInfo.outPath + (if subdir == "" then "" else "/" + subdir);
+      outPath = sourceInfo.outPath + (if subdir == "" then "" else "/" + subdir);
 
       flake = import (outPath + "/flake.nix");
 
-      inputs = mapAttrs (inputName: inputSpec: allNodes.${resolveInput inputSpec}.result) (
-        node.inputs or { }
-      );
+      # Note: constructing `edges` only consults the lock data (via
+      # `listFlakeInputs`), so it never causes anything to be
+      # fetched. A regular input is constructed in place; a "follows"
+      # input is resolved by walking the edges from the top-level
+      # flake, so every distinct input is constructed (and evaluated)
+      # only once.
+      edges = mapAttrs (
+        name: target:
+        if target == null then mkInput (inputAttrPath ++ [ name ]) else getInputByAttrPath target
+      ) (listFlakeInputs lockedFlake inputAttrPath);
+
+      inputs = mapAttrs (name: input: input.result) edges;
 
       outputs = flake.outputs (inputs // { self = result; });
 
@@ -97,17 +82,22 @@ let
 
     in
     {
+      inherit edges;
+
       result =
-        if node.flake or true then
+        if info.flake then
           assert builtins.isFunction flake.outputs;
-          assert !(node.buildTime or false);
+          assert !info.buildTime;
           result
         else
           sourceInfo // { inherit sourceInfo outPath; };
+    };
 
-      inherit outPath sourceInfo;
-    }
-  ) lockFile.nodes;
+  # Follow an input attribute path (e.g. ["dwarffs" "nixpkgs"]) from
+  # the top-level flake, returning the final input.
+  getInputByAttrPath = inputAttrPath: foldl' (input: name: input.edges.${name}) root inputAttrPath;
+
+  root = mkInput [ ];
 
 in
-allNodes.${lockFile.root}.result
+root.result
