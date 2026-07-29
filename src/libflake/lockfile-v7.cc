@@ -182,10 +182,10 @@ LockFileV7::LockFileV7(const fetchers::Settings & fetchSettings, const nlohmann:
     // a bit since we don't need to worry about cycles.
 }
 
-std::pair<nlohmann::json, LockFileV7::KeyMap> LockFileV7::toJSON() const
+nlohmann::json LockFileV7::toJSON() const
 {
     nlohmann::json nodes;
-    KeyMap nodeKeys;
+    std::map<ref<const Node>, std::string> nodeKeys;
     boost::unordered_flat_set<std::string> keys;
 
     auto dumpNode = [&](this auto & dumpNode, std::string key, ref<const Node> node) -> std::string {
@@ -244,13 +244,7 @@ std::pair<nlohmann::json, LockFileV7::KeyMap> LockFileV7::toJSON() const
     json["root"] = dumpNode("root", root);
     json["nodes"] = std::move(nodes);
 
-    return {json, std::move(nodeKeys)};
-}
-
-std::pair<std::string, LockFileV7::KeyMap> LockFileV7::to_string() const
-{
-    auto [json, nodeKeys] = toJSON();
-    return {json.dump(2), std::move(nodeKeys)};
+    return json;
 }
 
 std::optional<FlakeRef> LockFileV7::isUnlocked(const fetchers::Settings & fetchSettings) const
@@ -288,7 +282,7 @@ std::optional<FlakeRef> LockFileV7::isUnlocked(const fetchers::Settings & fetchS
 bool LockFileV7::operator==(const LockFileV7 & other) const
 {
     // FIXME: slow
-    return toJSON().first == other.toJSON().first;
+    return toJSON() == other.toJSON();
 }
 
 std::map<InputAttrPath, Node::Edge> LockFileV7::getAllInputs() const
@@ -395,12 +389,21 @@ void LockFileV7::check()
     }
 }
 
-std::vector<FlakeId> LockedFlakeV7::getInputNames(const InputAttrPath & prefix) const
+std::map<FlakeId, std::optional<InputAttrPath>> LockedFlakeV7::getInputTargets(const InputAttrPath & prefix) const
 {
-    std::vector<FlakeId> res;
-    if (auto node = lockFile.findInput(prefix))
-        for (auto & [id, input] : node->inputs)
-            res.push_back(id);
+    auto node = lockFile.findInput(prefix);
+    if (!node)
+        throw Error("flake input '%s' does not exist", printInputAttrPath(prefix));
+
+    std::map<FlakeId, std::optional<InputAttrPath>> res;
+
+    for (auto & [id, input] : node->inputs) {
+        if (std::get_if<0>(&input))
+            res.emplace(id, std::nullopt);
+        else
+            res.emplace(id, std::get<1>(input));
+    }
+
     return res;
 }
 
@@ -410,6 +413,8 @@ std::optional<LockedFlake::InputInfo> LockedFlakeV7::findInput(const InputAttrPa
         return InputInfo{
             .lockedRef = node->lockedRef,
             .isFlake = node->isFlake,
+            .buildTime = node->buildTime,
+            .parentInputAttrPath = node->parentInputAttrPath,
         };
     return std::nullopt;
 }
@@ -492,7 +497,7 @@ std::optional<FlakeRef> LockedFlakeV7::isUnlocked(const fetchers::Settings & fet
 
 nlohmann::json LockedFlakeV7::toJSON() const
 {
-    return lockFile.toJSON().first;
+    return lockFile.toJSON();
 }
 
 LockedFlakeV7::LockedFlakeV7(

@@ -78,13 +78,13 @@ ref<EvalCache> call(
                 state.parseExprFromString(callFlakeSchemasNix, state.rootPath(CanonPath::root)), *vCallFlakeSchemas);
 
             auto vFlake = state.allocValue();
-            flake::callFlake(state, *lockedFlake, *vFlake);
+            flake::callFlake(state, lockedFlake, *vFlake);
 
             auto vDefaultSchemasFlake = state.allocValue();
             if (vFlake->type() == nAttrs && vFlake->attrs()->get(state.symbols.create("schemas")))
                 vDefaultSchemasFlake->mkNull();
             else
-                flake::callFlake(state, *lockedDefaultSchemasFlake, *vDefaultSchemasFlake);
+                flake::callFlake(state, lockedDefaultSchemasFlake, *vDefaultSchemasFlake);
 
             auto vRes = state.allocValue();
             Value * args[] = {vDefaultSchemasFlake, vFlake};
