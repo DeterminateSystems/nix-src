@@ -42,7 +42,7 @@ PrimOp getFlake(const Settings & settings)
 
         if (args[0]->type() == nPath) {
             auto path = state.realisePath(pos, *args[0]);
-            callFlake(state, *lockFlake(settings, state, path, lockFlags), v);
+            callFlake(state, lockFlake(settings, state, path, lockFlags), v);
         } else {
             NixStringContext context;
             std::string flakeRefS(
@@ -71,12 +71,12 @@ PrimOp getFlake(const Settings & settings)
                     auto [storePath, subPath] = state.store->toStorePath(sourcePath->string());
                     if (auto mount = state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath)))) {
                         auto path = state.storePath(storePath) / CanonPath(subPath) / CanonPath(flakeRef.subdir);
-                        return callFlake(state, *lockFlake(settings, state, path, lockFlags), v);
+                        return callFlake(state, lockFlake(settings, state, path, lockFlags), v);
                     }
                 }
             }
 
-            callFlake(state, *lockFlake(settings, state, flakeRef, lockFlags), v);
+            callFlake(state, lockFlake(settings, state, flakeRef, lockFlags), v);
         }
     };
 
