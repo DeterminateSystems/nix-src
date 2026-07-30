@@ -50,7 +50,13 @@ AttrPath AttrPath::fromStrings(EvalState & state, const std::vector<std::string>
 
 std::string AttrPath::to_string(EvalState & state) const
 {
-    return dropEmptyInitThenConcatStringsSep(".", state.symbols.resolve({*this}));
+    std::ostringstream ss;
+    for (const auto & [idx, attr] : enumerate(state.symbols.resolve({*this}))) {
+        if (idx)
+            ss << '.';
+        printAttributeName(ss, attr);
+    }
+    return ss.str();
 }
 
 std::vector<SymbolStr> AttrPath::resolve(EvalState & state) const

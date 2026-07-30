@@ -200,7 +200,7 @@ struct DerivationType
     /**
      * Impure derivation type
      *
-     * This is similar at build-time to the content addressed, not standboxed, not fixed
+     * This is similar at build-time to the content addressed, not sandboxed, not fixed
      * type, but has some restrictions on its usage.
      */
     struct Impure
@@ -209,7 +209,16 @@ struct DerivationType
         auto operator<=>(const Impure &) const = default;
     };
 
-    typedef std::variant<InputAddressed, ContentAddressed, Impure> Raw;
+    /**
+     * A builtin:substitute derivation.
+     */
+    struct Substituted
+    {
+        bool operator==(const Substituted &) const = default;
+        auto operator<=>(const Substituted &) const = default;
+    };
+
+    typedef std::variant<InputAddressed, ContentAddressed, Impure, Substituted> Raw;
 
     Raw raw;
 
