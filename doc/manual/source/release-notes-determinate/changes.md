@@ -224,5 +224,3 @@ This section lists the differences between upstream Nix 2.34 and Determinate Nix
 <!-- Determinate Nix version 3.21.8 -->
 
 <!-- Determinate Nix version 3.21.9 -->
-
-* Populate the srcToStore cache when we have a fetcher cache hit by @edolstra in [DeterminateSystems/nix-src#575](https://github.com/DeterminateSystems/nix-src/pull/575)
