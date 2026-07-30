@@ -24,7 +24,7 @@ TEST(local_keys, signAndVerify)
         ASSERT_EQ(sig.keyName, "test-key-1");
         ASSERT_TRUE(pk->verifyDetached("hello world", sig));
 
-        auto sk2 = SecretKey::parse(sk->to_string());
+        auto sk2 = SecretKey::parse(sk->to_string(), false);
         ASSERT_EQ(sk2->name, sk->name);
         ASSERT_EQ(sk2->key, sk->key);
 
@@ -58,7 +58,7 @@ TEST(local_keys, rfc8032TestVector)
     auto skBytes = seed + pubKeyBytes;
     auto skString = "test:" + base64::encode(std::as_bytes(std::span<const char>{skBytes.data(), skBytes.size()}));
 
-    auto sk = SecretKey::parse(skString);
+    auto sk = SecretKey::parse(skString, false);
     auto sig = sk->signDetached(message);
 
     ASSERT_EQ(sig.keyName, "test");
@@ -157,7 +157,7 @@ TEST(local_keys, rfc6979EcdsaP384TestVector)
         "99ef4aeb15f178cea1fe40db2603138f130e740a19624526203b6351d0a3a94fa329c145786e679e7b82c71a38628ac8");
 
     auto skString = "rfc6979-test:" + base64::encode(std::as_bytes(std::span<const char>{skDer.data(), skDer.size()}));
-    auto sk = SecretKey::parse(skString);
+    auto sk = SecretKey::parse(skString, false);
 
     auto sig = sk->signDetached("sample");
     ASSERT_EQ(sig.keyName, "rfc6979-test");
@@ -198,7 +198,7 @@ runMlDsaAcvpTest(std::string_view variant, std::string_view derPrefixHex, size_t
     auto der = base16::decode(derPrefixHex) + sk;
     auto skString =
         std::string(variant) + ":" + base64::encode(std::as_bytes(std::span<const char>{der.data(), der.size()}));
-    auto parsed = SecretKey::parse(skString);
+    auto parsed = SecretKey::parse(skString, false);
 
     auto sig = parsed->signDetached(message);
     ASSERT_EQ(sig.keyName, std::string(variant));

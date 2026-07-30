@@ -49,6 +49,8 @@ enum KeyType {
     ECDSAP384,
 };
 
+std::tuple<std::string_view, std::string_view> splitColon(std::string_view s);
+
 KeyType parseKeyType(std::string_view s);
 
 const StringSet & getKeyTypes();
@@ -78,7 +80,7 @@ struct SecretKey : Key
 
     virtual ~SecretKey() {};
 
-    static std::unique_ptr<SecretKey> parse(std::string_view s);
+    static std::unique_ptr<SecretKey> parse(std::string_view s, bool forceUri);
 
     /**
      * Return a detached signature of the given string.
