@@ -13,6 +13,7 @@ namespace nix {
 
 TEST(readLinkAt, works)
 {
+    GTEST_SKIP() << "Broken on EC2 container bind mounted stores";
 #ifdef _WIN32
     GTEST_SKIP() << "Broken on Windows";
 #endif

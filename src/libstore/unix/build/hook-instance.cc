@@ -3,10 +3,13 @@
 #include "nix/store/build/child.hh"
 #include "nix/util/strings.hh"
 #include "nix/util/executable-path.hh"
+#include <chrono>
+
+#include <chrono>
 
 namespace nix {
 
-HookInstance::HookInstance(const Strings & _buildHook)
+HookInstance::HookInstance(const Strings & _buildHook, std::chrono::milliseconds timeout)
 {
     debug("starting build hook '%s'", concatStringsSep(" ", _buildHook));
 
@@ -69,6 +72,10 @@ HookInstance::HookInstance(const Strings & _buildHook)
 
         throw SysError("executing %s", PathFmt(buildHook));
     });
+
+    /* Give custom build hooks the chance to cleanup. */
+    pid.setKillSignal(SIGTERM);
+    pid.setKillTimeout(timeout);
 
     pid.setSeparatePG(true);
     fromHook.writeSide = -1;

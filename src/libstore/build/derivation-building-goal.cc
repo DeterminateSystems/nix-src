@@ -16,6 +16,7 @@
 #include "nix/store/local-store.hh" // TODO remove, along with remaining downcasts
 #include "nix/store/globals.hh"
 
+#include <chrono>
 #include <algorithm>
 #include <fstream>
 #include <sys/types.h>
@@ -1126,7 +1127,8 @@ HookReply DerivationBuildingGoal::tryBuildHook(const DerivationOptions<StorePath
         return rpDecline;
 
     if (!worker.hook)
-        worker.hook = std::make_unique<HookInstance>(worker.settings.buildHook);
+        worker.hook = std::make_unique<HookInstance>(
+            worker.settings.buildHook, std::chrono::milliseconds(worker.settings.buildHookKillTimeout));
 
     try {
 
