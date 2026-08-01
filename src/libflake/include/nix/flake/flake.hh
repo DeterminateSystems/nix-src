@@ -324,9 +324,10 @@ struct LockFlags
 
     /**
      * Flake inputs to be updated. This means that any existing lock
-     * for those inputs will be ignored.
+     * for those inputs will be ignored. `std::nullopt` means that
+     * *all* inputs will be updated.
      */
-    std::set<NonEmptyInputAttrPath> inputUpdates;
+    std::optional<std::set<NonEmptyInputAttrPath>> inputUpdates = std::set<NonEmptyInputAttrPath>();
 
     /**
      * Whether to require a locked input.
