@@ -795,7 +795,7 @@ std::unique_ptr<LockedFlake> lockFlakeV7(
 
                 updatesUsed.insert(inputAttrPath);
 
-                if (oldNode && !lockFlags.inputUpdates.count(nonEmptyInputAttrPath))
+                if (oldNode && !(lockFlags.inputUpdates && lockFlags.inputUpdates->count(nonEmptyInputAttrPath)))
                     if (auto oldLock2 = get(oldNode->inputs, id))
                         if (auto oldLock3 = std::get_if<0>(&*oldLock2))
                             oldLock = *oldLock3;
@@ -818,10 +818,14 @@ std::unique_ptr<LockedFlake> lockFlakeV7(
 
                     /* If we have this input in updateInputs, then we
                        must fetch the flake to update it. */
-                    auto lb = lockFlags.inputUpdates.lower_bound(nonEmptyInputAttrPath);
+                    auto mustRefetch = false;
 
-                    auto mustRefetch = lb != lockFlags.inputUpdates.end() && lb->get().size() > inputAttrPath.size()
-                                       && std::equal(inputAttrPath.begin(), inputAttrPath.end(), lb->get().begin());
+                    if (lockFlags.inputUpdates) {
+                        auto lb = lockFlags.inputUpdates->lower_bound(nonEmptyInputAttrPath);
+
+                        mustRefetch = lb != lockFlags.inputUpdates->end() && lb->get().size() > inputAttrPath.size()
+                                      && std::equal(inputAttrPath.begin(), inputAttrPath.end(), lb->get().begin());
+                    }
 
                     FlakeInputs fakeInputs;
 
@@ -993,7 +997,7 @@ std::unique_ptr<LockedFlake> lockFlakeV7(
         flake.inputs,
         newLockFile.root,
         {},
-        lockFlags.recreateLockFile ? nullptr : oldLockFile.root.get_ptr(),
+        lockFlags.recreateLockFile || !lockFlags.inputUpdates ? nullptr : oldLockFile.root.get_ptr(),
         {},
         flake.path,
         false);
@@ -1002,9 +1006,10 @@ std::unique_ptr<LockedFlake> lockFlakeV7(
         if (!overridesUsed.count(i.first))
             warn("the flag '--override-input %s %s' does not match any input", printInputAttrPath(i.first), i.second);
 
-    for (auto & i : lockFlags.inputUpdates)
-        if (!updatesUsed.count(i))
-            warn("'%s' does not match any input of this flake", printInputAttrPath(i));
+    if (lockFlags.inputUpdates)
+        for (auto & i : *lockFlags.inputUpdates)
+            if (!updatesUsed.count(i))
+                warn("'%s' does not match any input of this flake", printInputAttrPath(i));
 
     /* Check 'follows' inputs. */
     newLockFile.check();
