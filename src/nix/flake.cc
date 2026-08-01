@@ -106,11 +106,11 @@ public:
                             inputToUpdate);
                         throw e;
                     }
-                    if (lockFlags.inputUpdates.contains(*inputAttrPath))
+                    if (lockFlags.inputUpdates->contains(*inputAttrPath))
                         warn(
                             "Input '%s' was specified multiple times. You may have done this by accident.",
                             printInputAttrPath(*inputAttrPath));
-                    lockFlags.inputUpdates.insert(*inputAttrPath);
+                    lockFlags.inputUpdates->insert(*inputAttrPath);
                 }
             }},
             .completer = {[&](AddCompletions & completions, size_t, std::string_view prefix) {
@@ -133,9 +133,11 @@ public:
     void run(nix::ref<nix::Store> store) override
     {
         fetchSettings.tarballTtl = 0;
-        auto updateAll = lockFlags.inputUpdates.empty();
 
-        lockFlags.recreateLockFile = updateAll;
+        /* If no specific inputs are given, update all inputs. */
+        if (lockFlags.inputUpdates->empty())
+            lockFlags.inputUpdates = std::nullopt;
+
         lockFlags.writeLockFile = true;
         lockFlags.applyNixConfig = true;
         lockFlags.requireLockable = false;
