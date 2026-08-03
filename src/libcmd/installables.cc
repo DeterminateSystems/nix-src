@@ -171,8 +171,9 @@ MixFlakeOptions::MixFlakeOptions()
                 parseFlakeRef(fetchSettings, flakeRef, absPath(getCommandBaseDir()).string()),
                 {.writeLockFile = false});
 
-            for (auto & inputName : lockedFlake->getInputNames({})) {
-                if (auto input = lockedFlake->findInput(lockedFlake->resolveFollows({inputName}))) {
+            for (auto & inputName : lockedFlake->getInputNames(*evalState, {})) {
+                if (auto input =
+                        lockedFlake->findInput(*evalState, lockedFlake->resolveFollows(*evalState, {inputName}))) {
                     fetchers::Attrs extraAttrs;
 
                     if (!input->lockedRef.subdir.empty()) {
