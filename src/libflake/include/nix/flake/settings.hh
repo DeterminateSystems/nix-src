@@ -41,6 +41,18 @@ struct Settings : public Config
         )",
         {"commit-lockfile-summary"},
         true};
+
+    Setting<unsigned int> lockFileFormat{
+        this,
+        7,
+        "lock-file-format",
+        R"(
+          The lock file format version to use when creating a new lock
+          file (7 or 8). An existing lock file keeps its version
+          unless `--recreate-lock-file` is passed.
+        )",
+        {},
+        true};
 };
 
 } // namespace nix::flake
