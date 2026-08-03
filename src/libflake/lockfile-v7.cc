@@ -612,7 +612,7 @@ std::unique_ptr<LockedFlake> parseLockFileV7(
     return std::make_unique<LockedFlakeV7>(fetchSettings, std::move(flake), json, path);
 }
 
-std::unique_ptr<LockedFlake> lockFlakeV7(
+LockFlakeResult lockFlakeV7(
     const Settings & settings,
     EvalState & state,
     const LockFlags & lockFlags,
@@ -1002,19 +1002,14 @@ std::unique_ptr<LockedFlake> lockFlakeV7(
         flake.path,
         false);
 
-    for (auto & i : lockFlags.inputOverrides)
-        if (!overridesUsed.count(i.first))
-            warn("the flag '--override-input %s %s' does not match any input", printInputAttrPath(i.first), i.second);
-
-    if (lockFlags.inputUpdates)
-        for (auto & i : *lockFlags.inputUpdates)
-            if (!updatesUsed.count(i))
-                warn("'%s' does not match any input of this flake", printInputAttrPath(i));
-
     /* Check 'follows' inputs. */
     newLockFile.check();
 
-    return std::make_unique<LockedFlakeV7>(std::move(flake), std::move(newLockFile));
+    return {
+        .lockedFlake = std::make_unique<LockedFlakeV7>(std::move(flake), std::move(newLockFile)),
+        .overridesUsed = std::move(overridesUsed),
+        .updatesUsed = std::move(updatesUsed),
+    };
 }
 
 } // namespace nix::flake
