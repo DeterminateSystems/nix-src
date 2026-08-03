@@ -407,6 +407,19 @@ std::unique_ptr<LockedFlake>
 lockFlake(const Settings & settings, EvalState & state, const SourcePath & flakeDir, const LockFlags & lockFlags);
 
 /**
+ * Parse a lock file, dispatching on the version of its JSON
+ * representation. `json` must be null if the lock file doesn't exist,
+ * in which case an empty lock file of version `versionIfMissing` is
+ * returned.
+ */
+std::unique_ptr<LockedFlake> parseLockFile(
+    const fetchers::Settings & fetchSettings,
+    Flake flake,
+    const nlohmann::json & json,
+    std::string_view path,
+    unsigned int versionIfMissing = 7);
+
+/**
  * Parse a lock file in the old graph-based format (versions 5-7).
  * `json` must be null if the lock file doesn't exist.
  */
