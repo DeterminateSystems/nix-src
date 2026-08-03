@@ -164,16 +164,28 @@ struct LockedFlake
      * for a "follows" input, the input attribute path (relative to
      * the top-level flake) of the immediate target of the
      * "follows". Note that the target may itself denote a "follows"
-     * input. Throws an error if `prefix` does not denote an existing
-     * input.
+     * input. `prefix` must be fully resolved (see
+     * `resolveFollows()`). Throws an error if `prefix` does not
+     * denote an existing input.
      */
     virtual std::map<FlakeId, std::optional<InputAttrPath>> getInputTargets(const InputAttrPath & prefix) const = 0;
 
     /**
      * Return the names of the inputs of the input denoted by
      * `prefix`, or of the top-level flake if `prefix` is empty.
+     * `prefix` must be fully resolved (see `resolveFollows()`).
      */
     std::vector<FlakeId> getInputNames(const InputAttrPath & prefix) const;
+
+    /**
+     * Resolve any "follows" indirections in `path`, returning an
+     * input attribute path that denotes the same input but does not
+     * pass through any "follows" input. Such a *fully resolved* path
+     * is required by methods like `getInputTargets()`, `findInput()`
+     * and `getSourcePath()`. Path elements that do not denote
+     * existing inputs are returned unchanged.
+     */
+    InputAttrPath resolveFollows(const InputAttrPath & path) const;
 
     /**
      * Information about a locked input.
@@ -196,19 +208,21 @@ struct LockedFlake
     };
 
     /**
-     * Return information about the input denoted by `path`, resolving
-     * 'follows' indirections. Returns std::nullopt if the input does
-     * not exist.
+     * Return information about the input denoted by `path`, which
+     * must be fully resolved (see `resolveFollows()`); an error is
+     * thrown if it passes through a "follows" input. Returns
+     * std::nullopt if the input does not exist.
      */
     virtual std::optional<InputInfo> findInput(const InputAttrPath & path) const = 0;
 
     /**
      * Return the source path of the input denoted by `inputAttrPath`
      * (or of the top-level flake if `inputAttrPath` is empty),
-     * fetching it if necessary. Note: the returned path is backed by
-     * `EvalState::rootFS` (i.e. it's a store path, possibly a virtual
-     * one that has the input's accessor mounted on it if lazy trees
-     * are enabled), not by the input's original accessor.
+     * fetching it if necessary. `inputAttrPath` must be fully
+     * resolved (see `resolveFollows()`). Note: the returned path is
+     * backed by `EvalState::rootFS` (i.e. it's a store path, possibly
+     * a virtual one that has the input's accessor mounted on it if
+     * lazy trees are enabled), not by the input's original accessor.
      */
     virtual SourcePath getSourcePath(EvalState & state, const InputAttrPath & inputAttrPath) const = 0;
 

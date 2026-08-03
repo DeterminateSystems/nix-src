@@ -145,38 +145,6 @@ struct LockedNode : Node
     }
 };
 
-static std::shared_ptr<Node>
-doFind(const ref<Node> & root, const InputAttrPath & path, std::vector<InputAttrPath> & visited)
-{
-    auto pos = root;
-
-    auto found = std::find(visited.cbegin(), visited.cend(), path);
-
-    if (found != visited.end()) {
-        std::vector<std::string> cycle;
-        std::transform(found, visited.cend(), std::back_inserter(cycle), printInputAttrPath);
-        cycle.push_back(printInputAttrPath(path));
-        throw Error("follow cycle detected: [%s]", concatStringsSep(" -> ", cycle));
-    }
-    visited.push_back(path);
-
-    for (auto & elem : path) {
-        if (auto i = get(pos->inputs, elem)) {
-            if (auto node = std::get_if<0>(&*i))
-                pos = *node;
-            else if (auto follows = std::get_if<1>(&*i)) {
-                if (auto p = doFind(root, *follows, visited))
-                    pos = ref(p);
-                else
-                    return {};
-            }
-        } else
-            return {};
-    }
-
-    return pos;
-}
-
 /**
  * The old graph-based lock file format (versions 5-7).
  */
@@ -346,10 +314,29 @@ struct LockFileV7
         return toJSON() == other.toJSON();
     }
 
+    /**
+     * Return the node denoted by `path`, which must be fully
+     * resolved: an error is thrown if it passes through a 'follows'
+     * edge. Returns null if the input doesn't exist.
+     */
     std::shared_ptr<Node> findInput(const InputAttrPath & path) const
     {
-        std::vector<InputAttrPath> visited;
-        return doFind(root, path, visited);
+        std::shared_ptr<Node> pos = root.get_ptr();
+
+        for (const auto & [n, elem] : enumerate(path)) {
+            auto i = get(pos->inputs, elem);
+            if (!i)
+                return nullptr;
+            if (auto node = std::get_if<0>(&*i))
+                pos = node->get_ptr();
+            else
+                throw Error(
+                    "input attribute path '%s' contains unresolved 'follows' input '%s'",
+                    printInputAttrPath(path),
+                    printInputAttrPath({path.begin(), path.begin() + n + 1}));
+        }
+
+        return pos;
     }
 
     std::map<InputAttrPath, Node::Edge> getAllInputs() const
@@ -371,24 +358,6 @@ struct LockFileV7
         }({}, root);
 
         return res;
-    }
-
-    /**
-     * Check that every 'follows' input target exists.
-     */
-    void check()
-    {
-        auto inputs = getAllInputs();
-
-        for (auto & [inputAttrPath, input] : inputs) {
-            if (auto follows = std::get_if<1>(&input)) {
-                if (!follows->empty() && !findInput(*follows))
-                    throw Error(
-                        "input '%s' follows a non-existent input '%s'",
-                        printInputAttrPath(inputAttrPath),
-                        printInputAttrPath(*follows));
-            }
-        }
     }
 };
 
@@ -915,11 +884,21 @@ LockFlakeResult lockFlakeV7(
         flake.path,
         false);
 
-    /* Check 'follows' inputs. */
-    newLockFile.check();
+    auto lockedFlake = std::make_unique<LockedFlakeV7>(std::move(flake), std::move(newLockFile));
+
+    /* Check that the target of every 'follows' input exists. */
+    for (auto & [inputAttrPath, input] : lockedFlake->lockFile.getAllInputs()) {
+        if (auto follows = std::get_if<1>(&input)) {
+            if (!follows->empty() && !lockedFlake->lockFile.findInput(lockedFlake->resolveFollows(*follows)))
+                throw Error(
+                    "input '%s' follows a non-existent input '%s'",
+                    printInputAttrPath(inputAttrPath),
+                    printInputAttrPath(*follows));
+        }
+    }
 
     return {
-        .lockedFlake = std::make_unique<LockedFlakeV7>(std::move(flake), std::move(newLockFile)),
+        .lockedFlake = std::move(lockedFlake),
         .overridesUsed = std::move(overridesUsed),
         .updatesUsed = std::move(updatesUsed),
     };

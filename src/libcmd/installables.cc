@@ -172,8 +172,7 @@ MixFlakeOptions::MixFlakeOptions()
                 {.writeLockFile = false});
 
             for (auto & inputName : lockedFlake->getInputNames({})) {
-                // Note: findInput() resolves 'follows' nodes.
-                if (auto input = lockedFlake->findInput({inputName})) {
+                if (auto input = lockedFlake->findInput(lockedFlake->resolveFollows({inputName}))) {
                     fetchers::Attrs extraAttrs;
 
                     if (!input->lockedRef.subdir.empty()) {
