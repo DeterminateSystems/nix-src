@@ -6,12 +6,10 @@
 #include "nix/store/store-open.hh"
 #include "nix/store/gc-store.hh"
 #include "nix/main/loggers.hh"
-#include "nix/main/progress-bar.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/util.hh"
 
 #include <algorithm>
-#include <exception>
 #include <iostream>
 
 #include <cstdlib>
@@ -22,6 +20,9 @@
 
 #ifndef _WIN32
 #  include <sys/resource.h>
+#endif
+#ifdef __APPLE__
+#  include <sys/sysctl.h>
 #endif
 #ifdef __linux__
 #  include <features.h>
@@ -65,8 +66,7 @@ void printMissing(ref<Store> store, const MissingPaths & missing, Verbosity lvl)
         else
             printMsg(lvl, "these %d derivations will be built:", missing.willBuild.size());
         auto sorted = store->topoSortPaths(missing.willBuild);
-        reverse(sorted.begin(), sorted.end());
-        for (auto & i : sorted)
+        for (auto & i : sorted | std::views::reverse)
             printMsg(lvl, "  %s", store->printStorePath(i));
     }
 
@@ -134,15 +134,26 @@ void bumpFileLimit()
     if (getrlimit(RLIMIT_NOFILE, &limit) != 0)
         return;
 
-    if (limit.rlim_cur < limit.rlim_max) {
-        // Some software misbehaves really bad when we try to raise the
-        // limit to RLIM_INFINITY, so cap the limit at the 1048576 limit used
-        // by the daemon.
-        //
-        // GNU patch < 2.8 crashes with **** out of memory, which breaks in nixpkgs darwin bootstrap tools.
-        // This was fixed in:
-        // https://cgit.git.savannah.gnu.org/cgit/patch.git/commit/?id=61d7788b83b302207a67b82786f4fd79e3538f30
-        limit.rlim_cur = std::min(limit.rlim_max, rlim_t(1048576));
+    rlim_t target = limit.rlim_max;
+
+#  ifdef __APPLE__
+    // On macOS the hard limit is typically RLIM_INFINITY, but
+    // setting rlim_cur to that causes problems: child processes
+    // (e.g. GNU patch in the Nix sandbox) may allocate memory
+    // proportional to the fd limit and OOM. Use the kernel's
+    // per-process file limit instead, which is the effective cap.
+    //
+    // GNU patch < 2.8 crashes with **** out of memory, which breaks in nixpkgs darwin bootstrap tools.
+    // This was fixed in:
+    // https://cgit.git.savannah.gnu.org/cgit/patch.git/commit/?id=61d7788b83b302207a67b82786f4fd79e3538f30
+    int maxfiles;
+    size_t len = sizeof(maxfiles);
+    if (sysctlbyname("kern.maxfilesperproc", &maxfiles, &len, nullptr, 0) == 0)
+        target = maxfiles;
+#  endif
+
+    if (limit.rlim_cur < target) {
+        limit.rlim_cur = target;
         // Ignore errors, this is best effort.
         setrlimit(RLIMIT_NOFILE, &limit);
     }
@@ -171,10 +182,10 @@ void initNix(bool loadConfig)
     if (sigaction(SIGCHLD, &act, 0))
         throw SysError("resetting SIGCHLD");
 
-    /* Install a dummy SIGUSR1 handler for use with pthread_kill(). */
+    /* Install a dummy NIX_SIG_MULTI_INT handler for use with pthread_kill(). */
     act.sa_handler = sigHandler;
-    if (sigaction(SIGUSR1, &act, 0))
-        throw SysError("handling SIGUSR1");
+    if (sigaction(NIX_SIG_MULTI_INT, &act, 0))
+        throw SysError("handling multiplexed interrupt");
 
     /* Reset SIGQUIT to its default disposition. In particular, this
        unregisters any crash handler installed by `sentry_init()`
@@ -349,12 +360,12 @@ void printVersion(const std::string & programName)
         std::cout << "System type: " << settings.thisSystem << "\n";
         std::cout << "Additional system types: " << concatStringsSep(", ", settings.extraPlatforms.get()) << "\n";
         std::cout << "Features: " << concatStringsSep(", ", cfg) << "\n";
-        std::cout << "System configuration file: " << nixConfFile() << "\n";
+        std::cout << "System configuration file: " << os_string_to_string(nixConfFile().native()) << "\n";
         std::cout << "User configuration files: "
                   << os_string_to_string(ExecutablePath{.directories = nixUserConfFiles()}.render()) << "\n";
         std::cout << "Store directory: " << resolveStoreConfig(StoreReference{settings.storeUri.get()})->storeDir
                   << "\n";
-        std::cout << "State directory: " << settings.nixStateDir << "\n";
+        std::cout << "State directory: " << os_string_to_string(settings.nixStateDir.native()) << "\n";
     }
     throw Exit();
 }

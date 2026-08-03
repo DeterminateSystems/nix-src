@@ -31,11 +31,20 @@
  * Polyfill for MinGW
  *
  * Windows does in fact support symlinks, but the C runtime interfaces predate this.
- *
- * @todo get rid of this, and stop using `stat` when we want `lstat` too.
+ * We define S_IFLNK and S_ISLNK so that our lstat implementation can properly
+ * indicate symlinks by setting these mode bits when it detects a reparse point.
  */
+#ifndef S_IFLNK
+#  ifndef _WIN32
+#    error "S_IFLNK should be defined on non-Windows platforms"
+#  endif
+#  define S_IFLNK 0120000
+#endif
 #ifndef S_ISLNK
-#  define S_ISLNK(m) false
+#  ifndef _WIN32
+#    error "S_ISLNK should be defined on non-Windows platforms"
+#  endif
+#  define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
 #endif
 
 namespace nix {
@@ -98,6 +107,38 @@ using PosixStat =
 #endif
     ;
 
+#ifdef _WIN32
+namespace windows {
+
+/**
+ * Convert Windows FILETIME to Unix time_t.
+ */
+time_t fileTimeToUnixTime(const FILETIME & ft);
+
+/**
+ * Fill a PosixStat structure from file attributes and timestamps.
+ *
+ * @param dwFileAttributes File attributes (FILE_ATTRIBUTE_*)
+ * @param ftCreationTime Creation time
+ * @param ftLastAccessTime Last access time
+ * @param ftLastWriteTime Last write time
+ * @param nFileSizeHigh High 32 bits of file size
+ * @param nFileSizeLow Low 32 bits of file size
+ * @param nNumberOfLinks Number of hard links (default 1)
+ */
+void statFromFileInfo(
+    PosixStat & st,
+    DWORD dwFileAttributes,
+    const FILETIME & ftCreationTime,
+    const FILETIME & ftLastAccessTime,
+    const FILETIME & ftLastWriteTime,
+    DWORD nFileSizeHigh,
+    DWORD nFileSizeLow,
+    DWORD nNumberOfLinks = 1);
+
+} // namespace windows
+#endif
+
 /**
  * Get status of `path`.
  */
@@ -106,10 +147,6 @@ PosixStat lstat(const std::filesystem::path & path);
  * Get status of `path` following symlinks.
  */
 PosixStat stat(const std::filesystem::path & path);
-/**
- * Get status of an open file descriptor.
- */
-PosixStat fstat(int fd);
 /**
  * `lstat` the given path if it exists.
  * @return std::nullopt if the path doesn't exist, or an optional containing the result of `lstat` otherwise
@@ -121,23 +158,6 @@ std::optional<PosixStat> maybeStat(const std::filesystem::path & path);
  * @return true iff the given path exists.
  */
 bool pathExists(const std::filesystem::path & path);
-
-/**
- * Canonicalize a path except for the last component.
- *
- * This is useful for getting the canonical location of a symlink.
- *
- * Consider the case where `foo/l` is a symlink. `canonical("foo/l")` will
- * resolve the symlink `l` to its target.
- * `makeParentCanonical("foo/l")` will not resolve the symlink `l` to its target,
- * but does ensure that the returned parent part of the path, `foo` is resolved
- * to `canonical("foo")`, and can therefore be retrieved without traversing any
- * symlinks.
- *
- * If a relative path is passed, it will be made absolute, so that the parent
- * can always be canonicalized.
- */
-std::filesystem::path makeParentCanonical(const std::filesystem::path & path);
 
 /**
  * A version of pathExists that returns false on a permission error.
@@ -168,16 +188,23 @@ std::filesystem::path readLink(const std::filesystem::path & path);
 std::filesystem::path descriptorToPath(Descriptor fd);
 
 /**
- * Open a `Descriptor` with read-only access to the given directory.
+ * Type-safe boolean for whether to follow the final symlink component.
  */
-AutoCloseFD openDirectory(const std::filesystem::path & path);
+enum struct FinalSymlink : bool { DontFollow = false, Follow = true };
+
+/**
+ * Open a `Descriptor` with read-only access to the given directory.
+ *
+ * @param finalSymlink If `DontFollow`, fail if the path is a symlink.
+ */
+AutoCloseFD openDirectory(const std::filesystem::path & path, FinalSymlink finalSymlink = FinalSymlink::Follow);
 
 /**
  * Open a `Descriptor` with read-only access to the given file.
  *
  * @note For directories use @ref openDirectory.
  */
-AutoCloseFD openFileReadonly(const std::filesystem::path & path);
+AutoCloseFD openFileReadonly(const std::filesystem::path & path, FinalSymlink finalSymlink = FinalSymlink::Follow);
 
 struct OpenNewFileForWriteParams
 {
@@ -189,6 +216,10 @@ struct OpenNewFileForWriteParams
      * Whether to follow symlinks if @ref truncateExisting is true.
      */
     bool followSymlinksOnTruncate:1 = false;
+    /**
+     * Whether to open the newly created file as write-only.
+     */
+    bool writeOnly:1 = true;
 };
 
 /**
@@ -213,9 +244,19 @@ enum struct FsSync { Yes, No };
 /**
  * Write a string to a file.
  */
-void writeFile(const std::filesystem::path & path, std::string_view s, mode_t mode = 0666, FsSync sync = FsSync::No);
+void writeFile(
+    const std::filesystem::path & path,
+    std::string_view s,
+    mode_t mode = 0666,
+    FsSync sync = FsSync::No,
+    FinalSymlink finalSymlink = FinalSymlink::Follow);
 
-void writeFile(const std::filesystem::path & path, Source & source, mode_t mode = 0666, FsSync sync = FsSync::No);
+void writeFile(
+    const std::filesystem::path & path,
+    Source & source,
+    mode_t mode = 0666,
+    FsSync sync = FsSync::No,
+    FinalSymlink finalSymlink = FinalSymlink::Follow);
 
 void writeFile(
     Descriptor fd, std::string_view s, FsSync sync = FsSync::No, const std::filesystem::path * origPath = nullptr);
@@ -300,8 +341,12 @@ void moveFile(const std::filesystem::path & src, const std::filesystem::path & d
  * `true`, then also remove `oldPath` (making this equivalent to `moveFile`, but
  * with the guaranty that the destination will be “fresh”, with no stale inode
  * or file descriptor pointing to it).
+ *
+ * If contents is set, always create a regular file, even if the source is a
+ * link.
  */
-void copyFile(const std::filesystem::path & from, const std::filesystem::path & to, bool andDelete);
+void copyFile(
+    const std::filesystem::path & from, const std::filesystem::path & to, bool andDelete, bool contents = false);
 
 /**
  * Automatic cleanup of resources.
@@ -390,6 +435,12 @@ createTempDir(const std::filesystem::path & tmpRoot = "", const std::string & pr
 AutoCloseFD createAnonymousTempFile();
 
 /**
+ * Create a temporary file at a root, returning a file handle and its path.
+ */
+std::pair<AutoCloseFD, std::filesystem::path>
+createTempFile(const std::filesystem::path & root, const std::filesystem::path & prefix);
+
+/**
  * Create a temporary file, returning a file handle and its path.
  */
 std::pair<AutoCloseFD, std::filesystem::path> createTempFile(const std::filesystem::path & prefix = "nix");
@@ -451,12 +502,30 @@ bool chmodIfNeeded(const std::filesystem::path & path, mode_t mode, mode_t mask 
  */
 void chmod(const std::filesystem::path & path, mode_t mode);
 
+#ifndef _WIN32
+/**
+ * Change ownership of a file, throwing an exception on error.
+ *
+ * @param path Path to the file to change the ownership for.
+ * @param owner New owner user ID.
+ * @param group New owner group ID.
+ */
+void chown(const std::filesystem::path & path, uid_t owner, gid_t group);
+#endif
+
 /**
  * Remove a file, throwing an exception on error.
  *
  * @param path Path to the file to remove.
  */
 void unlink(const std::filesystem::path & path);
+
+/**
+ * Remove a file, throwing an exception on error. ENOENT is ignored.
+ *
+ * @param path Path to the file to remove.
+ */
+void unlinkIfExists(const std::filesystem::path & path);
 
 /**
  * Try to remove a file, ignoring errors.
@@ -536,51 +605,5 @@ public:
 private:
     std::filesystem::directory_iterator it_;
 };
-
-#ifdef __FreeBSD__
-class AutoUnmount
-{
-    std::filesystem::path path;
-    bool del;
-public:
-    AutoUnmount();
-    AutoUnmount(const std::filesystem::path &);
-    AutoUnmount(const AutoUnmount &) = delete;
-
-    AutoUnmount(AutoUnmount && other) noexcept
-        : path(std::move(other.path))
-        , del(std::exchange(other.del, false))
-    {
-    }
-
-    AutoUnmount & operator=(AutoUnmount && other) noexcept
-    {
-        swap(*this, other);
-        return *this;
-    }
-
-    friend void swap(AutoUnmount & lhs, AutoUnmount & rhs) noexcept
-    {
-        using std::swap;
-        swap(lhs.path, rhs.path);
-        swap(lhs.del, rhs.del);
-    }
-
-    ~AutoUnmount();
-
-    /**
-     * Cancel the unmounting
-     */
-    void cancel() noexcept;
-
-    /**
-     * Unmount the mountpoint right away (if it exists), resetting the
-     * `AutoUnmount`
-     *
-     * The destructor calls this, but ignoring any exception.
-     */
-    void unmount();
-};
-#endif
 
 } // namespace nix

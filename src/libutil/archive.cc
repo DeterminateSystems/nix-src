@@ -1,6 +1,4 @@
 #include <cerrno>
-#include <algorithm>
-#include <vector>
 #include <map>
 
 #include <strings.h> // for strcasecmp
@@ -8,7 +6,7 @@
 #include "nix/util/archive.hh"
 #include "nix/util/alignment.hh"
 #include "nix/util/config-global.hh"
-#include "nix/util/posix-source-accessor.hh"
+#include "nix/util/source-accessor.hh"
 #include "nix/util/source-path.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/signals.hh"
@@ -17,6 +15,10 @@ namespace nix {
 
 struct ArchiveSettings : Config
 {
+private:
+    void anchor() override;
+public:
+
     Setting<bool> useCaseHack{
         this,
 #ifdef __APPLE__
@@ -41,10 +43,10 @@ PathFilter defaultPathFilter = [](const std::string &) { return true; };
 
 void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & filter)
 {
-    auto dumpContents = [&](const CanonPath & path) {
+    auto dumpContents = [&sink](SourceAccessor & accessor, const CanonPath & path) {
         sink << "contents";
         std::optional<uint64_t> size;
-        readFile(path, sink, [&](uint64_t _size) {
+        accessor.readFile(path, sink, [&](uint64_t _size) {
             size = _size;
             sink << _size;
         });
@@ -54,13 +56,18 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
 
     sink << narVersionMagic1;
 
-    [&, &this_(*this)](this const auto & dump, const CanonPath & path, size_t depth) -> void {
+    [&sink, &filter, &dumpContents](
+        this const auto & dump,
+        SourceAccessor & accessor,
+        const CanonPath & path,
+        const CanonPath & filterPath,
+        size_t depth) -> void {
         checkInterrupt();
 
         if (depth >= narMaxDepth)
-            throw Error("path '%s' exceeds maximum NAR directory depth of %d", this_.showPath(path), narMaxDepth);
+            throw Error("path '%s' exceeds maximum NAR directory depth of %d", accessor.showPath(path), narMaxDepth);
 
-        auto st = this_.lstat(path);
+        auto st = accessor.lstat(path);
 
         sink << "(";
 
@@ -68,7 +75,7 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
             sink << "type" << "regular";
             if (st.isExecutable)
                 sink << "executable" << "";
-            dumpContents(path);
+            dumpContents(accessor, path);
         }
 
         else if (st.type == tDirectory) {
@@ -77,7 +84,7 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
             /* If we're on a case-insensitive system like macOS, undo
                the case hack applied by restorePath(). */
             StringMap unhacked;
-            for (auto & i : this_.readDirectory(path))
+            for (auto & i : accessor.readDirectory(path))
                 if (archiveSettings.useCaseHack) {
                     std::string name(i.first);
                     size_t pos = i.first.find(caseHackSuffix);
@@ -91,34 +98,39 @@ void SourceAccessor::dumpPath(const CanonPath & path, Sink & sink, PathFilter & 
                 } else
                     unhacked.emplace(i.first, i.first);
 
-            for (auto & i : unhacked)
-                if (filter((path / i.first).abs())) {
-                    sink << "entry" << "(" << "name" << i.first << "node";
-                    dump(path / i.second, depth + 1);
-                    sink << ")";
-                }
+            accessor.readDirectory(path, [&](SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath) {
+                for (auto & i : unhacked)
+                    if (filter((filterPath / i.first).abs())) {
+                        sink << "entry" << "(" << "name" << i.first << "node";
+                        dump(subdirAccessor, subdirRelPath / i.second, filterPath / i.second, depth + 1);
+                        sink << ")";
+                    }
+            });
         }
 
         else if (st.type == tSymlink)
-            sink << "type" << "symlink" << "target" << this_.readLink(path);
+            sink << "type" << "symlink" << "target" << accessor.readLink(path);
 
         else
             throw Error("file '%s' has an unsupported type", path);
 
         sink << ")";
-    }(path, 0);
+    }(*this, path, path, 0);
 }
+
+void ArchiveSettings::anchor() {}
 
 time_t dumpPathAndGetMtime(const std::filesystem::path & path, Sink & sink, PathFilter & filter)
 {
-    auto path2 = PosixSourceAccessor::createAtRoot(path, /*trackLastModified=*/true);
+    SourcePath path2 = makeFSSourceAccessor(absPath(path), /*trackLastModified=*/true);
     path2.dumpPath(sink, filter);
     return path2.accessor->getLastModified().value();
 }
 
 void dumpPath(const std::filesystem::path & path, Sink & sink, PathFilter & filter)
 {
-    dumpPathAndGetMtime(path, sink, filter);
+    SourcePath path2 = makeFSSourceAccessor(absPath(path), /*trackLastModified=*/false);
+    path2.dumpPath(sink, filter);
 }
 
 void dumpString(std::string_view s, Sink & sink)
@@ -139,22 +151,18 @@ static void parseContents(CreateRegularFileSink & sink, Source & source)
     sink.preallocateContents(size);
 
     if (sink.skipContents) {
-        source.skip(alignUp(size, 8));
+        uint64_t left = alignUp(size, 8);
+        /* Source::skip takes a size_t, which might be narrower on 32 bit systems, so
+           be careful around truncations. */
+        while (left) {
+            size_t toSkip = std::min<uint64_t>(left, std::numeric_limits<size_t>::max());
+            source.skip(toSkip);
+            left -= toSkip;
+        }
         return;
     }
 
-    uint64_t left = size;
-    std::array<char, 65536> buf;
-
-    while (left) {
-        checkInterrupt();
-        auto n = buf.size();
-        if ((uint64_t) n > left)
-            n = left;
-        source(buf.data(), n);
-        sink({buf.data(), n});
-        left -= n;
-    }
+    source.drainInto(sink, size);
 
     readPadding(size, source);
 }

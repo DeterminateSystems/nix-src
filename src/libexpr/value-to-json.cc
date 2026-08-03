@@ -5,7 +5,6 @@
 #include "nix/expr/parallel-eval.hh"
 
 #include <cstdlib>
-#include <iomanip>
 #include <nlohmann/json.hpp>
 
 namespace nix {
@@ -145,6 +144,8 @@ json printValueAsJSON(
 
     return res;
 }
+
+void JSONSerializationError::anchor() {}
 
 void printValueAsJSON(
     EvalState & state,

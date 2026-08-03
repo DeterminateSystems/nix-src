@@ -14,7 +14,15 @@ struct HttpBinaryCacheStoreConfig : std::enable_shared_from_this<HttpBinaryCache
                                     virtual Store::Config,
                                     BinaryCacheStoreConfig
 {
-    using BinaryCacheStoreConfig::BinaryCacheStoreConfig;
+private:
+    void anchor() override;
+
+public:
+    HttpBinaryCacheStoreConfig(const Params & params)
+        : StoreConfig(params, FilePathType::Unix)
+        , BinaryCacheStoreConfig(params)
+    {
+    }
 
     HttpBinaryCacheStoreConfig(ParsedURL cacheUri, const Store::Config::Params & params);
 
@@ -42,6 +50,30 @@ struct HttpBinaryCacheStoreConfig : std::enable_shared_from_this<HttpBinaryCache
     Setting<std::optional<AbsolutePath>> tlsKey{
         this, std::nullopt, "tls-private-key", "Path to an optional TLS client certificate private key in PEM format."};
 
+    Setting<uint32_t> retryDelayMs{
+        this,
+        0,
+        "retry-delay",
+        "Override [`filetransfer-retry-delay`](@docroot@/command-ref/conf-file.md#conf-filetransfer-retry-delay) for requests to this store (milliseconds)."};
+
+    Setting<uint32_t> retryDelayRateLimitedMs{
+        this,
+        0,
+        "retry-delay-rate-limited",
+        "Override [`filetransfer-retry-delay-rate-limited`](@docroot@/command-ref/conf-file.md#conf-filetransfer-retry-delay-rate-limited) for requests to this store (milliseconds)."};
+
+    Setting<uint32_t> retryMaxDelayMs{
+        this,
+        0,
+        "retry-max-delay",
+        "Override [`filetransfer-retry-max-delay`](@docroot@/command-ref/conf-file.md#conf-filetransfer-retry-max-delay) for requests to this store (milliseconds)."};
+
+    Setting<uint32_t> retryAttempts{
+        this,
+        0,
+        "retry-attempts",
+        "Override [`filetransfer-retry-attempts`](@docroot@/command-ref/conf-file.md#conf-filetransfer-retry-attempts) for requests to this store."};
+
     static const std::string name()
     {
         return "HTTP Binary Cache Store";
@@ -60,6 +92,8 @@ struct HttpBinaryCacheStoreConfig : std::enable_shared_from_this<HttpBinaryCache
 
 class HttpBinaryCacheStore : public virtual BinaryCacheStore
 {
+    void anchor() override;
+
     struct State
     {
         bool enabled = true;

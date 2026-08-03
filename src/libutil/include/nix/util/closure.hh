@@ -26,7 +26,7 @@ template<typename T>
 using GetEdgesAsync = fun<asio::awaitable<std::set<T>>(const T & elt)>;
 
 template<typename T, typename CompletionToken>
-auto computeClosure(std::set<T> startElts, std::set<T> & res, GetEdgesAsync<T> getEdges, CompletionToken && token)
+auto computeClosure(std::set<T> startElts, std::set<T> & res, GetEdgesAsync<T> getEdges, CompletionToken token)
 {
     auto initiator = [&res, startElts = std::move(startElts), getEdges = std::move(getEdges)](auto handler) {
         auto executor = asio::make_strand(asio::get_associated_executor(handler));
@@ -56,7 +56,7 @@ auto computeClosure(std::set<T> startElts, std::set<T> & res, GetEdgesAsync<T> g
             /**
              * Maximum number of concurrent coroutines. Implements primitive rate limiting.
              */
-            std::size_t maxConcurrent = 64;
+            std::size_t maxConcurrent = 1024;
             /**
              * Nodes to handle next.
              */

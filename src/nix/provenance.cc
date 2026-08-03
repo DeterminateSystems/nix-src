@@ -270,6 +270,8 @@ struct TrackingStore : public Store
     {
         return next->isTrustedClient();
     }
+
+    void anchor() override {}
 };
 
 struct CmdProvenanceVerify : StorePathsCommand

@@ -7,13 +7,14 @@
 #include "nix/store/derivations.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/store-open.hh"
+#include "nix/store/outputs-query.hh"
 #include "nix/util/util.hh"
 #include "nix/store/nar-info-disk-cache.hh"
 #include "nix/util/thread-pool.hh"
 #include "nix/util/archive.hh"
 #include "nix/util/callback.hh"
 #include "nix/util/git.hh"
-#include "nix/util/posix-source-accessor.hh"
+#include "nix/util/source-accessor.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/file-system.hh"
@@ -24,43 +25,104 @@
 #include <filesystem>
 #include <nlohmann/json.hpp>
 
-#include "nix/util/strings.hh"
+#ifdef _WIN32
+#  include "nix/util/windows-known-folders.hh"
+#endif
+
+using json = nlohmann::json;
 
 namespace nix {
 
-std::string StoreConfigBase::getDefaultNixStoreDir()
+void StoreConfig::anchor() {}
+
+void InvalidPath::anchor() {}
+
+void Unsupported::anchor() {}
+
+void SubstituteGone::anchor() {}
+
+void SubstituterDisabled::anchor() {}
+
+void InvalidStoreReference::anchor() {}
+
+void StoreConfigBase::anchor() {}
+
+static std::string canonStoreDir(std::string path)
 {
-    return
-#ifndef _WIN32
-        canonPath
-#endif
-        (getEnvNonEmpty("NIX_STORE_DIR").value_or(getEnvNonEmpty("NIX_STORE").value_or(NIX_STORE_DIR)))
-#ifndef _WIN32
-            .string()
-#endif
-            ;
+    if (path.empty() || path[0] != '/')
+        throw UsageError("store directory path \"%s\" is not an absolute path", path);
+    return CanonPath(std::move(path)).abs();
 }
 
-StoreDirSetting::StoreDirSetting(
-    Config * options,
-    const std::string & def,
-    const std::string & name,
-    const std::string & description,
-    const StringSet & aliases)
-    : BaseSetting<std::string>(def, true, name, description, aliases)
+static std::string canonStoreDir(std::filesystem::path path)
+{
+    if (!path.is_absolute())
+        throw UsageError("store directory path %s is not an absolute path", PathFmt(path));
+    return canonPath(std::move(path)).string();
+}
+
+StoreConfigBase::StoreDirSetting::StoreDirSetting(Config * options, FilePathType pathType)
+    : BaseSetting<std::string>(
+          [pathType]() -> std::string {
+              auto envOverrides = getEnvOsNonEmpty(OS_STR("NIX_STORE_DIR")).or_else([] {
+                  return getEnvOsNonEmpty(OS_STR("NIX_STORE"));
+              });
+
+              switch (pathType) {
+              case FilePathType::Unix:
+                  return canonStoreDir(envOverrides.transform([](const auto & s) { return os_string_to_string(s); })
+                                           .value_or(NIX_STORE_DIR));
+
+              case FilePathType::Native:
+                  return canonStoreDir(envOverrides.transform([](const auto & s) { return std::filesystem::path(s); })
+                                           .or_else([]() -> std::optional<std::filesystem::path> {
+#ifdef _WIN32
+                                               return windows::known_folders::getProgramData() / "nix" / "store";
+#else
+                                               return std::filesystem::path{NIX_STORE_DIR};
+#endif
+                                           })
+                                           .value());
+              }
+              assert(false);
+          }(),
+          true,
+          "store",
+          R"(
+            Logical location of the Nix store, usually `/nix/store`.
+
+            Defaults to [`NIX_STORE_DIR`](@docroot@/command-ref/env-common.md#env-NIX_STORE_DIR) if unset.
+
+            Note that you can only copy store paths between stores if they have the same `store` setting.
+          )",
+          {})
+    , pathType(pathType)
 {
     options->addSetting(this);
 }
 
-std::string StoreDirSetting::parse(const std::string & str) const
+std::string StoreConfigBase::StoreDirSetting::parse(const std::string & str) const
 {
     if (str.empty())
         throw UsageError("setting '%s' is a path and paths cannot be empty", name);
-    return canonPath(str).string();
+
+    switch (pathType) {
+    case FilePathType::Unix:
+        return canonStoreDir(str);
+    case FilePathType::Native:
+        return canonStoreDir(std::filesystem::path(str));
+    }
+    assert(false);
 }
 
-StoreConfig::StoreConfig(const Params & params)
-    : StoreConfigBase(params)
+StoreConfigBase::StoreConfigBase(const StoreReference::Params & params, FilePathType pathType)
+    : Config(params)
+    , storeDir_{this, pathType}
+{
+}
+
+StoreConfig::StoreConfig(const Params & params, FilePathType pathType)
+    : StoreConfigBase(params, pathType)
     , StoreDirConfig{storeDir_}
 {
 }
@@ -377,6 +439,17 @@ std::map<std::string, std::optional<StorePath>> Store::queryStaticPartialDerivat
     return outputs;
 }
 
+std::optional<StorePath>
+Store::queryStaticPartialDerivationOutput(const StorePath & path, const std::string & outputName)
+{
+    auto drv = readInvalidDerivation(path);
+    auto outputs = drv.outputsAndOptPaths(*this);
+    auto it = outputs.find(outputName);
+    if (it == outputs.end())
+        throw Error("derivation '%s' does not have an output named '%s'", printStorePath(path), outputName);
+    return it->second.second;
+}
+
 std::map<std::string, std::optional<StorePath>>
 Store::queryPartialDerivationOutputMap(const StorePath & path, Store * evalStore_)
 {
@@ -388,18 +461,7 @@ Store::queryPartialDerivationOutputMap(const StorePath & path, Store * evalStore
         return outputs;
 
     auto drv = evalStore.readInvalidDerivation(path);
-    auto drvHashes = staticOutputHashes(*this, drv);
-    for (auto & [outputName, hash] : drvHashes) {
-        auto realisation = queryRealisation(DrvOutput{hash, outputName});
-        if (realisation) {
-            outputs.insert_or_assign(outputName, realisation->outPath);
-        } else {
-            // queryStaticPartialDerivationOutputMap is not guaranteed
-            // to return std::nullopt for outputs which are not
-            // statically known.
-            outputs.insert({outputName, std::nullopt});
-        }
-    }
+    queryPartialDerivationOutputMapCA(*this, path, drv, outputs);
 
     return outputs;
 }
@@ -410,7 +472,7 @@ OutputPathMap Store::queryDerivationOutputMap(const StorePath & path, Store * ev
     OutputPathMap result;
     for (auto & [outName, optOutPath] : resp) {
         if (!optOutPath)
-            throw MissingRealisation(printStorePath(path), outName);
+            throw MissingRealisation(*this, path, outName);
         result.insert_or_assign(outName, *optOutPath);
     }
     return result;
@@ -418,7 +480,7 @@ OutputPathMap Store::queryDerivationOutputMap(const StorePath & path, Store * ev
 
 StorePathSet Store::queryDerivationOutputs(const StorePath & path)
 {
-    auto outputMap = this->queryDerivationOutputMap(path);
+    auto outputMap = nix::deepQueryDerivationOutputMap(*this, path);
     StorePathSet outputPaths;
     for (auto & i : outputMap) {
         outputPaths.emplace(std::move(i.second));
@@ -635,6 +697,12 @@ asio::awaitable<void> Store::queryPathInfos(
 void Store::queryRealisation(
     const DrvOutput & id, Callback<std::shared_ptr<const UnkeyedRealisation>> callback) noexcept
 {
+    if (!experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
+        /* then we should not be checking any experimental realisations
+           data structures. */
+        callback(nullptr);
+        return;
+    }
 
     try {
         if (diskCache) {
@@ -959,11 +1027,16 @@ std::map<StorePath, StorePath> copyPaths(
     StorePathSet storePaths;
     std::vector<const Realisation *> realisations;
     for (auto & path : paths) {
-        storePaths.insert(path.path());
-        if (auto * realisation = std::get_if<Realisation>(&path.raw)) {
-            experimentalFeatureSettings.require(Xp::CaDerivations);
-            realisations.push_back(realisation);
-        }
+        std::visit(
+            overloaded{
+                [&](const Realisation & realisation) {
+                    experimentalFeatureSettings.require(Xp::CaDerivations);
+                    realisations.push_back(&realisation);
+                    storePaths.insert(realisation.outPath);
+                },
+                [&](const OpaquePath & op) { storePaths.insert(op.path); },
+            },
+            path.raw);
     }
 
     auto pathsMap = copyPaths(srcStore, dstStore, storePaths, repair, checkSigs, substitute);
@@ -1011,7 +1084,6 @@ std::map<StorePath, StorePath> copyPaths(
     // In the general case, `addMultipleToStore` requires a sorted list of
     // store paths to add, so sort them right now
     auto sortedMissing = srcStore.topoSortPaths(missing);
-    std::reverse(sortedMissing.begin(), sortedMissing.end());
 
     std::map<StorePath, StorePath> pathsMap;
     for (auto & path : storePaths)
@@ -1037,7 +1109,7 @@ std::map<StorePath, StorePath> copyPaths(
         return storePathForDst;
     };
 
-    for (auto & missingPath : sortedMissing) {
+    for (auto & missingPath : sortedMissing | std::views::reverse) {
         auto info = srcStore.queryPathInfo(missingPath);
 
         auto storePathForDst = computeStorePathForDst(*info);
@@ -1084,20 +1156,19 @@ void copyClosure(
     const RealisedPath::Set & paths,
     RepairFlag repair,
     CheckSigsFlag checkSigs,
-    SubstituteFlag substitute)
+    SubstituteFlag substitute,
+    bool includeOutputs)
 {
     if (&srcStore == &dstStore)
         return;
 
     StorePathSet closure0;
     for (auto & path : paths) {
-        if (auto * opaquePath = std::get_if<OpaquePath>(&path.raw)) {
-            closure0.insert(opaquePath->path);
-        }
+        closure0.insert(path.path());
     }
 
     StorePathSet closure1;
-    srcStore.computeFSClosure(closure0, closure1);
+    srcStore.computeFSClosure(closure0, closure1, false, includeOutputs);
 
     RealisedPath::Set closure = paths;
     for (auto && path : closure1)
@@ -1112,13 +1183,14 @@ void copyClosure(
     const StorePathSet & storePaths,
     RepairFlag repair,
     CheckSigsFlag checkSigs,
-    SubstituteFlag substitute)
+    SubstituteFlag substitute,
+    bool includeOutputs)
 {
     if (&srcStore == &dstStore)
         return;
 
     StorePathSet closure;
-    srcStore.computeFSClosure(storePaths, closure);
+    srcStore.computeFSClosure(storePaths, closure, false, includeOutputs);
     copyPaths(srcStore, dstStore, closure, repair, checkSigs, substitute);
 }
 
@@ -1243,6 +1315,32 @@ void Store::signRealisation(Realisation & realisation)
         LocalSigner signer(SecretKey::parse(readFile(secretKeyFile)));
         realisation.sign(realisation.id, signer);
     }
+}
+
+const std::filesystem::path & StoreConfig::getStateDir() const
+{
+    return settings.nixStateDir;
+}
+
+const std::filesystem::path & StoreConfig::getLogDir() const
+{
+    static std::filesystem::path logDir = [] {
+        return getEnvOsNonEmpty(OS_STR("NIX_LOG_DIR"))
+            .transform([](auto && s) { return std::filesystem::path(s); })
+            .or_else([]() -> std::optional<std::filesystem::path> {
+#ifdef _WIN32
+#  ifdef NIX_LOG_DIR
+#    error "NIX_LOG_DIR should not be defined on Windows"
+#  endif
+                return windows::known_folders::getProgramData() / "nix" / "log";
+#else
+                return NIX_LOG_DIR;
+#endif
+            })
+            .transform([](auto && s) { return canonPath(s); })
+            .value();
+    }();
+    return logDir;
 }
 
 } // namespace nix

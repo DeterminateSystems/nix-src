@@ -16,6 +16,20 @@ in
 scope: {
   inherit stdenv;
 
+  mimalloc =
+    if lib.versionAtLeast pkgs.mimalloc.version "3.3.2" then
+      pkgs.mimalloc
+    else
+      pkgs.mimalloc.overrideAttrs rec {
+        version = "3.3.2";
+        src = pkgs.fetchFromGitHub {
+          owner = "microsoft";
+          repo = "mimalloc";
+          tag = "v${version}";
+          hash = "sha256-GZ37qQVDe9jgMb4Coe5oKvgaLTspZDlSkS5rdy1MfUU=";
+        };
+      };
+
   boehmgc =
     (pkgs.boehmgc.override {
       enableLargeConfig = true;
@@ -86,28 +100,28 @@ scope: {
             (prevAttrs.postInstall or "");
       });
 
-  curl =
-    (pkgs.curl.override {
-      http3Support = !pkgs.stdenv.hostPlatform.isWindows;
-      # Make sure we enable all the dependencies for Content-Encoding/Transfer-Encoding decompression.
-      zstdSupport = true;
-      brotliSupport = true;
-      zlibSupport = true;
-      # libpsl uses a data file needed at runtime, not useful for nix.
-      pslSupport = !stdenv.hostPlatform.isStatic;
-      idnSupport = !stdenv.hostPlatform.isStatic;
-    }).overrideAttrs
-      {
-        # TODO: Fix in nixpkgs. Static build with brotli is marked as broken, but it's not the case.
-        # Remove once https://github.com/NixOS/nixpkgs/pull/494111 lands in the 25.11 channel.
-        meta.broken = false;
-      };
+  curl = pkgs.curl.override {
+    http3Support = !pkgs.stdenv.hostPlatform.isWindows;
+    # Make sure we enable all the dependencies for Content-Encoding/Transfer-Encoding decompression.
+    zstdSupport = true;
+    brotliSupport = true;
+    zlibSupport = true;
+    # libpsl uses a data file needed at runtime, not useful for nix.
+    pslSupport = !stdenv.hostPlatform.isStatic;
+    idnSupport = !stdenv.hostPlatform.isStatic;
+  };
 
   libblake3 =
     (pkgs.libblake3.override {
       inherit stdenv;
       # Nixpkgs disables tbb on static
-      useTBB = !(stdenv.hostPlatform.isWindows || stdenv.hostPlatform.isStatic);
+      useTBB =
+        !(
+          stdenv.hostPlatform.isWindows
+          || stdenv.hostPlatform.isStatic
+          # Some tbb tests fail with libc++.
+          || (stdenv.cc.libcxx != null && stdenv.cc.libcxx.isLLVM)
+        );
     })
     # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
     # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
@@ -133,6 +147,45 @@ scope: {
             ];
           }
       );
+
+  sqlite =
+    if !stdenv.hostPlatform.isWindows then
+      pkgs.sqlite
+    else
+      pkgs.sqlite.overrideAttrs (prevAttrs: {
+        nativeBuildInputs = lib.filter (x: !(x.pname == "tcl")) prevAttrs.nativeBuildInputs or [ ];
+        configureFlags = (lib.filter (x: !(lib.hasPrefix "--with-tcl" x)) prevAttrs.configureFlags) ++ [
+          "--disable-tcl"
+        ];
+      });
+
+  libgit2 =
+    (
+      if lib.versionAtLeast pkgs.libgit2.version "1.9.4" then
+        pkgs.libgit2
+      else
+        # Grab newer libgit2.
+        pkgs.libgit2.overrideAttrs rec {
+          version = "1.9.4";
+          src = pkgs.fetchFromGitHub {
+            owner = "libgit2";
+            repo = "libgit2";
+            tag = "v${version}";
+            hash = "sha256-ZKUiz3pdFE2SKxh53X2oyr7hs32Njj5YVA0OXDXz7h0=";
+          };
+        }
+    ).overrideAttrs
+      (old: {
+        separateDebugInfo = true;
+
+        patches = old.patches or [ ] ++ [
+          # Fix a use-after-free crash when `git_thread_create` fails during
+          # pack building (e.g. with EAGAIN under thread pressure), leaving
+          # orphaned delta-search worker threads running while the
+          # packbuilder is freed.
+          ./patches/libgit2-packbuilder-dont-fail-on-thread-create-error.patch
+        ];
+      });
 
   # TODO Hack until https://github.com/NixOS/nixpkgs/issues/45462 is fixed.
   boost =
@@ -167,17 +220,5 @@ scope: {
 
     # Required for configuration detection for getsockname (for automatic port allocation for `nix serve`)
     __darwinAllowLocalNetworking = true;
-  });
-
-  libgit2 = pkgs.libgit2.overrideAttrs (old: {
-    separateDebugInfo = true;
-
-    patches = old.patches or [ ] ++ [
-      # Fix a use-after-free crash when `git_thread_create` fails during
-      # pack building (e.g. with EAGAIN under thread pressure), leaving
-      # orphaned delta-search worker threads running while the
-      # packbuilder is freed.
-      ./patches/libgit2-packbuilder-dont-fail-on-thread-create-error.patch
-    ];
   });
 }

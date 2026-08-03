@@ -1,3 +1,4 @@
+#include "nix/cmd/command.hh"
 #include "nix/cmd/common-eval-args.hh"
 #include "nix/main/common-args.hh"
 #include "nix/main/shared.hh"
@@ -5,6 +6,7 @@
 #include "nix/expr/eval-inline.hh"
 #include "nix/expr/eval-settings.hh"
 #include "nix/expr/get-drvs.hh"
+#include "nix/store/derived-path.hh"
 #include "nix/util/os-string.hh"
 #include "nix/util/signals.hh"
 #include "nix/store/store-open.hh"
@@ -34,9 +36,7 @@
 // FIXME is this supposed to be private or not?
 #include "flake-command.hh"
 
-using namespace nix;
-using namespace nix::flake;
-using json = nlohmann::json;
+namespace nix {
 
 struct CmdFlakeUpdate;
 
@@ -56,7 +56,7 @@ FlakeRef FlakeCommand::getFlakeRef()
     return parseFlakeRef(fetchSettings, flakeUrl, std::filesystem::current_path().string()); // FIXME
 }
 
-LockedFlake FlakeCommand::lockFlake()
+flake::LockedFlake FlakeCommand::lockFlake()
 {
     return flake::lockFlake(flakeSettings, *getEvalState(), getFlakeRef(), lockFlags);
 }
@@ -93,7 +93,7 @@ public:
             .optional = true,
             .handler = {[&](std::vector<std::string> inputsToUpdate) {
                 for (const auto & inputToUpdate : inputsToUpdate) {
-                    std::optional<NonEmptyInputAttrPath> inputAttrPath;
+                    std::optional<flake::NonEmptyInputAttrPath> inputAttrPath;
                     try {
                         inputAttrPath = flake::NonEmptyInputAttrPath::parse(inputToUpdate);
                         if (!inputAttrPath)
@@ -256,12 +256,10 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
             if (!lockedFlake.lockFile.root->inputs.empty())
                 logger->cout(ANSI_BOLD "Inputs:" ANSI_NORMAL);
 
-            std::set<ref<Node>> visited{lockedFlake.lockFile.root};
+            std::set<ref<flake::Node>> visited{lockedFlake.lockFile.root};
 
-            [&](this const auto & recurse, const Node & node, const std::string & prefix) -> void {
-                for (const auto & [i, input] : enumerate(node.inputs)) {
-                    bool last = i + 1 == node.inputs.size();
-
+            [&](this const auto & recurse, const flake::Node & node, const std::string & prefix) -> void {
+                for (const auto & [last, input] : markLast(node.inputs)) {
                     if (auto lockedNode = std::get_if<0>(&input.second)) {
                         std::string lastModifiedStr = "";
                         if (auto lastModified = (*lockedNode)->lockedRef.input.getLastModified())
@@ -282,7 +280,7 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                             "%s" ANSI_BOLD "%s" ANSI_NORMAL " follows input '%s'",
                             prefix + (last ? treeLast : treeConn),
                             input.first,
-                            printInputAttrPath(*follows));
+                            flake::printInputAttrPath(*follows));
                     }
                 }
             }(*lockedFlake.lockFile.root, "");
@@ -315,13 +313,14 @@ static void logEvalError()
     }
 }
 
-struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
+struct CmdFlakeCheck : FlakeCommand, MixPrintOutPaths, MixOutLinkBase, MixFlakeSchemas
 {
     bool build = true;
     bool buildAll = false;
     bool checkAllSystems = false;
 
     CmdFlakeCheck()
+        : MixOutLinkBase(std::nullopt)
     {
         addFlag({
             .longName = "no-build",
@@ -337,6 +336,15 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
             .longName = "all-systems",
             .description = "Check the outputs for all systems.",
             .handler = {&checkAllSystems, true},
+        });
+        addFlag({
+            .longName = "out-link",
+            .shortName = 'o',
+            .description =
+                "Use *path* as prefix for the symlinks to the check results. By default, no out links are created.",
+            .labels = {"path"},
+            .handler = {&outLink},
+            .completer = completePath,
         });
     }
 
@@ -362,7 +370,7 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
         auto state = getEvalState();
 
         lockFlags.applyNixConfig = true;
-        auto flake = std::make_shared<LockedFlake>(lockFlake());
+        auto flake = std::make_shared<flake::LockedFlake>(lockFlake());
         auto localSystem = std::string(settings.thisSystem.get());
 
         auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas());
@@ -494,25 +502,30 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
             // via substitution, as `nix flake check` only needs to verify buildability,
             // not actually produce the outputs.
             state->waitForAllPaths();
-            auto missing = store->queryMissing(*drvPaths);
 
             std::vector<DerivedPath> toBuild;
-            std::set<DerivedPath> toBuildSet;
-            for (auto & path : missing.willBuild) {
-                auto derivedPath = DerivedPath::Built{
-                    .drvPath = makeConstantStorePathRef(path),
-                    .outputs = OutputsSpec::All{},
-                };
-                toBuild.emplace_back(derivedPath);
-                toBuildSet.insert(std::move(derivedPath));
-            }
 
-            for (auto & [derivedPath, attrPaths] : *derivedPathToAttrPaths)
-                if (!toBuildSet.contains(derivedPath))
-                    for (auto & attrPath : attrPaths)
-                        notice(
-                            "✅ " ANSI_BOLD "%s" ANSI_NORMAL ANSI_ITALIC ANSI_FAINT " (previously built)" ANSI_NORMAL,
-                            attrPath.to_string(*state));
+            if (printOutputPaths || outLink) {
+                toBuild = *drvPaths;
+            } else {
+                std::set<DerivedPath> toBuildSet;
+                for (auto & path : store->queryMissing(*drvPaths).willBuild) {
+                    auto derivedPath = DerivedPath::Built{
+                        .drvPath = makeConstantStorePathRef(path),
+                        .outputs = OutputsSpec::All{},
+                    };
+                    toBuild.emplace_back(derivedPath);
+                    toBuildSet.insert(std::move(derivedPath));
+                }
+
+                for (auto & [derivedPath, attrPaths] : *derivedPathToAttrPaths)
+                    if (!toBuildSet.contains(derivedPath))
+                        for (auto & attrPath : attrPaths)
+                            notice(
+                                "✅ " ANSI_BOLD "%s" ANSI_NORMAL ANSI_ITALIC ANSI_FAINT
+                                " (previously built)" ANSI_NORMAL,
+                                attrPath.to_string(*state));
+            }
 
             // FIXME: should start building while evaluating.
             Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", toBuild.size()));
@@ -540,6 +553,15 @@ struct CmdFlakeCheck : FlakeCommand, MixFlakeSchemas
                     for (auto & attrPath : (*derivedPathToAttrPaths)[buildResult.path])
                         notice("✅ " ANSI_BOLD "%s" ANSI_NORMAL, attrPath.to_string(*state));
             }
+
+            auto builtPaths =
+                buildResults | std::views::filter([](auto & result) { return result.tryGetSuccess(); })
+                | std::views::transform([&](auto & result) { return toBuiltPath(result, getEvalStore(), store); })
+                | std::ranges::to<BuiltPaths>();
+
+            printOutPathsMaybe(builtPaths, store);
+
+            createOutLinksMaybe(builtPaths, store);
         }
 
         if (!omittedSystems.lock()->empty()) {
@@ -560,7 +582,7 @@ struct CmdFlakeInitCommon : virtual Args, EvalCommand, MixFlakeSchemas
     std::string templateUrl = "https://flakehub.com/f/DeterminateSystems/flake-templates/0.1";
     std::filesystem::path destDir;
 
-    const LockFlags lockFlags{.writeLockFile = false};
+    const flake::LockFlags lockFlags{.writeLockFile = false};
 
     CmdFlakeInitCommon()
     {
@@ -796,9 +818,9 @@ struct CmdFlakeArchive : FlakeCommand, MixJSON, MixDryRun, MixNoCheckSigs
         sources.insert(storePath);
 
         // FIXME: use graph output, handle cycles.
-        std::function<nlohmann::json(const Node & node)> traverse;
-        traverse = [&](const Node & node) {
-            nlohmann::json jsonObj2 = json ? json::object() : nlohmann::json(nullptr);
+        auto traverse =
+            [&, json = json, dryRun = dryRun](this const auto & self, const flake::Node & node) -> nlohmann::json {
+            nlohmann::json jsonObj2 = json ? nlohmann::json::object() : nlohmann::json(nullptr);
             for (auto & [inputName, input] : node.inputs) {
                 if (auto inputNode = std::get_if<0>(&input)) {
                     std::optional<StorePath> storePath;
@@ -812,9 +834,9 @@ struct CmdFlakeArchive : FlakeCommand, MixJSON, MixDryRun, MixNoCheckSigs
                         auto & jsonObj3 = jsonObj2[inputName];
                         if (storePath)
                             jsonObj3["path"] = store->printStorePath(*storePath);
-                        jsonObj3["inputs"] = traverse(**inputNode);
+                        jsonObj3["inputs"] = self(**inputNode);
                     } else
-                        traverse(**inputNode);
+                        self(**inputNode);
                 }
             }
             return jsonObj2;
@@ -896,7 +918,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
             throw UsageError("The '--drv-paths' flag requires '--json'.");
 
         auto state = getEvalState();
-        auto flake = make_ref<LockedFlake>(lockFlake());
+        auto flake = make_ref<flake::LockedFlake>(lockFlake());
         auto localSystem = std::string(settings.thisSystem.get());
 
         auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas());
@@ -1157,3 +1179,5 @@ static auto rCmdFlakeNew = registerCommand2<CmdFlakeNew>({"flake", "new"});
 static auto rCmdFlakePrefetch = registerCommand2<CmdFlakePrefetch>({"flake", "prefetch"});
 static auto rCmdFlakeShow = registerCommand2<CmdFlakeShow>({"flake", "show"});
 static auto rCmdFlakeUpdate = registerCommand2<CmdFlakeUpdate>({"flake", "update"});
+
+} // namespace nix

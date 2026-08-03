@@ -6,6 +6,8 @@
 
 namespace nix {
 
+void BuildError::anchor() {}
+
 void ExitStatusFlags::updateFromStatus(BuildResult::Failure::Status status)
 {
 // Allow selecting a subset of enum values
@@ -22,7 +24,7 @@ void ExitStatusFlags::updateFromStatus(BuildResult::Failure::Status status)
         checkMismatch = true;
         break;
     case BuildResult::Failure::PermanentFailure:
-    // Also considered a permenant failure, it seems
+    // Also considered a permanent failure, it seems
     case BuildResult::Failure::InputRejected:
         permanentFailure = true;
         break;

@@ -46,8 +46,11 @@ typedef enum {
 
 typedef uint64_t ActivityId;
 
-struct LoggerSettings : Config
+class LoggerSettings : public Config
 {
+    void anchor() override;
+
+public:
     Setting<bool> showTrace{
         this,
         false,
@@ -116,7 +119,7 @@ public:
 
     typedef std::vector<Field> Fields;
 
-    virtual ~Logger() {}
+    virtual ~Logger();
 
     virtual void stop() {};
 

@@ -1,17 +1,17 @@
 #include "nix/fetchers/fetchers.hh"
 #include "nix/store/store-api.hh"
+#include "nix/util/fs-sink.hh"
 #include "nix/util/source-path.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/fetchers/provenance.hh"
 #include "nix/util/url.hh"
-#include "nix/util/forwarding-source-accessor.hh"
-#include "nix/util/archive.hh"
 #include "nix/util/users.hh"
 #include "nix/store/pathlocks.hh"
 #include "nix/util/environment-variables.hh"
 
+#include <thread>
 #include <nlohmann/json.hpp>
 #include <thread>
 
@@ -340,9 +340,12 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
        reuse it. We only do this for final inputs, since otherwise
        there is a risk that we don't return the same attributes (like
        `lastModified`) that the "real" fetcher would return. */
-    if (storePath && store.isValidPath(*storePath)) {
-        debug("using input '%s' in '%s'", to_string(), store.printStorePath(*storePath));
-        return makeStoreAccessor();
+    if (storePath) {
+        store.addTempRoot(*storePath);
+        if (store.isValidPath(*storePath)) {
+            debug("using input '%s' in '%s'", to_string(), store.printStorePath(*storePath));
+            return makeStoreAccessor();
+        }
     }
 
     auto fixupAccessor = [&](ref<SourceAccessor> accessor, Input result) -> std::pair<ref<SourceAccessor>, Input> {
@@ -365,7 +368,8 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
     PathLocks lock(
         {lockFilePath.string()}, fmt("waiting for another Nix process to finish fetching input '%s'...", to_string()));
 
-    if (getEnv("_NIX_TEST_CONCURRENT_FETCHES"))
+    static auto inTest = getEnv("_NIX_TEST_CONCURRENT_FETCHES") == "1";
+    if (inTest)
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
     /* See if the input is in the cache of the fetcher. */
@@ -378,7 +382,6 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
     /* If not, try to substitute the input. */
     if (storePath) {
         try {
-            store.addTempRoot(*storePath);
             store.ensurePath(*storePath);
             return makeStoreAccessor();
         }

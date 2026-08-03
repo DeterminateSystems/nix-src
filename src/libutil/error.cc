@@ -11,10 +11,21 @@
 #include <cinttypes>
 #include <iostream>
 #include <optional>
-#include "nix/util/serialise.hh"
 #include <sstream>
 
 namespace nix {
+
+void BaseError::anchor() {}
+
+void Error::anchor() {}
+
+void UsageError::anchor() {}
+
+void UnimplementedError::anchor() {}
+
+void SystemError::anchor() {}
+
+void SysError::anchor() {}
 
 void BaseError::addTrace(std::shared_ptr<const Pos> && e, HintFmt hint, TracePrint print)
 {

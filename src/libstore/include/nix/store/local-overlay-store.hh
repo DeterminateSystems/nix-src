@@ -7,13 +7,17 @@ namespace nix {
  */
 struct LocalOverlayStoreConfig : virtual LocalStoreConfig
 {
+private:
+    void anchor() override;
+
+public:
     LocalOverlayStoreConfig(const StringMap & params)
         : LocalOverlayStoreConfig("", params)
     {
     }
 
     LocalOverlayStoreConfig(const std::filesystem::path & path, const Params & params)
-        : StoreConfig(params)
+        : StoreConfig(params, FilePathType::Native)
         , LocalFSStoreConfig(path, params)
         , LocalStoreConfig(path, params)
     {
@@ -33,7 +37,7 @@ struct LocalOverlayStoreConfig : virtual LocalStoreConfig
 
     const Setting<AbsolutePath> upperLayer{
         (StoreConfig *) this,
-        "",
+        "/upper-layer-must-be-set",
         "upper-layer",
         R"(
           Directory containing the OverlayFS upper layer for this store's store dir.
@@ -53,9 +57,9 @@ struct LocalOverlayStoreConfig : virtual LocalStoreConfig
           default, but can be disabled if needed.
         )"};
 
-    const Setting<AbsolutePath> remountHook{
+    const Setting<std::optional<AbsolutePath>> remountHook{
         (StoreConfig *) this,
-        "",
+        std::nullopt,
         "remount-hook",
         R"(
           Script or other executable to run when overlay filesystem needs remounting.
@@ -119,6 +123,8 @@ struct LocalOverlayStore : virtual LocalStore
     LocalOverlayStore(ref<const Config>);
 
 private:
+    void anchor() override;
+
     /**
      * The store beneath us.
      *

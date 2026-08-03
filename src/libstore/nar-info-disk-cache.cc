@@ -43,12 +43,18 @@ create table if not exists NARs (
     foreign key (cache) references BinaryCaches(id) on delete cascade
 );
 
-create table if not exists Realisations (
+create table if not exists BuildTrace (
     cache integer not null,
-    outputId text not null,
-    content blob, -- Json serialisation of the realisation, or null if the realisation is absent
+
+    drvPath text not null,
+    outputName text not null,
+
+    -- The following are null if the realisation is absent
+    outputPath text,
+    sigs text,
+
     timestamp        integer not null,
-    primary key (cache, outputId),
+    primary key (cache, drvPath, outputName),
     foreign key (cache) references BinaryCaches(id) on delete cascade
 );
 
@@ -61,6 +67,9 @@ create table if not exists LastPurge (
 
 struct NarInfoDiskCacheImpl : NarInfoDiskCache
 {
+private:
+    void anchor() override;
+public:
     /* How often to purge expired entries from the cache. */
     const int purgeInterval = 24 * 3600;
 
@@ -83,7 +92,7 @@ struct NarInfoDiskCacheImpl : NarInfoDiskCache
     NarInfoDiskCacheImpl(
         const Settings & settings,
         SQLiteSettings sqliteSettings,
-        std::filesystem::path dbPath = getCacheDir() / "binary-cache-detsys-v2.sqlite")
+        std::filesystem::path dbPath = getCacheDir() / "binary-cache-detsys-v3.sqlite")
         : NarInfoDiskCache{settings}
     {
         auto state(_state.lock());
@@ -118,24 +127,24 @@ struct NarInfoDiskCacheImpl : NarInfoDiskCache
         state->insertRealisation.create(
             state->db,
             R"(
-                insert or replace into Realisations(cache, outputId, content, timestamp)
-                    values (?, ?, ?, ?)
+                insert or replace into BuildTrace(cache, drvPath, outputName, outputPath, sigs, timestamp)
+                    values (?, ?, ?, ?, ?, ?)
             )");
 
         state->insertMissingRealisation.create(
             state->db,
             R"(
-                insert or replace into Realisations(cache, outputId, timestamp)
-                    values (?, ?, ?)
+                insert or replace into BuildTrace(cache, drvPath, outputName, timestamp)
+                    values (?, ?, ?, ?)
             )");
 
         state->queryRealisation.create(
             state->db,
             R"(
-                select content from Realisations
-                    where cache = ? and outputId = ?  and
-                        ((content is null and timestamp > ?) or
-                         (content is not null and timestamp > ?))
+                select outputPath, sigs from BuildTrace
+                    where cache = ? and drvPath = ? and outputName = ? and
+                        ((outputPath is null and timestamp > ?) or
+                         (outputPath is not null and timestamp > ?))
             )");
 
         /* Periodically purge expired entries from the database. */
@@ -271,7 +280,7 @@ public:
                 auto narInfo = make_ref<NarInfo>(
                     cache.storeDir, StorePath(hashPart + "-" + namePart), Hash::parseAnyPrefixed(queryNAR.getStr(6)));
                 narInfo->url = queryNAR.getStr(2);
-                narInfo->compression = queryNAR.getStr(3);
+                narInfo->compression = parseCompressionAlgo(queryNAR.getStr(3));
                 if (!queryNAR.isNull(4))
                     narInfo->fileHash = Hash::parseAnyPrefixed(queryNAR.getStr(4));
                 narInfo->fileSize = queryNAR.getInt(5);
@@ -303,23 +312,29 @@ public:
 
                 auto queryRealisation(state->queryRealisation.use()
                                           .apply(cache.info.id)
-                                          .apply(id.to_string())
+                                          .apply(id.drvPath.to_string())
+                                          .apply(id.outputName)
                                           .apply(now - settings.ttlNegative)
                                           .apply(now - settings.ttlPositive));
 
                 if (!queryRealisation.next())
-                    return {oUnknown, 0};
+                    return {oUnknown, nullptr};
 
                 if (queryRealisation.isNull(0))
-                    return {oInvalid, 0};
+                    return {oInvalid, nullptr};
 
                 try {
                     return {
                         oValid,
-                        std::make_shared<Realisation>(nlohmann::json::parse(queryRealisation.getStr(0))),
+                        std::make_shared<Realisation>(
+                            UnkeyedRealisation{
+                                .outPath = StorePath{queryRealisation.getStr(0)},
+                                .signatures = nlohmann::json::parse(queryRealisation.getStr(1)),
+                            },
+                            id),
                     };
                 } catch (Error & e) {
-                    e.addTrace({}, "while parsing the local disk cache");
+                    e.addTrace({}, "reading build trace key-value from the local disk cache");
                     throw;
                 }
             });
@@ -344,7 +359,11 @@ public:
                     .apply(hashPart)
                     .apply(std::string(info->path.name()))
                     .apply(narInfo ? narInfo->url : "", narInfo != 0)
-                    .apply(narInfo ? narInfo->compression : "", narInfo != 0)
+                    .apply(
+                        /* TODO: Revisit the whole conditional on nullopt compression. This shouldn't happen. .narinfo
+                           parsing treats empty strings as bzip2 while other code treats it as "none"... */
+                        narInfo && narInfo->compression ? showCompressionAlgo(*narInfo->compression) : "",
+                        narInfo != 0)
                     .apply(
                         narInfo && narInfo->fileHash ? narInfo->fileHash->to_string(HashFormat::Nix32, true) : "",
                         narInfo && narInfo->fileHash)
@@ -376,8 +395,10 @@ public:
 
             state->insertRealisation.use()
                 .apply(cache.info.id)
-                .apply(realisation.id.to_string())
-                .apply(static_cast<nlohmann::json>(realisation).dump())
+                .apply(realisation.id.drvPath.to_string())
+                .apply(realisation.id.outputName)
+                .apply(realisation.outPath.to_string())
+                .apply(static_cast<nlohmann::json>(realisation.signatures).dump())
                 .apply(time(nullptr))
                 .exec();
         });
@@ -391,12 +412,17 @@ public:
             auto & cache(getCache(*state, uri));
             state->insertMissingRealisation.use()
                 .apply(cache.info.id)
-                .apply(id.to_string())
+                .apply(id.drvPath.to_string())
+                .apply(id.outputName)
                 .apply(time(nullptr))
                 .exec();
         });
     }
 };
+
+void NarInfoDiskCache::anchor() {}
+
+void NarInfoDiskCacheImpl::anchor() {}
 
 ref<NarInfoDiskCache> NarInfoDiskCache::get(const Settings & settings, SQLiteSettings sqliteSettings)
 {

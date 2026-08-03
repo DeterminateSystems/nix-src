@@ -12,6 +12,7 @@
 #include <functional>
 #include <future>
 #include <thread>
+#include <queue>
 
 namespace nix {
 
@@ -92,6 +93,11 @@ private:
     WeakGoals wantingToBuild;
 
     /**
+     * Goals waiting for a substitution slot.
+     */
+    WeakGoals wantingToSubstitute;
+
+    /**
      * Child processes currently running.
      */
     std::list<Child> children;
@@ -121,14 +127,14 @@ private:
     std::map<DrvOutput, std::weak_ptr<DrvOutputSubstitutionGoal>> drvOutputSubstitutionGoals;
 
     /**
-     * Goals waiting for busy paths to be unlocked.
-     */
-    WeakGoals waitingForAnyGoal;
-
-    /**
      * Goals sleeping for a few seconds (polling a lock).
      */
     WeakGoals waitingForAWhile;
+
+    /**
+     * Goals awaiting completion callbacks.
+     */
+    WeakGoals waitingForCompletion;
 
     /**
      * Last time the goals in `waitingForAWhile` were woken up.
@@ -139,6 +145,42 @@ private:
      * Cache for pathContentsGood().
      */
     std::map<StorePath, bool> pathContentsGoodCache;
+
+    class Waker
+    {
+#ifndef _WIN32
+        /**
+         * Wakeup pipe polled alongside all other goal FDs. Gets written to by
+         * enqueue(). Not needed on Windows.
+         */
+        unix::SelfPipe wakeupPipe;
+#else
+        Descriptor ioport;
+#endif
+        /**
+         * Queue of goals that need to be woken up.
+         */
+        Sync<std::queue<WeakGoalPtr>> wakeupQueue_;
+
+        friend class Worker;
+
+        void wakeAll(Worker & worker);
+
+        Waker()
+        {
+#ifndef _WIN32
+            wakeupPipe.create();
+#endif
+        }
+
+    public:
+        void enqueue(WeakGoalPtr goal);
+    };
+
+    /**
+     * This is behind a ref, so that other threads can take a weak_ptr to it.
+     */
+    ref<Waker> wakerState;
 
 public:
 
@@ -214,7 +256,7 @@ public:
 
     std::shared_ptr<DerivationGoal> makeDerivationGoal(
         const StorePath & drvPath,
-        const Derivation & drv,
+        ref<const Derivation> drv,
         const OutputName & wantedOutput,
         BuildMode buildMode,
         bool storeDerivation);
@@ -223,13 +265,13 @@ public:
      * @ref DerivationResolutionGoal "derivation resolution goal"
      */
     std::shared_ptr<DerivationResolutionGoal>
-    makeDerivationResolutionGoal(const StorePath & drvPath, const Derivation & drv, BuildMode buildMode);
+    makeDerivationResolutionGoal(const StorePath & drvPath, ref<const Derivation> drv, BuildMode buildMode);
 
     /**
      * @ref DerivationBuildingGoal "derivation building goal"
      */
     std::shared_ptr<DerivationBuildingGoal> makeDerivationBuildingGoal(
-        const StorePath & drvPath, const Derivation & drv, BuildMode buildMode, bool storeDerivation);
+        const StorePath & drvPath, ref<const Derivation> drv, BuildMode buildMode, bool storeDerivation);
 
     /**
      * @ref PathSubstitutionGoal "substitution goal"
@@ -260,6 +302,12 @@ public:
     void wakeUp(GoalPtr goal);
 
     /**
+     * Get a weak reference to the goal waker. It can be used to safely enqueue Goals
+     * for wakeup from other threads.
+     */
+    std::weak_ptr<Waker> getCrossThreadWaker();
+
+    /**
      * Return the number of local build processes currently running (but not
      * remote builds via the build hook).
      */
@@ -281,15 +329,13 @@ public:
         bool respectTimeouts);
 
     /**
-     * Unregisters a running child process.  `wakeSleepers` should be
-     * false if there is no sense in waking up goals that are sleeping
-     * because they can't run yet (e.g., there is no free build slot,
-     * or the hook would still say `postpone`).
+     * Unregisters a running child process. Wakes at most a single goal that is
+     * awaiting on the corresponding build slot type (building or substitution).
      *
      * This overload requires `goal` to point to a fully constructed,
      * valid goal object, as it calls `goal->jobCategory()`.
      */
-    void childTerminated(Goal * goal, bool wakeSleepers = true);
+    void childTerminated(Goal * goal);
 
     /**
      * Unregisters a running child process, like the other overload.
@@ -298,7 +344,7 @@ public:
      * weak goal references, so it is safe to call from destructors
      * where the goal object may be partially destroyed.
      */
-    void childTerminated(Goal * goal, JobCategory jobCategory, bool wakeSleepers = true);
+    void childTerminated(Goal * goal, JobCategory jobCategory);
 
     /**
      * Put `goal` to sleep until a build slot becomes available (which
@@ -307,18 +353,17 @@ public:
     void waitForBuildSlot(GoalPtr goal);
 
     /**
-     * Wait for any goal to finish.  Pretty indiscriminate way to
-     * wait for some resource that some other goal is holding.
-     */
-    void waitForAnyGoal(GoalPtr goal);
-
-    /**
      * Wait for a few seconds and then retry this goal.  Used when
      * waiting for a lock held by another process.  This kind of
      * polling is inefficient, but POSIX doesn't really provide a way
      * to wait for multiple locks in the main select() loop.
      */
     void waitForAWhile(GoalPtr goal);
+
+    /**
+     * Wait until explicitly resumed by Waker::enqueue.
+     */
+    void waitForCompletion(GoalPtr goal);
 
     /**
      * Loop until the specified top-level goals have finished.

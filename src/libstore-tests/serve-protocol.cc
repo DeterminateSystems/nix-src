@@ -1,5 +1,4 @@
 #include <thread>
-#include <regex>
 
 #include <nlohmann/json.hpp>
 #include <gtest/gtest.h>
@@ -16,8 +15,6 @@
 namespace nix {
 
 const char serveProtoDir[] = "serve-protocol";
-
-static constexpr std::string_view defaultStoreDir = "/nix/store";
 
 struct ServeProtoTest : VersionedProtoTest<ServeProto, serveProtoDir>
 {
@@ -78,16 +75,19 @@ VERSIONED_CHARACTERIZATION_TEST(
 
 VERSIONED_CHARACTERIZATION_TEST(
     ServeProtoTest,
-    drvOutput,
-    "drv-output",
-    defaultVersion,
+    drvOutput_2_8,
+    "drv-output-2.8",
+    (ServeProto::Version{
+        .major = 2,
+        .minor = 8,
+    }),
     (std::tuple<DrvOutput, DrvOutput>{
         {
-            .drvHash = Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
+            .drvPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"},
             .outputName = "baz",
         },
         DrvOutput{
-            .drvHash = Hash::parseSRI("sha256-b4afnqKCO9oWXgYHb9DeQ2berSwOjS27rSd9TxXDc/U="),
+            .drvPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"},
             .outputName = "quux",
         },
     }))
@@ -96,54 +96,37 @@ VERSIONED_CHARACTERIZATION_TEST(
 
 VERSIONED_CHARACTERIZATION_TEST(
     ServeProtoTest,
-    realisation,
-    "realisation",
-    defaultVersion,
-    (std::tuple<Realisation, Realisation>{
-        Realisation{
-            {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
-            },
-            {
-                .drvHash = Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
-                .outputName = "baz",
-            },
-        },
-        Realisation{
-            {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
-                .signatures =
-                    {
-                        Signature{.keyName = "asdf", .sig = std::string(64, '\0')},
-                        Signature{.keyName = "qwer", .sig = std::string(64, '\0')},
-                    },
-            },
-            {
-                .drvHash = Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
-                .outputName = "baz",
-            },
-        },
+    unkeyedRealisation_2_8,
+    "unkeyed-realisation-2.8",
+    (ServeProto::Version{
+        .major = 2,
+        .minor = 8,
+    }),
+    (UnkeyedRealisation{
+        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+        .signatures =
+            {Signature{.keyName = "asdf", .sig = std::string(64, '\0')},
+             Signature{.keyName = "qwer", .sig = std::string(64, '\0')}},
     }))
 
-VERSIONED_READ_CHARACTERIZATION_TEST(
+VERSIONED_CHARACTERIZATION_TEST(
     ServeProtoTest,
-    realisation_with_deps,
-    "realisation-with-deps",
-    defaultVersion,
-    (std::tuple<Realisation>{
-        Realisation{
-            {
-                .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
-                .signatures =
-                    {
-                        Signature{.keyName = "asdf", .sig = std::string(64, '\0')},
-                        Signature{.keyName = "qwer", .sig = std::string(64, '\0')},
-                    },
-            },
-            {
-                .drvHash = Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
-                .outputName = "baz",
-            },
+    realisation_2_8,
+    "realisation-2.8",
+    (ServeProto::Version{
+        .major = 2,
+        .minor = 8,
+    }),
+    (Realisation{
+        UnkeyedRealisation{
+            .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+            .signatures =
+                {Signature{.keyName = "asdf", .sig = std::string(64, '\0')},
+                 Signature{.keyName = "qwer", .sig = std::string(64, '\0')}},
+        },
+        {
+            .drvPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"},
+            .outputName = "baz",
         },
     }))
 
@@ -209,7 +192,10 @@ VERSIONED_CHARACTERIZATION_TEST(
         t;
     }))
 
-VERSIONED_CHARACTERIZATION_TEST(
+/* We now do a lossy read which does not allow us to faithfully write
+   back, since we changed the data type. We still however want to test
+   that this read works, and so for that we have a one-way test. */
+VERSIONED_READ_CHARACTERIZATION_TEST(
     ServeProtoTest,
     buildResult_2_6,
     "build-result-2.6",
@@ -242,27 +228,72 @@ VERSIONED_CHARACTERIZATION_TEST(
                             {
                                 "foo",
                                 {
-                                    {
-                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
-                                    },
-                                    DrvOutput{
-                                        .drvHash =
-                                            Hash::parseSRI("sha256-b4afnqKCO9oWXgYHb9DeQ2berSwOjS27rSd9TxXDc/U="),
-                                        .outputName = "foo",
-                                    },
+                                    .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
                                 },
                             },
                             {
                                 "bar",
                                 {
-                                    {
-                                        .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar"},
-                                    },
-                                    DrvOutput{
-                                        .drvHash =
-                                            Hash::parseSRI("sha256-b4afnqKCO9oWXgYHb9DeQ2berSwOjS27rSd9TxXDc/U="),
-                                        .outputName = "bar",
-                                    },
+                                    .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar"},
+                                },
+                            },
+                        },
+                }},
+                .timesBuilt = 1,
+                .startTime = 30,
+                .stopTime = 50,
+#if 0
+                // These fields are not yet serialized.
+                // FIXME Include in next version of protocol or document
+                // why they are skipped.
+                .cpuUser = std::chrono::milliseconds(500s),
+                .cpuSystem = std::chrono::milliseconds(604s),
+#endif
+            },
+        };
+        t;
+    }))
+
+VERSIONED_CHARACTERIZATION_TEST(
+    ServeProtoTest,
+    buildResult_2_8,
+    "build-result-2.8",
+    (ServeProto::Version{
+        .major = 2,
+        .minor = 8,
+    }),
+    ({
+        using namespace std::literals::chrono_literals;
+        std::tuple<BuildResult, BuildResult, BuildResult> t{
+            BuildResult{.inner{BuildResult::Failure{{
+                .status = BuildResult::Failure::OutputRejected,
+                .msg = HintFmt("no idea why"),
+            }}}},
+            BuildResult{
+                .inner{BuildResult::Failure{{
+                    .status = BuildResult::Failure::NotDeterministic,
+                    .msg = HintFmt("no idea why"),
+                    .isNonDeterministic = true,
+                }}},
+                .timesBuilt = 3,
+                .startTime = 30,
+                .stopTime = 50,
+            },
+            BuildResult{
+                .inner{BuildResult::Success{
+                    .status = BuildResult::Success::Built,
+                    .builtOutputs =
+                        {
+                            {
+                                "foo",
+                                {
+                                    .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                                },
+                            },
+                            {
+                                "bar",
+                                {
+                                    .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar"},
                                 },
                             },
                         },
@@ -292,12 +323,12 @@ VERSIONED_CHARACTERIZATION_TEST(
     }),
     (std::tuple<UnkeyedValidPathInfo, UnkeyedValidPathInfo>{
         ({
-            UnkeyedValidPathInfo info{std::string{defaultStoreDir}, Hash::dummy};
+            UnkeyedValidPathInfo info{"/nix/store", Hash::dummy};
             info.narSize = 34878;
             info;
         }),
         ({
-            UnkeyedValidPathInfo info{std::string{defaultStoreDir}, Hash::dummy};
+            UnkeyedValidPathInfo info{"/nix/store", Hash::dummy};
             info.deriver = StorePath{
                 "g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar.drv",
             };
@@ -322,7 +353,7 @@ VERSIONED_CHARACTERIZATION_TEST(
     (std::tuple<UnkeyedValidPathInfo, UnkeyedValidPathInfo>{
         ({
             UnkeyedValidPathInfo info{
-                std::string{defaultStoreDir},
+                "/nix/store",
                 Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="),
             };
             info.deriver = StorePath{
@@ -513,12 +544,6 @@ TEST_F(ServeProtoTest, handshake_log)
     });
 }
 
-/// Has to be a `BufferedSink` for handshake.
-struct NullBufferedSink : BufferedSink
-{
-    void writeUnbuffered(std::string_view data) override {}
-};
-
 TEST_F(ServeProtoTest, handshake_client_replay)
 {
     CharacterizationTest::readTest("handshake-to-client.bin", [&](std::string toClientLog) {
@@ -577,5 +602,63 @@ TEST_F(ServeProtoTest, handshake_client_corrupted_throws)
         }
     });
 }
+
+/**
+ * The old-protocol fallback writes `builtOutputs` as a `StringMap`
+ * with a dummy hash so that old clients can still extract output
+ * paths. This round-trips because the read side only uses the
+ * `outputName` (from the key) and `outPath` (from the JSON value).
+ */
+VERSIONED_CHARACTERIZATION_TEST(
+    ServeProtoTest,
+    buildResult_2_7_compat,
+    "build-result-2.7-compat",
+    (ServeProto::Version{
+        .major = 2,
+        .minor = 7,
+    }),
+    ({
+        using namespace std::literals::chrono_literals;
+        std::tuple<BuildResult, BuildResult, BuildResult> t{
+            BuildResult{.inner{BuildResult::Failure{{
+                .status = BuildResult::Failure::OutputRejected,
+                .msg = HintFmt("no idea why"),
+            }}}},
+            BuildResult{
+                .inner{BuildResult::Failure{{
+                    .status = BuildResult::Failure::NotDeterministic,
+                    .msg = HintFmt("no idea why"),
+                    .isNonDeterministic = true,
+                }}},
+                .timesBuilt = 3,
+                .startTime = 30,
+                .stopTime = 50,
+            },
+            BuildResult{
+                .inner{BuildResult::Success{
+                    .status = BuildResult::Success::Built,
+                    .builtOutputs =
+                        {
+                            {
+                                "foo",
+                                {
+                                    .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo"},
+                                },
+                            },
+                            {
+                                "bar",
+                                {
+                                    .outPath = StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar"},
+                                },
+                            },
+                        },
+                }},
+                .timesBuilt = 1,
+                .startTime = 30,
+                .stopTime = 50,
+            },
+        };
+        t;
+    }))
 
 } // namespace nix

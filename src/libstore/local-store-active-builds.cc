@@ -220,11 +220,11 @@ std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
             try {
 #  ifdef __linux__
                 if (info.cgroup) {
-                    for (auto pid : getPidsInCgroup(*info.cgroup))
+                    for (auto pid : linux::getPidsInCgroup(*info.cgroup))
                         info.processes.push_back(getProcessInfo(pid));
 
                     /* Read CPU statistics from the cgroup. */
-                    auto stats = getCgroupStats(*info.cgroup);
+                    auto stats = linux::getCgroupStats(*info.cgroup);
                     info.utime = stats.cpuUser;
                     info.stime = stats.cpuSystem;
                 } else

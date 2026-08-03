@@ -7,13 +7,12 @@ TODO_NixOS
 needLocalStore "'--no-require-sigs' can’t be used with the daemon"
 
 # We can produce drvs directly into the binary cache
-clearStore
-clearCacheCache
 nix-instantiate --store "file://$cacheDir" dependencies.nix
 
-# Create the binary cache.
 clearStore
-clearCache
+clearBinaryCache
+
+# Create the binary cache.
 outPath=$(nix-build dependencies.nix --no-out-link)
 depPath=$(nix-build dependencies.nix -A input0_drv --no-out-link)
 
@@ -255,7 +254,7 @@ grepQuiet "building.*input-2" "$TEST_ROOT/log"
 
 
 # Create a signed binary cache.
-clearCache
+clearBinaryCache
 clearCacheCache
 
 nix key generate-secret --key-name test.nixos.org-1 > "$TEST_ROOT/sk1"
@@ -332,7 +331,7 @@ rm -rfv "$cacheDir/nar"
 
 
 # Test NAR listing generation.
-clearCache
+clearBinaryCache
 
 
 # preserve quotes variables in the single-quoted string
@@ -349,11 +348,31 @@ nix copy --to "file://$cacheDir"?write-nar-listing=1 "$outPath"
 
 diff -u \
     <(jq -S < "$cacheDir/$(basename "$outPath" | cut -c1-32).ls") \
-    <(echo '{"version":1,"root":{"type":"directory","entries":{"bar":{"type":"regular","size":4,"narOffset":232},"link":{"type":"symlink","target":"xyzzy"}}}}' | jq -S)
+    <(jq -S <<'EOF'
+{
+  "version": 1,
+  "root": {
+    "type": "directory",
+    "entries": {
+      "bar": {
+        "type": "regular",
+        "executable": false,
+        "size": 4,
+        "narOffset": 232
+      },
+      "link": {
+        "type": "symlink",
+        "target": "xyzzy"
+      }
+    }
+  }
+}
+EOF
+    )
 
 
 # Test debug info index generation.
-clearCache
+clearBinaryCache
 
 # preserve quotes variables in the single-quoted string
 # shellcheck disable=SC2016

@@ -4,8 +4,6 @@ source common.sh
 
 TODO_NixOS
 
-clearStore
-
 path=$(nix-build dependencies.nix --no-out-link)
 
 # Test nix-store -l.
@@ -19,11 +17,11 @@ nix-build dependencies.nix --no-out-link --compress-build-log
 [ "$(nix-store -l "$path")" = FOO ]
 
 # test whether empty logs work fine with `nix log`.
-builder="$(realpath "$(mktemp)")"
+builder=$TEST_ROOT/builder
 echo -e "#!/bin/sh\nmkdir \$out" > "$builder"
 outp="$(nix-build -E \
     'with import '"${config_nix}"'; mkDerivation { name = "fnord"; builder = '"$builder"'; }' \
-    --out-link "$(mktemp -d)/result")"
+    --out-link "$TEST_ROOT/result")"
 
 test -d "$outp"
 
@@ -38,7 +36,7 @@ fi
 clearStore
 nix build -vv --file dependencies.nix --no-link --json-log-path "$TEST_ROOT/log.json" 2>&1 | grepQuiet 'building.*dependencies-top.drv'
 grep '{"action":"start","fields":\[".*-dependencies-top.drv","",1,1\],"id":.*,"level":3,"parent":0' "$TEST_ROOT/log.json" >&2
-grep -E '{"action":"result","id":[^,]+,"payload":{"builtOutputs":{"out":{"dependentRealisations":\{\},"id":"[^"]+","outPath":"[^-]+-dependencies-top".*"status":"Built".*"success":true' "$TEST_ROOT/log.json" >&2
+grep -E '{"action":"result","id":[^,]+,"payload":{"builtOutputs":{"out":{"outPath":"[^-]+-dependencies-top".*"status":"Built".*"success":true' "$TEST_ROOT/log.json" >&2
 (( $(grep -c '{"action":"msg","level":5,"msg":"executing builder .*"}' "$TEST_ROOT/log.json" ) == 5 ))
 
 rm "$TEST_ROOT/log.json"

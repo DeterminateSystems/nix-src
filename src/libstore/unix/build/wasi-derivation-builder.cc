@@ -1,4 +1,10 @@
-#include <wasmtime.hh>
+#include "store-config-private.hh"
+
+#if NIX_USE_WASMTIME
+
+#  include "derivation-builder-impl.hh"
+
+#  include <wasmtime.hh>
 
 namespace nix {
 
@@ -20,7 +26,7 @@ static std::span<uint8_t> string2span(std::string_view s)
 struct WasiDerivationBuilder : DerivationBuilderImpl
 {
     WasiDerivationBuilder(
-        LocalStore & store, std::unique_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
+        LocalStore & store, std::shared_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
         : DerivationBuilderImpl(store, std::move(miscMethods), std::move(params))
     {
         experimentalFeatureSettings.require(Xp::WasmDerivations);
@@ -46,7 +52,7 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
             wasiConfig.env(env2);
         }
         if (!wasiConfig.preopen_dir(
-                store.config->realStoreDir.get(),
+                store.config->realStoreDir.get().string(),
                 store.storeDir,
                 WASMTIME_WASI_DIR_PERMS_READ | WASMTIME_WASI_DIR_PERMS_WRITE,
                 WASMTIME_WASI_FILE_PERMS_READ | WASMTIME_WASI_FILE_PERMS_WRITE))
@@ -75,6 +81,18 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
 
         _exit(0);
     }
+
+    void anchor() override;
 };
 
+void WasiDerivationBuilder::anchor() {}
+
+DerivationBuilderUnique makeWasiDerivationBuilder(
+    LocalStore & store, std::shared_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
+{
+    return DerivationBuilderUnique(new WasiDerivationBuilder(store, std::move(miscMethods), std::move(params)));
+}
+
 } // namespace nix
+
+#endif // NIX_USE_WASMTIME
