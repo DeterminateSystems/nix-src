@@ -77,6 +77,14 @@ struct SQLite
     void exec(const std::string & stmt);
 
     uint64_t getLastInsertedRowId();
+
+    /**
+     * Set the value returned by `getLastInsertedRowId()`. Since only
+     * successful inserts update the last-inserted rowid, this can be
+     * used to detect whether an upsert statement performed an insert
+     * or an update.
+     */
+    void setLastInsertedRowId(uint64_t id);
 };
 
 /**
