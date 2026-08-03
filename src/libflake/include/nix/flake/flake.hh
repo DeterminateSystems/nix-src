@@ -168,14 +168,15 @@ struct LockedFlake
      * `resolveFollows()`). Throws an error if `prefix` does not
      * denote an existing input.
      */
-    virtual std::map<FlakeId, std::optional<InputAttrPath>> getInputTargets(const InputAttrPath & prefix) const = 0;
+    virtual std::map<FlakeId, std::optional<InputAttrPath>>
+    getInputTargets(EvalState & state, const InputAttrPath & prefix) const = 0;
 
     /**
      * Return the names of the inputs of the input denoted by
      * `prefix`, or of the top-level flake if `prefix` is empty.
      * `prefix` must be fully resolved (see `resolveFollows()`).
      */
-    std::vector<FlakeId> getInputNames(const InputAttrPath & prefix) const;
+    std::vector<FlakeId> getInputNames(EvalState & state, const InputAttrPath & prefix) const;
 
     /**
      * Resolve any "follows" indirections in `path`, returning an
@@ -185,7 +186,7 @@ struct LockedFlake
      * and `getSourcePath()`. Path elements that do not denote
      * existing inputs are returned unchanged.
      */
-    InputAttrPath resolveFollows(const InputAttrPath & path) const;
+    InputAttrPath resolveFollows(EvalState & state, const InputAttrPath & path) const;
 
     /**
      * Information about a locked input.
@@ -213,7 +214,7 @@ struct LockedFlake
      * thrown if it passes through a "follows" input. Returns
      * std::nullopt if the input does not exist.
      */
-    virtual std::optional<InputInfo> findInput(const InputAttrPath & path) const = 0;
+    virtual std::optional<InputInfo> findInput(EvalState & state, const InputAttrPath & path) const = 0;
 
     /**
      * Return the source path of the input denoted by `inputAttrPath`
@@ -244,7 +245,7 @@ struct LockedFlake
      * the inputs of that input. We never recurse into "follows"
      * inputs; their targets are visited under their own paths.
      */
-    void visit(VisitCallback callback) const;
+    void visit(EvalState & state, VisitCallback callback) const;
 
     std::optional<Fingerprint> getFingerprint(Store & store, const fetchers::Settings & fetchSettings) const;
 
