@@ -183,6 +183,12 @@ struct LockFileV7
 {
     ref<Node> root = make_ref<Node>();
 
+    /**
+     * The version of the lock file this was parsed from (5-7), or 7
+     * for new lock files.
+     */
+    unsigned int version = 7;
+
     LockFileV7() {};
 
     LockFileV7(const fetchers::Settings & fetchSettings, const nlohmann::json & json, std::string_view path)
@@ -190,6 +196,8 @@ struct LockFileV7
         auto version = json.value("version", 0);
         if (version < 5 || version > 7)
             throw Error("lock file '%s' has unsupported version %d", path, version);
+
+        this->version = version;
 
         std::string rootKey = json["root"];
         std::map<std::string, ref<Node>> nodeMap{{rootKey, root}};
@@ -383,36 +391,6 @@ struct LockFileV7
     }
 };
 
-static std::string describe(const FlakeRef & flakeRef)
-{
-    auto s = fmt("'%s'", flakeRef.to_string(true));
-
-    if (auto lastModified = flakeRef.input.getLastModified())
-        s += fmt(" (%s)", std::put_time(std::gmtime(&*lastModified), "%Y-%m-%d"));
-
-    return s;
-}
-
-std::ostream & operator<<(std::ostream & stream, const Node::Edge & edge)
-{
-    if (auto node = std::get_if<0>(&edge))
-        stream << describe((*node)->lockedRef);
-    else if (auto follows = std::get_if<1>(&edge))
-        stream << fmt("follows '%s'", printInputAttrPath(*follows));
-    return stream;
-}
-
-static bool equals(const Node::Edge & e1, const Node::Edge & e2)
-{
-    if (auto n1 = std::get_if<0>(&e1))
-        if (auto n2 = std::get_if<0>(&e2))
-            return (*n1)->lockedRef == (*n2)->lockedRef;
-    if (auto f1 = std::get_if<1>(&e1))
-        if (auto f2 = std::get_if<1>(&e2))
-            return *f1 == *f2;
-    return false;
-}
-
 struct LockedFlakeV7 : LockedFlake
 {
     /**
@@ -544,41 +522,22 @@ struct LockedFlakeV7 : LockedFlake
         return lockFile.isUnlocked(fetchSettings);
     }
 
-    std::string diff(const LockedFlake & _oldLockFile) const override
+    unsigned int version() const override
     {
-        /* If `oldLockFile` is not a version 7 lock file, diff against an
-           empty lock file, i.e. all inputs of this lock file will show up
-           as added. */
-        auto oldLockFile = dynamic_cast<const LockedFlakeV7 *>(&_oldLockFile);
+        return lockFile.version;
+    }
 
-        auto oldFlat = oldLockFile ? oldLockFile->lockFile.getAllInputs() : std::map<InputAttrPath, Node::Edge>();
-        auto newFlat = lockFile.getAllInputs();
+    std::map<InputAttrPath, LockEntry> getAllLockEntries(bool fetchTransitive) const override
+    {
+        /* Note: `fetchTransitive` is irrelevant, since a version 7
+           lock file already contains all transitive locks. */
+        std::map<InputAttrPath, LockEntry> res;
 
-        auto i = oldFlat.begin();
-        auto j = newFlat.begin();
-        std::string res;
-
-        while (i != oldFlat.end() || j != newFlat.end()) {
-            if (j != newFlat.end() && (i == oldFlat.end() || i->first > j->first)) {
-                res +=
-                    fmt("• " ANSI_GREEN "Added input '%s':" ANSI_NORMAL "\n    %s\n",
-                        printInputAttrPath(j->first),
-                        j->second);
-                ++j;
-            } else if (i != oldFlat.end() && (j == newFlat.end() || i->first < j->first)) {
-                res += fmt("• " ANSI_RED "Removed input '%s'" ANSI_NORMAL "\n", printInputAttrPath(i->first));
-                ++i;
-            } else {
-                if (!equals(i->second, j->second)) {
-                    res +=
-                        fmt("• " ANSI_BOLD "Updated input '%s':" ANSI_NORMAL "\n    %s\n  → %s\n",
-                            printInputAttrPath(i->first),
-                            i->second,
-                            j->second);
-                }
-                ++i;
-                ++j;
-            }
+        for (auto & [path, edge] : lockFile.getAllInputs()) {
+            if (auto node = std::get_if<0>(&edge))
+                res.emplace(path, (*node)->lockedRef);
+            else
+                res.emplace(path, std::get<1>(edge));
         }
 
         return res;
