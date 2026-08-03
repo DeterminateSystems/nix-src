@@ -434,7 +434,9 @@ std::unique_ptr<LockedFlake> parseLockFile(
 {
     auto version = json.is_null() ? versionIfMissing : (unsigned int) json.value("version", 0);
 
-    if (version >= 5 && version <= 7)
+    if (version == 8)
+        return parseLockFileV8(fetchSettings, std::move(flake), json, path);
+    else if (version >= 5 && version <= 7)
         return parseLockFileV7(fetchSettings, std::move(flake), json, path);
     else
         throw Error("lock file '%s' has unsupported version %d", path, version);
@@ -493,13 +495,35 @@ std::unique_ptr<LockedFlake> lockFlake(
             }
         }
 
-        // FIXME: dispatch on the lock file version here.
-        auto oldLockedFlake = parseLockFile(state.fetchSettings, flake, oldLockFileJson, fmt("%s", lockFilePath));
+        std::optional<unsigned int> oldVersion;
+        if (!oldLockFileJson.is_null()) {
+            oldVersion = oldLockFileJson.value("version", 0);
+            if (*oldVersion < 5 || *oldVersion > 8)
+                throw Error("lock file '%s' has unsupported version %d", lockFilePath, *oldVersion);
+        }
+
+        /* Determine the version of the new lock file: the existing
+           lock file's version wins, unless `--recreate-lock-file` was
+           passed (or there is no lock file), in which case the
+           `lock-file-format` setting is used. */
+        unsigned int version = oldVersion && !lockFlags.recreateLockFile ? (*oldVersion == 8 ? 8 : 7)
+                                                                         : (unsigned int) settings.lockFileFormat;
+
+        if (version != 7 && version != 8)
+            throw Error("unsupported lock file format version %d; supported versions are 7 and 8", version);
+
+        /* Parse the old lock file. If there is no lock file, get an
+           empty lock file of the version we're producing, so that the
+           lock functions below receive the type they expect. */
+        auto oldLockedFlake =
+            parseLockFile(state.fetchSettings, flake, oldLockFileJson, fmt("%s", lockFilePath), version);
 
         debug("old lock file: %s", oldLockedFlake->to_string());
 
+        auto lockFlakeForVersion = version == 8 ? lockFlakeV8 : lockFlakeV7;
+
         auto [lockedFlake, overridesUsed, updatesUsed] =
-            lockFlakeV7(settings, state, lockFlags, std::move(flake), *oldLockedFlake);
+            lockFlakeForVersion(settings, state, lockFlags, std::move(flake), *oldLockedFlake);
 
         for (auto & i : lockFlags.inputOverrides)
             if (!overridesUsed.count(i.first))

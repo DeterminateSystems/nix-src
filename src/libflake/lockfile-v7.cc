@@ -524,7 +524,11 @@ LockFlakeResult lockFlakeV7(
     Flake flake,
     const LockedFlake & _oldLockFile)
 {
-    auto & oldLockFile = dynamic_cast<const LockedFlakeV7 &>(_oldLockFile).lockFile;
+    /* If the old lock file is not a version 7 lock file (e.g. when
+       migrating from version 8), ignore it. */
+    auto oldLockedFlake = dynamic_cast<const LockedFlakeV7 *>(&_oldLockFile);
+    LockFileV7 emptyLockFile;
+    auto & oldLockFile = oldLockedFlake ? oldLockedFlake->lockFile : emptyLockFile;
 
     auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
     auto useRegistriesInputs = useRegistries ? fetchers::UseRegistries::Limited : fetchers::UseRegistries::No;
