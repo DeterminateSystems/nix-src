@@ -12,6 +12,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -22,6 +23,7 @@
 #include "nix/util/ref.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/flake/flake.hh"
+#include "flake-impl.hh"
 #include "nix/expr/eval.hh"
 #include "nix/expr/eval-cache.hh"
 #include "nix/expr/eval-settings.hh"
@@ -41,6 +43,7 @@
 #include "nix/expr/fetch-tree.hh"
 #include "nix/expr/json-to-value.hh"
 #include "nix/expr/primops.hh"
+#include "nix/expr/print.hh"
 #include "nix/expr/nixexpr.hh"
 #include "nix/expr/symbol-table.hh"
 #include "nix/expr/value.hh"
@@ -434,6 +437,29 @@ std::unique_ptr<LockedFlake> parseLockFile(
         return parseLockFileV7(fetchSettings, std::move(flake), json, path);
     else
         throw Error("lock file '%s' has unsupported version %d", path, version);
+}
+
+void warnRegistry(
+    const InputAttrPath & inputAttrPath,
+    const FlakeRef & ref,
+    const FlakeRef & resolvedRef,
+    const SourcePath & topFlakePath)
+{
+    if (inputAttrPath.size() == 1 && !ref.input.isDirect()) {
+        std::ostringstream s;
+        printLiteralString(s, resolvedRef.to_string());
+        warn(
+            "Flake input '%1%' uses the flake registry. "
+            "Using the registry in flake inputs is deprecated in Determinate Nix. "
+            "To make your flake future-proof, add the following to '%2%':\n"
+            "\n"
+            "  inputs.%1%.url = %3%;\n"
+            "\n"
+            "For more information, see: https://github.com/DeterminateSystems/nix-src/issues/37",
+            printInputAttrPath(inputAttrPath),
+            topFlakePath,
+            s.str());
+    }
 }
 
 std::unique_ptr<LockedFlake> lockFlake(
