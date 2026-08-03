@@ -889,7 +889,12 @@ void LockedFlake::visit(EvalState & state, VisitCallback callback) const
     if (!callback({}, InputInfo{.lockedRef = flake.lockedRef}))
         return;
 
-    [&](this const auto & recurse, const InputAttrPath & prefix) -> void {
+    /* Note: this is not a recursive lambda using an explicit object
+       parameter because that triggers an internal compiler error in
+       GCC. */
+    std::function<void(const InputAttrPath &)> recurse;
+
+    recurse = [&](const InputAttrPath & prefix) {
         for (auto & [id, target] : getInputTargets(state, prefix)) {
             auto inputAttrPath(prefix);
             inputAttrPath.push_back(id);
@@ -900,7 +905,9 @@ void LockedFlake::visit(EvalState & state, VisitCallback callback) const
                     recurse(inputAttrPath);
             }
         }
-    }({});
+    };
+
+    recurse({});
 }
 
 std::string LockedFlake::to_string() const
