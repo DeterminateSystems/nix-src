@@ -230,7 +230,7 @@ struct LockedFlake
      * the inputs of that input. We never recurse into "follows"
      * inputs; their targets are visited under their own paths.
      */
-    virtual void visit(VisitCallback callback) const = 0;
+    void visit(VisitCallback callback) const;
 
     std::optional<Fingerprint> getFingerprint(Store & store, const fetchers::Settings & fetchSettings) const;
 
