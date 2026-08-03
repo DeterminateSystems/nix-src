@@ -22,6 +22,7 @@
 
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/flake/flake.hh"
+#include "flake-impl.hh"
 #include "nix/util/sync.hh"
 #include "nix/flake/settings.hh"
 #include "nix/expr/eval.hh"
@@ -862,28 +863,6 @@ LockFlakeResult lockFlakeV7(
                     auto inputIsOverride = explicitCliOverrides.contains(nonEmptyInputAttrPath);
                     auto ref = (input2.ref && inputIsOverride) ? *input2.ref : *input.ref;
 
-                    /* Warn against the use of indirect flakerefs
-                       (but only at top-level since we don't want
-                       to annoy users about flakes that are not
-                       under their control). */
-                    auto warnRegistry = [&](const FlakeRef & resolvedRef) {
-                        if (inputAttrPath.size() == 1 && !input.ref->input.isDirect()) {
-                            std::ostringstream s;
-                            printLiteralString(s, resolvedRef.to_string());
-                            warn(
-                                "Flake input '%1%' uses the flake registry. "
-                                "Using the registry in flake inputs is deprecated in Determinate Nix. "
-                                "To make your flake future-proof, add the following to '%2%':\n"
-                                "\n"
-                                "  inputs.%1%.url = %3%;\n"
-                                "\n"
-                                "For more information, see: https://github.com/DeterminateSystems/nix-src/issues/37",
-                                inputAttrPathS,
-                                flake.path,
-                                s.str());
-                        }
-                    };
-
                     if (input.isFlake) {
                         auto inputFlake = getInputFlake(
                             *input.ref, inputIsOverride ? fetchers::UseRegistries::All : useRegistriesInputs);
@@ -912,7 +891,7 @@ LockFlakeResult lockFlakeV7(
                             inputFlake.path,
                             false);
 
-                        warnRegistry(inputFlake.resolvedRef);
+                        warnRegistry(inputAttrPath, *input.ref, inputFlake.resolvedRef, flake.path);
                     }
 
                     else {
@@ -927,7 +906,7 @@ LockFlakeResult lockFlakeV7(
                                 auto resolvedRef = FlakeRef(std::move(cachedInput.resolvedInput), input.ref->subdir);
                                 auto lockedRef = FlakeRef(std::move(cachedInput.lockedInput), input.ref->subdir);
 
-                                warnRegistry(resolvedRef);
+                                warnRegistry(inputAttrPath, *input.ref, resolvedRef, flake.path);
 
                                 return {
                                     state.storePath(state.mountInput(
