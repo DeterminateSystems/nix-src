@@ -329,7 +329,7 @@ FlakeRef InstallableFlake::nixpkgsFlakeRef() const
 {
     auto lockedFlake = getLockedFlake();
 
-    if (auto nixpkgsInput = lockedFlake->findInput(lockedFlake->resolveFollows({"nixpkgs"}))) {
+    if (auto nixpkgsInput = lockedFlake->findInput(*state, lockedFlake->resolveFollows(*state, {"nixpkgs"}))) {
         if (nixpkgsInput->isFlake) {
             debug("using nixpkgs flake '%s'", nixpkgsInput->lockedRef);
             return std::move(nixpkgsInput->lockedRef);
