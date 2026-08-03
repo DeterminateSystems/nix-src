@@ -327,7 +327,9 @@ ref<eval_cache::EvalCache> InstallableFlake::openEvalCache() const
 
 FlakeRef InstallableFlake::nixpkgsFlakeRef() const
 {
-    if (auto nixpkgsInput = getLockedFlake()->findInput({"nixpkgs"})) {
+    auto lockedFlake = getLockedFlake();
+
+    if (auto nixpkgsInput = lockedFlake->findInput(lockedFlake->resolveFollows({"nixpkgs"}))) {
         if (nixpkgsInput->isFlake) {
             debug("using nixpkgs flake '%s'", nixpkgsInput->lockedRef);
             return std::move(nixpkgsInput->lockedRef);

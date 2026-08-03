@@ -63,6 +63,7 @@
 #include "nix/util/pos-idx.hh"
 #include "nix/util/pos-table.hh"
 #include "nix/util/source-path.hh"
+#include "nix/util/strings.hh"
 #include "nix/util/types.hh"
 #include "nix/util/util.hh"
 
@@ -834,6 +835,52 @@ std::vector<FlakeId> LockedFlake::getInputNames(const InputAttrPath & prefix) co
     std::vector<FlakeId> res;
     for (auto & [name, target] : getInputTargets(prefix))
         res.push_back(name);
+    return res;
+}
+
+InputAttrPath LockedFlake::resolveFollows(const InputAttrPath & path) const
+{
+    std::vector<InputAttrPath> visited;
+
+    InputAttrPath res;
+
+    /* The path elements still to be resolved, in reverse order. */
+    InputAttrPath todo(path.rbegin(), path.rend());
+
+    while (!todo.empty()) {
+        auto name = todo.back();
+        todo.pop_back();
+
+        auto targets = getInputTargets(res);
+        auto i = targets.find(name);
+
+        if (i == targets.end()) {
+            /* The input doesn't exist, so there is nothing to
+               resolve; return the remaining path unchanged and leave
+               it to the caller to deal with it. */
+            res.push_back(std::move(name));
+            res.insert(res.end(), todo.rbegin(), todo.rend());
+            return res;
+        }
+
+        if (i->second) {
+            /* A "follows" input: restart resolution from its target
+               (which is relative to the top-level flake). */
+            auto followsPath(res);
+            followsPath.push_back(std::move(name));
+            if (std::find(visited.begin(), visited.end(), followsPath) != visited.end()) {
+                std::vector<std::string> cycle;
+                std::transform(visited.begin(), visited.end(), std::back_inserter(cycle), printInputAttrPath);
+                cycle.push_back(printInputAttrPath(followsPath));
+                throw Error("follow cycle detected: [%s]", concatStringsSep(" -> ", cycle));
+            }
+            visited.push_back(std::move(followsPath));
+            todo.insert(todo.end(), i->second->rbegin(), i->second->rend());
+            res.clear();
+        } else
+            res.push_back(std::move(name));
+    }
+
     return res;
 }
 
