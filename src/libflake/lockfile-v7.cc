@@ -385,7 +385,8 @@ struct LockedFlakeV7 : LockedFlake
     {
     }
 
-    std::map<FlakeId, std::optional<InputAttrPath>> getInputTargets(const InputAttrPath & prefix) const override
+    std::map<FlakeId, std::optional<InputAttrPath>>
+    getInputTargets(EvalState & state, const InputAttrPath & prefix) const override
     {
         auto node = lockFile.findInput(prefix);
         if (!node)
@@ -403,7 +404,7 @@ struct LockedFlakeV7 : LockedFlake
         return res;
     }
 
-    std::optional<InputInfo> findInput(const InputAttrPath & path) const override
+    std::optional<InputInfo> findInput(EvalState & state, const InputAttrPath & path) const override
     {
         if (auto node = std::dynamic_pointer_cast<const LockedNode>(lockFile.findInput(path)))
             return InputInfo{
@@ -889,7 +890,7 @@ LockFlakeResult lockFlakeV7(
     /* Check that the target of every 'follows' input exists. */
     for (auto & [inputAttrPath, input] : lockedFlake->lockFile.getAllInputs()) {
         if (auto follows = std::get_if<1>(&input)) {
-            if (!follows->empty() && !lockedFlake->lockFile.findInput(lockedFlake->resolveFollows(*follows)))
+            if (!follows->empty() && !lockedFlake->lockFile.findInput(lockedFlake->resolveFollows(state, *follows)))
                 throw Error(
                     "input '%s' follows a non-existent input '%s'",
                     printInputAttrPath(inputAttrPath),
