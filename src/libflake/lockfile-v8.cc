@@ -207,9 +207,10 @@ struct LockFileV8
 
     /**
      * Flatten this lock file into a map from absolute input attribute
-     * paths to lock entries. Inline locks appear under the path of
-     * their containing entry. A colliding top-level (override) entry
-     * shadows an inline entry, matching the precedence of overrides
+     * paths to lock entries. Entries in the nested `locks` of an
+     * entry appear under the path of that entry. If a top-level
+     * (override) entry denotes the same path as a nested entry, the
+     * former takes precedence, matching the precedence of overrides
      * at evaluation time.
      */
     void
@@ -220,10 +221,10 @@ struct LockFileV8
             absPath.insert(absPath.end(), path.get().begin(), path.get().end());
             if (lock.locks)
                 lock.locks->getAllLockEntries(res, absPath);
-            /* Note: this shadows any colliding inline entry, since
-               the entry for the containing input sorts before the
-               override path and thus has been recursed into
-               already. */
+            /* Note: this takes precedence over any nested entry for
+               the same path, since the entry for the containing input
+               sorts before the override path and thus has been
+               recursed into already. */
             res.insert_or_assign(std::move(absPath), lock.lockedRef);
         }
     }
@@ -444,10 +445,10 @@ LockFlakeResult lockFlakeV8(
 
                     /* If so, and this input's transitive inputs are
                        locked here (because it has no lock file of its
-                       own), refetch it and recompute its inline
-                       locks. Otherwise the update path doesn't match
-                       anything we can update, and the caller will
-                       warn about it. */
+                       own), refetch it and recompute its nested
+                       `locks`. Otherwise the update path doesn't
+                       match anything we can update, and the caller
+                       will warn about it. */
                     if (!mustRefetch || !oldLock->locks) {
                         debug("keeping existing input '%s'", absPathS);
                         return oldLock->clone();
