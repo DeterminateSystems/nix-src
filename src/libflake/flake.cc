@@ -456,7 +456,20 @@ std::unique_ptr<LockedFlake> lockFlake(
 
         debug("old lock file: %s", oldLockedFlake->to_string());
 
-        auto lockedFlake = lockFlakeV7(settings, state, lockFlags, std::move(flake), *oldLockedFlake);
+        auto [lockedFlake, overridesUsed, updatesUsed] =
+            lockFlakeV7(settings, state, lockFlags, std::move(flake), *oldLockedFlake);
+
+        for (auto & i : lockFlags.inputOverrides)
+            if (!overridesUsed.count(i.first))
+                warn(
+                    "the flag '--override-input %s %s' does not match any input",
+                    printInputAttrPath(i.first),
+                    i.second);
+
+        if (lockFlags.inputUpdates)
+            for (auto & i : *lockFlags.inputUpdates)
+                if (!updatesUsed.count(i))
+                    warn("'%s' does not match any input of this flake", printInputAttrPath(i));
 
         debug("new lock file: %s", lockedFlake->to_string());
 
@@ -550,7 +563,7 @@ std::unique_ptr<LockedFlake> lockFlake(
             }
         }
 
-        return lockedFlake;
+        return std::move(lockedFlake);
 
     } catch (Error & e) {
         e.addTrace({}, "while updating the lock file of flake '%s'", flakeRefForTrace);
