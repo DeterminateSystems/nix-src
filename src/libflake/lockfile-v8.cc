@@ -258,12 +258,13 @@ struct LockedFlakeV8 : LockedFlake
         throw Error("'%s' is not implemented yet for lock file version 8", what);
     }
 
-    std::map<FlakeId, std::optional<InputAttrPath>> getInputTargets(const InputAttrPath & prefix) const override
+    std::map<FlakeId, std::optional<InputAttrPath>>
+    getInputTargets(EvalState & state, const InputAttrPath & prefix) const override
     {
         notImplemented("getInputTargets");
     }
 
-    std::optional<InputInfo> findInput(const InputAttrPath & path) const override
+    std::optional<InputInfo> findInput(EvalState & state, const InputAttrPath & path) const override
     {
         notImplemented("findInput");
     }
@@ -310,10 +311,260 @@ LockFlakeResult lockFlakeV8(
     EvalState & state,
     const LockFlags & lockFlags,
     Flake flake,
-    const LockedFlake & oldLockFile)
+    const LockedFlake & _oldLockFile)
 {
-    // FIXME: implement the version 8 lock algorithm.
-    throw Error("creating version 8 lock files is not implemented yet");
+    /* The old lock file to reuse entries from. Null if the old lock
+       file is not a version 8 lock file (e.g. when migrating from
+       version 7), or if we're relocking from scratch. Note that
+       updating all inputs (`inputUpdates` = nullopt) ignores the old
+       lock file, but lock file entries can then still be *copied*
+       from dependencies' own lock files. */
+    const LockFileV8 * oldLockFile = nullptr;
+    if (auto old = dynamic_cast<const LockedFlakeV8 *>(&_oldLockFile);
+        old && !lockFlags.recreateLockFile && lockFlags.inputUpdates)
+        oldLockFile = &old->lockFile;
+
+    auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
+    auto useRegistriesInputs = useRegistries ? fetchers::UseRegistries::Limited : fetchers::UseRegistries::No;
+
+    std::set<NonEmptyInputAttrPath> overridesUsed;
+    std::set<InputAttrPath> updatesUsed;
+    std::set<NonEmptyInputAttrPath> explicitCliOverrides;
+
+    /* Apply command line overrides as if they were overrides declared
+       by the top-level flake (`inputs.foo.inputs.bar.url = ...`),
+       creating intermediate override entries as needed. They
+       overwrite any conflicting override in `flake.nix` ("outermost
+       override wins"). Note: overrides of inputs that don't exist at
+       the top level are left unapplied so the caller can warn about
+       them. */
+    for (auto & [path, ref] : lockFlags.inputOverrides) {
+        auto input = get(flake.inputs, path.get().front());
+        if (!input)
+            continue;
+        for (auto & elem : std::views::drop(path.get(), 1))
+            input = &input->overrides[elem];
+        input->ref = ref;
+        input->follows = std::nullopt;
+        overridesUsed.insert(path);
+        explicitCliOverrides.insert(path);
+    }
+
+    LockFileV8 newLockFile;
+
+    std::vector<FlakeRef> parents;
+
+    std::function<void(
+        const FlakeInputs & flakeInputs,
+        LockFileV8 & output,
+        const InputAttrPath & absPrefix,
+        const LockFileV8 * oldLocks,
+        const SourcePath & sourcePath)>
+        computeLocks;
+
+    computeLocks = [&](
+                       /* The declared inputs of the flake being
+                          locked (from its flake.nix). */
+                       const FlakeInputs & flakeInputs,
+                       /* The lock file being computed for this
+                          flake. */
+                       LockFileV8 & output,
+                       /* The absolute input attribute path of this
+                          flake (empty for the top-level flake). */
+                       const InputAttrPath & absPrefix,
+                       /* The old locks, if any, from which locks can
+                          be copied. */
+                       const LockFileV8 * oldLocks,
+                       /* The path of this flake's `flake.nix`. */
+                       const SourcePath & sourcePath) {
+        debug("computing lock file entries for '%s'", printInputAttrPath(absPrefix));
+
+        /* Compute the lock for a single input or override declared by
+           this flake. `relPath` is relative to this flake. Returns
+           std::nullopt for inputs that are not stored in the lock
+           file ('follows' and relative path inputs). */
+        auto createLock = [&](const NonEmptyInputAttrPath & relPath,
+                              const FlakeInput & input) -> std::optional<LockFileV8::Lock> {
+            InputAttrPath absPath(absPrefix);
+            absPath.insert(absPath.end(), relPath.get().begin(), relPath.get().end());
+            auto nonEmptyAbsPath = *NonEmptyInputAttrPath::make(absPath);
+            auto absPathS = printInputAttrPath(absPath);
+            debug("computing input '%s'", absPathS);
+
+            try {
+                updatesUsed.insert(absPath);
+
+                if (input.follows) {
+                    /* 'follows' inputs are not stored in the lock
+                       file; they are resolved at evaluation time from
+                       the flake.nix files. */
+                    if (!input.overrides.empty())
+                        throw Error(
+                            "input '%s' has both 'follows' and overrides for its inputs, which is not supported by lock file version 8",
+                            absPathS);
+                    return std::nullopt;
+                }
+
+                auto ref = input.ref.value_or(
+                    FlakeRef::fromAttrs(
+                        state.fetchSettings, {{"type", "indirect"}, {"id", std::string(relPath.inputName())}}));
+
+                if (auto relativePath = ref.input.isRelative()) {
+                    /* Relative path inputs (e.g. 'path:./foo') are
+                       not stored in the lock file, since they change
+                       along with the flake that declares them. If
+                       they're flakes, they must have a lock file of
+                       their own, which is used at evaluation time. */
+                    SourcePath resolved{
+                        sourcePath.accessor, CanonPath(relativePath->string(), sourcePath.path.parent().value())};
+                    if (input.isFlake && !(resolved / "flake.lock").pathExists())
+                        throw Error(
+                            "relative path input '%s' does not have a lock file; run 'nix flake lock %s' to create it",
+                            absPathS,
+                            resolved);
+                    return std::nullopt;
+                }
+
+                auto explicitUpdate = lockFlags.inputUpdates && lockFlags.inputUpdates->count(nonEmptyAbsPath);
+
+                auto oldLock = oldLocks ? get(oldLocks->locks, relPath) : nullptr;
+
+                if (oldLock && !explicitUpdate && oldLock->originalRef.canonicalize() == ref.canonicalize()) {
+                    /* Copy the input from the old lock file since its
+                       flakeref didn't change. */
+
+                    /* Check whether an explicit update of an input
+                     *below* this one is requested. */
+                    bool mustRefetch = false;
+                    if (lockFlags.inputUpdates) {
+                        auto lb = lockFlags.inputUpdates->lower_bound(nonEmptyAbsPath);
+                        mustRefetch = lb != lockFlags.inputUpdates->end() && lb->get().size() > absPath.size()
+                                      && std::equal(absPath.begin(), absPath.end(), lb->get().begin());
+                    }
+
+                    /* If so, and this input's transitive inputs are
+                       locked here (because it has no lock file of its
+                       own), refetch it and recompute its inline
+                       locks. Otherwise the update path doesn't match
+                       anything we can update, and the caller will
+                       warn about it. */
+                    if (!mustRefetch || !oldLock->locks) {
+                        debug("keeping existing input '%s'", absPathS);
+                        return oldLock->clone();
+                    }
+
+                    auto inputFlake = getFlake(state, oldLock->lockedRef, useRegistriesInputs, absPath, true);
+
+                    LockFileV8::Lock lock(oldLock->originalRef, oldLock->lockedRef);
+                    *lock.sourcePath.lock() = inputFlake.path.parent();
+                    lock.locks = std::make_unique<LockFileV8>();
+                    computeLocks(inputFlake.inputs, *lock.locks, absPath, oldLock->locks.get(), inputFlake.path);
+                    return lock;
+                }
+
+                /* We need to create a new lock file entry. So fetch
+                   this input. */
+                debug("creating new input '%s'", absPathS);
+
+                if (!lockFlags.allowUnlocked && !ref.input.isLocked(state.fetchSettings))
+                    throw Error("cannot update unlocked flake input '%s' in pure mode", absPathS);
+
+                auto useRegistriesInput =
+                    explicitCliOverrides.contains(nonEmptyAbsPath) ? fetchers::UseRegistries::All : useRegistriesInputs;
+
+                if (input.isFlake) {
+                    auto inputFlake = getFlake(state, ref, useRegistriesInput, absPath, true);
+
+                    warnRegistry(absPath, ref, inputFlake.resolvedRef, flake.path);
+
+                    LockFileV8::Lock lock(ref, inputFlake.lockedRef);
+                    *lock.sourcePath.lock() = inputFlake.path.parent();
+
+                    /* If the input doesn't have a lock file of its
+                       own, lock its transitive inputs here, in the
+                       `locks` attribute of this entry. */
+                    if (!inputFlake.lockFilePath().pathExists()) {
+                        /* Guard against circular flake imports. */
+                        for (auto & parent : parents)
+                            if (parent == ref)
+                                throw Error("found circular import of flake '%s'", parent);
+                        parents.push_back(ref);
+                        Finally cleanup([&]() { parents.pop_back(); });
+
+                        lock.locks = std::make_unique<LockFileV8>();
+                        computeLocks(
+                            inputFlake.inputs,
+                            *lock.locks,
+                            absPath,
+                            oldLock && oldLock->locks ? oldLock->locks.get() : nullptr,
+                            inputFlake.path);
+                    }
+
+                    return lock;
+                } else {
+                    auto cachedInput =
+                        state.inputCache->getAccessor(state.fetchSettings, *state.store, ref.input, useRegistriesInput);
+
+                    auto resolvedRef = FlakeRef(std::move(cachedInput.resolvedInput), ref.subdir);
+                    auto lockedRef = FlakeRef(std::move(cachedInput.lockedInput), ref.subdir);
+
+                    warnRegistry(absPath, ref, resolvedRef, flake.path);
+
+                    /* Note: `mountInput()` adds a NAR hash to
+                       `lockedRef.input` if it doesn't have one. */
+                    auto storePath =
+                        state.storePath(state.mountInput(lockedRef.input, ref.input, cachedInput.accessor, true, true));
+
+                    LockFileV8::Lock lock(ref, lockedRef);
+                    *lock.sourcePath.lock() = storePath;
+                    return lock;
+                }
+
+            } catch (Error & e) {
+                e.addTrace({}, "while updating the flake input '%s'", absPathS);
+                throw;
+            }
+        };
+
+        for (auto & [id, input] : flakeInputs) {
+            auto relPath = NonEmptyInputAttrPath::append({}, id);
+
+            if (auto lock = createLock(relPath, input))
+                output.locks.emplace(relPath, std::move(*lock));
+
+            /* Store the overrides declared by this flake for the
+               transitive inputs of this input
+               (e.g. `inputs.foo.inputs.bar.url = ...`), keyed by
+               their path relative to this flake. */
+            [&](this const auto & recurse, const NonEmptyInputAttrPath & prefix, const FlakeInput & input) -> void {
+                for (auto & [id2, override] : input.overrides) {
+                    auto relPath2 = NonEmptyInputAttrPath::append(prefix, id2);
+                    if (override.follows) {
+                        /* 'follows' overrides are not stored; they
+                           are resolved at evaluation time from the
+                           flake.nix files. */
+                        if (!override.overrides.empty())
+                            throw Error(
+                                "input '%s' has both 'follows' and overrides for its inputs, which is not supported by lock file version 8",
+                                printInputAttrPath(relPath2));
+                        continue;
+                    }
+                    if (override.ref)
+                        if (auto lock = createLock(relPath2, override))
+                            output.locks.emplace(relPath2, std::move(*lock));
+                    recurse(relPath2, override);
+                }
+            }(relPath, input);
+        }
+    };
+
+    computeLocks(flake.inputs, newLockFile, {}, oldLockFile, flake.path);
+
+    return {
+        .lockedFlake = std::make_unique<LockedFlakeV8>(std::move(flake), std::move(newLockFile)),
+        .overridesUsed = std::move(overridesUsed),
+        .updatesUsed = std::move(updatesUsed),
+    };
 }
 
 } // namespace nix::flake
