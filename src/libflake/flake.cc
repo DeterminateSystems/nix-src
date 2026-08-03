@@ -421,6 +421,21 @@ Flake getFlake(
     return getFlake(state, originalRef, useRegistries, {}, requireLockable);
 }
 
+std::unique_ptr<LockedFlake> parseLockFile(
+    const fetchers::Settings & fetchSettings,
+    Flake flake,
+    const nlohmann::json & json,
+    std::string_view path,
+    unsigned int versionIfMissing)
+{
+    auto version = json.is_null() ? versionIfMissing : (unsigned int) json.value("version", 0);
+
+    if (version >= 5 && version <= 7)
+        return parseLockFileV7(fetchSettings, std::move(flake), json, path);
+    else
+        throw Error("lock file '%s' has unsupported version %d", path, version);
+}
+
 std::unique_ptr<LockedFlake> lockFlake(
     const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags, Flake flake)
 {
@@ -452,7 +467,7 @@ std::unique_ptr<LockedFlake> lockFlake(
         }
 
         // FIXME: dispatch on the lock file version here.
-        auto oldLockedFlake = parseLockFileV7(state.fetchSettings, flake, oldLockFileJson, fmt("%s", lockFilePath));
+        auto oldLockedFlake = parseLockFile(state.fetchSettings, flake, oldLockFileJson, fmt("%s", lockFilePath));
 
         debug("old lock file: %s", oldLockedFlake->to_string());
 
