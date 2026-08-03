@@ -347,6 +347,27 @@ Flake readFlake(
     const SourcePath & rootDir,
     const InputAttrPath & lockRootPath);
 
+/**
+ * The result of functions like `lockFlakeV7()` that compute a lock
+ * file for a flake.
+ */
+struct LockFlakeResult
+{
+    std::unique_ptr<LockedFlake> lockedFlake;
+
+    /**
+     * The elements of `LockFlags::inputOverrides` that matched an
+     * input of the flake.
+     */
+    std::set<NonEmptyInputAttrPath> overridesUsed;
+
+    /**
+     * The elements of `LockFlags::inputUpdates` that matched an input
+     * of the flake.
+     */
+    std::set<InputAttrPath> updatesUsed;
+};
+
 /*
  * Compute an in-memory lock file for the specified top-level flake, and optionally write it to file, if the flake is
  * writable.
@@ -372,7 +393,7 @@ std::unique_ptr<LockedFlake> parseLockFileV7(
  * `oldLockFile` (which must have been produced by `parseLockFileV7()`)
  * where possible. Note: this does not write the new lock file.
  */
-std::unique_ptr<LockedFlake> lockFlakeV7(
+LockFlakeResult lockFlakeV7(
     const Settings & settings,
     EvalState & state,
     const LockFlags & lockFlags,
