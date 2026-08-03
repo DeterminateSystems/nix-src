@@ -837,6 +837,25 @@ std::vector<FlakeId> LockedFlake::getInputNames(const InputAttrPath & prefix) co
     return res;
 }
 
+void LockedFlake::visit(VisitCallback callback) const
+{
+    if (!callback({}, InputInfo{.lockedRef = flake.lockedRef}))
+        return;
+
+    [&](this const auto & recurse, const InputAttrPath & prefix) -> void {
+        for (auto & [id, target] : getInputTargets(prefix)) {
+            auto inputAttrPath(prefix);
+            inputAttrPath.push_back(id);
+            if (target)
+                callback(inputAttrPath, *target);
+            else if (auto info = findInput(inputAttrPath)) {
+                if (callback(inputAttrPath, *info) && info->isFlake)
+                    recurse(inputAttrPath);
+            }
+        }
+    }({});
+}
+
 std::string LockedFlake::to_string() const
 {
     return toJSON().dump(2);

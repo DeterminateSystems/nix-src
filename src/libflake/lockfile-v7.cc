@@ -493,31 +493,6 @@ struct LockedFlakeV7 : LockedFlake
         return path;
     }
 
-    void visit(VisitCallback callback) const override
-    {
-        if (!callback({}, InputInfo{.lockedRef = flake.lockedRef}))
-            return;
-
-        [&](this const auto & recurse, const InputAttrPath & prefix, ref<Node> node) -> void {
-            for (auto & [id, input] : node->inputs) {
-                auto inputAttrPath(prefix);
-                inputAttrPath.push_back(id);
-                if (auto child = std::get_if<0>(&input)) {
-                    if (callback(
-                            inputAttrPath,
-                            InputInfo{
-                                .lockedRef = (*child)->lockedRef,
-                                .isFlake = (*child)->isFlake,
-                                .buildTime = (*child)->buildTime,
-                            }))
-                        recurse(inputAttrPath, *child);
-                } else if (auto follows = std::get_if<1>(&input)) {
-                    callback(inputAttrPath, *follows);
-                }
-            }
-        }({}, lockFile.root);
-    }
-
     std::optional<FlakeRef> isUnlocked(const fetchers::Settings & fetchSettings) const override
     {
         return lockFile.isUnlocked(fetchSettings);
