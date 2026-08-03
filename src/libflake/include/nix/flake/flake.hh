@@ -453,6 +453,26 @@ LockFlakeResult lockFlakeV7(
     Flake flake,
     const LockedFlake & oldLockFile);
 
+/**
+ * Parse a lock file in the sparse format (version 8). `json` must be
+ * null if the lock file doesn't exist.
+ */
+std::unique_ptr<LockedFlake> parseLockFileV8(
+    const fetchers::Settings & fetchSettings, Flake flake, const nlohmann::json & json, std::string_view path);
+
+/**
+ * Compute a version 8 lock file for `flake`, reusing entries from
+ * `oldLockFile` where possible. If `oldLockFile` was not produced by
+ * `parseLockFileV8()`, it is ignored. Note: this does not write the
+ * new lock file.
+ */
+LockFlakeResult lockFlakeV8(
+    const Settings & settings,
+    EvalState & state,
+    const LockFlags & lockFlags,
+    Flake flake,
+    const LockedFlake & oldLockFile);
+
 void callFlake(EvalState & state, std::shared_ptr<const LockedFlake> lockedFlake, Value & v);
 
 } // namespace flake
