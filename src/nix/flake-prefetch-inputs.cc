@@ -25,11 +25,13 @@ struct CmdFlakePrefetchInputs : FlakeCommand
     {
         auto flake = lockFlake();
 
+        auto state = getEvalState();
+
         /* Gather the attribute paths of all transitive inputs,
            skipping build-time inputs and their dependencies. */
         std::vector<std::pair<flake::InputAttrPath, FlakeRef>> inputs;
 
-        flake->visit([&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
+        flake->visit(*state, [&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
             auto inputInfo = std::get_if<flake::LockedFlake::InputInfo>(&input);
 
             /* Skip "follows" inputs and build-time inputs (and their
@@ -43,8 +45,6 @@ struct CmdFlakePrefetchInputs : FlakeCommand
 
             return true;
         });
-
-        auto state = getEvalState();
 
         /* Fetch the inputs in parallel. */
         ThreadPool pool{fileTransferSettings.httpConnections};

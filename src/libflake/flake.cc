@@ -707,7 +707,7 @@ static void prim_listFlakeInputs(EvalState & state, const PosIdx pos, Value ** a
     auto & lockedFlake = requireLockedFlake(state, *args[0], pos);
     auto prefix = getInputAttrPathArg(state, *args[1], pos);
 
-    auto targets = lockedFlake.getInputTargets(prefix);
+    auto targets = lockedFlake.getInputTargets(state, prefix);
 
     auto attrs = state.buildBindings(targets.size());
 
@@ -747,7 +747,7 @@ static void prim_fetchFlakeInput(EvalState & state, const PosIdx pos, Value ** a
 
     std::optional<LockedFlake::InputInfo> info;
     if (!path.empty()) {
-        info = lockedFlake.findInput(path);
+        info = lockedFlake.findInput(state, path);
         if (!info)
             state.error<EvalError>("flake input '%s' does not exist", printInputAttrPath(path)).atPos(pos).debugThrow();
     }
@@ -779,7 +779,7 @@ static void prim_fetchFlakeInput(EvalState & state, const PosIdx pos, Value ** a
                 /* The parent is the top-level flake. */
                 info2.reset();
             else
-                info2 = lockedFlake.findInput(*info2->parentInputAttrPath);
+                info2 = lockedFlake.findInput(state, *info2->parentInputAttrPath);
         }
 
         emitTreeAttrs(
@@ -830,15 +830,15 @@ void callFlake(EvalState & state, std::shared_ptr<const LockedFlake> lockedFlake
 
 LockedFlake::~LockedFlake() {}
 
-std::vector<FlakeId> LockedFlake::getInputNames(const InputAttrPath & prefix) const
+std::vector<FlakeId> LockedFlake::getInputNames(EvalState & state, const InputAttrPath & prefix) const
 {
     std::vector<FlakeId> res;
-    for (auto & [name, target] : getInputTargets(prefix))
+    for (auto & [name, target] : getInputTargets(state, prefix))
         res.push_back(name);
     return res;
 }
 
-InputAttrPath LockedFlake::resolveFollows(const InputAttrPath & path) const
+InputAttrPath LockedFlake::resolveFollows(EvalState & state, const InputAttrPath & path) const
 {
     std::vector<InputAttrPath> visited;
 
@@ -851,7 +851,7 @@ InputAttrPath LockedFlake::resolveFollows(const InputAttrPath & path) const
         auto name = todo.back();
         todo.pop_back();
 
-        auto targets = getInputTargets(res);
+        auto targets = getInputTargets(state, res);
         auto i = targets.find(name);
 
         if (i == targets.end()) {
@@ -884,18 +884,18 @@ InputAttrPath LockedFlake::resolveFollows(const InputAttrPath & path) const
     return res;
 }
 
-void LockedFlake::visit(VisitCallback callback) const
+void LockedFlake::visit(EvalState & state, VisitCallback callback) const
 {
     if (!callback({}, InputInfo{.lockedRef = flake.lockedRef}))
         return;
 
     [&](this const auto & recurse, const InputAttrPath & prefix) -> void {
-        for (auto & [id, target] : getInputTargets(prefix)) {
+        for (auto & [id, target] : getInputTargets(state, prefix)) {
             auto inputAttrPath(prefix);
             inputAttrPath.push_back(id);
             if (target)
                 callback(inputAttrPath, *target);
-            else if (auto info = findInput(inputAttrPath)) {
+            else if (auto info = findInput(state, inputAttrPath)) {
                 if (callback(inputAttrPath, *info) && info->isFlake)
                     recurse(inputAttrPath);
             }

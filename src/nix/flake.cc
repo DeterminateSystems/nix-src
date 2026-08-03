@@ -265,7 +265,7 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
 
             TreeNode root;
 
-            lockedFlake->visit([&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
+            lockedFlake->visit(*getEvalState(), [&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
                 if (!inputAttrPath.empty()) {
                     auto * node = &root;
                     for (auto & elem : inputAttrPath)
@@ -840,7 +840,7 @@ struct CmdFlakeArchive : FlakeCommand, MixJSON, MixDryRun, MixNoCheckSigs
             return *jsonObj;
         };
 
-        flake->visit([&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
+        flake->visit(*getEvalState(), [&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
             /* Skip "follows" inputs; their targets are visited under
                their own paths. */
             auto inputInfo = std::get_if<flake::LockedFlake::InputInfo>(&input);
