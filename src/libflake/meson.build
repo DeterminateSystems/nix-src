@@ -41,6 +41,7 @@ endforeach
 
 sources = files(
   'config.cc',
+  'diff.cc',
   'flake-primops.cc',
   'flake.cc',
   'flakeref.cc',

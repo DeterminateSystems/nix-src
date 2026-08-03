@@ -479,7 +479,7 @@ std::unique_ptr<LockedFlake> lockFlake(
         auto lockedFlakeJson = lockedFlake->toJSON();
         if (lockedFlakeJson != oldLockedFlake->toJSON() || lockFlags.outputLockFilePath) {
 
-            auto diff = lockedFlake->diff(*oldLockedFlake);
+            auto diff = diffLockedFlakes(*oldLockedFlake, *lockedFlake, false);
 
             if (lockFlags.writeLockFile) {
                 if (sourcePath || lockFlags.outputLockFilePath) {

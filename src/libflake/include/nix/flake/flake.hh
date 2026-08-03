@@ -241,10 +241,25 @@ struct LockedFlake
     virtual std::optional<FlakeRef> isUnlocked(const fetchers::Settings & fetchSettings) const = 0;
 
     /**
-     * Return a human-readable description of the differences between
-     * the (older) `oldLockFile` and the lock file of this flake.
+     * Return the version of this lock file's format (e.g. 7 or 8).
      */
-    virtual std::string diff(const LockedFlake & oldLockFile) const = 0;
+    virtual unsigned int version() const = 0;
+
+    /**
+     * A lock file entry: either the locked flakeref of an input, or,
+     * for "follows" inputs, the input attribute path of the target of
+     * the "follows" (relative to the top-level flake).
+     */
+    using LockEntry = std::variant<FlakeRef, InputAttrPath>;
+
+    /**
+     * Return the contents of this lock file as a map from input
+     * attribute paths to lock entries. If `fetchTransitive` is true,
+     * inputs that have a lock file of their own may be fetched in
+     * order to include their transitive locks; otherwise only the
+     * locks contained in this lock file are returned.
+     */
+    virtual std::map<InputAttrPath, LockEntry> getAllLockEntries(bool fetchTransitive) const = 0;
 
     virtual nlohmann::json toJSON() const = 0;
 
@@ -252,6 +267,16 @@ struct LockedFlake
 };
 
 std::ostream & operator<<(std::ostream & stream, const LockedFlake & lockedFlake);
+
+/**
+ * Return a human-readable description of the differences between two
+ * locked flakes (which may use different lock file versions), e.g.
+ * between the old and new version of a lock file written by
+ * `lockFlake()`. If `fetchTransitive` is true, transitive lock files
+ * may be fetched (see `LockedFlake::getAllLockEntries()`).
+ */
+std::string
+diffLockedFlakes(const LockedFlake & oldLockedFlake, const LockedFlake & newLockedFlake, bool fetchTransitive);
 
 struct LockFlags
 {
