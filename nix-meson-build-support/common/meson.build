@@ -14,7 +14,7 @@ if host_machine.system() == 'cygwin'
   )
 endif
 
-add_project_arguments(
+warning_flags = [
   '-Wdeprecated-copy',
   '-Werror=suggest-override',
   '-Werror=switch',
@@ -27,18 +27,39 @@ add_project_arguments(
   '-Wignored-qualifiers',
   '-Wimplicit-fallthrough',
   '-Wno-deprecated-declarations',
+  '-Wno-interference-size', # Used for C++ ABI only. We don't provide any guarantees about different march tunings.
+  '-Wno-subobject-linkage', # GCC doesn't like unity builds.
+  # Catch brace elision bugs: when WorkerProto::Version changed from `unsigned int`
+  # to `struct { unsigned int major; uint8_t minor; }`, `.version = 16` silently
+  # became `.version = {16, 0}` instead of failing, breaking protocol compatibility
+  # in a subtle way
+  '-Werror=c99-designator',
+]
+
+if meson.project_name() in [
+  'nix-util',
+  'nix-store',
+  'nix-util-c',
+  'nix-store-c',
+  'nix-expr',
+  'nix-expr-c',
+]
+  # Catch vtables with vague linkage. All vtables must have a "key" function to make
+  # sure they are emitted as strong symbols (as required by Itanium ABI). This is needed
+  # in certain cases of dynamic linking, where weak symbols are not always coalesced. Otherwise
+  # typeinfo symbols get duplicated and dynamic_cast/exception handling ends up broken on Darwin's
+  # libc++.
+  # Search for 'virtual void anchor' in the repo to see how this is done.
+  warning_flags += [ '-Werror=weak-vtables' ]
+endif
+
+add_project_arguments(
+  cxx.get_supported_arguments(warning_flags),
   language : 'cpp',
 )
 
 # GCC doesn't benefit much from precompiled headers.
 do_pch = cxx.get_id() == 'clang'
-
-if cxx.get_id() == 'gcc'
-  add_project_arguments(
-    '-Wno-interference-size', # Used for C++ ABI only. We don't provide any guarantees about different march tunings.
-    language : 'cpp',
-  )
-endif
 
 # This is a clang-only option for improving build times.
 # It forces the instantiation of templates in the PCH itself and
@@ -49,11 +70,6 @@ endif
 # instantiations in libutil and libstore.
 if cxx.get_id() == 'clang'
   add_project_arguments('-fpch-instantiate-templates', language : 'cpp')
-  # Catch brace elision bugs: when WorkerProto::Version changed from `unsigned int`
-  # to `struct { unsigned int major; uint8_t minor; }`, `.version = 16` silently
-  # became `.version = {16, 0}` instead of failing, breaking protocol compatibility
-  # in a subtle way
-  add_project_arguments('-Werror=c99-designator', language : 'cpp')
 endif
 
 # Detect if we're using libstdc++ (GCC's standard library)
@@ -76,9 +92,6 @@ if is_using_libstdcxx
   add_project_arguments('-D_GLIBCXX_USE_TBB_PAR_BACKEND=0', language : 'cpp')
 endif
 
-# Darwin ld doesn't like "X.Y.ZpreABCD+W"
-nix_soversion = meson.project_version().split('+')[0].split('pre')[0]
-
 cxx = meson.get_compiler('cpp')
 
 # Clang does not support prelinking on static builds
@@ -91,3 +104,6 @@ endif
 subdir('assert-fail')
 subdir('asan-options')
 subdir('cxa-throw')
+if not meson.is_subproject()
+  subdir('clang-tidy')
+endif

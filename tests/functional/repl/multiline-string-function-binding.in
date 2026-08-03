@@ -1,3 +1,4 @@
+# COM: Multi-line string in function call binding (issue #15801)
 f = x: x
 y = f ''
   world

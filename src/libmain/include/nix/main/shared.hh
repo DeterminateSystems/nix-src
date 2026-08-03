@@ -28,7 +28,7 @@ void parseCmdLine(
 
 std::string version();
 
-void printVersion(const std::string & programName);
+[[noreturn]] void printVersion(const std::string & programName);
 
 /**
  * Ugh.  No better place to put this.

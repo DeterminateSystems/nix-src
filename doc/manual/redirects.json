@@ -283,7 +283,7 @@
         "string-literal": "string-literals.html"
     },
     "language/derivations.html": {
-        "builder-execution": "../store/building.html#builder-execution"
+        "builder-execution": "../store/building.html"
     },
     "installation/installing-binary.html": {
         "uninstalling": "uninstall.html"
@@ -297,7 +297,6 @@
         "debugging-failing-functional-tests": "testing.html#debugging-failing-functional-tests",
         "integration-tests": "testing.html#integration-tests",
         "installer-tests": "testing.html#installer-tests",
-        "one-time-setup": "testing.html#one-time-setup",
         "using-the-ci-generated-installer-for-manual-testing":
             "testing.html#using-the-ci-generated-installer-for-manual-testing",
         "characterization-testing": "testing.html#characterisation-testing-unit",
@@ -306,6 +305,9 @@
         "build-process": "contributing.html#build-process",
         "reverting": "contributing.html#reverting",
         "branches": "contributing.html#branches"
+    },
+    "store/store-path.html": {
+        "store-directory": "#store-directory-path"
     },
     "glossary.html": {
         "gloss-local-store": "store/types/local-store.html",

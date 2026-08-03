@@ -24,7 +24,14 @@ class RemoteFSAccessor;
 
 struct RemoteStoreConfig : virtual StoreConfig
 {
-    using StoreConfig::StoreConfig;
+private:
+    void anchor() override;
+
+public:
+    RemoteStoreConfig(const Params & params, FilePathType pathType)
+        : StoreConfig(params, pathType)
+    {
+    }
 
     Setting<int> maxConnections{
         this, 64, "max-connections", "Maximum number of concurrent connections to the Nix daemon."};
@@ -45,6 +52,10 @@ struct RemoteStore : public virtual Store,
                      public virtual LogStore,
                      public virtual QueryActiveBuildsStore
 {
+private:
+    void anchor() override;
+
+public:
     using Config = RemoteStoreConfig;
 
     const Config & config;
@@ -61,6 +72,10 @@ struct RemoteStore : public virtual Store,
 
     void queryPathInfoUncached(
         const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override;
+
+    asio::awaitable<void> queryPathInfos(
+        const std::set<StorePath> & paths,
+        fun<void(std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>>)> callback) override;
 
     void queryReferrers(const StorePath & path, StorePathSet & referrers) override;
 
@@ -121,7 +136,7 @@ struct RemoteStore : public virtual Store,
 
     void ensurePath(const StorePath & path) override;
 
-    void addTempRoot(const StorePath & path) override;
+    void addTempRoots(const StorePathSet & paths) override;
 
     Roots findRoots(bool censor) override;
 

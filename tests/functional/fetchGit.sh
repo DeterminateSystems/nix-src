@@ -4,15 +4,11 @@ source common.sh
 
 requireGit
 
-clearStoreIfPossible
-
 # Intentionally not in a canonical form
 # See https://github.com/NixOS/nix/issues/6195
 repo=$TEST_ROOT/./git
 
 export _NIX_FORCE_HTTP=1
-
-rm -rf "${repo}"-tmp "$TEST_HOME"/.cache/nix "$TEST_ROOT"/worktree "$TEST_ROOT"/minimal
 
 createGitRepo "$repo"
 
@@ -35,7 +31,7 @@ nix-instantiate --eval -E "builtins.readFile ((builtins.fetchGit \"file://$TEST_
 
 # Fetch a worktree.
 unset _NIX_FORCE_HTTP
-expectStderr 0 nix eval -vvvv --impure --raw --expr "(builtins.fetchGit \"file://$TEST_ROOT/worktree\").outPath" | grepQuiet "copying '$TEST_ROOT/worktree/' to the store"
+expectStderr 0 nix eval -vvvv --impure --raw --expr "(builtins.fetchGit \"file://$TEST_ROOT/worktree\").outPath" | grepQuiet "copying '$TEST_ROOT/worktree' to the store"
 path0=$(nix eval --impure --raw --expr "(builtins.fetchGit \"file://$TEST_ROOT/worktree\").outPath")
 path0_=$(nix eval --impure --raw --expr "(builtins.fetchTree { type = \"git\"; url = \"file://$TEST_ROOT/worktree\"; }).outPath")
 [[ $path0 = "$path0_" ]]

@@ -22,4 +22,19 @@ TEST(readNum, negativeValuesSerialiseWellDefined)
     EXPECT_EQ(readNum<uint64_t>(*makeNumSource(int16_t(-1))), std::numeric_limits<uint64_t>::max());
 }
 
+TEST(readPadding, works)
+{
+    for (unsigned i = 0; i < 8; ++i)
+        EXPECT_NO_THROW(readPadding(i, *makeNumSource(0)));
+
+    for (unsigned len = 1; len < 8; ++len) {
+        EXPECT_THROW(readPadding(len, *makeNumSource(~uint64_t(0))), SerialisationError);
+        unsigned padLen = 8 - len;
+        for (unsigned byte = 0; byte < padLen; ++byte) {
+            uint64_t val = uint64_t{1} << (8 * byte);
+            EXPECT_THROW(readPadding(len, *makeNumSource(val)), SerialisationError);
+        }
+    }
+}
+
 } // namespace nix

@@ -5,7 +5,6 @@
 #include "nix/expr/parallel-eval.hh"
 
 #include <cstdlib>
-#include <iomanip>
 #include <nlohmann/json.hpp>
 
 namespace nix {
@@ -29,8 +28,8 @@ static void parallelForceDeep(EvalState & state, Value & v, PosIdx pos)
         if (v.attrs()->get(state.s.outPath))
             return;
         for (auto & a : *v.attrs())
-            state.addWork(work, 0, [value(allocRootValue(a.value)), pos(a.pos), &state]() {
-                parallelForceDeep(state, **value, pos);
+            state.addWork(work, 0, [value(std::make_shared<RootValue>(a.value)), pos(a.pos), &state]() {
+                parallelForceDeep(state, ***value, pos);
             });
         break;
     }
@@ -145,6 +144,8 @@ json printValueAsJSON(
 
     return res;
 }
+
+void JSONSerializationError::anchor() {}
 
 void printValueAsJSON(
     EvalState & state,

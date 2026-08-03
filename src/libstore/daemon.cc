@@ -3,7 +3,6 @@
 #include "nix/store/worker-protocol.hh"
 #include "nix/store/worker-protocol-connection.hh"
 #include "nix/store/worker-protocol-impl.hh"
-#include "nix/store/build-result.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/store-cast.hh"
 #include "nix/store/filetransfer.hh"
@@ -16,11 +15,13 @@
 #include "nix/util/archive.hh"
 #include "nix/store/derivations.hh"
 #include "nix/util/args.hh"
-#include "nix/util/git.hh"
 #include "nix/util/logging.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/active-builds.hh"
 #include "nix/util/provenance.hh"
+#include "nix/util/async.hh"
+
+#include <variant>
 
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
 #  include "nix/util/monitor-fd.hh"
@@ -45,6 +46,8 @@ Sink & operator<<(Sink & sink, const Logger::Fields & fields)
     return sink;
 }
 
+namespace {
+
 /* Logger that forwards log messages to the client, *if* we're in a
    state where the protocol allows it (i.e., when canSendStderr is
    true). */
@@ -68,7 +71,7 @@ struct TunnelLogger : public Logger
     {
     }
 
-    void enqueueMsg(const std::string & s)
+    void enqueueMsg(const std::string & s) noexcept
     {
         auto state(state_.lock());
 
@@ -79,15 +82,18 @@ struct TunnelLogger : public Logger
                 to.flush();
             } catch (...) {
                 /* Write failed; that means that the other side is
-                   gone. */
+                   gone, so stop sending it messages. Note that we
+                   don't propagate the error, since logging must not
+                   throw. The client's death will be detected
+                   elsewhere (e.g. by `MonitorFdHup` or by the next
+                   protocol read/write). */
                 state->canSendStderr = false;
-                throw;
             }
         } else
             state->pendingMsgs.push_back(s);
     }
 
-    void log(Verbosity lvl, std::string_view s) override
+    void log(Verbosity lvl, std::string_view s) noexcept override
     {
         if (lvl > verbosity)
             return;
@@ -97,7 +103,7 @@ struct TunnelLogger : public Logger
         enqueueMsg(buf.s);
     }
 
-    void logEI(const ErrorInfo & ei) override
+    void logEI(const ErrorInfo & ei) noexcept override
     {
         if (ei.level > verbosity)
             return;
@@ -150,7 +156,7 @@ struct TunnelLogger : public Logger
         ActivityType type,
         const std::string & s,
         const Fields & fields,
-        ActivityId parent) override
+        ActivityId parent) noexcept override
     {
         if (clientVersion.number < WorkerProto::Version::Number{1, 20}) {
             if (!s.empty())
@@ -163,7 +169,7 @@ struct TunnelLogger : public Logger
         enqueueMsg(buf.s);
     }
 
-    void stopActivity(ActivityId act) override
+    void stopActivity(ActivityId act) noexcept override
     {
         if (clientVersion.number < WorkerProto::Version::Number{1, 20})
             return;
@@ -172,29 +178,13 @@ struct TunnelLogger : public Logger
         enqueueMsg(buf.s);
     }
 
-    void result(ActivityId act, ResultType type, const Fields & fields) override
+    void result(ActivityId act, ResultType type, const Fields & fields) noexcept override
     {
         if (clientVersion.number < WorkerProto::Version::Number{1, 20})
             return;
         StringSink buf;
         buf << STDERR_RESULT << act << type << fields;
         enqueueMsg(buf.s);
-    }
-};
-
-struct TunnelSink : Sink
-{
-    Sink & to;
-
-    TunnelSink(Sink & to)
-        : to(to)
-    {
-    }
-
-    void operator()(std::string_view data) override
-    {
-        to << STDERR_WRITE;
-        writeString(data, to);
     }
 };
 
@@ -219,6 +209,8 @@ struct TunnelSource : BufferedSource
         return n;
     }
 };
+
+} // namespace
 
 struct ClientSettings
 {
@@ -299,10 +291,9 @@ struct ClientSettings
                     trusted || name == settings.getWorkerSettings().buildTimeout.name
                     || name == settings.getWorkerSettings().maxSilentTime.name
                     || name == settings.getWorkerSettings().pollInterval.name || name == "connect-timeout"
-                    || name == loggerSettings.sessionId.name || (name == "builders" && value == "")) {
+                    || name == loggerSettings.sessionId.name || (name == "builders" && value == ""))
                     settings.set(name, value);
-                    fileTransferSettings.set(name, value);
-                } else if (setSubstituters(settings.getWorkerSettings().substituters))
+                else if (setSubstituters(settings.getWorkerSettings().substituters))
                     ;
                 else
                     warn(
@@ -695,6 +686,15 @@ static void performOp(
         break;
     }
 
+    case WorkerProto::Op::AddTempRoots: {
+        auto paths = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
+        logger->startWork();
+        store->addTempRoots(paths);
+        logger->stopWork();
+        conn.to << 1;
+        break;
+    }
+
     case WorkerProto::Op::AddPermRoot: {
         if (!trusted)
             throw Error(
@@ -754,13 +754,31 @@ static void performOp(
     case WorkerProto::Op::CollectGarbage: {
         GCOptions options;
         options.action = WorkerProto::Serialise<GCOptions::GCAction>::read(*store, rconn);
-        options.pathsToDelete = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
+        if (rconn.version.features.contains(WorkerProto::featureDeleteDeadSpecificReferrers)) {
+            options.pathsToDelete = WorkerProto::Serialise<GCOptions::GCPaths>::read(*store, rconn);
+        } else {
+            auto paths = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
+            if (options.action != GCAction::gcDeleteSpecific && paths.empty())
+                options.pathsToDelete = GCOptions::WholeStore{};
+            else
+                options.pathsToDelete = GCOptions::SpecificPaths{
+                    .paths = paths,
+                    .deleteReferrers = false,
+                };
+        }
         conn.from >> options.ignoreLiveness >> options.maxFreed;
         options.censor = !trusted;
         // obsolete fields
         readInt(conn.from);
         readInt(conn.from);
         readInt(conn.from);
+
+        if (options.action == GCAction::gcDeleteDead
+            && std::holds_alternative<GCOptions::SpecificPaths>(options.pathsToDelete)
+            && !conn.protoVersion.features.contains(WorkerProto::featureDeleteDeadSpecificReferrers)) {
+            throw Error(
+                "Garbage collecting specific paths requested but it is not supported by the negotiated protocol");
+        }
 
         GCResults results;
 
@@ -877,6 +895,37 @@ static void performOp(
         break;
     }
 
+    case WorkerProto::Op::QueryPathInfos: {
+        auto paths = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
+        logger->startWork();
+        std::vector<ValidPathInfo> infos;
+        {
+            asio::io_context ctx;
+            std::exception_ptr ex;
+            asio::co_spawn(
+                ctx,
+                [&]() -> asio::awaitable<void> {
+                    co_await store->queryPathInfos(
+                        paths, [&](std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>> results) {
+                            for (auto & [path, info] : results)
+                                if (info)
+                                    infos.push_back(*info);
+                        });
+                },
+                [&](std::exception_ptr e) { ex = e; });
+            ctx.run();
+            if (ex)
+                std::rethrow_exception(ex);
+        }
+        logger->stopWork();
+        /* Write the infos for the valid paths. Paths not reported are
+           invalid. */
+        conn.to << infos.size();
+        for (auto & info : infos)
+            WorkerProto::write(*store, wconn, info);
+        break;
+    }
+
     case WorkerProto::Op::OptimiseStore:
         logger->startWork();
         store->optimiseStore();
@@ -981,14 +1030,8 @@ static void performOp(
 
     case WorkerProto::Op::RegisterDrvOutput: {
         logger->startWork();
-        if (conn.protoVersion.number < WorkerProto::Version::Number{1, 31}) {
-            auto outputId = WorkerProto::Serialise<DrvOutput>::read(*store, rconn);
-            auto outputPath = StorePath(readString(conn.from));
-            store->registerDrvOutput(Realisation{{.outPath = outputPath}, outputId});
-        } else {
-            auto realisation = WorkerProto::Serialise<Realisation>::read(*store, rconn);
-            store->registerDrvOutput(realisation);
-        }
+        auto realisation = WorkerProto::Serialise<Realisation>::read(*store, rconn);
+        store->registerDrvOutput(realisation);
         logger->stopWork();
         break;
     }
@@ -996,19 +1039,16 @@ static void performOp(
     case WorkerProto::Op::QueryRealisation: {
         logger->startWork();
         auto outputId = WorkerProto::Serialise<DrvOutput>::read(*store, rconn);
-        auto info = store->queryRealisation(outputId);
+        auto ptr = store->queryRealisation(outputId);
+        std::optional<UnkeyedRealisation> info;
+        if (ptr)
+            info = *ptr;
         logger->stopWork();
-        if (conn.protoVersion.number < WorkerProto::Version::Number{1, 31}) {
-            std::set<StorePath> outPaths;
-            if (info)
-                outPaths.insert(info->outPath);
-            WorkerProto::write(*store, wconn, outPaths);
-        } else {
-            std::set<Realisation> realisations;
-            if (info)
-                realisations.insert({*info, outputId});
-            WorkerProto::write(*store, wconn, realisations);
-        }
+        /* Only return the new format because if we got past
+           `DrvOutput` serialization, we know that is what we're using.
+           */
+        assert(conn.protoVersion.features.contains(WorkerProto::featureRealisationWithPath));
+        WorkerProto::write(*store, wconn, info);
         break;
     }
 
@@ -1062,11 +1102,14 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
 #endif
 
     /* Exchange the greeting. */
-    WorkerProto::BasicServerConnection conn;
-    auto version = WorkerProto::latest;
+    auto localVersion = WorkerProto::latest;
+    if (recursive)
+        localVersion.features.insert(std::string{WorkerProto::featureDisableSetOptions});
     if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
-        version.features.erase(std::string(WorkerProto::featureProvenance));
-    conn.protoVersion = WorkerProto::BasicServerConnection::handshake(to, from, version);
+        localVersion.features.erase(std::string(WorkerProto::featureProvenance));
+
+    WorkerProto::BasicServerConnection conn;
+    conn.protoVersion = WorkerProto::BasicServerConnection::handshake(to, from, localVersion);
 
     if (conn.protoVersion.number < WorkerProto::minimum.number)
         throw Error("the Nix client version is too old");

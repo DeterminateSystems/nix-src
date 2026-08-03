@@ -1,11 +1,10 @@
 #include "nix/store/derivations.hh"
-#include "nix/util/fun.hh"
+#include "nix/store/outputs-query.hh"
 #include "nix/store/parsed-derivations.hh"
 #include "nix/store/derivation-options.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/store-open.hh"
 #include "nix/store/nar-info.hh"
-#include "nix/util/thread-pool.hh"
 #include "nix/store/realisation.hh"
 #include "nix/util/topo-sort.hh"
 #include "nix/util/callback.hh"
@@ -19,15 +18,11 @@
 namespace nix {
 
 void Store::computeFSClosure(
-    const StorePathSet & startPaths,
-    StorePathSet & paths_,
-    bool flipDirection,
-    bool includeOutputs,
-    bool includeDerivers)
+    const StorePathSet & startPaths, StorePathSet & out, bool flipDirection, bool includeOutputs, bool includeDerivers)
 {
-    std::function<asio::awaitable<StorePathSet>(const StorePath & path)> queryDeps;
-    if (flipDirection)
-        queryDeps = [this, includeOutputs, includeDerivers](const StorePath & path) -> asio::awaitable<StorePathSet> {
+    if (flipDirection) {
+        std::function<asio::awaitable<StorePathSet>(const StorePath & path)> queryDeps =
+            [this, includeOutputs, includeDerivers](const StorePath & path) -> asio::awaitable<StorePathSet> {
             StorePathSet res;
             StorePathSet referrers;
             queryReferrers(path, referrers);
@@ -45,27 +40,72 @@ void Store::computeFSClosure(
                         res.insert(*maybeOutPath);
             co_return res;
         };
-    else
-        queryDeps = [this, includeOutputs, includeDerivers](const StorePath & path) -> asio::awaitable<StorePathSet> {
-            StorePathSet res;
-            auto info = co_await callbackToAwaitable<ref<const ValidPathInfo>>(
-                [this, path](Callback<ref<const ValidPathInfo>> cb) { queryPathInfo(path, std::move(cb)); });
+        computeClosure<StorePath>(startPaths, out, GetEdgesAsync<StorePath>(queryDeps));
+    } else {
 
-            for (auto & ref : info->references)
-                if (ref != path)
-                    res.insert(ref);
+        asio::io_context ctx;
+        std::exception_ptr ex;
 
-            if (includeOutputs && path.isDerivation())
-                for (auto & [_, maybeOutPath] : queryPartialDerivationOutputMap(path))
-                    if (maybeOutPath && isValidPath(*maybeOutPath))
-                        res.insert(*maybeOutPath);
+        StorePathSet required, done;
 
-            if (includeDerivers && info->deriver && isValidPath(*info->deriver))
-                res.insert(*info->deriver);
-            co_return res;
+        std::function<asio::awaitable<void>(StorePathSet)> doPaths;
+        doPaths = [&](StorePathSet paths) -> asio::awaitable<void> {
+            StorePathSet batch;
+            for (auto & path : std::exchange(paths, {}))
+                if (done.insert(path).second)
+                    batch.insert(path);
+
+            auto executor = co_await asio::this_coro::executor;
+
+            co_await queryPathInfos(
+                batch, [&](std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>> infos) {
+                    StorePathSet todo;
+
+                    for (auto & [path, info] : infos) {
+                        if (!info) {
+                            if (required.contains(path))
+                                throw InvalidPath("path '%s' is not valid", printStorePath(path));
+                            continue;
+                        }
+
+                        out.insert(path);
+
+                        for (auto & ref : info->references)
+                            if (ref != path) {
+                                required.insert(ref);
+                                todo.insert(ref);
+                            }
+
+                        if (includeOutputs && path.isDerivation())
+                            // FIXME: need an async, multiple-path version of queryPartialDerivationOutputMap().
+                            for (auto & [_, maybeOutPath] : queryPartialDerivationOutputMap(path))
+                                if (maybeOutPath)
+                                    todo.insert(*maybeOutPath);
+
+                        if (includeDerivers && info->deriver)
+                            todo.insert(*info->deriver);
+
+                        // FIXME: process partialClosure when we merge
+                        // https://github.com/DeterminateSystems/nix-src/pull/523.
+                    }
+
+                    if (!todo.empty())
+                        asio::co_spawn(executor, std::bind(doPaths, todo), [&](std::exception_ptr e) {
+                            if (e)
+                                ex = e;
+                        });
+                });
         };
 
-    computeClosure<StorePath>(startPaths, paths_, GetEdgesAsync<StorePath>(queryDeps));
+        asio::co_spawn(ctx, std::bind(doPaths, startPaths), [&](std::exception_ptr e) {
+            if (e)
+                ex = e;
+        });
+
+        ctx.run();
+        if (ex)
+            std::rethrow_exception(ex);
+    }
 }
 
 void Store::computeFSClosure(
@@ -150,7 +190,7 @@ querySubstitutablePathInfosAsync(Store & store, const StorePathCAMap & paths, Su
         }
         if (lastStoresException.has_value()) {
             if (!settings.getWorkerSettings().tryFallback) {
-                throw *lastStoresException;
+                throw std::move(*lastStoresException);
             } else
                 logError(lastStoresException->info());
         }
@@ -244,17 +284,16 @@ MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
 
                         // If there are unknown output paths, attempt to find if the
                         // paths are known to substituters through a realisation.
-                        auto outputHashes = staticOutputHashes(*this, *drv);
                         knownOutputPaths = true;
 
-                        for (auto [outputName, hash] : outputHashes) {
+                        for (auto & [outputName, _] : drv->outputs) {
                             if (!bfd.outputs.contains(outputName))
                                 continue;
 
                             bool found = false;
                             for (auto & sub : getDefaultSubstituters()) {
                                 /* TODO: Asyncify this. */
-                                auto realisation = sub->queryRealisation({hash, outputName});
+                                auto realisation = sub->queryRealisation({drvPath, outputName});
                                 if (!realisation)
                                     continue;
                                 found = true;
@@ -363,7 +402,7 @@ OutputPathMap resolveDerivedPath(Store & store, const DerivedPath::Built & bfd, 
 {
     auto drvPath = resolveDerivedPath(store, *bfd.drvPath, evalStore_);
 
-    auto outputsOpt_ = store.queryPartialDerivationOutputMap(drvPath, evalStore_);
+    auto outputsOpt_ = deepQueryPartialDerivationOutputMap(store, drvPath, evalStore_);
 
     auto outputsOpt = std::visit(
         overloaded{
@@ -391,7 +430,7 @@ OutputPathMap resolveDerivedPath(Store & store, const DerivedPath::Built & bfd, 
     OutputPathMap outputs;
     for (auto & [outputName, outputPathOpt] : outputsOpt) {
         if (!outputPathOpt)
-            throw MissingRealisation(bfd.drvPath->to_string(store), outputName);
+            throw MissingRealisation(store, *bfd.drvPath, drvPath, outputName);
         auto & outputPath = *outputPathOpt;
         outputs.insert_or_assign(outputName, outputPath);
     }
@@ -400,23 +439,15 @@ OutputPathMap resolveDerivedPath(Store & store, const DerivedPath::Built & bfd, 
 
 StorePath resolveDerivedPath(Store & store, const SingleDerivedPath & req, Store * evalStore_)
 {
-    auto & evalStore = evalStore_ ? *evalStore_ : store;
-
     return std::visit(
         overloaded{
             [&](const SingleDerivedPath::Opaque & bo) { return bo.path; },
             [&](const SingleDerivedPath::Built & bfd) {
                 auto drvPath = resolveDerivedPath(store, *bfd.drvPath, evalStore_);
-                auto outputPaths = evalStore.queryPartialDerivationOutputMap(drvPath, evalStore_);
-                if (outputPaths.count(bfd.output) == 0)
-                    throw Error(
-                        "derivation '%s' does not have an output named '%s'",
-                        store.printStorePath(drvPath),
-                        bfd.output);
-                auto & optPath = outputPaths.at(bfd.output);
-                if (!optPath)
-                    throw MissingRealisation(bfd.drvPath->to_string(store), bfd.output);
-                return *optPath;
+                auto outPath = deepQueryPartialDerivationOutput(store, drvPath, bfd.output, evalStore_);
+                if (!outPath)
+                    throw MissingRealisation(store, *bfd.drvPath, drvPath, bfd.output);
+                return *outPath;
             },
         },
         req.raw());
@@ -425,7 +456,7 @@ StorePath resolveDerivedPath(Store & store, const SingleDerivedPath & req, Store
 OutputPathMap resolveDerivedPath(Store & store, const DerivedPath::Built & bfd)
 {
     auto drvPath = resolveDerivedPath(store, *bfd.drvPath);
-    auto outputMap = store.queryDerivationOutputMap(drvPath);
+    auto outputMap = deepQueryDerivationOutputMap(store, drvPath);
     auto outputsLeft = std::visit(
         overloaded{
             [&](const OutputsSpec::All &) { return StringSet{}; },

@@ -7,6 +7,8 @@
 
 namespace nix {
 
+void EvalSettings::anchor() {}
+
 void DeprecatedWarnSetting::assign(const bool & v)
 {
     value = v;
@@ -70,7 +72,7 @@ Strings EvalSettings::parseNixPath(const std::string & s)
 }
 
 EvalSettings::EvalSettings(bool & readOnlyMode, EvalSettings::LookupPathHooks lookupPathHooks)
-    : readOnlyMode{readOnlyMode}
+    : readOnlyMode{&readOnlyMode}
     , lookupPathHooks{lookupPathHooks}
 {
     auto var = getEnv("NIX_ABORT_ON_WARN");

@@ -17,7 +17,9 @@
 namespace nix {
 
 Worker::Worker(Store & store, Store & evalStore)
-    : act(*logger, actRealise)
+    /* Can't use make_ref, because the constructor is private. */
+    : wakerState(ref<Waker>(new Waker{}))
+    , act(*logger, actRealise)
     , actDerivations(*logger, actBuilds)
     , actSubstitutions(*logger, actCopyPaths)
 #ifdef _WIN32
@@ -33,6 +35,7 @@ Worker::Worker(Store & store, Store & evalStore)
 #ifdef _WIN32
     if (!ioport)
         throw windows::WinError("CreateIoCompletionPort");
+    wakerState->ioport = ioport.get();
 #endif
     nrLocalBuilds = 0;
     nrSubstitutions = 0;
@@ -58,7 +61,7 @@ std::shared_ptr<G> Worker::initGoalIfNeeded(std::weak_ptr<G> & goal_weak, Args &
     if (auto goal = goal_weak.lock())
         return goal;
 
-    auto goal = std::make_shared<G>(args...);
+    auto goal = std::make_shared<G>(std::forward<Args>(args)...);
     goal_weak = goal;
     wakeUp(goal);
     return goal;
@@ -85,25 +88,32 @@ std::shared_ptr<DerivationTrampolineGoal> Worker::makeDerivationTrampolineGoal(
 
 std::shared_ptr<DerivationGoal> Worker::makeDerivationGoal(
     const StorePath & drvPath,
-    const Derivation & drv,
+    ref<const Derivation> drv,
     const OutputName & wantedOutput,
     BuildMode buildMode,
     bool storeDerivation)
 {
     return initGoalIfNeeded(
-        derivationGoals[drvPath][wantedOutput], drvPath, drv, wantedOutput, *this, buildMode, storeDerivation);
+        derivationGoals[drvPath][wantedOutput],
+        drvPath,
+        std::move(drv),
+        wantedOutput,
+        *this,
+        buildMode,
+        storeDerivation);
 }
 
 std::shared_ptr<DerivationResolutionGoal>
-Worker::makeDerivationResolutionGoal(const StorePath & drvPath, const Derivation & drv, BuildMode buildMode)
+Worker::makeDerivationResolutionGoal(const StorePath & drvPath, ref<const Derivation> drv, BuildMode buildMode)
 {
     return initGoalIfNeeded(derivationResolutionGoals[drvPath], drvPath, drv, *this, buildMode);
 }
 
 std::shared_ptr<DerivationBuildingGoal> Worker::makeDerivationBuildingGoal(
-    const StorePath & drvPath, const Derivation & drv, BuildMode buildMode, bool storeDerivation)
+    const StorePath & drvPath, ref<const Derivation> drv, BuildMode buildMode, bool storeDerivation)
 {
-    return initGoalIfNeeded(derivationBuildingGoals[drvPath], drvPath, drv, *this, buildMode, storeDerivation);
+    return initGoalIfNeeded(
+        derivationBuildingGoals[drvPath], drvPath, std::move(drv), *this, buildMode, storeDerivation);
 }
 
 std::shared_ptr<PathSubstitutionGoal> Worker::makePathSubstitutionGoal(
@@ -131,64 +141,31 @@ GoalPtr Worker::makeGoal(const DerivedPath & req, BuildMode buildMode)
         req.raw());
 }
 
-/**
- * This function is polymorphic (both via type parameters and
- * overloading) and recursive in order to work on a various types of
- * trees
- *
- * @return Whether the tree node we are processing is not empty / should
- * be kept alive. In the case of this overloading the node in question
- * is the leaf, the weak reference itself. If the weak reference points
- * to the goal we are looking for, our caller can delete it. In the
- * inductive case where the node is an interior node, we'll likewise
- * return whether the interior node is non-empty. If it is empty
- * (because we just deleted its last child), then our caller can
- * likewise delete it.
- */
-template<typename G>
-static bool removeGoal(std::shared_ptr<G> goal, std::weak_ptr<G> & gp)
-{
-    return gp.lock() != goal;
-}
-
-template<typename K, typename G, typename Inner>
-static bool removeGoal(std::shared_ptr<G> goal, std::map<K, Inner> & goalMap)
-{
-    /* !!! inefficient */
-    for (auto i = goalMap.begin(); i != goalMap.end();) {
-        if (!removeGoal(goal, i->second))
-            i = goalMap.erase(i);
-        else
-            ++i;
-    }
-    return !goalMap.empty();
-}
-
-template<typename G>
-static bool
-removeGoal(std::shared_ptr<G> goal, typename DerivedPathMap<std::map<OutputsSpec, std::weak_ptr<G>>>::ChildNode & node)
-{
-    bool valueKeep = removeGoal(goal, node.value);
-    bool childMapKeep = removeGoal(goal, node.childMap);
-    return valueKeep || childMapKeep;
-}
-
 void Worker::removeGoal(GoalPtr goal)
 {
-    if (auto drvGoal = std::dynamic_pointer_cast<DerivationTrampolineGoal>(goal))
-        nix::removeGoal(drvGoal, derivationTrampolineGoals.map);
-    else if (auto drvGoal = std::dynamic_pointer_cast<DerivationGoal>(goal))
-        nix::removeGoal(drvGoal, derivationGoals);
-    else if (auto drvResolutionGoal = std::dynamic_pointer_cast<DerivationResolutionGoal>(goal))
-        nix::removeGoal(drvResolutionGoal, derivationResolutionGoals);
-    else if (auto drvBuildingGoal = std::dynamic_pointer_cast<DerivationBuildingGoal>(goal))
-        nix::removeGoal(drvBuildingGoal, derivationBuildingGoals);
-    else if (auto subGoal = std::dynamic_pointer_cast<PathSubstitutionGoal>(goal))
-        nix::removeGoal(subGoal, substitutionGoals);
-    else if (auto subGoal = std::dynamic_pointer_cast<DrvOutputSubstitutionGoal>(goal))
-        nix::removeGoal(subGoal, drvOutputSubstitutionGoals);
-    else
-        assert(false);
+    if (auto drvGoal = std::dynamic_pointer_cast<DerivationTrampolineGoal>(goal)) {
+        derivationTrampolineGoals.removeSlot(*drvGoal->drvReq, [&](auto & node) {
+            node.value.erase(drvGoal->wantedOutputs);
+            /* Return true if ancestors don't need to be pruned. */
+            return !node.value.empty();
+        });
+    } else if (auto drvGoal = std::dynamic_pointer_cast<DerivationGoal>(goal)) {
+        if (auto it = derivationGoals.find(drvGoal->drvPath); it != derivationGoals.end()) {
+            it->second.erase(drvGoal->wantedOutput);
+            if (it->second.empty())
+                derivationGoals.erase(it);
+        }
+    } else if (auto drvResolutionGoal = std::dynamic_pointer_cast<DerivationResolutionGoal>(goal)) {
+        derivationResolutionGoals.erase(drvResolutionGoal->drvPath);
+    } else if (auto drvBuildingGoal = std::dynamic_pointer_cast<DerivationBuildingGoal>(goal)) {
+        derivationBuildingGoals.erase(drvBuildingGoal->drvPath);
+    } else if (auto subGoal = std::dynamic_pointer_cast<PathSubstitutionGoal>(goal)) {
+        substitutionGoals.erase(subGoal->storePath);
+    } else if (auto subGoal = std::dynamic_pointer_cast<DrvOutputSubstitutionGoal>(goal)) {
+        drvOutputSubstitutionGoals.erase(subGoal->id);
+    } else {
+        unreachable();
+    }
 
     if (topGoals.find(goal) != topGoals.end()) {
         topGoals.erase(goal);
@@ -197,15 +174,6 @@ void Worker::removeGoal(GoalPtr goal)
         if (goal->exitCode == Goal::ecFailed && !settings.keepGoing)
             topGoals.clear();
     }
-
-    /* Wake up goals waiting for any goal to finish. */
-    for (auto & i : waitingForAnyGoal) {
-        GoalPtr goal = i.lock();
-        if (goal)
-            wakeUp(goal);
-    }
-
-    waitingForAnyGoal.clear();
 }
 
 void Worker::wakeUp(GoalPtr goal)
@@ -244,21 +212,21 @@ void Worker::childStarted(
             nrLocalBuilds++;
             break;
         case JobCategory::Administration:
-            /* Intentionally not limited, see docs */
-            break;
         default:
+            /* Doesn't make sense, since there are only building and substitution slots. */
             unreachable();
         }
     }
 }
 
-void Worker::childTerminated(Goal * goal, bool wakeSleepers)
+void Worker::childTerminated(Goal * goal)
 {
-    childTerminated(goal, goal->jobCategory(), wakeSleepers);
+    childTerminated(goal, goal->jobCategory());
 }
 
-void Worker::childTerminated(Goal * goal, JobCategory jobCategory, bool wakeSleepers)
+void Worker::childTerminated(Goal * goal, JobCategory jobCategory)
 {
+    // FIXME: Inefficient. Make children a map from Goal -> Child instead.
     auto i = std::find_if(children.begin(), children.end(), [&](const Child & child) { return child.goal2 == goal; });
     if (i == children.end())
         return;
@@ -274,75 +242,64 @@ void Worker::childTerminated(Goal * goal, JobCategory jobCategory, bool wakeSlee
             nrLocalBuilds--;
             break;
         case JobCategory::Administration:
-            /* Intentionally not limited, see docs */
-            break;
         default:
+            /* Doesn't make sense, since there are only building and substitution slots. */
             unreachable();
         }
     }
 
     children.erase(i);
+    auto & waiting = jobCategory == JobCategory::Substitution ? wantingToSubstitute : wantingToBuild;
 
-    if (wakeSleepers) {
-
-        /* Wake up goals waiting for a build slot. */
-        for (auto & j : wantingToBuild) {
-            GoalPtr goal = j.lock();
-            if (goal)
-                wakeUp(goal);
+    /* Wake up goals waiting for a build slot. Wake at most one waiter to avoid
+       starting unnecessary work (that is accompanied by coroutine frame allocation). */
+    auto it = waiting.begin();
+    while (it != waiting.end()) {
+        if (auto goal = it->lock()) {
+            waiting.erase(it);
+            wakeUp(goal);
+            break;
         }
-
-        wantingToBuild.clear();
+        it = waiting.erase(it);
     }
 }
 
 void Worker::waitForBuildSlot(GoalPtr goal)
 {
     goal->trace("wait for build slot");
-    bool isSubstitutionGoal = goal->jobCategory() == JobCategory::Substitution;
-    if ((!isSubstitutionGoal && getNrLocalBuilds() < settings.maxBuildJobs)
-        || (isSubstitutionGoal && getNrSubstitutions() < settings.maxSubstitutionJobs))
-        wakeUp(goal); /* we can do it right away */
-    else
-        addToWeakGoals(wantingToBuild, goal);
-}
 
-void Worker::waitForAnyGoal(GoalPtr goal)
-{
-    debug("wait for any goal");
-    addToWeakGoals(waitingForAnyGoal, goal);
+    bool slotAvailable = [&] {
+        if (goal->jobCategory() == JobCategory::Substitution)
+            return getNrSubstitutions() < settings.maxSubstitutionJobs;
+        else
+            return getNrLocalBuilds() < settings.maxBuildJobs;
+    }();
+
+    if (slotAvailable)
+        wakeUp(goal); /* Can do it right away. */
+    else
+        addToWeakGoals(goal->jobCategory() == JobCategory::Substitution ? wantingToSubstitute : wantingToBuild, goal);
 }
 
 void Worker::waitForAWhile(GoalPtr goal)
 {
-    debug("wait for a while");
+    goal->trace("wait for a while");
     addToWeakGoals(waitingForAWhile, goal);
+}
+
+void Worker::waitForCompletion(GoalPtr goal)
+{
+    goal->trace("waiting for completion callback");
+    addToWeakGoals(waitingForCompletion, goal);
 }
 
 void Worker::run(const Goals & _topGoals)
 {
-    std::vector<nix::DerivedPath> topPaths;
-
-    for (auto & i : _topGoals) {
-        topGoals.insert(i);
-        if (auto goal = dynamic_cast<DerivationTrampolineGoal *>(i.get())) {
-            topPaths.push_back(
-                DerivedPath::Built{
-                    .drvPath = goal->drvReq,
-                    .outputs = goal->wantedOutputs,
-                });
-        } else if (auto goal = dynamic_cast<PathSubstitutionGoal *>(i.get())) {
-            topPaths.push_back(DerivedPath::Opaque{goal->storePath});
-        }
-    }
-
-    /* Call queryMissing() to efficiently query substitutes. */
-    store.queryMissing(topPaths);
-
     debug("entered goal loop");
+    for (std::shared_ptr<Goal> goal : _topGoals)
+        topGoals.insert(std::move(goal));
 
     while (1) {
-
         checkInterrupt();
 
         // TODO GC interface?
@@ -359,9 +316,24 @@ void Worker::run(const Goals & _topGoals)
                     awake2.insert(goal);
             }
             awake.clear();
+
             for (auto & goal : awake2) {
                 checkInterrupt();
+
+                std::chrono::time_point<std::chrono::steady_clock> startTime;
+                if (verbosity >= lvlVomit)
+                    startTime = std::chrono::steady_clock::now();
+
                 goal->work();
+
+                /* Useful for tracing which goals hod the event loop. */
+                vomit(
+                    "worker event loop worked goal '%1%' for %2$.3fms",
+                    goal->name,
+                    std::chrono::duration_cast<std::chrono::duration<float, std::milli>>(
+                        std::chrono::steady_clock::now() - startTime)
+                        .count());
+
                 if (topGoals.empty())
                     break; // stuff may have been cancelled
             }
@@ -370,8 +342,8 @@ void Worker::run(const Goals & _topGoals)
         if (topGoals.empty())
             break;
 
-        /* Wait for input. */
-        if (!children.empty() || !waitingForAWhile.empty())
+        /* Wait for input or completion callbacks. */
+        if (!children.empty() || !waitingForAWhile.empty() || !waitingForCompletion.empty())
             waitForInput();
         else if (awake.empty() && 0U == settings.maxBuildJobs) {
             if (Machine::parseConfig({nix::settings.thisSystem}, nix::settings.getWorkerSettings().builders).empty())
@@ -463,6 +435,17 @@ void Worker::waitForInput()
             state.fdToPollStatus[j] = state.pollStatus.size() - 1;
         }
     }
+
+    {
+        auto wakeupPipeFd = wakerState->wakeupPipe.pipe.readSide.get();
+        state.pollStatus.push_back(
+            pollfd{
+                .fd = wakeupPipeFd,
+                .events = POLLIN,
+            });
+
+        state.fdToPollStatus[wakeupPipeFd] = state.pollStatus.size() - 1;
+    }
 #endif
 
     state.poll(
@@ -508,6 +491,17 @@ void Worker::waitForInput()
         }
     }
 
+#ifndef _WIN32
+    std::set<MuxablePipePollState::CommChannel> wakerChannels{wakerState->wakeupPipe.pipe.readSide.get()};
+    state.iterate(
+        wakerChannels,
+        [&](Descriptor k, std::string_view data) { wakerState->wakeAll(*this); },
+        [](Descriptor fd) { unreachable(); });
+#else
+    /* Slightly less optimal on windows. We don't use a wakeup pipe and signal the ioport directly. */
+    wakerState->wakeAll(*this);
+#endif
+
     if (!waitingForAWhile.empty() && lastWokenUp + std::chrono::seconds(settings.pollInterval) <= after) {
         lastWokenUp = after;
         for (auto & i : waitingForAWhile) {
@@ -517,6 +511,39 @@ void Worker::waitForInput()
         }
         waitingForAWhile.clear();
     }
+}
+
+std::weak_ptr<Worker::Waker> Worker::getCrossThreadWaker()
+{
+    return wakerState.get_ptr();
+}
+
+void Worker::Waker::wakeAll(Worker & worker)
+{
+    /* Wake up all goals that have been enqueued by asynchronous completion callbacks. */
+    auto wakeupQueue(wakeupQueue_.lock());
+#ifndef _WIN32
+    wakeupPipe.drain();
+#endif
+    while (!wakeupQueue->empty()) {
+        auto ptr = wakeupQueue->front().lock();
+        wakeupQueue->pop();
+        if (ptr) {
+            worker.waitingForCompletion.erase(ptr);
+            worker.wakeUp(ptr);
+        }
+    }
+}
+
+void Worker::Waker::enqueue(WeakGoalPtr goal)
+{
+    wakeupQueue_.lock()->push(goal);
+#ifdef _WIN32
+    PostQueuedCompletionStatus(
+        ioport, /*dwNumberOfBytesTransferred=*/0, /*dwCompletionKey=*/0, /*lpOverlapped=*/nullptr);
+#else
+    wakeupPipe.notify();
+#endif
 }
 
 bool Worker::pathContentsGood(const StorePath & path)

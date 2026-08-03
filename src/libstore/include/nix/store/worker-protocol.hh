@@ -6,6 +6,7 @@
 #include <compare>
 
 #include "nix/store/common-protocol.hh"
+#include "nix/store/gc-store.hh"
 
 namespace nix {
 
@@ -13,6 +14,12 @@ namespace nix {
 #define WORKER_MAGIC_2 0x6478696f
 #define WORKER_MAGIC_ACCESS_DENIED 0xab9a9ff0 // = 🚫
 
+/* Note: you generally shouldn't change the protocol version. Define a
+   new `WorkerProto::Feature` instead. */
+#define PROTOCOL_VERSION (1 << 8 | 39)
+#define MINIMUM_PROTOCOL_VERSION (1 << 8 | 18)
+#define GET_PROTOCOL_MAJOR(x) ((x) & 0xff00)
+#define GET_PROTOCOL_MINOR(x) ((x) & 0x00ff)
 #define STDERR_NEXT 0x6f6c6d67
 #define STDERR_READ 0x64617461  // data needed from source
 #define STDERR_WRITE 0x64617416 // data for sink
@@ -31,6 +38,9 @@ struct BuildResult;
 struct KeyedBuildResult;
 struct ValidPathInfo;
 struct UnkeyedValidPathInfo;
+struct DrvOutput;
+struct UnkeyedRealisation;
+struct Realisation;
 enum BuildMode : uint8_t;
 enum TrustedFlag : bool;
 enum class GCAction;
@@ -113,6 +123,24 @@ struct WorkerProto
     static constexpr std::string_view featureQueryActiveBuilds = "queryActiveBuilds";
     static constexpr std::string_view featureProvenance = "provenance";
     static constexpr std::string_view featureVersionedAddToStoreMultiple = "versionedAddToStoreMultiple";
+    static constexpr std::string_view featureAddTempRoots = "addTempRoots";
+    static constexpr std::string_view featureQueryPathInfos = "queryPathInfos";
+
+    /**
+     * Feature for transmitting `UnkeyedRealisation` and `DrvOutput`
+     * using drvPath (store path) instead of the old hash-based JSON format.
+     */
+    static constexpr std::string_view featureRealisationWithPath = "realisation-with-path-not-hash";
+
+    /**
+     * Feature for garbage collecting a specific set of paths and deleting referrers.
+     */
+    static constexpr std::string_view featureDeleteDeadSpecificReferrers = "delete-dead-specific-referrers";
+
+    /**
+     * Feature for disabling SetOptions, which is a no-op in recursive-nix
+     */
+    static constexpr std::string_view featureDisableSetOptions = "disable-set-options";
 
     /**
      * A unidirectional read connection, to be used by the read half of the
@@ -238,6 +266,8 @@ enum struct WorkerProto::Op : uint64_t {
     BuildPathsWithResults = 46,
     AddPermRoot = 47,
     QueryActiveBuilds = 48,
+    AddTempRoots = 49,
+    QueryPathInfos = 50,
 };
 
 struct WorkerProto::ClientHandshakeInfo
@@ -315,6 +345,14 @@ DECLARE_WORKER_SERIALISER(ValidPathInfo);
 template<>
 DECLARE_WORKER_SERIALISER(UnkeyedValidPathInfo);
 template<>
+DECLARE_WORKER_SERIALISER(DrvOutput);
+template<>
+DECLARE_WORKER_SERIALISER(UnkeyedRealisation);
+template<>
+DECLARE_WORKER_SERIALISER(Realisation);
+template<>
+DECLARE_WORKER_SERIALISER(std::optional<UnkeyedRealisation>);
+template<>
 DECLARE_WORKER_SERIALISER(BuildMode);
 template<>
 DECLARE_WORKER_SERIALISER(GCAction);
@@ -325,6 +363,12 @@ DECLARE_WORKER_SERIALISER(std::optional<std::chrono::microseconds>);
 template<>
 DECLARE_WORKER_SERIALISER(WorkerProto::ClientHandshakeInfo);
 
+template<>
+DECLARE_WORKER_SERIALISER(GCOptions::SpecificPaths);
+
+template<>
+DECLARE_WORKER_SERIALISER(GCOptions::GCPaths);
+
 template<typename T>
 DECLARE_WORKER_SERIALISER(std::vector<T>);
 #define COMMA_ ,
@@ -333,8 +377,8 @@ DECLARE_WORKER_SERIALISER(std::set<T COMMA_ Compare>);
 template<typename... Ts>
 DECLARE_WORKER_SERIALISER(std::tuple<Ts...>);
 
-template<typename K, typename V>
-DECLARE_WORKER_SERIALISER(std::map<K COMMA_ V>);
+template<typename K, typename V, typename Compare>
+DECLARE_WORKER_SERIALISER(std::map<K COMMA_ V COMMA_ Compare>);
 #undef COMMA_
 
 } // namespace nix

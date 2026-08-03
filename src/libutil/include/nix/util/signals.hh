@@ -8,6 +8,13 @@
 
 #include <functional>
 
+#if defined(__FreeBSD__)
+// SIGUSR1 is used by bdwgc
+#  define NIX_SIG_MULTI_INT SIGTSTP
+#elif !defined(_WIN32)
+#  define NIX_SIG_MULTI_INT SIGUSR1
+#endif
+
 namespace nix {
 
 /* User interruption. */
@@ -36,10 +43,11 @@ inline void checkInterrupt();
  * @note Never will happen on Windows
  */
 MakeError(Interrupted, BaseError);
+MakeError(Cancelled, BaseError);
 
 struct InterruptCallback
 {
-    virtual ~InterruptCallback() {};
+    virtual ~InterruptCallback();
 };
 
 /**
@@ -51,7 +59,7 @@ struct InterruptCallback
 std::unique_ptr<InterruptCallback> createInterruptCallback(fun<void()> callback);
 
 /**
- * A RAII class that causes the current thread to receive SIGUSR1 when
+ * A RAII class that causes the current thread to receive NIX_SIG_MULTI_INT when
  * the signal handler thread receives SIGINT. That is, this allows
  * SIGINT to be multiplexed to multiple threads.
  *

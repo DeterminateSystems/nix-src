@@ -133,7 +133,7 @@ struct CmdServe : StoreCommand
 
             auto info = store.queryPathInfo(*path);
             NarInfo ni(*info);
-            ni.compression = "none";
+            ni.compression = CompressionAlgo::none;
             // FIXME: would be nicer to use just the NAR hash, but we can't look up NARs by NAR hash.
             ni.url = "nar/" + std::string(info->path.hashPart()) + "-"
                      + info->narHash.to_string(HashFormat::Nix32, false) + ".nar";

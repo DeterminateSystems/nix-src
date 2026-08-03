@@ -1,13 +1,12 @@
 #include "nix/util/util.hh"
+#include "nix/util/ref.hh"
 #include "nix/util/fmt.hh"
-#include "nix/util/file-path.hh"
 #include "nix/util/signals.hh"
 
 #include <array>
 #include <cctype>
-#include <iostream>
-#include <regex>
 
+#include <openssl/crypto.h>
 #include <sodium.h>
 #include <boost/lexical_cast.hpp>
 #include <stdint.h>
@@ -18,8 +17,16 @@
 
 namespace nix {
 
+void FormatError::anchor() {}
+
+bad_ref_cast::~bad_ref_cast() {}
+
 void initLibUtil()
 {
+    static std::atomic_flag done = ATOMIC_FLAG_INIT;
+    if (done.test_and_set())
+        return;
+
     // Check that exception handling works. Exception handling has been observed
     // not to work on darwin when the linker flags aren't quite right.
     // In this case we don't want to expose the user to some unrelated uncaught
@@ -41,6 +48,21 @@ void initLibUtil()
 
     if (sodium_init() == -1)
         throw Error("could not initialise libsodium");
+
+    /* Prevent OpenSSL from registering its atexit() handler
+       (OPENSSL_cleanup()). If we exit() while other threads that use
+       OpenSSL are still running, OPENSSL_cleanup() frees OpenSSL's
+       thread-local state handlers; when those threads then exit, their
+       thread-specific-data destructors (init_thread_stop()) crash on
+       the freed state. This happens in particular in nix-daemon
+       connection children, where library destructors run by _dl_fini()
+       (e.g. aws-crt-cpp's) stop their worker threads *after*
+       OPENSSL_cleanup() has already run. Since we're exiting anyway,
+       skipping the cleanup is harmless. This must run before any other
+       use of OpenSSL, since only the first initialisation takes
+       effect. */
+    if (OPENSSL_init_crypto(OPENSSL_INIT_NO_ATEXIT, nullptr) != 1)
+        throw Error("could not initialise OpenSSL");
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -83,14 +105,18 @@ std::string replaceStrings(std::string res, std::string_view from, std::string_v
     return res;
 }
 
-std::string rewriteStrings(std::string s, const StringMap & rewrites)
+std::string
+rewriteStrings(std::string s, const StringMap & rewrites, std::set<uint64_t> * matches, uint64_t offsetShift)
 {
     for (auto & i : rewrites) {
         if (i.first == i.second)
             continue;
         size_t j = 0;
-        while ((j = s.find(i.first, j)) != s.npos)
+        while ((j = s.find(i.first, j)) != s.npos) {
+            if (matches)
+                matches->insert(j + offsetShift);
             s.replace(j, i.first.size(), i.second);
+        }
     }
     return s;
 }
@@ -247,6 +273,10 @@ void logExceptionExceptInterrupt(std::string_view prefix, Verbosity lvl)
     try {
         throw;
     } catch (const Interrupted & e) {
+        throw;
+    } catch (const Cancelled & e) {
+        /* Morally the same as Interrupted, just not triggered by a user but some other
+           cancellation. */
         throw;
     } catch (Error & e) {
         printMsg(lvl, ANSI_RED "%s" ANSI_NORMAL "%s", prefix, e.info().msg);

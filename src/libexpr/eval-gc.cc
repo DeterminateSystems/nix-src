@@ -1,8 +1,6 @@
-#include "nix/util/error.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/expr/eval-settings.hh"
 #include "nix/util/config-global.hh"
-#include "nix/util/serialise.hh"
 #include "nix/expr/eval-gc.hh"
 #include "nix/expr/value.hh"
 
@@ -160,6 +158,21 @@ static inline void initGCReal()
 
     GC_set_sp_corrector(&fixupBoehmStackPointer);
     assert(GC_get_sp_corrector());
+
+    /* Funnel boehm warnings into debug logs. */
+    GC_set_warn_proc([](char * msg, GC_word word) noexcept {
+        std::array<char, 4096> buffer{};
+        auto res = snprintf(buffer.data(), buffer.size(), msg, word);
+        /* Ignore garbage. */
+        if (res < 0)
+            return;
+
+        try {
+            debug("%s", chomp(std::string_view(buffer.data(), std::min<size_t>(res, buffer.size() - 1))));
+        } catch (...) {
+            /* Swallow all errors. */
+        }
+    });
 
     /* Set the initial heap size to something fairly big (80% of
        free RAM, up to a maximum of 4 GiB) so that in most cases

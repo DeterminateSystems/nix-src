@@ -7,11 +7,14 @@
 #include "nix/util/closure.hh"
 #include "nix/store/store-registration.hh"
 #include "nix/store/globals.hh"
+#include "nix/util/compression.hh"
 #include "nix/util/topo-sort.hh"
 
 namespace nix {
 
 MakeError(UploadToHTTP, Error);
+
+void UploadToHTTP::anchor() {}
 
 StringSet HttpBinaryCacheStoreConfig::uriSchemes()
 {
@@ -22,8 +25,12 @@ StringSet HttpBinaryCacheStoreConfig::uriSchemes()
     return ret;
 }
 
+void HttpBinaryCacheStoreConfig::anchor() {}
+
+void HttpBinaryCacheStore::anchor() {}
+
 HttpBinaryCacheStoreConfig::HttpBinaryCacheStoreConfig(ParsedURL _cacheUri, const Params & params)
-    : StoreConfig(params)
+    : StoreConfig(params, FilePathType::Unix)
     , BinaryCacheStoreConfig(params)
     , cacheUri(std::move(_cacheUri))
 {
@@ -203,18 +210,18 @@ void HttpBinaryCacheStore::upsertFile(
 {
     try {
         if (auto compressionMethod = getCompressionMethod(path)) {
-            CompressedSource compressed(source, *compressionMethod);
+            StringSource compressed(compress(*compressionMethod, source));
             /* TODO: Validate that this is a valid content encoding. We probably shouldn't set non-standard values here.
              */
             Headers headers = {{"Content-Encoding", showCompressionAlgo(*compressionMethod)}};
-            upload(path, compressed, compressed.size(), mimeType, std::move(headers));
+            upload(path, compressed, compressed.s.size(), mimeType, std::move(headers));
         } else {
             upload(path, source, sizeHint, mimeType, std::nullopt);
         }
     } catch (FileTransferError & e) {
         UploadToHTTP err(e.message());
         err.addTrace({}, "while uploading to HTTP binary cache at '%s'", config->cacheUri.to_string());
-        throw err;
+        throw std::move(err);
     }
 }
 
@@ -254,6 +261,18 @@ FileTransferRequest HttpBinaryCacheStore::makeRequest(std::string_view path)
             request.tlsKey = *key;
         }
     }
+
+    // Propagate per-substituter retry overrides to the transfer request.
+    // Only set when the user actually specified the URL parameter; otherwise
+    // the transfer falls back to the global FileTransferSettings.
+    auto propagate = [](auto & setting, auto & dest) {
+        if (setting.isOverridden())
+            dest = setting.get();
+    };
+    propagate(config->retryDelayMs, request.retryDelayMs);
+    propagate(config->retryDelayRateLimitedMs, request.retryDelayRateLimitedMs);
+    propagate(config->retryMaxDelayMs, request.retryMaxDelayMs);
+    propagate(config->retryAttempts, request.retryAttempts);
 
     return request;
 }

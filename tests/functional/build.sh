@@ -2,8 +2,6 @@
 
 source common.sh
 
-clearStoreIfPossible
-
 # Make sure that 'nix build' returns all outputs by default.
 nix build -f multiple-outputs.nix --json a b --no-link | jq --exit-status '
   (.[0] |
@@ -53,7 +51,7 @@ nix build -f multiple-outputs.nix --json nothing-to-install --no-link | jq --exi
     (.outputs | keys == ["out"]))
 '
 
-# But not when it's overriden.
+# But not when it's overridden.
 nix build -f multiple-outputs.nix --json e^a_a --no-link
 nix build -f multiple-outputs.nix --json e^a_a --no-link | jq --exit-status '
   (.[0] |
@@ -67,7 +65,7 @@ nix build -f multiple-outputs.nix --json 'e^*' --no-link | jq --exit-status '
     (.outputs | keys == ["a_a", "b", "c"]))
 '
 
-# test buidling from non-drv attr path
+# test building from non-drv attr path
 
 nix build -f multiple-outputs.nix --json 'e.a_a.outPath' --no-link | jq --exit-status '
   (.[0] |

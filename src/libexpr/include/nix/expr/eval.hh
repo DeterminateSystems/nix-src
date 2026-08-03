@@ -6,6 +6,7 @@
 #include "nix/expr/eval-profiler.hh"
 #include "nix/util/types.hh"
 #include "nix/expr/value.hh"
+#include "nix/expr/root-value.hh"
 #include "nix/expr/nixexpr.hh"
 #include "nix/expr/symbol-table.hh"
 #include "nix/util/configuration.hh"
@@ -27,6 +28,7 @@
 #include <map>
 #include <optional>
 #include <functional>
+#include <span>
 
 namespace nix {
 
@@ -167,9 +169,7 @@ struct Constant
     bool impureOnly = false;
 };
 
-typedef std::
-    map<std::string, Value *, std::less<std::string>, traceable_allocator<std::pair<const std::string, Value *>>>
-        ValMap;
+typedef std::map<std::string, RootValue> ValMap;
 
 typedef boost::unordered_flat_map<PosIdx, DocComment, std::hash<PosIdx>> DocCommentMap;
 
@@ -473,13 +473,7 @@ private:
     /**
      * A cache from resolved paths to values.
      */
-    const ref<boost::concurrent_flat_map<
-        SourcePath,
-        Value *,
-        std::hash<SourcePath>,
-        std::equal_to<SourcePath>,
-        traceable_allocator<std::pair<const SourcePath, Value *>>>>
-        fileEvalCache;
+    const ref<boost::concurrent_flat_map<SourcePath, RootValue>> fileEvalCache;
 
     /**
      * Associate source positions of certain AST nodes with their preceding doc comment, if they have one.
@@ -489,7 +483,15 @@ private:
 
     LookupPath lookupPath;
 
-    const ref<boost::concurrent_flat_map<std::string, std::optional<SourcePath>, StringViewHash, std::equal_to<>>>
+    struct LookupPathResolvedState
+    {
+        SourcePath path;
+        const ref<boost::concurrent_flat_map<CanonPath, std::optional<SourcePath>>> resolvedPaths;
+    };
+
+    const ref<
+        boost::
+            concurrent_flat_map<std::string, std::shared_ptr<LookupPathResolvedState>, StringViewHash, std::equal_to<>>>
         lookupPathResolved;
 
     /**
@@ -631,9 +633,10 @@ public:
      *
      * If the specified search path element is a URI, download it.
      *
-     * If it is not found, return `std::nullopt`.
+     * If it is not found, return `nullptr`.
      */
-    std::optional<SourcePath> resolveLookupPathPath(const LookupPath::Path & elem, bool initAccessControl = false);
+    std::shared_ptr<LookupPathResolvedState>
+    resolveLookupPathPath(const LookupPath::Path & elem, bool initAccessControl = false);
 
     /**
      * Evaluate an expression to normal form
@@ -817,13 +820,7 @@ public:
     /**
      * Internal primops not exposed to the user.
      */
-    boost::unordered_flat_map<
-        std::string,
-        Value *,
-        StringViewHash,
-        std::equal_to<>,
-        traceable_allocator<std::pair<const std::string, Value *>>>
-        internalPrimOps;
+    boost::unordered_flat_map<std::string, RootValue, StringViewHash> internalPrimOps;
 
     /**
      * Name and documentation about every constant.
@@ -1007,7 +1004,10 @@ public:
      */
     void mkSingleDerivedPathString(const SingleDerivedPath & p, Value & v);
 
-    void concatLists(Value & v, size_t nrLists, Value * const * lists, const PosIdx pos, std::string_view errorCtx);
+    /**
+     * @brief Concatenate values with an n-ary version of the `++` operator.
+     */
+    void concatLists(Value & v, std::span<Value * const> lists, const PosIdx pos, std::string_view errorCtx);
 
     /**
      * Print statistics, if enabled.
@@ -1099,23 +1099,21 @@ public:
     Counter nrSpuriousWakeups;
 
 private:
-    bool countCalls;
+    const bool countCalls;
 
-    // FIXME: make thread-safe.
-    typedef boost::unordered_flat_map<std::string, size_t, StringViewHash, std::equal_to<>> PrimOpCalls;
-    PrimOpCalls primOpCalls;
+    typedef boost::concurrent_flat_map<std::string, size_t, StringViewHash, std::equal_to<>> PrimOpCalls;
+    const ref<PrimOpCalls> primOpCalls;
 
-    typedef boost::unordered_flat_map<ExprLambda *, size_t> FunctionCalls;
-    FunctionCalls functionCalls;
+    typedef boost::concurrent_flat_map<ExprLambda *, size_t> FunctionCalls;
+    const ref<FunctionCalls> functionCalls;
 
     /** Evaluation/call profiler. */
     MultiEvalProfiler profiler;
 
     void incrFunctionCall(ExprLambda * fun);
 
-    // FIXME: make thread-safe.
-    typedef boost::unordered_flat_map<PosIdx, size_t, std::hash<PosIdx>> AttrSelects;
-    AttrSelects attrSelects;
+    typedef boost::concurrent_flat_map<PosIdx, size_t, std::hash<PosIdx>> AttrSelects;
+    const ref<AttrSelects> attrSelects;
 
     friend struct ExprOpUpdate;
     friend struct ExprOpConcatLists;

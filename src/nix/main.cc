@@ -13,6 +13,7 @@
 #include "nix/store/store-registration.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/util/finally.hh"
+#include "nix/util/json-utils.hh"
 #include "nix/main/loggers.hh"
 #include "nix/cmd/markdown.hh"
 #include "nix/util/memory-source-accessor.hh"
@@ -22,7 +23,6 @@
 #include "nix/expr/eval-cache.hh"
 #include "nix/flake/flake.hh"
 #include "nix/flake/settings.hh"
-#include "nix/util/json-utils.hh"
 #include "nix/util/sentry.hh"
 
 #include "self-exe.hh"
@@ -46,15 +46,15 @@
 #  include "nix/util/linux-namespaces.hh"
 #endif
 
+#include "nix/util/strings.hh"
+
+namespace nix {
+
 #ifndef _WIN32
 extern std::string chrootHelperName;
 
 void chrootHelper(int argc, char ** argv);
 #endif
-
-#include "nix/util/strings.hh"
-
-namespace nix {
 
 /* Check if we have a non-loopback/link-local network interface. */
 static bool haveInternet()
@@ -180,6 +180,7 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             {"make-content-addressable", {AliasStatus::Deprecated, {"store", "make-content-addressed"}}},
             {"optimise-store", {AliasStatus::Deprecated, {"store", "optimise"}}},
             {"ping-store", {AliasStatus::Deprecated, {"store", "info"}}},
+            {"realisation", {AliasStatus::Deprecated, {"store", "build-trace"}}},
             {"sign-paths", {AliasStatus::Deprecated, {"store", "sign"}}},
             {"shell", {AliasStatus::AcceptedShorthand, {"env", "shell"}}},
             {"show-derivation", {AliasStatus::Deprecated, {"derivation", "show"}}},
@@ -406,9 +407,7 @@ static void terminateHandler()
         }
     }
 
-    // Call the original terminate handler.
-    std::set_terminate(nullptr);
-    std::terminate();
+    onTerminate();
 }
 
 void mainWrapped(int argc, char ** argv)
@@ -423,6 +422,9 @@ void mainWrapped(int argc, char ** argv)
         return;
     }
 #endif
+
+    /* This must be called before Sentry since both initialize OpenSSL. */
+    initLibUtil();
 
     bool sentryEnabled = false;
 
@@ -480,14 +482,8 @@ void mainWrapped(int argc, char ** argv)
     flakeSettings.configureEvalSettings(evalSettings);
 
 #ifdef __linux__
-    if (isRootUser()) {
-        try {
-            saveMountNamespace();
-            if (unshare(CLONE_NEWNS) == -1)
-                throw SysError("setting up a private mount namespace");
-        } catch (Error & e) {
-        }
-    }
+    if (isRootUser())
+        tryEnterPrivateMountNamespace();
 #endif
 
     Finally f([] { logger->stop(); });
@@ -680,12 +676,6 @@ int main(int argc, char ** argv)
     using namespace nix;
 
     // The CLI has a more detailed version than the libraries; see nixVersion.
-    nixVersion = NIX_CLI_VERSION;
-#ifndef _WIN32
-    // Increase the default stack size for the evaluator and for
-    // libstdc++'s std::regex.
-    setStackSize(evalStackSize);
-#endif
-
-    return handleExceptions(argv[0], [&]() { mainWrapped(argc, argv); });
+    nix::nixVersion = NIX_CLI_VERSION;
+    return nix::handleExceptions(argv[0], [&]() { nix::mainWrapped(argc, argv); });
 }

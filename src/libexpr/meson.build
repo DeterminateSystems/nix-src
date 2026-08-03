@@ -7,10 +7,8 @@ project(
     # TODO(Qyriad): increase the warning level
     'warning_level=1',
     'errorlogs=true', # Please print logs for tests that fail
-    'unity=on',
-    'unity_size=1024',
   ],
-  meson_version : '>= 1.1',
+  meson_version : '>= 1.8',
   license : 'LGPL-2.1-or-later',
 )
 
@@ -184,6 +182,7 @@ sources = files(
   'print-ambiguous.cc',
   'print.cc',
   'provenance.cc',
+  'root-value.cc',
   'search-path.cc',
   'symbol-table.cc',
   'value-to-json.cc',
@@ -230,7 +229,7 @@ parser_library = static_library(
   'nixexpr-parser',
   parser_tab,
   lexer_tab,
-  files('lexer-helpers.cc'),
+  'lexer-helpers.cc',
   cpp_args : parser_library_cpp_args,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
@@ -241,6 +240,7 @@ parser_library = static_library(
   override_options : [
     'b_ndebug=@0@'.format(not get_option('debug')),
     'b_lto=@0@'.format(get_option('b_lto') and cxx.get_id() != 'gcc'),
+    # Unity builds mess up the recursive header dependency between flex and bison generated code.
     'unity=off',
   ],
 )
@@ -252,7 +252,6 @@ this_library = library(
   parser_tab[1],
   lexer_tab[1],
   generated_headers,
-  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags + link_args,

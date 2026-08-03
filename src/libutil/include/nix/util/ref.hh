@@ -24,6 +24,12 @@ public:
     {
     }
 
+    bad_ref_cast(bad_ref_cast &&) = default;
+    bad_ref_cast(const bad_ref_cast &) = default;
+    bad_ref_cast & operator=(bad_ref_cast &&) = default;
+    bad_ref_cast & operator=(const bad_ref_cast &) = default;
+    ~bad_ref_cast() override;
+
     const char * what() const noexcept override
     {
         return msg.c_str();
@@ -82,9 +88,14 @@ public:
         assertNonNull();
     }
 
+    T * get() const
+    {
+        return p.get();
+    }
+
     T * operator->() const
     {
-        return &*p;
+        return get();
     }
 
     T & operator*() const
