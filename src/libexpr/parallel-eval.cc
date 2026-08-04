@@ -294,9 +294,7 @@ static void prim_parallel(EvalState & state, const PosIdx pos, Value ** args, Va
         Executor::WorkItems work;
         for (auto value : args[0]->listView())
             if (!value->isFinished())
-                state.addWork(work, 0, [value(std::make_shared<RootValue>(value)), &state, pos]() {
-                    state.forceValue(***value, pos);
-                });
+                state.addWork(work, 0, [value(RootValue(value)), &state, pos]() { state.forceValue(**value, pos); });
         state.executor->spawn(std::move(work));
     }
 

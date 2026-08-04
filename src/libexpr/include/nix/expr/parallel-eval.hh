@@ -21,8 +21,7 @@ namespace nix {
 
 struct Executor
 {
-    // FIXME: support std::moveable_function.
-    using work_t = std::function<void()>;
+    using work_t = std::move_only_function<void()>;
 
     struct Item
     {
@@ -84,7 +83,9 @@ struct FutureVector
 
     void spawn(uint8_t prioPrefix, Executor::work_t && work)
     {
-        spawn({{std::move(work), prioPrefix}});
+        Executor::WorkItems items;
+        items.emplace_back(std::move(work), prioPrefix);
+        spawn(std::move(items));
     }
 
     void finishAll();
