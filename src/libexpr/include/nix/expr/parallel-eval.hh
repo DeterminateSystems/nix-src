@@ -7,6 +7,7 @@
 
 #include <boost/thread/thread.hpp>
 
+#include "nix/util/move-only-function.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/logging.hh"
 #include "nix/util/environment-variables.hh"
@@ -21,7 +22,7 @@ namespace nix {
 
 struct Executor
 {
-    using work_t = std::move_only_function<void()>;
+    using work_t = MoveOnlyFunction<void()>;
 
     struct Item
     {
