@@ -7,6 +7,7 @@
 
 #include <boost/thread/thread.hpp>
 
+#include "nix/util/move-only-function.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/logging.hh"
 #include "nix/util/environment-variables.hh"
@@ -21,8 +22,7 @@ namespace nix {
 
 struct Executor
 {
-    // FIXME: support std::moveable_function.
-    using work_t = std::function<void()>;
+    using work_t = MoveOnlyFunction<void()>;
 
     struct Item
     {
@@ -84,7 +84,9 @@ struct FutureVector
 
     void spawn(uint8_t prioPrefix, Executor::work_t && work)
     {
-        spawn({{std::move(work), prioPrefix}});
+        Executor::WorkItems items;
+        items.emplace_back(std::move(work), prioPrefix);
+        spawn(std::move(items));
     }
 
     void finishAll();

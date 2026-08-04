@@ -64,6 +64,7 @@ headers = [ config_pub_h ] + files(
   'memo.hh',
   'memory-source-accessor.hh',
   'mounted-source-accessor.hh',
+  'move-only-function.hh',
   'muxable-pipe.hh',
   'nar-accessor.hh',
   'nar-cache.hh',

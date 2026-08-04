@@ -28,9 +28,8 @@ static void parallelForceDeep(EvalState & state, Value & v, PosIdx pos)
         if (v.attrs()->get(state.s.outPath))
             return;
         for (auto & a : *v.attrs())
-            state.addWork(work, 0, [value(std::make_shared<RootValue>(a.value)), pos(a.pos), &state]() {
-                parallelForceDeep(state, ***value, pos);
-            });
+            state.addWork(
+                work, 0, [value(RootValue(a.value)), pos(a.pos), &state]() { parallelForceDeep(state, **value, pos); });
         break;
     }
 
