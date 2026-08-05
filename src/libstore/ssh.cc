@@ -6,11 +6,6 @@
 #include "nix/util/exec.hh"
 #include "nix/util/base-n.hh"
 
-#ifndef _WIN32
-#  include <sys/wait.h>
-#  include <cerrno>
-#endif
-
 namespace nix {
 
 static std::string parsePublicHostKey(std::string_view host, std::string_view sshPublicHostKey)
@@ -254,20 +249,9 @@ std::optional<std::filesystem::path> SSHMaster::startMaster()
 
     auto state(state_.lock());
 
-    if (state->sshMaster != INVALID_DESCRIPTOR) {
-        // Check if master is still alive before returning cached socket.
-        pid_t result = waitpid(state->sshMaster, nullptr, WNOHANG);
-        if (result == 0)
-            return state->socketPath;
-        if (result == -1) {
-            if (errno == EINTR)
-                return state->socketPath; // assume alive; worst case SSH falls back
-            if (errno != ECHILD)
-                warn("waitpid failed for SSH master %d: %s", (pid_t) state->sshMaster, strerror(errno));
-        }
-        // Master gone — release Pid to avoid kill()/wait() on already-reaped child.
-        state->sshMaster.release();
-    }
+    // Check if the master is still alive before returning the cached socket.
+    if (state->sshMaster != INVALID_DESCRIPTOR && state->sshMaster.isAlive())
+        return state->socketPath;
 
     state->socketPath = tmpDir->path() / "ssh.sock";
 
