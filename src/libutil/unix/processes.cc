@@ -130,6 +130,25 @@ int Pid::wait(bool allowInterrupts)
     }
 }
 
+bool Pid::isAlive()
+{
+    assert(pid != -1);
+    pid_t res = waitpid(pid, nullptr, WNOHANG);
+    if (res == 0)
+        return true;
+    if (res == -1) {
+        if (errno == EINTR)
+            /* Assume it's still alive; the caller can check again later. */
+            return true;
+        if (errno != ECHILD)
+            warn("waitpid failed for PID %d: %s", pid, strerror(errno));
+    }
+    /* The process has exited and been reaped (or was already reaped
+       elsewhere). Reset so the destructor doesn't kill()/wait() it. */
+    release();
+    return false;
+}
+
 void Pid::setSeparatePG(bool separatePG)
 {
     this->separatePG = separatePG;

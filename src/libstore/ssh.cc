@@ -193,6 +193,16 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
                 if (verbosity >= lvlChatty)
                     args.push_back("-v");
                 args.splice(args.end(), std::move(extraSshArgs));
+                // Override LocalCommand to no-op on command SSHs; master
+                // already consumed "started". On fallback, "echo started"
+                // would leak into the nix protocol stream. #441
+                if (useMaster) {
+                    for (auto & arg : args) {
+                        if (arg.starts_with(OS_STR("-oLocalCommand="))) {
+                            arg = OS_STR("-oLocalCommand=true");
+                        }
+                    }
+                }
                 args.push_back("--");
             }
 
@@ -208,9 +218,9 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
     in.readSide = INVALID_DESCRIPTOR;
     out.writeSide = INVALID_DESCRIPTOR;
 
-    // Wait for the SSH connection to be established,
-    // So that we don't overwrite the password prompt with our progress bar.
-    if (!fakeSSH && !(socketPath && isMasterRunning(*socketPath))) {
+    // Skip readLine when useMaster: SSH connects via master socket, or
+    // falls back to direct connection where LocalCommand is now a no-op.
+    if (!fakeSSH && !useMaster && !(socketPath && isMasterRunning(*socketPath))) {
         std::string reply;
         try {
             reply = readLine(out.readSide.get());
@@ -239,7 +249,8 @@ std::optional<std::filesystem::path> SSHMaster::startMaster()
 
     auto state(state_.lock());
 
-    if (state->sshMaster != INVALID_DESCRIPTOR)
+    // Check if the master is still alive before returning the cached socket.
+    if (state->sshMaster != INVALID_DESCRIPTOR && state->sshMaster.isAlive())
         return state->socketPath;
 
     state->socketPath = tmpDir->path() / "ssh.sock";
