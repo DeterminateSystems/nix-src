@@ -25,7 +25,9 @@
 #include "nix/flake/flakeref.hh"
 #include "nix/util/ansicolor.hh"
 #include "nix/util/canon-path.hh"
+#include "nix/util/configuration.hh"
 #include "nix/util/error.hh"
+#include "nix/util/experimental-features.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/fmt.hh"
 #include "nix/util/logging.hh"
@@ -627,6 +629,8 @@ struct LockedFlakeV8 : LockedFlake
 std::unique_ptr<LockedFlake> parseLockFileV8(
     const fetchers::Settings & fetchSettings, Flake flake, const nlohmann::json & json, std::string_view path)
 {
+    experimentalFeatureSettings.require(Xp::LockFileV8);
+
     return std::make_unique<LockedFlakeV8>(fetchSettings, std::move(flake), json, path);
 }
 
@@ -637,6 +641,8 @@ LockFlakeResult lockFlakeV8(
     Flake flake,
     const LockedFlake & _oldLockFile)
 {
+    experimentalFeatureSettings.require(Xp::LockFileV8);
+
     /* The old lock file to reuse entries from. Null if the old lock
        file is not a version 8 lock file (e.g. when migrating from
        version 7), or if we're relocking from scratch. Note that
