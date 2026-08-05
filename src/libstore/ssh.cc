@@ -263,8 +263,7 @@ std::optional<std::filesystem::path> SSHMaster::startMaster()
             if (errno == EINTR)
                 return state->socketPath; // assume alive; worst case SSH falls back
             if (errno != ECHILD)
-                warn("waitpid failed for SSH master %d: %s",
-                     (pid_t) state->sshMaster, strerror(errno));
+                warn("waitpid failed for SSH master %d: %s", (pid_t) state->sshMaster, strerror(errno));
         }
         // Master gone — release Pid to avoid kill()/wait() on already-reaped child.
         state->sshMaster.release();
