@@ -661,19 +661,43 @@ LockFlakeResult lockFlakeV8(
     std::set<InputAttrPath> updatesUsed;
     std::set<NonEmptyInputAttrPath> explicitCliOverrides;
 
+    /* The refs declared in flake.nix for the inputs overridden on the
+       command line. These are recorded as the `original` of the
+       resulting lock file entries, so that the overrides aren't nuked
+       by the next lock file update. That is, overrides are sticky,
+       like in version 7. */
+    std::map<NonEmptyInputAttrPath, FlakeRef> cliOverrideOriginals;
+
     /* Apply command line overrides as if they were overrides declared
        by the top-level flake (`inputs.foo.inputs.bar.url = ...`),
        creating intermediate override entries as needed. They
        overwrite any conflicting override in `flake.nix` ("outermost
        override wins"). Note: overrides of inputs that don't exist at
-       the top level are left unapplied so the caller can warn about
-       them. */
+       the top level, or whose path passes through a 'follows' input,
+       are left unapplied so the caller can warn about them. */
     for (auto & [path, ref] : lockFlags.inputOverrides) {
         auto input = get(flake.inputs, path.get().front());
+        for (auto & elem : std::views::drop(path.get(), 1)) {
+            if (input && input->follows)
+                input = nullptr;
+            if (!input)
+                break;
+            input = &input->overrides[elem];
+        }
         if (!input)
             continue;
-        for (auto & elem : std::views::drop(path.get(), 1))
-            input = &input->overrides[elem];
+        if (input->ref && !input->ref->input.isRelative())
+            cliOverrideOriginals.emplace(path, *input->ref);
+        else if (lockFlags.writeLockFile)
+            /* The lock file entry for this override would be removed
+               again by the next lock file update, since it has no
+               corresponding entry in flake.nix to be reused for. */
+            throw UsageError(
+                "'--override-input %s %s' would create a lock file entry that would be removed by the next lock file update, "
+                "since there is no corresponding input with a non-relative flake reference in flake.nix; "
+                "use '--no-write-lock-file' to apply the override without updating the lock file",
+                printInputAttrPath(path),
+                ref);
         input->ref = ref;
         input->follows = std::nullopt;
         overridesUsed.insert(path);
@@ -756,10 +780,12 @@ LockFlakeResult lockFlakeV8(
                 }
 
                 auto explicitUpdate = lockFlags.inputUpdates && lockFlags.inputUpdates->count(nonEmptyAbsPath);
+                auto explicitCliOverride = explicitCliOverrides.contains(nonEmptyAbsPath);
 
                 auto oldLock = oldLocks ? get(oldLocks->locks, relPath) : nullptr;
 
-                if (oldLock && !explicitUpdate && oldLock->originalRef.canonicalize() == ref.canonicalize()) {
+                if (oldLock && !explicitUpdate && !explicitCliOverride
+                    && oldLock->originalRef.canonicalize() == ref.canonicalize()) {
                     /* Copy the input from the old lock file since its
                        flakeref didn't change. */
 
@@ -799,15 +825,24 @@ LockFlakeResult lockFlakeV8(
                 if (!lockFlags.allowUnlocked && !ref.input.isLocked(state.fetchSettings))
                     throw Error("cannot update unlocked flake input '%s' in pure mode", absPathS);
 
-                auto useRegistriesInput =
-                    explicitCliOverrides.contains(nonEmptyAbsPath) ? fetchers::UseRegistries::All : useRegistriesInputs;
+                /* In case of a command line override, record the ref
+                   declared in flake.nix (if any) as the `original`,
+                   rather than the override, so that the override
+                   isn't nuked the next time we update the lock
+                   file. */
+                auto originalRef = ref;
+                if (explicitCliOverride)
+                    if (auto declaredRef = get(cliOverrideOriginals, nonEmptyAbsPath))
+                        originalRef = *declaredRef;
+
+                auto useRegistriesInput = explicitCliOverride ? fetchers::UseRegistries::All : useRegistriesInputs;
 
                 if (input.isFlake) {
                     auto inputFlake = getFlake(state, ref, useRegistriesInput, absPath, true);
 
                     warnRegistry(absPath, ref, inputFlake.resolvedRef, flake.path);
 
-                    LockFileV8::Lock lock(ref, inputFlake.lockedRef);
+                    LockFileV8::Lock lock(originalRef, inputFlake.lockedRef);
                     *lock.sourcePath.lock() = inputFlake.path.parent();
 
                     /* If the input doesn't have a lock file of its
@@ -845,7 +880,7 @@ LockFlakeResult lockFlakeV8(
                     auto storePath =
                         state.storePath(state.mountInput(lockedRef.input, ref.input, cachedInput.accessor, true, true));
 
-                    LockFileV8::Lock lock(ref, lockedRef);
+                    LockFileV8::Lock lock(originalRef, lockedRef);
                     *lock.sourcePath.lock() = storePath;
                     return lock;
                 }
