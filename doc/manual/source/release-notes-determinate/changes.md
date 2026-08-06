@@ -226,20 +226,3 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 <!-- Determinate Nix version 3.21.9 -->
 
 <!-- Determinate Nix version 3.22.0 -->
-
-* Sync with upstream 2.35.1 by @edolstra in [DeterminateSystems/nix-src#530](https://github.com/DeterminateSystems/nix-src/pull/530)
-
-* LocalStore: Reduce number of SQLite calls by @edolstra in [DeterminateSystems/nix-src#574](https://github.com/DeterminateSystems/nix-src/pull/574)
-
-* Fixes from upstream 2.35-maintenance by @edolstra in [DeterminateSystems/nix-src#584](https://github.com/DeterminateSystems/nix-src/pull/584)
-
-* Use std::move_only_function for parallel evel work items by @edolstra in [DeterminateSystems/nix-src#585](https://github.com/DeterminateSystems/nix-src/pull/585)
-
-* Fix randomly failing build.sh test by @edolstra in [DeterminateSystems/nix-src#587](https://github.com/DeterminateSystems/nix-src/pull/587)
-
-* Progress bar signal handling improvements by @edolstra in [DeterminateSystems/nix-src#586](https://github.com/DeterminateSystems/nix-src/pull/586)
-
-* Prevent LocalCommand 'started' leak on stale SSH master socket by @DarthPJB in [DeterminateSystems/nix-src#569](https://github.com/DeterminateSystems/nix-src/pull/569)
-
-
-* @DarthPJB made their first contribution in [DeterminateSystems/nix-src#569](https://github.com/DeterminateSystems/nix-src/pull/569)
