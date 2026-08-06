@@ -447,19 +447,24 @@ expectStderr 102 nix build -o "$TEST_ROOT"/result "file://$TEST_ROOT/flake.tar.g
 
 # Test --override-input.
 git -C "$flake3Dir" reset --hard
-nix flake lock "$flake3Dir" --override-input flake2/flake1 file://"$TEST_ROOT"/flake.tar.gz -vvvvv
 if [[ $lockFileFormat = 8 ]]; then
-    flake1_2='.locks."flake2/flake1"'
+    # An override of a transitive input that has no corresponding entry in
+    # flake.nix cannot be written to a version 8 lock file (the entry
+    # would be removed again by the next lock file update)...
+    expectStderr 1 nix flake lock "$flake3Dir" --override-input flake2/flake1 file://"$TEST_ROOT"/flake.tar.gz | grepQuiet "would create a lock file entry"
+
+    # ...but it can still be applied without writing the lock file.
+    nix flake metadata --json "$flake3Dir" --no-write-lock-file --override-input flake2/flake1 flake1/master/"$hash1" | jq -r '.locks.locks."flake2/flake1".locked.rev' | grepQuiet "$hash1"
 else
-    flake1_2=.nodes.flake1_2
+    nix flake lock "$flake3Dir" --override-input flake2/flake1 file://"$TEST_ROOT"/flake.tar.gz -vvvvv
+    [[ $(jq .nodes.flake1_2.locked.url "$flake3Dir/flake.lock") =~ flake.tar.gz ]]
+
+    nix flake lock "$flake3Dir" --override-input flake2/flake1 flake1
+    [[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash2 ]]
+
+    nix flake lock "$flake3Dir" --override-input flake2/flake1 flake1/master/"$hash1"
+    [[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash1 ]]
 fi
-[[ $(jq "$flake1_2.locked.url" "$flake3Dir/flake.lock") =~ flake.tar.gz ]]
-
-nix flake lock "$flake3Dir" --override-input flake2/flake1 flake1
-[[ $(jq -r "$flake1_2.locked.rev" "$flake3Dir/flake.lock") =~ $hash2 ]]
-
-nix flake lock "$flake3Dir" --override-input flake2/flake1 flake1/master/"$hash1"
-[[ $(jq -r "$flake1_2.locked.rev" "$flake3Dir/flake.lock") =~ $hash1 ]]
 
 # Test that --override-input with empty input path is rejected (issue #14816).
 expectStderr 1 nix flake lock "$flake3Dir" --override-input '' . | grepQuiet -- "--override-input was passed a zero-length input path, which would refer to the flake itself, not an input"
@@ -469,10 +474,8 @@ expectStderr 1 nix flake lock "$flake3Dir" --update-input '' | grepQuiet -- "--u
 
 # Test --update-input.
 if [[ $lockFileFormat = 8 ]]; then
-    # In lock file version 8, an entry written by '--override-input' is
-    # dropped again by a subsequent lock if the override is not declared
-    # in flake.nix, and a transitive input locked by a dependency's own
-    # lock file cannot be updated in our lock file.
+    # A transitive input locked by a dependency's own lock file cannot be
+    # updated in our lock file.
     nix flake lock "$flake3Dir"
     [[ $(jq '.locks | has("flake2/flake1")' "$flake3Dir/flake.lock") = false ]]
 
@@ -531,14 +534,7 @@ cmp "$flake2Dir/flake.lock" "$TEST_ROOT"/flake2.lock >/dev/null # lockfiles shou
 
 nix flake lock "$flake2Dir" --output-lock-file "$TEST_ROOT"/flake2-overridden.lock --override-input flake1 git+file://"$flake1Dir"?rev="$flake1OriginalCommit"
 expectStderr 1 cmp "$flake2Dir/flake.lock" "$TEST_ROOT"/flake2-overridden.lock
-if [[ $lockFileFormat = 8 ]]; then
-    # Overrides are not sticky in lock file version 8: since the
-    # overridden entry doesn't match the input declared in flake.nix, it
-    # gets relocked.
-    nix flake metadata "$flake2Dir" --no-write-lock-file --reference-lock-file "$TEST_ROOT"/flake2-overridden.lock 2>&1 | grepQuiet "Updated input 'flake1'"
-else
-    nix flake metadata "$flake2Dir" --reference-lock-file "$TEST_ROOT"/flake2-overridden.lock | grepQuiet "$flake1OriginalCommit"
-fi
+nix flake metadata "$flake2Dir" --reference-lock-file "$TEST_ROOT"/flake2-overridden.lock | grepQuiet "$flake1OriginalCommit"
 
 # reference-lock-file can only be used if allow-dirty is set.
 expectStderr 1 nix flake metadata "$flake2Dir" --no-allow-dirty --reference-lock-file "$TEST_ROOT"/flake2-overridden.lock
