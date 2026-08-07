@@ -5,7 +5,7 @@ include_dirs = [ include_directories('../..') ]
 headers = files(
   'flake.hh',
   'flakeref.hh',
-  'lockfile.hh',
+  'input-attr-path.hh',
   'provenance.hh',
   'settings.hh',
   'url-name.hh',
