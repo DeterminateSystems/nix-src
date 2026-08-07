@@ -77,6 +77,14 @@ struct SQLite
     void exec(const std::string & stmt);
 
     uint64_t getLastInsertedRowId();
+
+    /**
+     * Set the value returned by `getLastInsertedRowId()`. Since only
+     * successful inserts update the last-inserted rowid, this can be
+     * used to detect whether an upsert statement performed an insert
+     * or an update.
+     */
+    void setLastInsertedRowId(uint64_t id);
 };
 
 /**
@@ -121,9 +129,9 @@ struct SQLiteStmt
         /**
          * Bind the next parameter.
          */
-        Use & operator()(std::string_view value, bool notNull = true);
-        Use & operator()(const unsigned char * data, size_t len, bool notNull = true);
-        Use & operator()(int64_t value, bool notNull = true);
+        Use & apply(std::string_view value, bool notNull = true);
+        Use & apply(const unsigned char * data, size_t len, bool notNull = true);
+        Use & apply(int64_t value, bool notNull = true);
         Use & bind(); // null
 
         int step();
@@ -166,12 +174,15 @@ struct SQLiteTxn
     ~SQLiteTxn();
 };
 
-struct SQLiteError : CloneableError<SQLiteError, Error>
+class SQLiteError : public CloneableError<SQLiteError, Error>
 {
     std::string path;
     std::string errMsg;
     int errNo, extendedErrNo, offset;
 
+    void anchor() override;
+
+public:
     template<typename... Args>
     [[noreturn]] static void throw_(sqlite3 * db, const std::string & fs, const Args &... args)
     {
@@ -207,7 +218,7 @@ void handleSQLiteBusy(const SQLiteBusy & e, time_t & nextWarning);
  * database is busy.
  */
 template<typename T, typename F>
-T retrySQLite(F && fun)
+T retrySQLite(const F & fun)
 {
     time_t nextWarning = time(nullptr) + 1;
 

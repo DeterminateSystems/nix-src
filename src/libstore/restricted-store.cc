@@ -26,6 +26,8 @@ static StorePath pathPartOfReq(const DerivedPath & req)
         req.raw());
 }
 
+void RestrictionContext::anchor() {}
+
 bool RestrictionContext::isAllowed(const DerivedPath & req)
 {
     return isAllowed(pathPartOfReq(req));
@@ -38,6 +40,10 @@ bool RestrictionContext::isAllowed(const DerivedPath & req)
  */
 struct RestrictedStore : public virtual IndirectRootStore, public virtual GcStore
 {
+private:
+    void anchor() override;
+
+public:
     ref<const LocalStore::Config> config;
 
     ref<LocalStore> next;
@@ -98,7 +104,8 @@ struct RestrictedStore : public virtual IndirectRootStore, public virtual GcStor
         ContentAddressMethod hashMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override;
 
     void narFromPath(const StorePath & path, Sink & sink) override;
 
@@ -123,7 +130,7 @@ struct RestrictedStore : public virtual IndirectRootStore, public virtual GcStor
         unsupported("buildDerivation");
     }
 
-    void addTempRoot(const StorePath & path) override {}
+    void addTempRoots(const StorePathSet & paths) override {}
 
     void addIndirectRoot(const std::filesystem::path & path) override {}
 
@@ -157,6 +164,8 @@ struct RestrictedStore : public virtual IndirectRootStore, public virtual GcStor
     }
 };
 
+void RestrictedStore::anchor() {}
+
 ref<Store> makeRestrictedStore(ref<LocalStore::Config> config, ref<LocalStore> next, RestrictionContext & context)
 {
     return make_ref<RestrictedStore>(config, next, context);
@@ -167,8 +176,11 @@ StorePathSet RestrictedStore::queryAllValidPaths()
     StorePathSet paths;
     for (auto & p : goal.originalPaths())
         paths.insert(p);
-    for (auto & p : goal.addedPaths)
-        paths.insert(p);
+    for (auto & [p, future] : goal.state_.lock()->addedPaths) {
+        /* Only report the paths that have finished materialising in the sandbox. */
+        if (future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            paths.insert(p);
+    }
     return paths;
 }
 
@@ -215,9 +227,10 @@ StorePath RestrictedStore::addToStoreFromDump(
     ContentAddressMethod hashMethod,
     HashAlgorithm hashAlgo,
     const StorePathSet & references,
-    RepairFlag repair)
+    RepairFlag repair,
+    std::shared_ptr<const Provenance> provenance)
 {
-    auto path = next->addToStoreFromDump(dump, name, dumpMethod, hashMethod, hashAlgo, references, repair);
+    auto path = next->addToStoreFromDump(dump, name, dumpMethod, hashMethod, hashAlgo, references, repair, provenance);
     goal.addDependency(path);
     return path;
 }
@@ -280,9 +293,18 @@ std::vector<KeyedBuildResult> RestrictedStore::buildPathsWithResults(
 
     for (auto & result : results) {
         if (auto * successP = result.tryGetSuccess()) {
-            for (auto & [outputName, output] : successP->builtOutputs) {
-                newPaths.insert(output.outPath);
-                newRealisations.insert(output);
+            if (auto * pathBuilt = std::get_if<DerivedPathBuilt>(&result.path)) {
+                // TODO ugly extra IO
+                auto drvPath = resolveDerivedPath(*next, *pathBuilt->drvPath);
+                for (auto & [outputName, output] : successP->builtOutputs) {
+                    newPaths.insert(output.outPath);
+                    newRealisations.insert(
+                        {output,
+                         {
+                             .drvPath = drvPath,
+                             .outputName = outputName,
+                         }});
+                }
             }
         }
     }
@@ -291,8 +313,12 @@ std::vector<KeyedBuildResult> RestrictedStore::buildPathsWithResults(
     next->computeFSClosure(newPaths, closure);
     for (auto & path : closure)
         goal.addDependency(path);
-    for (auto & real : newRealisations)
-        goal.addedDrvOutputs.insert(real.id);
+
+    {
+        auto state(goal.state_.lock());
+        for (auto & real : newRealisations)
+            state->addedDrvOutputs.insert(real.id);
+    }
 
     return results;
 }

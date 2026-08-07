@@ -6,12 +6,14 @@
 #include "nix/store/pathlocks.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/indirect-root-store.hh"
+#include "nix/store/active-builds.hh"
 #include "nix/util/sync.hh"
 
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <string>
-#include <boost/unordered/unordered_flat_set.hpp>
+#include <boost/unordered/concurrent_flat_set_fwd.hpp>
 
 namespace nix {
 
@@ -27,16 +29,17 @@ const int nixSchemaVersion = 10;
 
 struct OptimiseStats
 {
-    unsigned long filesLinked = 0;
-    uint64_t bytesFreed = 0;
+    std::atomic<unsigned long> filesLinked = 0;
+    std::atomic<uint64_t> bytesFreed = 0;
 };
 
 struct LocalSettings;
 
 struct LocalBuildStoreConfig : virtual LocalFSStoreConfig
 {
-
 private:
+    void anchor() override;
+
     /**
       Input for computing the build directory. See `getBuildDir()`.
      */
@@ -80,11 +83,16 @@ struct LocalStoreConfig : std::enable_shared_from_this<LocalStoreConfig>,
                           virtual LocalFSStoreConfig,
                           virtual LocalBuildStoreConfig
 {
-    using LocalFSStoreConfig::LocalFSStoreConfig;
+    LocalStoreConfig(const Params & params)
+        : StoreConfig(params, FilePathType::Native)
+        , LocalFSStoreConfig(params)
+    {
+    }
 
     LocalStoreConfig(const std::filesystem::path & path, const Params & params);
 
 private:
+    void anchor() override;
 
     /**
      * An indirection so that we don't need to refer to global settings
@@ -141,7 +149,7 @@ public:
           Whether to request garbage collector roots from an external daemon.
 
           When enabled, the garbage collector connects to a Unix domain socket
-          at [`<state-dir>`](@docroot@/store/types/local-store.md#store-option-state)`/gc-roots-socket/socket` to discover additional roots
+          at [`<state-dir>`](@docroot@/store/types/local-store.md#store-local-store-state)`/gc-roots-socket/socket` to discover additional roots
           that should not be collected. This is useful when the Nix daemon runs
           without root privileges and cannot scan `/proc` for runtime roots.
 
@@ -171,8 +179,15 @@ public:
     StoreReference getReference() const override;
 };
 
-class LocalStore : public virtual IndirectRootStore, public virtual GcStore
+MakeError(PathInUse, Error);
+
+class LocalStore : public virtual IndirectRootStore,
+                   public virtual GcStore,
+                   public virtual TrackActiveBuildsStore,
+                   public virtual QueryActiveBuildsStore
 {
+    void anchor() override;
+
 public:
 
     using Config = LocalStoreConfig;
@@ -208,6 +223,7 @@ private:
          */
         bool gcRunning = false;
         std::shared_future<void> gcFuture;
+        std::thread gcThread;
 
         /**
          * How much disk space was available after the previous
@@ -274,12 +290,18 @@ public:
     std::map<std::string, std::optional<StorePath>>
     queryStaticPartialDerivationOutputMap(const StorePath & path) override;
 
+    std::optional<StorePath>
+    queryStaticPartialDerivationOutput(const StorePath & path, const std::string & outputName) override;
+
     std::optional<StorePath> queryPathFromHashPart(const std::string & hashPart) override;
 
     bool pathInfoIsUntrusted(const ValidPathInfo &) override;
     bool realisationIsUntrusted(const Realisation &) override;
 
     void addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override;
+
+    void
+    addMultipleToStore(PathsSource && pathsToCopy, Activity & act, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
     StorePath addToStoreFromDump(
         Source & dump,
@@ -288,11 +310,37 @@ public:
         ContentAddressMethod hashMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override;
 
-    void addTempRoot(const StorePath & path) override;
+    void addTempRoots(const StorePathSet & paths) override;
 
 private:
+
+    /**
+     * Restore the contents of `info` from `source` (a NAR) into the
+     * store, verifying the NAR hash/size and (if applicable) the
+     * content address, then canonicalise, optimise and optionally fsync
+     * the path.
+     *
+     * This does *not* acquire a lock on the path or register it as
+     * valid: the caller must already hold the path lock and is
+     * responsible for registering the path afterwards. Shared by
+     * `addToStore()` and `addMultipleToStore()`.
+     */
+    void doAddToStore(const ValidPathInfo & info, Source & source, RepairFlag repair);
+
+    /**
+     * The path of the marker file (`<realPath>.unpacked`) used to record
+     * that the NAR for the store path at `realPath` has been unpacked
+     * completely and successfully. See `addMultipleToStore()`.
+     */
+    static std::filesystem::path unpackedMarkerFor(const std::filesystem::path & realPath)
+    {
+        auto marker = realPath;
+        marker += ".unpacked";
+        return marker;
+    }
 
     void createTempRootsFile();
 
@@ -459,7 +507,12 @@ private:
 
     void openDB(State & state, bool create);
 
-    void upgradeDBSchema(State & state);
+    /**
+     * Perform or check if a database schema upgrade is needed.
+     * @param dryRun only check if an upgrade is needed.
+     * @return true if an upgrade is needed or was performed, false otherwise.
+     */
+    bool upgradeDBSchema(State & state, bool dryRun);
 
     void makeStoreWritable();
 
@@ -486,7 +539,7 @@ private:
 
     std::pair<std::filesystem::path, AutoCloseFD> createTempDirInStore();
 
-    typedef boost::unordered_flat_set<ino_t> InodeHash;
+    typedef boost::concurrent_flat_set<ino_t> InodeHash;
 
     InodeHash loadInodeHash();
     Strings readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash);
@@ -507,6 +560,24 @@ private:
     friend struct DerivationGoal;
     /* Only used for createTempDirInStore. */
     friend class DerivationBuilderImpl;
+
+private:
+
+    std::filesystem::path activeBuildsDir;
+
+    struct ActiveBuildFile
+    {
+        AutoCloseFD fd;
+        AutoDelete del;
+    };
+
+    Sync<std::unordered_map<uint64_t, ActiveBuildFile>> activeBuilds;
+
+    std::vector<ActiveBuildInfo> queryActiveBuilds() override;
+
+    BuildHandle buildStarted(const ActiveBuild & build) override;
+
+    void buildFinished(const BuildHandle & handle) override;
 };
 
 } // namespace nix

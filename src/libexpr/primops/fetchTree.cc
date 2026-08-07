@@ -1,7 +1,9 @@
+#include "nix/expr/value.hh"
 #include "nix/fetchers/attrs.hh"
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/expr/eval-settings.hh"
+#include "nix/expr/fetch-tree.hh"
 #include "nix/store/store-api.hh"
 #include "nix/fetchers/fetchers.hh"
 #include "nix/store/filetransfer.hh"
@@ -16,9 +18,103 @@
 
 #include <ctime>
 #include <iomanip>
-#include <regex>
 
 namespace nix {
+
+/**
+ * Adapter for putting libfetchers data into a thunk closure.
+ * Used as the argument to prim_forceLazyFetcherAttr in a lazy apply thunk.
+ */
+class LazyFetcherAttr : public ExternalValueBase, public gc_cleanup
+{
+private:
+    /* VTable anchor to avoid weak linkage of the vtable - it breaks
+       dynamic_cast across shared libraries on Darwin. */
+    virtual void anchor();
+    fetchers::LazyAttr lazy;
+
+public:
+    LazyFetcherAttr(fetchers::LazyAttr lazy)
+        : lazy(std::move(lazy))
+    {
+    }
+
+    fetchers::ResolvedAttr force()
+    {
+        return lazy->compute();
+    }
+
+protected:
+    std::ostream & print(std::ostream & str) const override
+    {
+        unreachable();
+    }
+
+public:
+    std::string showType() const override
+    {
+        unreachable();
+    }
+
+    std::string typeOf() const override
+    {
+        unreachable();
+    }
+};
+
+void LazyFetcherAttr::anchor() {}
+
+/**
+ * Initialize a `Value` from a resolved fetcher attribute.
+ */
+static void resolvedAttrToValue(EvalState & state, Value & v, const fetchers::ResolvedAttr & resolved)
+{
+    std::visit(
+        overloaded{
+            [&](const std::string & s) { v.mkString(s, state.mem); },
+            [&](uint64_t n) { v.mkInt(n); },
+            [&](const Explicit<bool> & b) { v.mkBool(b.t); },
+        },
+        resolved);
+}
+
+/**
+ * internal primop: Force a LazyFetcherAttr external value.
+ */
+static void prim_forceLazyFetcherAttr(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+{
+    Value & arg = *args[0];
+
+    state.forceValue(arg, pos);
+    // We only construct this primop with LazyFetcherAttr preapplied.
+    assert(arg.type() == nExternal);
+    auto * ext = dynamic_cast<LazyFetcherAttr *>(args[0]->external());
+    assert(ext);
+
+    resolvedAttrToValue(state, v, ext->force());
+}
+
+/**
+ * Emit a lazy thunk for a LazyAttr: mkApp(primop, externalValue).
+ */
+static void emitLazyAttrThunk(EvalState & state, const fetchers::LazyAttr & lazyAttr, Value & dest)
+{
+    // not user-callable (unregistered, internal)
+    static PrimOp forcePrimOp{
+        .name = "__forceLazyFetcherAttr",
+        .arity = 1,
+        .impl = prim_forceLazyFetcherAttr,
+        .internal = true,
+    };
+
+    auto * vExt = state.allocValue();
+    vExt->mkExternal(new LazyFetcherAttr(lazyAttr));
+
+    auto * vPrimOp = state.allocValue();
+    vPrimOp->mkPrimOp(&forcePrimOp);
+
+    dest.mkApp(vPrimOp, vExt);
+}
 
 void emitTreeAttrs(
     EvalState & state,
@@ -30,12 +126,16 @@ void emitTreeAttrs(
 {
     auto attrs = state.buildBindings(100);
 
-    state.mkStorePathString(storePath, attrs.alloc(state.s.outPath));
+    auto & vStorePath = attrs.alloc(state.s.outPath);
+    state.mkStorePathString(storePath, vStorePath);
 
     // FIXME: support arbitrary input attributes.
 
     if (auto narHash = input.getNarHash())
         attrs.alloc("narHash").mkString(narHash->to_string(HashFormat::SRI, true), state.mem);
+    else
+        // Lazily compute the NAR hash for backward compatibility.
+        attrs.alloc("narHash").mkApp(**get(state.internalPrimOps, "narHash"), &vStorePath);
 
     if (input.getType() == "git")
         attrs.alloc("submodules").mkBool(fetchers::maybeGetBoolAttr(input.attrs, "submodules").value_or(false));
@@ -52,7 +152,9 @@ void emitTreeAttrs(
             attrs.alloc("shortRev").mkString(emptyHash.gitShortRev(), state.mem);
         }
 
-        if (auto revCount = input.getRevCount())
+        if (auto revCount = maybeGetLazyAttr(input.attrs, "revCount"))
+            emitLazyAttrThunk(state, *revCount, attrs.alloc("revCount"));
+        else if (auto revCount = input.getRevCount())
             attrs.alloc("revCount").mkInt(*revCount);
         else if (emptyRevFallback)
             attrs.alloc("revCount").mkInt(0);
@@ -77,7 +179,6 @@ struct FetchTreeParams
     bool emptyRevFallback = false;
     bool allowNameArgument = false;
     bool isFetchGit = false;
-    bool isFinal = false;
 };
 
 static void fetchTree(
@@ -151,11 +252,6 @@ static void fetchTree(
             attrs.emplace("exportIgnore", Explicit<bool>{true});
         }
 
-        // fetchTree should fetch git repos with shallow = true by default
-        if (type == "git" && !params.isFetchGit && !attrs.contains("shallow")) {
-            attrs.emplace("shallow", Explicit<bool>{true});
-        }
-
         if (!params.allowNameArgument)
             if (auto nameIter = attrs.find("name"); nameIter != attrs.end())
                 state.error<EvalError>("argument 'name' isn’t supported in call to '%s'", fetcher)
@@ -184,17 +280,11 @@ static void fetchTree(
             }
             input = fetchers::Input::fromAttrs(state.fetchSettings, std::move(attrs));
         } else {
-            if (!experimentalFeatureSettings.isEnabled(Xp::Flakes))
-                state
-                    .error<EvalError>(
-                        "passing a string argument to '%s' requires the 'flakes' experimental feature", fetcher)
-                    .atPos(pos)
-                    .debugThrow();
             input = fetchers::Input::fromURL(state.fetchSettings, url);
         }
     }
 
-    if (!state.settings.pureEval && !input.isDirect() && experimentalFeatureSettings.isEnabled(Xp::Flakes))
+    if (!state.settings.pureEval && !input.isDirect())
         input = lookupInRegistries(state.fetchSettings, *state.store, input, fetchers::UseRegistries::Limited).first;
 
     if (state.settings.pureEval && !input.isLocked(state.fetchSettings)) {
@@ -213,17 +303,13 @@ static void fetchTree(
 
     state.checkURI(input.toURLString());
 
-    if (params.isFinal) {
+    if (input.getNarHash())
         input.attrs.insert_or_assign("__final", Explicit<bool>(true));
-    } else {
-        if (input.isFinal())
-            throw Error("input '%s' is not allowed to use the '__final' attribute", input.to_string());
-    }
 
     auto cachedInput =
         state.inputCache->getAccessor(state.fetchSettings, *state.store, input, fetchers::UseRegistries::No);
 
-    auto storePath = state.mountInput(cachedInput.lockedInput, input, cachedInput.accessor);
+    auto storePath = state.mountInput(cachedInput.lockedInput, input, cachedInput.accessor, true);
 
     emitTreeAttrs(state, storePath, cachedInput.lockedInput, v, params.emptyRevFallback, false);
 }
@@ -318,7 +404,6 @@ static RegisterPrimOp primop_fetchTree({
           - `"mercurial"`
 
          *input* can also be a [URL-like reference](@docroot@/command-ref/new-cli/nix3-flake.md#flake-references).
-         The additional input types and the URL-like syntax requires the [`flakes` experimental feature](@docroot@/development/experimental-features.md#xp-feature-flakes) to be enabled.
 
           > **Example**
           >
@@ -358,19 +443,6 @@ static RegisterPrimOp primop_fetchTree({
         return doc;
     }(),
     .impl = prim_fetchTree,
-    .experimentalFeature = Xp::FetchTree,
-});
-
-void prim_fetchFinalTree(EvalState & state, const PosIdx pos, Value ** args, Value & v)
-{
-    fetchTree(state, pos, args, v, {.isFinal = true});
-}
-
-static RegisterPrimOp primop_fetchFinalTree({
-    .name = "fetchFinalTree",
-    .args = {"input"},
-    .impl = prim_fetchFinalTree,
-    .internal = true,
 });
 
 static void fetch(
@@ -477,35 +549,39 @@ static void fetch(
         }
     }
 
-    // Download the file/tarball if substitution failed or no hash was provided
-    auto storePath = unpack ? fetchToStore(
-                                  state.fetchSettings,
-                                  *state.store,
-                                  fetchers::downloadTarball(*state.store, state.fetchSettings, *url),
-                                  FetchMode::Copy,
-                                  name)
-                            : fetchers::downloadFile(*state.store, state.fetchSettings, *url, name).storePath;
-
-    if (expectedHash) {
-        auto hash = unpack ? state.store->queryPathInfo(storePath)->narHash
-                           : hashPath(
-                                 {state.store->requireStoreObjectAccessor(storePath)},
-                                 FileSerialisationMethod::Flat,
-                                 HashAlgorithm::SHA256)
-                                 .hash;
-        if (hash != *expectedHash) {
-            state
-                .error<EvalError>(
-                    "hash mismatch in file downloaded from '%s':\n  specified: %s\n  got:       %s",
-                    *url,
-                    expectedHash->to_string(HashFormat::Nix32, true),
-                    hash.to_string(HashFormat::Nix32, true))
-                .withExitStatus(102)
-                .debugThrow();
+    if (unpack) {
+        auto attrs = fetchers::Attrs{
+            {"type", "tarball"},
+            {"url", *url},
+            {"name", name},
+        };
+        if (expectedHash)
+            attrs.emplace("narHash", expectedHash->to_string(HashFormat::SRI, true));
+        auto input = fetchers::Input::fromAttrs(state.fetchSettings, std::move(attrs));
+        auto cachedInput =
+            state.inputCache->getAccessor(state.fetchSettings, *state.store, input, fetchers::UseRegistries::No);
+        auto storePath = state.mountInput(cachedInput.lockedInput, input, cachedInput.accessor, false);
+        state.mkStorePathString(storePath, v);
+    } else {
+        auto storePath = fetchers::downloadFile(*state.store, state.fetchSettings, *url, name).storePath;
+        if (expectedHash) {
+            auto hash = hashPath(
+                            {state.store->requireStoreObjectAccessor(storePath)},
+                            FileSerialisationMethod::Flat,
+                            HashAlgorithm::SHA256)
+                            .hash;
+            if (hash != *expectedHash)
+                state
+                    .error<EvalError>(
+                        "hash mismatch in file downloaded from '%s':\n  specified: %s\n  got:       %s",
+                        *url,
+                        expectedHash->to_string(HashFormat::Nix32, true),
+                        hash.to_string(HashFormat::Nix32, true))
+                    .withExitStatus(102)
+                    .debugThrow();
         }
+        state.allowAndSetStorePathString(storePath, v);
     }
-
-    state.allowAndSetStorePathString(storePath, v);
 }
 
 static void prim_fetchurl(EvalState & state, const PosIdx pos, Value ** args, Value & v)
@@ -600,7 +676,12 @@ static RegisterPrimOp primop_fetchGit({
 
       - `url`
 
-        The URL of the repo.
+        The [Git URL] of the repo. SCP-like syntax is supported, but relative
+        paths are rewritten to absolute ones. For example:
+
+        `git@github.com:repo/path` becomes `ssh://git@github.com/repo/path`
+
+        [Git URL]: https://git-scm.com/docs/git-clone#_git_urls
 
       - `name` (default: `source`)
 
@@ -719,7 +800,7 @@ static RegisterPrimOp primop_fetchGit({
           name in the `ref` attribute.
 
           However, if the revision you're looking for is in a future
-          branch for the non-default branch you will need to specify the
+          branch for the non-default branch you need to specify the
           the `ref` attribute as well.
 
           ```nix

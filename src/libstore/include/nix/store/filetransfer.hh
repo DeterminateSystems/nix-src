@@ -1,6 +1,8 @@
 #pragma once
 ///@file
 
+#include <optional>
+#include <cstdint>
 #include <string>
 #include <future>
 
@@ -21,15 +23,28 @@ namespace nix {
 
 const std::filesystem::path & nixConfDir();
 
-struct FileTransferSettings : Config
+class FileTransferSettings : public Config
 {
-private:
-    static std::filesystem::path getDefaultSSLCertFile();
+    static std::optional<std::filesystem::path> getDefaultSSLCertFile();
+
+    void anchor() override;
 
 public:
     FileTransferSettings();
 
     Setting<bool> enableHttp2{this, true, "http2", "Whether to enable HTTP/2 support."};
+
+    Setting<bool> enableHttp3{
+        this,
+        false,
+        "http3",
+        R"(
+          Whether to try enabling HTTP/3 (QUIC).
+          When enabled, Nix requests HTTP/3 and transparently falls back
+          to HTTP/2 or HTTP/1.1 for servers that do not support it.
+          This option has no effect unless the `nix` binary is linked
+          against a libcurl built with HTTP/3 (QUIC) support.
+        )"};
 
     Setting<std::string> userAgentSuffix{
         this, "", "user-agent-suffix", "String appended to the user agent in HTTP requests."};
@@ -73,8 +88,63 @@ public:
           timeout's duration.
         )"};
 
-    Setting<unsigned int> tries{
-        this, 5, "download-attempts", "The number of times Nix attempts to download a file before giving up."};
+    Setting<uint32_t> tries{
+        this,
+        5,
+        "filetransfer-retry-attempts",
+        R"(
+          The number of times Nix attempts a file transfer (download
+          or upload) before giving up. Retries apply to transient
+          failures: connection-level errors, HTTP 408, 429, and most
+          5xx responses. Authentication failures (401/403/407),
+          404/410, and other 4xx responses are not retried.
+        )",
+        {"download-attempts"}};
+
+    Setting<uint32_t> retryDelayMs{
+        this,
+        100,
+        "filetransfer-retry-delay",
+        R"(
+          Initial delay in milliseconds before retrying a failed file transfer
+          (download or upload). The delay doubles with each subsequent attempt
+          (exponential backoff) and is subject to random jitter (see
+          `filetransfer-retry-jitter`).
+        )"};
+
+    Setting<uint32_t> retryDelayRateLimitedMs{
+        this,
+        5000,
+        "filetransfer-retry-delay-rate-limited",
+        R"(
+          Initial delay in milliseconds before retrying a file transfer that
+          failed with a rate-limit response (HTTP 429 or 503). The delay doubles
+          with each subsequent attempt.
+
+          Servers may send a `Retry-After` header specifying a longer delay;
+          when present, Nix respects the larger of the two values.
+        )"};
+
+    Setting<uint32_t> retryMaxDelayMs{
+        this,
+        60000,
+        "filetransfer-retry-max-delay",
+        R"(
+          Ceiling on the exponential backoff delay in milliseconds. This does not
+          cap server-provided `Retry-After` values, which are honored as-is.
+        )"};
+
+    Setting<bool> retryJitter{
+        this,
+        true,
+        "filetransfer-retry-jitter",
+        R"(
+          Whether to apply random jitter to retry delays. When enabled, each
+          retry waits for a random duration between 0 and the computed delay
+          ("full jitter"), which spreads out retry storms from many clients.
+
+          Disable for deterministic retry timing (primarily useful for tests).
+        )"};
 
     Setting<size_t> downloadBufferSize{
         this,
@@ -147,8 +217,6 @@ public:
 
 extern FileTransferSettings fileTransferSettings;
 
-extern const unsigned int RETRY_TIME_MS_DEFAULT;
-
 /**
  * HTTP methods supported by FileTransfer.
  */
@@ -182,9 +250,18 @@ struct FileTransferRequest
     Headers headers;
     std::string expectedETag;
     HttpMethod method = HttpMethod::Get;
-    unsigned int baseRetryTimeMs = RETRY_TIME_MS_DEFAULT;
     ActivityId parentAct;
     bool decompress = true;
+
+    /**
+     * Per-request retry overrides. When set, these take precedence over the
+     * global `FileTransferSettings`. Typically populated from a store's URL
+     * parameters (e.g. `s3://bucket?retry-attempts=8`).
+     */
+    std::optional<uint32_t> retryDelayMs;
+    std::optional<uint32_t> retryDelayRateLimitedMs;
+    std::optional<uint32_t> retryMaxDelayMs;
+    std::optional<uint32_t> retryAttempts;
 
     /**
      * Optional path to the client certificate in "PEM" format. Only used for TLS-based protocols.
@@ -242,6 +319,14 @@ struct FileTransferRequest
         , parentAct(getCurActivity())
     {
     }
+
+    /**
+     * `uri` with any userinfo (`user:password@`) stripped, for use in
+     * progress, warning and error messages so credentials embedded in
+     * the URL don't leak into logs. Returns `uri` verbatim if it can't
+     * be parsed.
+     */
+    std::string displayUri() const;
 
     /**
      * Returns the method description for logging purposes.
@@ -346,7 +431,7 @@ public:
         }
     };
 
-    virtual ~FileTransfer() {}
+    virtual ~FileTransfer();
 
     /**
      * Enqueue a data transfer request, returning a future to the result of
@@ -354,14 +439,14 @@ public:
      * exception.
      */
     virtual ItemHandle
-    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) = 0;
+    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) noexcept = 0;
 
     /**
      * Unpause a transfer that has been previously paused by a dataCallback.
      */
     virtual void unpauseTransfer(ItemHandle handle) = 0;
 
-    std::future<FileTransferResult> enqueueFileTransfer(const FileTransferRequest & request);
+    std::future<FileTransferResult> enqueueFileTransfer(const FileTransferRequest & request) noexcept;
 
     /**
      * Synchronously download a file.
@@ -385,7 +470,7 @@ public:
     void
     download(FileTransferRequest && request, Sink & sink, std::function<void(FileTransferResult)> resultCallback = {});
 
-    enum Error { NotFound, Forbidden, Misc, Transient, Interrupted };
+    enum Error { NotFound, Unauthorized, Forbidden, Misc, Transient };
 };
 
 /**
@@ -403,8 +488,13 @@ ref<FileTransfer> getFileTransfer();
  */
 ref<FileTransfer> makeFileTransfer(const FileTransferSettings & settings = fileTransferSettings);
 
+std::shared_ptr<FileTransfer> resetFileTransfer();
+
 class FileTransferError final : public CloneableError<FileTransferError, Error>
 {
+private:
+    void anchor() override;
+
 public:
     FileTransfer::Error error;
     /// intentionally optional

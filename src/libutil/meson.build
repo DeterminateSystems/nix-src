@@ -8,7 +8,7 @@ project(
     'warning_level=1',
     'errorlogs=true', # Please print logs for tests that fail
   ],
-  meson_version : '>= 1.1',
+  meson_version : '>= 1.8',
   license : 'LGPL-2.1-or-later',
 )
 
@@ -42,6 +42,12 @@ configdata_pub.set(
   'NIX_UBSAN_ENABLED',
   ('undefined' in get_option('b_sanitize')).to_int(),
   description : 'Whether nix has been built with UBSan enabled',
+)
+
+configdata_pub.set(
+  'NIX_ASAN_ENABLED',
+  ('address' in get_option('b_sanitize')).to_int(),
+  description : 'Whether nix has been built with ASan enabled',
 )
 
 subdir('nix-meson-build-support/libatomic')
@@ -101,6 +107,10 @@ brotli = [
 ]
 deps_private += brotli
 
+# Direct libzstd linkage for ZstdMultiFrameCompressionSink.
+zstd = dependency('libzstd', version : '>= 1.4.0')
+deps_private += zstd
+
 cpuid_required = get_option('cpuid')
 if host_machine.cpu_family() != 'x86_64' and cpuid_required.enabled()
   warning('Force-enabling seccomp on non-x86_64 does not make sense')
@@ -126,12 +136,19 @@ config_priv_h = configure_file(
 
 subdir('nix-meson-build-support/common')
 
+if have_cxa_throw
+  deps_other += cxa_throw_dep
+endif
+
 sources = [ config_priv_h ] + files(
   'archive.cc',
   'args.cc',
   'base-n.cc',
   'base-nix-32.cc',
+  'bump-memory-resource.cc',
+  'caching-source-accessor.cc',
   'canon-path.cc',
+  'checked-arithmetic.cc',
   'compression-algo.cc',
   'compression-settings.cc',
   'compression.cc',
@@ -148,6 +165,7 @@ sources = [ config_priv_h ] + files(
   'file-content-address.cc',
   'file-descriptor.cc',
   'file-system.cc',
+  'forwarding-source-accessor.cc',
   'fs-sink.cc',
   'git.cc',
   'hash.cc',
@@ -164,6 +182,7 @@ sources = [ config_priv_h ] + files(
   'position.cc',
   'posix-source-accessor.cc',
   'processes.cc',
+  'provenance.cc',
   'serialise.cc',
   'signature/local-keys.cc',
   'signature/signer.cc',
@@ -211,11 +230,10 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixutil',
   sources,
-  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,
-  prelink : true, # For C++ static initializers
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )

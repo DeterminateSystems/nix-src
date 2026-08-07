@@ -27,7 +27,7 @@ let
     pkg-config
     ;
 
-  baseVersion = lib.fileContents ../.version;
+  baseVersion = lib.fileContents ../.version-determinate;
 
   versionSuffix = lib.optionalString (!officialRelease) "pre";
 
@@ -45,21 +45,15 @@ let
   filesetToSource = lib.fileset.toSource;
 
   /**
-    Given a set of layers, create a mkDerivation-like function
+    Given a stdenv and set of layers, create a mkDerivation-like function
   */
-  mkPackageBuilder =
-    exts: userFn: stdenv.mkDerivation (lib.extends (lib.composeManyExtensions exts) userFn);
+  mkPackageBuilderFor =
+    stdenv': exts: userFn:
+    stdenv'.mkDerivation (lib.extends (lib.composeManyExtensions exts) userFn);
+
+  mkPackageBuilder = mkPackageBuilderFor stdenv;
 
   setVersionLayer = finalAttrs: prevAttrs: {
-    preConfigure =
-      prevAttrs.preConfigure or ""
-      +
-      # Update the repo-global .version file.
-      # Symlink ./.version points there, but by default only workDir is writable.
-      ''
-        chmod u+w ./.version
-        echo ${finalAttrs.version} > ./.version
-      '';
   };
 
   localSourceLayer =
@@ -136,8 +130,6 @@ let
             !(stdenv.hostPlatform.isWindows || stdenv.hostPlatform.isCygwin)
             # build failure
             && !stdenv.hostPlatform.isStatic
-            # LTO breaks exception handling on x86-64-darwin.
-            && stdenv.system != "x86_64-darwin"
           )
           ''
             case "$mesonBuildType" in
@@ -150,6 +142,13 @@ let
       ninja
     ]
     ++ prevAttrs.nativeBuildInputs or [ ];
+    mesonFlags =
+      prevAttrs.mesonFlags or [ ]
+      ++ (lib.optionals scope.withUnityBuild [
+        "-Dunity=on"
+        "-Dunity_size=8192"
+        "-Db_pch=false"
+      ]);
     mesonCheckFlags = prevAttrs.mesonCheckFlags or [ ] ++ [
       "--print-errorlogs"
     ];
@@ -209,8 +208,13 @@ let
   enableSanitizersLayer =
     finalAttrs: prevAttrs:
     let
-      sanitizers = lib.optional scope.withASan "address" ++ lib.optional scope.withUBSan "undefined";
+      sanitizers =
+        lib.optional scope.withASan "address"
+        ++ lib.optional scope.withUBSan "undefined"
+        ++ lib.optional scope.withTSan "thread";
     in
+    # Thread sanitizer can't be used with ASan or UBSan
+    assert scope.withTSan -> !(scope.withASan || scope.withUBSan);
     {
       mesonFlags =
         (prevAttrs.mesonFlags or [ ])
@@ -223,6 +227,30 @@ let
             (lib.mesonBool "b_lundef" false)
           ])
         );
+    };
+
+  enableClangTidyLayer =
+    finalAttrs: prevAttrs:
+    lib.optionalAttrs scope.withClangTidy {
+      nativeBuildInputs = (prevAttrs.nativeBuildInputs or [ ]) ++ [
+        pkgs.buildPackages.llvmPackages.clang-tools # provides run-clang-tidy
+      ];
+
+      buildInputs = (prevAttrs.buildInputs or [ ]) ++ [
+        scope.nix-clang-tidy-plugin # provides nix-clang-tidy.pc with plugin_path
+      ];
+
+      # Use debug build for faster compilation (no optimizations)
+      mesonBuildType = "debug";
+
+      # Skip tests - we only care about clang-tidy results
+      doCheck = false;
+
+      # Run clang-tidy after the normal build
+      postBuild = (prevAttrs.postBuild or "") + ''
+        echo "Running clang-tidy on ${finalAttrs.pname}..."
+        ninja clang-tidy
+      '';
     };
 
   nixDefaultsLayer = finalAttrs: prevAttrs: {
@@ -276,6 +304,26 @@ in
     Whether meson components are built with [UndefinedBehaviorSanitizer](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html).
   */
   withUBSan = false;
+
+  /**
+    Whether meson components are built with [ThreadSanitizer](https://clang.llvm.org/docs/ThreadSanitizer.html).
+  */
+  withTSan = false;
+
+  /**
+    Whether meson components are checked with [clang-tidy](https://clang.llvm.org/extra/clang-tidy/).
+  */
+  withClangTidy = false;
+
+  /**
+    Whether to use [unity builds](https://mesonbuild.com/Unity-builds.html#unity-builds).
+  */
+  withUnityBuild = true;
+
+  /**
+    Whether to embed the public C API into nix-cli so plugins can resolve those symbols from the executable.
+  */
+  withPluginCAPI = !(stdenv.hostPlatform.isWindows || stdenv.hostPlatform.isStatic);
 
   /**
     A user-provided extension function to apply to each component derivation.
@@ -375,6 +423,7 @@ in
     mesonBuildLayer
     fixupStaticLayer
     enableSanitizersLayer
+    enableClangTidyLayer
     scope.mesonComponentOverrides
   ];
   mkMesonLibrary = mkPackageBuilder [
@@ -387,6 +436,7 @@ in
     mesonLibraryLayer
     fixupStaticLayer
     enableSanitizersLayer
+    enableClangTidyLayer
     scope.mesonComponentOverrides
   ];
 
@@ -423,7 +473,9 @@ in
   /**
     The Nix command line interface. Note that this does not include its tests, whereas `nix-everything` does.
   */
-  nix-cli = callPackage ../src/nix/package.nix { version = fineVersion; };
+  nix-cli = callPackage ../src/nix/package.nix {
+    version = fineVersion;
+  };
 
   nix-functional-tests = callPackage ../tests/functional/package.nix {
     version = fineVersion;
@@ -456,7 +508,21 @@ in
   */
   nix-json-schema-checks = callPackage ../src/json-schema-checks/package.nix { };
 
-  nix-perl-bindings = callPackage ../src/perl/package.nix { };
+  # The clang-tidy plugin is a build-time tool loaded into clang-tidy itself,
+  # so it must be built with a clang stdenv for ABI compatibility with the
+  # clang-tidy binary from the same llvmPackages set, regardless of the
+  # scope's stdenv (which may be GCC).
+  nix-clang-tidy-plugin = callPackage ../src/clang-tidy-plugin/package.nix {
+    llvmPackages = pkgs.buildPackages.llvmPackages;
+    mkMesonDerivation = mkPackageBuilderFor pkgs.buildPackages.llvmPackages.stdenv [
+      nixDefaultsLayer
+      scope.sourceLayer
+      setVersionLayer
+      mesonLayer
+      fixupStaticLayer
+      scope.mesonComponentOverrides
+    ];
+  };
 
   /**
     Combined package that has the CLI, libraries, and (assuming non-cross, no overrides) it requires that all tests succeed.

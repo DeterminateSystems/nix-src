@@ -12,7 +12,15 @@ namespace nix {
 
 struct LegacySSHStoreConfig : std::enable_shared_from_this<LegacySSHStoreConfig>, virtual CommonSSHStoreConfig
 {
-    using CommonSSHStoreConfig::CommonSSHStoreConfig;
+private:
+    void anchor() override;
+
+public:
+    LegacySSHStoreConfig(const Params & params)
+        : StoreConfig(params, FilePathType::Unix)
+        , CommonSSHStoreConfig(params)
+    {
+    }
 
     LegacySSHStoreConfig(const ParsedURL::Authority & authority, const Params & params);
 
@@ -59,6 +67,10 @@ struct LegacySSHStoreConfig : std::enable_shared_from_this<LegacySSHStoreConfig>
 
 struct LegacySSHStore : public virtual Store
 {
+private:
+    void anchor() override;
+
+public:
     using Config = LegacySSHStoreConfig;
 
     ref<const Config> config;
@@ -72,6 +84,11 @@ struct LegacySSHStore : public virtual Store
     LegacySSHStore(ref<const Config>);
 
     ref<Connection> openConnection();
+
+    bool includeInProvenance() override
+    {
+        return true;
+    }
 
     void queryPathInfoUncached(
         const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override;
@@ -112,11 +129,12 @@ struct LegacySSHStore : public virtual Store
     StorePath addToStoreFromDump(
         Source & dump,
         std::string_view name,
-        FileSerialisationMethod dumpMethod = FileSerialisationMethod::NixArchive,
-        ContentAddressMethod hashMethod = FileIngestionMethod::NixArchive,
-        HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
-        const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) override
+        FileSerialisationMethod dumpMethod,
+        ContentAddressMethod hashMethod,
+        HashAlgorithm hashAlgo,
+        const StorePathSet & references,
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override
     {
         unsupported("addToStore");
     }

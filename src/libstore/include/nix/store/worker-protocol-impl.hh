@@ -34,8 +34,10 @@ WORKER_USE_LENGTH_PREFIX_SERIALISER(template<typename... Ts>, std::tuple<Ts...>)
 
 #define WORKER_USE_LENGTH_PREFIX_SERIALISER_COMMA ,
 WORKER_USE_LENGTH_PREFIX_SERIALISER(
-    template<typename K WORKER_USE_LENGTH_PREFIX_SERIALISER_COMMA typename V>,
-    std::map<K WORKER_USE_LENGTH_PREFIX_SERIALISER_COMMA V>)
+    template<typename K WORKER_USE_LENGTH_PREFIX_SERIALISER_COMMA typename V WORKER_USE_LENGTH_PREFIX_SERIALISER_COMMA
+             typename Compare>
+    ,
+    std::map<K WORKER_USE_LENGTH_PREFIX_SERIALISER_COMMA V WORKER_USE_LENGTH_PREFIX_SERIALISER_COMMA Compare>)
 
 /**
  * Use `CommonProto` where possible.
@@ -45,12 +47,14 @@ struct WorkerProto::Serialise
 {
     static T read(const StoreDirConfig & store, WorkerProto::ReadConn conn)
     {
-        return CommonProto::Serialise<T>::read(store, CommonProto::ReadConn{.from = conn.from});
+        return CommonProto::Serialise<T>::read(
+            store, CommonProto::ReadConn{.from = conn.from, .shortStorePaths = conn.shortStorePaths});
     }
 
     static void write(const StoreDirConfig & store, WorkerProto::WriteConn conn, const T & t)
     {
-        CommonProto::Serialise<T>::write(store, CommonProto::WriteConn{.to = conn.to}, t);
+        CommonProto::Serialise<T>::write(
+            store, CommonProto::WriteConn{.to = conn.to, .shortStorePaths = conn.shortStorePaths}, t);
     }
 };
 

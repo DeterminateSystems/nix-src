@@ -1,7 +1,23 @@
 #include <atomic>
+
 #include "nix/util/source-accessor.hh"
+#include "nix/util/provenance.hh"
 
 namespace nix {
+
+void SourceAccessorError::anchor() {}
+
+void FileNotFound::anchor() {}
+
+void NotASymlink::anchor() {}
+
+void NotADirectory::anchor() {}
+
+void NotARegularFile::anchor() {}
+
+void RestrictedPathError::anchor() {}
+
+void SymlinkNotAllowed::anchor() {}
 
 static std::atomic<size_t> nextNumber{0};
 
@@ -49,16 +65,12 @@ std::string SourceAccessor::readFile(const CanonPath & path)
 {
     StringSink sink;
     std::optional<uint64_t> size;
-    readFile(path, sink, [&](uint64_t _size) { size = _size; });
+    readFile(path, sink, [&](uint64_t _size) {
+        size = _size;
+        sink.s.reserve(_size);
+    });
     assert(size && *size == sink.s.size());
     return std::move(sink.s);
-}
-
-void SourceAccessor::readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback)
-{
-    auto s = readFile(path);
-    sizeCallback(s.size());
-    sink(s);
 }
 
 Hash SourceAccessor::hashPath(const CanonPath & path, PathFilter & filter, HashAlgorithm ha)
@@ -124,6 +136,11 @@ CanonPath SourceAccessor::resolveSymlinks(const CanonPath & path, SymlinkResolut
     }
 
     return res;
+}
+
+std::shared_ptr<const Provenance> SourceAccessor::getProvenance(const CanonPath & path)
+{
+    return provenance && !path.isRoot() ? std::make_shared<SubpathProvenance>(provenance, path) : provenance;
 }
 
 } // namespace nix

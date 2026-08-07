@@ -1,5 +1,5 @@
 #include "nix/store/sqlite.hh"
-#include "nix/store/globals.hh"
+#include "nix/util/environment-variables.hh"
 #include "nix/util/util.hh"
 #include "nix/util/url.hh"
 #include "nix/util/signals.hh"
@@ -10,7 +10,6 @@
 
 #include <sqlite3.h>
 
-#include <atomic>
 #include <thread>
 
 namespace nix {
@@ -34,6 +33,10 @@ SQLiteError::SQLiteError(
         path ? path : "(in-memory)");
 }
 
+void SQLiteError::anchor() {}
+
+void SQLiteBusy::anchor() {}
+
 [[noreturn]] void SQLiteError::throw_(sqlite3 * db, HintFmt && hf)
 {
     int err = sqlite3_errcode(db);
@@ -48,7 +51,7 @@ SQLiteError::SQLiteError(
         exp.err.msg = HintFmt(
             err == SQLITE_PROTOCOL ? "SQLite database '%s' is busy (SQLITE_PROTOCOL)" : "SQLite database '%s' is busy",
             path ? path : "(in-memory)");
-        throw exp;
+        throw std::move(exp);
     } else
         throw SQLiteError(path, errMsg, err, exterr, offset, std::move(hf));
 }
@@ -141,6 +144,11 @@ uint64_t SQLite::getLastInsertedRowId()
     return sqlite3_last_insert_rowid(db);
 }
 
+void SQLite::setLastInsertedRowId(uint64_t id)
+{
+    sqlite3_set_last_insert_rowid(db, id);
+}
+
 void SQLiteStmt::create(sqlite3 * db, const std::string & sql)
 {
     checkInterrupt();
@@ -175,17 +183,17 @@ SQLiteStmt::Use::~Use()
     sqlite3_reset(stmt);
 }
 
-SQLiteStmt::Use & SQLiteStmt::Use::operator()(std::string_view value, bool notNull)
+SQLiteStmt::Use & SQLiteStmt::Use::apply(std::string_view value, bool notNull)
 {
     if (notNull) {
-        if (sqlite3_bind_text(stmt, curArg++, value.data(), -1, SQLITE_TRANSIENT) != SQLITE_OK)
+        if (sqlite3_bind_text(stmt, curArg++, value.data(), value.size(), SQLITE_TRANSIENT) != SQLITE_OK)
             SQLiteError::throw_(stmt.db, "binding argument");
     } else
         bind();
     return *this;
 }
 
-SQLiteStmt::Use & SQLiteStmt::Use::operator()(const unsigned char * data, size_t len, bool notNull)
+SQLiteStmt::Use & SQLiteStmt::Use::apply(const unsigned char * data, size_t len, bool notNull)
 {
     if (notNull) {
         if (sqlite3_bind_blob(stmt, curArg++, data, len, SQLITE_TRANSIENT) != SQLITE_OK)
@@ -195,7 +203,7 @@ SQLiteStmt::Use & SQLiteStmt::Use::operator()(const unsigned char * data, size_t
     return *this;
 }
 
-SQLiteStmt::Use & SQLiteStmt::Use::operator()(int64_t value, bool notNull)
+SQLiteStmt::Use & SQLiteStmt::Use::apply(int64_t value, bool notNull)
 {
     if (notNull) {
         if (sqlite3_bind_int64(stmt, curArg++, value) != SQLITE_OK)
@@ -236,6 +244,7 @@ bool SQLiteStmt::Use::next()
 std::string SQLiteStmt::Use::getStr(int col)
 {
     auto s = (const char *) sqlite3_column_text(stmt, col);
+    // FIXME: Don't crash on nulls?
     assert(s);
     return s;
 }

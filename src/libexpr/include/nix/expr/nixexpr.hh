@@ -8,7 +8,6 @@
 #include <memory_resource>
 #include <algorithm>
 
-#include "nix/expr/gc-small-vector.hh"
 #include "nix/expr/value.hh"
 #include "nix/expr/symbol-table.hh"
 #include "nix/expr/eval-error.hh"
@@ -17,6 +16,7 @@
 #include "nix/expr/counter.hh"
 #include "nix/util/pos-table.hh"
 #include "nix/util/error.hh"
+#include "nix/util/bump-memory-resource.hh"
 
 namespace nix {
 
@@ -91,8 +91,6 @@ typedef std::vector<AttrName> AttrSelectionPath;
 
 std::string showAttrSelectionPath(const SymbolTable & symbols, std::span<const AttrName> attrPath);
 
-using UpdateQueue = SmallTemporaryValueVector<conservativeStackReservation>;
-
 /* Abstract syntax of Nix expressions. */
 
 struct Expr
@@ -123,14 +121,6 @@ struct Expr
      * of thunks allocated.
      */
     virtual Value * maybeThunk(EvalState & state, Env & env);
-
-    /**
-     * Only called when performing an attrset update: `//` or similar.
-     * Instead of writing to a Value &, this function writes to an UpdateQueue.
-     * This allows the expression to perform multiple updates in a delayed manner, gathering up all the updates before
-     * applying them.
-     */
-    virtual void evalForUpdate(EvalState & state, Env & env, UpdateQueue & q, std::string_view errorCtx);
     virtual void setName(Symbol name);
     virtual void setDocComment(DocComment docComment) {};
 
@@ -556,7 +546,7 @@ public:
                 std::numeric_limits<decltype(nFormals)>::max());
             if (pos)
                 err.atPos(positions[pos]);
-            throw err;
+            throw std::move(err);
         }
         std::uninitialized_copy_n(formals.formals.begin(), nFormals, formalsStart);
     };
@@ -738,7 +728,7 @@ struct ExprOpNot : Expr
     struct name : Expr            \
     {                             \
         MakeBinOpMembers(name, s) \
-    }
+    };
 
 MakeBinOp(ExprOpEq, "==");
 MakeBinOp(ExprOpNEq, "!=");
@@ -749,14 +739,7 @@ MakeBinOp(ExprOpConcatLists, "++");
 
 struct ExprOpUpdate : Expr
 {
-private:
-    /** Special case for merging of two attrsets. */
-    void eval(EvalState & state, Value & v, Value & v1, Value & v2);
-    void evalForUpdate(EvalState & state, Env & env, UpdateQueue & q);
-
-public:
-    MakeBinOpMembers(ExprOpUpdate, "//");
-    virtual void evalForUpdate(EvalState & state, Env & env, UpdateQueue & q, std::string_view errorCtx) override;
+    MakeBinOpMembers(ExprOpUpdate, "//")
 };
 
 struct ExprConcatStrings : Expr
@@ -811,23 +794,12 @@ struct ExprPos : Expr
     COMMON_METHODS
 };
 
-/* only used to mark thunks as black holes. */
-struct ExprBlackHole : Expr
-{
-    void show(const SymbolTable & symbols, std::ostream & str) const override {}
-
-    void eval(EvalState & state, Env & env, Value & v) override;
-
-    void bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env) override {}
-
-    [[noreturn]] static void throwInfiniteRecursionError(EvalState & state, Value & v);
-};
-
-extern ExprBlackHole eBlackHole;
-
 class Exprs
 {
-    std::pmr::monotonic_buffer_resource buffer;
+    /* Thread-safe fallback resource, which might be a bit slower. */
+    std::pmr::synchronized_pool_resource fallbackResource;
+    BumpMemoryResource buffer{BumpMemoryResource::defaultReserveSize, &fallbackResource};
+
 public:
     std::pmr::polymorphic_allocator<char> alloc{&buffer};
 

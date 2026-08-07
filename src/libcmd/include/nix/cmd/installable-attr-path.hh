@@ -17,11 +17,10 @@
 #include "nix/util/url.hh"
 #include "nix/fetchers/registry.hh"
 #include "nix/store/build-result.hh"
+#include "nix/expr/root-value.hh"
 
 #include <regex>
 #include <queue>
-
-#include <nlohmann/json.hpp>
 
 namespace nix {
 

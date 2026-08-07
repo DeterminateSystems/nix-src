@@ -41,11 +41,13 @@
   nix-internal-api-docs,
   nix-external-api-docs,
 
-  nix-perl-bindings,
-
   testers,
 
   patchedSrc ? null,
+
+  curl,
+  boehmgc,
+  sentry-native,
 }:
 
 let
@@ -65,19 +67,10 @@ let
       nix-main-c
       nix-cmd
       ;
-  }
-  //
-    lib.optionalAttrs
-      (!stdenv.hostPlatform.isStatic && stdenv.buildPlatform.canExecute stdenv.hostPlatform)
-      {
-        # Currently fails in static build
-        inherit
-          nix-perl-bindings
-          ;
-      };
+  };
 
   devdoc = buildEnv {
-    name = "nix-${nix-cli.version}-devdoc";
+    name = "determinate-nix-${nix-cli.version}-devdoc";
     paths = [
       nix-internal-api-docs
       nix-external-api-docs
@@ -86,7 +79,7 @@ let
 
 in
 stdenv.mkDerivation (finalAttrs: {
-  pname = "nix";
+  pname = "determinate-nix";
   version = nix-cli.version;
 
   /**
@@ -104,6 +97,7 @@ stdenv.mkDerivation (finalAttrs: {
     "dev"
     "doc"
     "man"
+    "debug"
   ];
 
   /**
@@ -116,7 +110,7 @@ stdenv.mkDerivation (finalAttrs: {
   dontBuild = true;
 
   /**
-    `doCheck` controles whether tests are added as build gate for the combined package.
+    `doCheck` controls whether tests are added as build gate for the combined package.
     This includes both the unit tests and the functional tests, but not the
     integration tests that run in CI (the flake's `hydraJobs` and some of the `checks`).
   */
@@ -141,11 +135,9 @@ stdenv.mkDerivation (finalAttrs: {
     nix-functional-tests
   ]
   ++
-    lib.optionals (!stdenv.hostPlatform.isStatic && stdenv.buildPlatform.canExecute stdenv.hostPlatform)
+    lib.optionals (stdenv.hostPlatform.isLinux && stdenv.buildPlatform.canExecute stdenv.hostPlatform)
       [
-        # Perl currently fails in static build
-        # TODO: Split out tests into a separate derivation?
-        nix-perl-bindings
+        nix-util-tests.tests.run-without-new-syscalls
       ];
 
   nativeBuildInputs = [
@@ -155,9 +147,18 @@ stdenv.mkDerivation (finalAttrs: {
   installPhase =
     let
       devPaths = lib.mapAttrsToList (_k: lib.getDev) finalAttrs.finalPackage.libs;
+      debugPaths = lib.map (lib.getOutput "debug") (
+        lib.attrValues finalAttrs.finalPackage.libs
+        ++ [
+          nix-cli
+          curl
+          boehmgc
+        ]
+        ++ lib.optional (stdenv.hostPlatform.isLinux && !stdenv.hostPlatform.isStatic) sentry-native
+      );
     in
     ''
-      mkdir -p $out $dev/nix-support
+      mkdir -p $out $dev/nix-support $debug/lib/debug
 
       # Custom files
       echo $libs >> $dev/nix-support/propagated-build-inputs
@@ -168,6 +169,12 @@ stdenv.mkDerivation (finalAttrs: {
 
       for lib in ${lib.escapeShellArgs devPaths}; do
         lndir $lib $dev
+      done
+
+      for d in ${lib.escapeShellArgs debugPaths}; do
+        if [[ -d $d/lib/debug ]]; then
+          lndir $d/lib/debug $debug/lib/debug
+        fi
       done
 
       # Forwarded outputs
