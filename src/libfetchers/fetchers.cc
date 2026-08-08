@@ -10,6 +10,7 @@
 #include "nix/util/users.hh"
 #include "nix/store/pathlocks.hh"
 #include "nix/util/environment-variables.hh"
+#include "nix/util/strings.hh"
 
 #include <thread>
 #include <nlohmann/json.hpp>
@@ -258,28 +259,49 @@ void Input::checkLocks(Input specified, Input & result)
         return;
     }
 
-    if (auto prevNarHash = specified.getNarHash()) {
-        if (result.getNarHash() != prevNarHash) {
-            if (result.getNarHash())
-                throw Error(
-                    (unsigned int) 102,
-                    "NAR hash mismatch in input '%s', expected '%s' but got '%s'",
-                    specified.to_string(),
-                    prevNarHash->to_string(HashFormat::SRI, true),
-                    result.getNarHash()->to_string(HashFormat::SRI, true));
-            else
-                throw Error(
-                    (unsigned int) 102,
-                    "NAR hash mismatch in input '%s', expected '%s' but got none",
-                    specified.to_string(),
-                    prevNarHash->to_string(HashFormat::SRI, true));
-        }
-    }
+    specified.checkNarHash(result.getNarHash());
 
     if (auto prevRev = specified.getRev()) {
         if (result.getRev() != prevRev)
             throw Error("'rev' attribute mismatch in input '%s', expected %s", result.to_string(), prevRev->gitRev());
     }
+}
+
+void Input::checkNarHash(const std::optional<Hash> & narHash, const std::optional<std::string> & storePath) const
+{
+    auto expected = getNarHash();
+    if (!expected || (narHash && *narHash == *expected))
+        return;
+
+    auto location = storePath ? fmt(" at '%s'", *storePath) : "";
+
+    if (narHash)
+        throw Error(
+            (unsigned int) 102,
+            "NAR hash mismatch in input '%s'%s, expected '%s' but got '%s'",
+            to_string(),
+            location,
+            expected->to_string(HashFormat::SRI, true),
+            narHash->to_string(HashFormat::SRI, true));
+    else
+        throw Error(
+            (unsigned int) 102,
+            "NAR hash mismatch in input '%s'%s, expected '%s' but got none",
+            to_string(),
+            location,
+            expected->to_string(HashFormat::SRI, true));
+}
+
+void Input::checkStorePath(Store & store, const ValidPathInfo & info) const
+{
+    checkNarHash(info.narHash, store.printStorePath(info.path));
+
+    if (!info.references.empty())
+        throw Error(
+            "store path '%s' of input '%s' has references (%s), which is not supported",
+            store.printStorePath(info.path),
+            to_string(),
+            concatStringsSep(", ", store.printStorePathSet(info.references)));
 }
 
 std::pair<ref<SourceAccessor>, Input> Input::getAccessor(const Settings & settings, Store & store) const
@@ -310,6 +332,14 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
         storePath = computeStorePath(store);
 
     auto makeStoreAccessor = [&]() -> std::pair<ref<SourceAccessor>, Input> {
+        auto info = store.queryPathInfo(*storePath);
+
+        /* If the store path is input-addressed (i.e. it comes from a
+           `storePath` attribute rather than being computed from the
+           NAR hash), its validity does not imply that it has the
+           expected contents, so verify the NAR hash. */
+        checkStorePath(store, *info);
+
         auto accessor = store.requireStoreObjectAccessor(*storePath);
 
         // FIXME: use the NAR hash for fingerprinting Git trees since it may have a .gitattributes file and we don't
@@ -324,7 +354,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
             settings.getCache()->upsert(
                 makeSourcePathToHashCacheKey(
                     *accessor->fingerprint, ContentAddressMethod::Raw::NixArchive, CanonPath::root),
-                {{"hash", store.queryPathInfo(*storePath)->narHash.to_string(HashFormat::SRI, true)}});
+                {{"hash", info->narHash.to_string(HashFormat::SRI, true)}});
         }
 
         accessor->provenance = std::make_shared<TreeProvenance>(*this);
@@ -430,6 +460,12 @@ std::string Input::getName() const
 
 StorePath Input::computeStorePath(Store & store) const
 {
+    /* If the input records the resolved store path (which may be
+       input-addressed and thus not computable from the NAR hash), use
+       it directly. */
+    if (auto storePath = maybeGetStrAttr(attrs, "storePath"))
+        return store.parseStorePath(*storePath);
+
     auto narHash = getNarHash();
     if (!narHash)
         throw Error("cannot compute store path for unlocked input '%s'", to_string());
