@@ -106,7 +106,14 @@ void LocalStore::optimisePath_(
 {
     checkInterrupt();
 
-    auto st = lstat(path);
+    /* Missing valid paths are a problem, but they should not prevent
+       store optimisation from finishing, so warn and skip them. */
+    auto optSt = maybeLstat(path);
+    if (!optSt) {
+        warn("skipping missing path %s", PathFmt(path));
+        return;
+    }
+    auto & st = *optSt;
 
 #ifdef __APPLE__
     /* HFS/macOS has some undocumented security feature disabling hardlinking for
