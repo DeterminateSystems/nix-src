@@ -74,7 +74,16 @@ struct SQLite
      */
     void isCache();
 
+    /**
+     * Execute a statement. Retry if the database is busy. Do not call this inside a transaction; use execNoRetry()
+     * instead.
+     */
     void exec(const std::string & stmt);
+
+    /**
+     * Execute a statement.
+     */
+    void execNoRetry(const std::string & stmt);
 
     uint64_t getLastInsertedRowId();
 

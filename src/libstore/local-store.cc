@@ -144,6 +144,7 @@ struct LocalStore::State::Stmts
     SQLiteStmt QueryRealisedOutput;
     SQLiteStmt QueryPathFromHashPart;
     SQLiteStmt QueryValidPaths;
+    SQLiteStmt QuerySchemaMigration;
 };
 
 LocalStore::LocalStore(ref<const Config> config)
@@ -293,17 +294,6 @@ LocalStore::LocalStore(ref<const Config> config)
                            : "database schema needs migrating, but this cannot be done in read-only mode");
     }
 
-    auto acquireWriteLock = [&]() {
-        if (!lockFile(globalLock.get(), ltWrite, false)) {
-            printInfo("waiting for exclusive access to the Nix store...");
-            // We have acquired a shared lock; release it to prevent deadlocks.
-            // This can happen if someone else is trying to promote their read
-            // lock into a write lock.
-            lockFile(globalLock.get(), ltNone, false);
-            lockFile(globalLock.get(), ltWrite, true);
-        }
-    };
-
     if (curSchema > nixSchemaVersion)
         throw Error("current Nix store schema is version %1%, but I only support %2%", curSchema, nixSchemaVersion);
 
@@ -326,7 +316,12 @@ LocalStore::LocalStore(ref<const Config> config)
                 "which is no longer supported. To convert to the new format,\n"
                 "please upgrade Nix to version 1.11 first.");
 
-        acquireWriteLock();
+        if (!lockFile(globalLock.get(), ltWrite, false)) {
+            Activity act(*logger, lvlInfo, actUnknown, "waiting for exclusive access to the Nix store");
+            lockFile(
+                globalLock.get(), ltNone, false); // We have acquired a shared lock; release it to prevent deadlocks
+            lockFile(globalLock.get(), ltWrite, true);
+        }
 
         /* Get the schema version again, because another process may
            have performed the upgrade already. */
@@ -340,40 +335,28 @@ LocalStore::LocalStore(ref<const Config> config)
 
         if (curSchema < 8) {
             SQLiteTxn txn(state->db);
-            state->db.exec("alter table ValidPaths add column ultimate integer");
-            state->db.exec("alter table ValidPaths add column sigs text");
+            state->db.execNoRetry("alter table ValidPaths add column ultimate integer");
+            state->db.execNoRetry("alter table ValidPaths add column sigs text");
             txn.commit();
         }
 
         if (curSchema < 9) {
-            SQLiteTxn txn(state->db);
             state->db.exec("drop table FailedPaths");
-            txn.commit();
         }
 
         if (curSchema < 10) {
-            SQLiteTxn txn(state->db);
             state->db.exec("alter table ValidPaths add column ca text");
-            txn.commit();
         }
 
         writeFile(schemaPath, fmt("%1%", nixSchemaVersion), 0666, FsSync::Yes);
 
-        // Downgrade to a read lock and hold to prevent other processes from
-        // upgrading the schema while we're using the store
         lockFile(globalLock.get(), ltRead, true);
     }
 
     else
         openDB(*state, false);
 
-    if (!config->readOnly && upgradeDBSchema(*state, true)) {
-        acquireWriteLock();
-        upgradeDBSchema(*state, false);
-        // Downgrade to a read lock and hold to prevent other processes from
-        // upgrading the schema while we're using the store
-        lockFile(globalLock.get(), ltRead, true);
-    }
+    upgradeDBSchema(*state);
 
     /* Prepare SQL statements. */
     state->stmts->RegisterValidPath.create(
@@ -614,24 +597,11 @@ void LocalStore::openDB(State & state, bool create)
     }
 }
 
-bool LocalStore::upgradeDBSchema(State & state, bool dryRun)
+void LocalStore::upgradeDBSchema(State & state)
 {
-    bool ret = false;
+    state.db.exec("create table if not exists SchemaMigrations (migration text primary key not null);");
 
-    {
-        SQLiteStmt queryHasSchemaMigrations;
-        queryHasSchemaMigrations.create(
-            state.db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='SchemaMigrations';");
-        auto useQueryHasSchemaMigrations(queryHasSchemaMigrations.use());
-        if (!useQueryHasSchemaMigrations.next()) {
-            if (dryRun)
-                return true;
-            else {
-                state.db.exec("create table SchemaMigrations (migration text primary key not null);");
-                ret = true;
-            }
-        }
-    }
+    state.stmts->QuerySchemaMigration.create(state.db, "select 1 from SchemaMigrations where migration = ?;");
 
     StringSet schemaMigrations;
 
@@ -643,39 +613,38 @@ bool LocalStore::upgradeDBSchema(State & state, bool dryRun)
             schemaMigrations.insert(useQuerySchemaMigrations.getStr(0));
     }
 
-    auto needsMigration = [&](const std::string & migrationName) -> bool {
-        return !schemaMigrations.contains(migrationName);
-    };
-
-    auto maybeUpgrade = [&](const std::string & migrationName, const std::string & stmt) {
-        if (!needsMigration(migrationName))
+    auto doUpgrade = [&](const std::string & migrationName, const std::string & stmt) {
+        if (schemaMigrations.contains(migrationName))
             return;
 
-        ret = true;
-        if (dryRun)
-            return;
+        notice("executing Nix database schema migration '%s'...", migrationName);
 
-        debug("executing Nix database schema migration '%s'...", migrationName);
+        retrySQLite<void>([&]() {
+            SQLiteTxn txn(state.db);
 
-        SQLiteTxn txn(state.db);
-        state.db.exec(stmt + fmt(";\ninsert or ignore into SchemaMigrations values('%s')", migrationName));
-        txn.commit();
+            /* Another process may have executed this migration in the
+               meantime, so check for it again within the
+               transaction. */
+            if (state.stmts->QuerySchemaMigration.use().apply(migrationName).next())
+                return;
+
+            state.db.execNoRetry(stmt + fmt(";\ninsert or ignore into SchemaMigrations values('%s')", migrationName));
+            txn.commit();
+        });
 
         schemaMigrations.insert(migrationName);
     };
 
     if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations))
-        maybeUpgrade(
+        doUpgrade(
             "20251017-ca-derivations",
 #include "ca-specific-schema.sql.gen.hh"
         );
 
-    maybeUpgrade("20260309-drop-redundant-indexreferrer", "drop index if exists IndexReferrer");
+    doUpgrade("20260309-drop-redundant-indexreferrer", "drop index if exists IndexReferrer");
 
     if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
-        maybeUpgrade("20241024-provenance", "alter table ValidPaths add column provenance text");
-
-    return ret;
+        doUpgrade("20241024-provenance", "alter table ValidPaths add column provenance text");
 }
 
 /* To improve purity, users may want to make the Nix store a read-only
