@@ -133,10 +133,13 @@ void SQLite::isCache()
 
 void SQLite::exec(const std::string & stmt)
 {
-    retrySQLite<void>([&]() {
-        if (sqlite3_exec(db, stmt.c_str(), 0, 0, 0) != SQLITE_OK)
-            SQLiteError::throw_(db, "executing SQLite statement '%s'", stmt);
-    });
+    retrySQLite<void>([&]() { execNoRetry(stmt); });
+}
+
+void SQLite::execNoRetry(const std::string & stmt)
+{
+    if (sqlite3_exec(db, stmt.c_str(), 0, 0, 0) != SQLITE_OK)
+        SQLiteError::throw_(db, "executing SQLite statement '%s'", stmt);
 }
 
 uint64_t SQLite::getLastInsertedRowId()

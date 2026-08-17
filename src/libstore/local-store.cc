@@ -144,6 +144,7 @@ struct LocalStore::State::Stmts
     SQLiteStmt QueryRealisedOutput;
     SQLiteStmt QueryPathFromHashPart;
     SQLiteStmt QueryValidPaths;
+    SQLiteStmt QuerySchemaMigration;
 };
 
 LocalStore::LocalStore(ref<const Config> config)
@@ -334,21 +335,17 @@ LocalStore::LocalStore(ref<const Config> config)
 
         if (curSchema < 8) {
             SQLiteTxn txn(state->db);
-            state->db.exec("alter table ValidPaths add column ultimate integer");
-            state->db.exec("alter table ValidPaths add column sigs text");
+            state->db.execNoRetry("alter table ValidPaths add column ultimate integer");
+            state->db.execNoRetry("alter table ValidPaths add column sigs text");
             txn.commit();
         }
 
         if (curSchema < 9) {
-            SQLiteTxn txn(state->db);
             state->db.exec("drop table FailedPaths");
-            txn.commit();
         }
 
         if (curSchema < 10) {
-            SQLiteTxn txn(state->db);
             state->db.exec("alter table ValidPaths add column ca text");
-            txn.commit();
         }
 
         writeFile(schemaPath, fmt("%1%", nixSchemaVersion), 0666, FsSync::Yes);
@@ -604,6 +601,8 @@ void LocalStore::upgradeDBSchema(State & state)
 {
     state.db.exec("create table if not exists SchemaMigrations (migration text primary key not null);");
 
+    state.stmts->QuerySchemaMigration.create(state.db, "select 1 from SchemaMigrations where migration = ?;");
+
     StringSet schemaMigrations;
 
     {
@@ -620,9 +619,18 @@ void LocalStore::upgradeDBSchema(State & state)
 
         notice("executing Nix database schema migration '%s'...", migrationName);
 
-        SQLiteTxn txn(state.db);
-        state.db.exec(stmt + fmt(";\ninsert or ignore into SchemaMigrations values('%s')", migrationName));
-        txn.commit();
+        retrySQLite<void>([&]() {
+            SQLiteTxn txn(state.db);
+
+            /* Another process may have executed this migration in the
+               meantime, so check for it again within the
+               transaction. */
+            if (state.stmts->QuerySchemaMigration.use().apply(migrationName).next())
+                return;
+
+            state.db.execNoRetry(stmt + fmt(";\ninsert or ignore into SchemaMigrations values('%s')", migrationName));
+            txn.commit();
+        });
 
         schemaMigrations.insert(migrationName);
     };
