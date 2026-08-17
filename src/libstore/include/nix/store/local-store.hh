@@ -507,12 +507,7 @@ private:
 
     void openDB(State & state, bool create);
 
-    /**
-     * Perform or check if a database schema upgrade is needed.
-     * @param dryRun only check if an upgrade is needed.
-     * @return true if an upgrade is needed or was performed, false otherwise.
-     */
-    bool upgradeDBSchema(State & state, bool dryRun);
+    void upgradeDBSchema(State & state);
 
     void makeStoreWritable();
 
