@@ -349,6 +349,15 @@ public:
     template<typename T, std::size_t N = 0>
     inline void * allocBytes(size_t count);
 
+    inline void * allocAtomicBytes(size_t n);
+
+    /**
+     * Like `allocBytes<T, N>()`, but allocates pointer-free memory
+     * that is not zeroed (see `allocAtomicBytes(size_t)`).
+     */
+    template<typename T, std::size_t N = 0>
+    inline void * allocAtomicBytes(size_t count);
+
     inline Value * allocValue();
     inline Env & allocEnv(size_t size);
 

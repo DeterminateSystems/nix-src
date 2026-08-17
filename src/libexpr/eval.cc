@@ -94,7 +94,11 @@ static const char * makeImmutableString(std::string_view s)
 
 StringData & StringData::alloc(EvalMemory & mem, size_t size)
 {
-    void * t = mem.allocBytes<char, sizeof(StringData) + 1>(size);
+    /* String data contains no pointers, so it doesn't need to be
+       scanned by the GC. Note that the allocated memory is not
+       zeroed, so callers must initialize the entire string, including
+       the NUL terminator. */
+    void * t = mem.allocAtomicBytes<char, sizeof(StringData) + 1>(size);
     auto res = new (t) StringData(size);
     return *res;
 }

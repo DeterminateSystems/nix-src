@@ -26,9 +26,12 @@ inline void * EvalMemory::allocBytes(size_t n)
     return p;
 }
 
+/**
+ * Compute `count * sizeof(T) + N`, throwing `bad_alloc` on overflow.
+ */
 template<typename T, std::size_t N>
 [[gnu::always_inline]]
-inline void * EvalMemory::allocBytes(size_t count)
+inline size_t checkedAllocSize(size_t count)
 {
     size_t res = 0;
 
@@ -38,7 +41,36 @@ inline void * EvalMemory::allocBytes(size_t count)
     if (__builtin_add_overflow(res, N, &res)) [[unlikely]]
         outOfMemory();
 
-    return allocBytes(res);
+    return res;
+}
+
+template<typename T, std::size_t N>
+[[gnu::always_inline]]
+inline void * EvalMemory::allocBytes(size_t count)
+{
+    return allocBytes(checkedAllocSize<T, N>(count));
+}
+
+/**
+ * Allocate memory that must not contain pointers into the GC heap,
+ * since it is not scanned for pointers by the GC. Note: unlike
+ * `allocBytes()`, the returned memory is *not* zeroed.
+ */
+[[gnu::always_inline]]
+inline void * EvalMemory::allocAtomicBytes(size_t n)
+{
+    /* GC_MALLOC_ATOMIC is defined as std::malloc in non-GC builds. */
+    void * p = GC_MALLOC_ATOMIC(n);
+    if (!p)
+        outOfMemory();
+    return p;
+}
+
+template<typename T, std::size_t N>
+[[gnu::always_inline]]
+inline void * EvalMemory::allocAtomicBytes(size_t count)
+{
+    return allocAtomicBytes(checkedAllocSize<T, N>(count));
 }
 
 [[gnu::always_inline]]
