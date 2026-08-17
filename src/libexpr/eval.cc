@@ -1109,7 +1109,7 @@ Value * ExprVar::maybeThunk(EvalState & state, Env & env)
         state.nrAvoided++;
         return v;
     }
-    return Expr::maybeThunk(state, env);
+    [[gnu::musttail]] return Expr::maybeThunk(state, env);
 }
 
 Value * ExprString::maybeThunk(EvalState & state, Env & env)
@@ -1422,11 +1422,12 @@ void ExprLet::eval(EvalState & state, Env & env, Value & v)
         env2.values[displ++] = i.second.e->maybeThunk(state, *i.second.chooseByKind(&env2, &env, inheritEnv));
     }
 
-    auto dts = state.debugRepl
-                   ? makeDebugTraceStacker(state, *this, env2, getPos(), "while evaluating a '%1%' expression", "let")
-                   : nullptr;
-
-    body->eval(state, env2, v);
+    if (state.debugRepl) {
+        auto dts = makeDebugTraceStacker(state, *this, env2, getPos(), "while evaluating a '%1%' expression", "let");
+        return body->eval(state, env2, v);
+    } else {
+        [[gnu::musttail]] return body->eval(state, env2, v);
+    }
 }
 
 void ExprList::eval(EvalState & state, Env & env, Value & v)
@@ -1871,7 +1872,7 @@ void EvalState::autoCallFunction(const Bindings & args, Value & fun, Value & res
             Value * v = allocValue();
             callFunction(*found->value, fun, *v, pos);
             forceValue(*v, pos);
-            return autoCallFunction(args, *v, res);
+            [[gnu::musttail]] return autoCallFunction(args, *v, res);
         }
     }
 
@@ -1910,7 +1911,7 @@ https://nix.dev/manual/nix/stable/language/syntax.html#functions.)",
         }
     }
 
-    callFunction(fun, allocValue()->mkAttrs(attrs), res, pos);
+    [[gnu::musttail]] return callFunction(fun, allocValue()->mkAttrs(attrs), res, pos);
 }
 
 void ExprWith::eval(EvalState & state, Env & env, Value & v)
@@ -1919,13 +1920,14 @@ void ExprWith::eval(EvalState & state, Env & env, Value & v)
     env2.up = &env;
     env2.values[0] = attrs->maybeThunk(state, env);
 
-    body->eval(state, env2, v);
+    [[gnu::musttail]] return body->eval(state, env2, v);
 }
 
 void ExprIf::eval(EvalState & state, Env & env, Value & v)
 {
     // We cheat in the parser, and pass the position of the condition as the position of the if itself.
-    (state.evalBool(env, cond, pos, "while evaluating a branch condition") ? then : else_)->eval(state, env, v);
+    [[gnu::musttail]] return (state.evalBool(env, cond, pos, "while evaluating a branch condition") ? then : else_)
+        ->eval(state, env, v);
 }
 
 void ExprAssert::eval(EvalState & state, Env & env, Value & v)
@@ -1950,7 +1952,7 @@ void ExprAssert::eval(EvalState & state, Env & env, Value & v)
 
         state.error<AssertionError>("assertion '%1%' failed", exprStr).atPos(pos).withFrame(env, *this).debugThrow();
     }
-    body->eval(state, env, v);
+    [[gnu::musttail]] return body->eval(state, env, v);
 }
 
 void ExprOpNot::eval(EvalState & state, Env & env, Value & v)
