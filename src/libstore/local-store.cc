@@ -295,7 +295,7 @@ LocalStore::LocalStore(ref<const Config> config)
 
     auto acquireWriteLock = [&]() {
         if (!lockFile(globalLock.get(), ltWrite, false)) {
-            printInfo("waiting for exclusive access to the Nix store...");
+            Activity act(*logger, lvlInfo, actUnknown, "waiting for exclusive access to the Nix store");
             // We have acquired a shared lock; release it to prevent deadlocks.
             // This can happen if someone else is trying to promote their read
             // lock into a write lock.
