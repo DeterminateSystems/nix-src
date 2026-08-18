@@ -68,7 +68,6 @@ struct Executor::Fiber
      */
     detail::ValueBase * waitingOn = nullptr;
     WaiterDomain * suspendDomain = nullptr;
-    std::unique_lock<std::mutex> * suspendLock = nullptr;
 
     Fiber(Executor & executor, Item && item)
         : executor(executor)
@@ -264,21 +263,19 @@ void Executor::runFiber(FiberPtr fiber)
 
     if (fib->ctx) {
         /* The fiber suspended itself in `waitOnThunk()`. We are still
-           holding the waiter domain lock, which the fiber acquired on
+           holding the waiter domain mutex, which the fiber locked on
            this thread before switching back to us (so `std::mutex`
            thread ownership is respected). Register the fiber in the
-           wait list, then release the lock. Only after the unlock can
+           wait list, then release the mutex. Only after the unlock can
            `notifyWaiters()` extract and resume the fiber — at which
-           point `fib->ctx` is fully formed. Note that `suspendLock`
-           points into the fiber's (currently quiescent) stack. */
+           point `fib->ctx` is fully formed. */
         auto domain = fib->suspendDomain;
-        auto lock = fib->suspendLock;
-        assert(domain && lock && fib->waitingOn);
+        assert(domain && fib->waitingOn);
         auto n = ++currentSuspendedFibers;
         if (n > maxSuspendedFibers)
             maxSuspendedFibers = n;
         domain->waiters.emplace(fib->waitingOn, std::move(fiber));
-        lock->unlock();
+        domain->mutex.unlock();
         /* `fib` may be resumed by another thread from this point on,
            so don't touch it anymore. */
     } else {
@@ -475,7 +472,14 @@ suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::V
     assert(!std::current_exception() && !std::uncaught_exceptions());
     fib->waitingOn = &v;
     fib->suspendDomain = &domain;
-    fib->suspendLock = &lk;
+    /* Hand ownership of the domain mutex over to the scheduler, which
+       will unlock it (via `domain.mutex`) after registering us in the
+       wait list. We must not let the scheduler unlock through `lk`:
+       `unique_lock::unlock()` releases the mutex *before* clearing its
+       owns-flag, and the moment the mutex is released, this fiber can
+       be resumed on another thread, which would then read the flag on
+       this stack concurrently with the scheduler's write. */
+    lk.release();
     /* Switch back to the scheduler (`Executor::runFiber()`), which
        will register us in the domain's wait list and then release the
        lock. We can't do that here: the fiber's continuation only
