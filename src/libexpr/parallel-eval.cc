@@ -37,6 +37,15 @@ struct Executor::Fiber
      */
     const uint32_t evalThreadId;
 
+    /**
+     * This fiber's Nix call stack depth (see
+     * `EvalState::callDepthPtr`). `EvalState::addCallDepth()` uses
+     * this counter instead of the thread-local one while the fiber is
+     * running, so that the depth accounting survives the fiber being
+     * suspended mid-call-chain and resumed on a different thread.
+     */
+    size_t callDepth = 0;
+
     std::promise<void> promise;
 
     work_t work;
@@ -242,13 +251,16 @@ void Executor::runFiber(FiberPtr fiber)
     assert(!currentFiber);
 
     auto savedThreadId = myEvalThreadId;
+    auto savedCallDepthPtr = EvalState::callDepthPtr;
     currentFiber = fib;
     myEvalThreadId = fib->evalThreadId;
+    EvalState::callDepthPtr = &fib->callDepth;
 
     fib->ctx = std::move(fib->ctx).resume();
 
     currentFiber = nullptr;
     myEvalThreadId = savedThreadId;
+    EvalState::callDepthPtr = savedCallDepthPtr;
 
     if (fib->ctx) {
         /* The fiber suspended itself in `waitOnThunk()`. We are still

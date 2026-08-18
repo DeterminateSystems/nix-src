@@ -1582,6 +1582,7 @@ void ExprLambda::eval(EvalState & state, Env & env, Value & v)
 }
 
 [[gnu::tls_model("initial-exec")]] thread_local size_t EvalState::callDepth = 0;
+[[gnu::tls_model("initial-exec")]] thread_local size_t * EvalState::callDepthPtr = &EvalState::callDepth;
 
 void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes, const PosIdx pos)
 {
