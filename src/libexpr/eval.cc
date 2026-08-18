@@ -3100,6 +3100,9 @@ void EvalState::printStatistics()
     topObj["nrSpuriousWakeups"] = nrSpuriousWakeups.load();
     topObj["maxWaiting"] = maxWaiting.load();
     topObj["waitingTime"] = microsecondsWaiting / (double) 1000000;
+    topObj["nrFibersSpawned"] = executor->nrFibersSpawned.load();
+    topObj["nrFiberWakeups"] = executor->nrFiberWakeups.load();
+    topObj["maxSuspendedFibers"] = executor->maxSuspendedFibers.load();
     topObj["nrAvoided"] = nrAvoided.load();
     topObj["nrLookups"] = nrLookups.load();
     topObj["nrPrimOpCalls"] = nrPrimOpCalls.load();
