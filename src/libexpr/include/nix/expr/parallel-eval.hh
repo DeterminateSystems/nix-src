@@ -42,6 +42,15 @@ struct Executor
     using FiberPtr = std::unique_ptr<Fiber>;
 
     /**
+     * A pool of reusable fiber stacks, to avoid the cost of
+     * allocating and faulting in a fresh stack for every work
+     * item. Defined in `parallel-eval.cc`.
+     */
+    struct StackPool;
+
+    const std::unique_ptr<StackPool> stackPool;
+
+    /**
      * Queue entries are either fresh work items (which get a new fiber
      * when they're picked up) or suspended fibers to be resumed.
      */
@@ -69,6 +78,7 @@ struct Executor
     std::atomic<uint64_t> nrFiberWakeups{0};
     std::atomic<uint64_t> currentSuspendedFibers{0};
     std::atomic<uint64_t> maxSuspendedFibers{0};
+    std::atomic<uint64_t> nrFiberStacksAllocated{0};
 
     static unsigned int getEvalCores(const EvalSettings & evalSettings);
 
