@@ -1,0 +1,58 @@
+From: Eelco Dolstra <edolstra@gmail.com>
+Subject: [PATCH] Fix cross-thread corruption of the exception state in
+ manage_exception_state
+
+manage_exception_state snapshots *__cxa_get_globals() before a fiber
+context switch and writes it back afterwards, to preserve the
+libstdc++ per-thread exception state across switches. However,
+__cxa_get_globals() is declared __attribute__((const)), so the
+compiler folds the constructor's and the destructor's calls into a
+single call executed before the switch. When a fiber suspends on one
+thread and is resumed on another, the destructor then restores the
+snapshot through the *original* thread's globals pointer, silently
+overwriting that thread's live exception state (the caughtExceptions
+list head and the uncaughtExceptions counter) from another thread.
+
+This caused reproducible "std::terminate() called without exception"
+aborts and segfaults in programs that resume fibers on other threads
+and unwind exceptions concurrently: a `throw;` would find its thread's
+caught-exception list emptied under its feet.
+
+Fix by fetching the globals pointer through a volatile function
+pointer, which forces a fresh call in the destructor so that the write
+goes to the thread the destructor actually runs on.
+
+Assisted-by: Claude Fable 5 <noreply@anthropic.com>
+---
+--- a/boost/context/fiber_fcontext.hpp
++++ b/boost/context/fiber_fcontext.hpp
+@@ -90,7 +90,7 @@
+ class manage_exception_state {
+ public:
+     manage_exception_state() {
+-        exception_state_ = *__cxa_get_globals();
++        exception_state_ = *get_globals();
+     }
+     // Hack to account for the forced_unwind exception thrown in fiber_unwind
+     // that's run ontop before the destructor.
+@@ -98,9 +98,19 @@
+         exception_state_.uncaughtExceptions += 1;
+     }
+     ~manage_exception_state() {
+-        *__cxa_get_globals() = exception_state_;
++        *get_globals() = exception_state_;
+     }
+ private:
++    /* Fetch through a volatile function pointer to keep the compiler
++       from CSE'ing the `const`-attributed __cxa_get_globals() across
++       the context switch: the destructor can run on a different thread
++       than the constructor (e.g. when a fiber is resumed on another
++       thread), and the write must go to the *destructor* thread's
++       globals, not the constructor thread's. */
++    static __cxa_eh_globals * get_globals() noexcept {
++        __cxa_eh_globals * (* volatile f)() = __cxa_get_globals;
++        return f();
++    }
+     __cxa_eh_globals exception_state_;
+ };
+ } // namespace __cxxabiv1

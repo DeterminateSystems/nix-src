@@ -205,6 +205,7 @@ scope: {
       ];
       patches = [
         ./patches/0001-Fix-uncaught_exceptions-not-accounting-for-forced_un.patch
+        ./patches/0002-Fix-cross-thread-corruption-of-the-exception-state-i.patch
       ];
       enableIcu = false;
       inherit stdenv;
