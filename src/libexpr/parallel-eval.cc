@@ -87,6 +87,47 @@ struct Executor::Fiber
     }
 };
 
+struct Executor::StackPool
+{
+    Sync<std::vector<boost::context::stack_context>> stacks;
+
+    ~StackPool()
+    {
+        for (auto & sctx : *stacks.lock())
+            boost::context::protected_fixedsize_stack(evalStackSize).deallocate(sctx);
+    }
+};
+
+/**
+ * A Boost.Context stack allocator that reuses stacks from the
+ * executor's pool. Reused stacks also come with their previously
+ * faulted-in pages, avoiding both the mmap/munmap system calls and
+ * the page faults of a fresh stack for every work item.
+ */
+struct PooledStackAllocator
+{
+    Executor & executor;
+
+    boost::context::stack_context allocate()
+    {
+        {
+            auto stacks(executor.stackPool->stacks.lock());
+            if (!stacks->empty()) {
+                auto sctx = stacks->back();
+                stacks->pop_back();
+                return sctx;
+            }
+        }
+        executor.nrFiberStacksAllocated++;
+        return boost::context::protected_fixedsize_stack(evalStackSize).allocate();
+    }
+
+    void deallocate(boost::context::stack_context & sctx)
+    {
+        executor.stackPool->stacks.lock()->push_back(sctx);
+    }
+};
+
 // cache line alignment to prevent false sharing
 struct alignas(64) WaiterDomain
 {
@@ -144,7 +185,8 @@ unsigned int Executor::getEvalCores(const EvalSettings & evalSettings)
 }
 
 Executor::Executor(const EvalSettings & evalSettings)
-    : evalCores(getEvalCores(evalSettings))
+    : stackPool(std::make_unique<StackPool>())
+    , evalCores(getEvalCores(evalSettings))
     , enabled(evalCores > 1)
     , interruptCallback(createInterruptCallback([&]() {
         /* Wake up all waiting fibers and threads so they can observe
@@ -217,7 +259,7 @@ Executor::FiberPtr Executor::makeFiber(Item && item)
     try {
         fiber->ctx = boost::context::fiber(
             std::allocator_arg,
-            boost::context::protected_fixedsize_stack(evalStackSize),
+            PooledStackAllocator{*this},
             [fib](boost::context::fiber && sched) -> boost::context::fiber {
                 fib->schedCtx = std::move(sched);
                 try {
