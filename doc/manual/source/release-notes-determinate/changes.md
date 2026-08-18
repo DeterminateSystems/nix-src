@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.22.0.<!-- differences -->
+This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.22.1.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -226,3 +226,15 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 <!-- Determinate Nix version 3.21.9 -->
 
 <!-- Determinate Nix version 3.22.0 -->
+
+<!-- Determinate Nix version 3.22.1 -->
+
+* Don't let missing store paths abort 'nix store optimise' by @edolstra in [DeterminateSystems/nix-src#590](https://github.com/DeterminateSystems/nix-src/pull/590)
+
+* Sync with upstream 2.35.2 by @edolstra in [DeterminateSystems/nix-src#592](https://github.com/DeterminateSystems/nix-src/pull/592)
+
+* Make ExprLet::eval a tail call by @edolstra in [DeterminateSystems/nix-src#593](https://github.com/DeterminateSystems/nix-src/pull/593)
+
+* Fix "waiting for exclusive access" hangs during schema migrations by @edolstra in [DeterminateSystems/nix-src#594](https://github.com/DeterminateSystems/nix-src/pull/594)
+
+* Upstream fixes by @edolstra in [DeterminateSystems/nix-src#595](https://github.com/DeterminateSystems/nix-src/pull/595)
