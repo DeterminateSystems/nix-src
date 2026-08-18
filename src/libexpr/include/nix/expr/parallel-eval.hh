@@ -1,9 +1,11 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <queue>
 #include <future>
 #include <random>
+#include <variant>
 
 #include <boost/thread/thread.hpp>
 
@@ -30,9 +32,24 @@ struct Executor
         work_t work;
     };
 
+    /**
+     * A work item running on its own stack. Defined in
+     * `parallel-eval.cc`; opaque here to keep the Boost.Context
+     * dependency out of this header.
+     */
+    struct Fiber;
+
+    using FiberPtr = std::unique_ptr<Fiber>;
+
+    /**
+     * Queue entries are either fresh work items (which get a new fiber
+     * when they're picked up) or suspended fibers to be resumed.
+     */
+    using QueueEntry = std::variant<Item, FiberPtr>;
+
     struct State
     {
-        std::multimap<uint64_t, Item> queue;
+        std::multimap<uint64_t, QueueEntry> queue;
         std::vector<boost::thread> threads;
     };
 
@@ -48,6 +65,11 @@ struct Executor
 
     std::condition_variable wakeup;
 
+    std::atomic<uint64_t> nrFibersSpawned{0};
+    std::atomic<uint64_t> nrFiberWakeups{0};
+    std::atomic<uint64_t> currentSuspendedFibers{0};
+    std::atomic<uint64_t> maxSuspendedFibers{0};
+
     static unsigned int getEvalCores(const EvalSettings & evalSettings);
 
     Executor(const EvalSettings & evalSettings);
@@ -57,6 +79,37 @@ struct Executor
     void createWorker(State & state);
 
     void worker();
+
+    /**
+     * Create a fiber for a fresh work item. If fiber creation fails
+     * (e.g. stack allocation failure), the item's promise receives the
+     * exception and a null pointer is returned.
+     */
+    FiberPtr makeFiber(Item && item);
+
+    /**
+     * Start or resume a fiber on the current thread. On return, the
+     * fiber has either finished (its promise is fulfilled and the
+     * fiber is destroyed) or suspended itself waiting on a thunk (in
+     * which case it has been registered with the thunk's waiter
+     * domain).
+     */
+    void runFiber(FiberPtr fiber);
+
+    /**
+     * Put a previously suspended fiber back onto the ready queue, at
+     * the highest priority. Called when the thunk it was waiting on
+     * has been finished.
+     */
+    void enqueueFiber(FiberPtr fiber);
+
+    /**
+     * Drain the queue on shutdown/interrupt: work items that haven't
+     * started get an `Interrupted` exception on their promise;
+     * suspended fibers are resumed so they can observe `quit` and
+     * unwind their stacks.
+     */
+    void drainQueue();
 
     using WorkItems = std::vector<std::pair<Executor::work_t, uint8_t>>;
 

@@ -3,17 +3,128 @@
 #include "nix/store/globals.hh"
 #include "nix/expr/primops.hh"
 
+#include <boost/context/fiber.hpp>
+#include <boost/context/protected_fixedsize_stack.hpp>
+
+#include <unordered_map>
+
 namespace nix {
+
+struct WaiterDomain;
+
+[[gnu::tls_model("initial-exec")]] thread_local bool Executor::amWorkerThread{false};
+
+static std::atomic<uint32_t> nextEvalThreadId{1};
+[[gnu::tls_model("initial-exec")]] thread_local uint32_t myEvalThreadId(nextEvalThreadId++);
+
+/**
+ * The fiber currently executing on this thread, or null if we're not
+ * inside a fiber (e.g. on the main thread or in a worker's scheduler
+ * loop).
+ */
+[[gnu::tls_model("initial-exec")]] static thread_local Executor::Fiber * currentFiber{nullptr};
+
+struct Executor::Fiber
+{
+    Executor & executor;
+
+    /**
+     * The value of `myEvalThreadId` while this fiber is running. Each
+     * fiber needs its own id (rather than a per-thread id) since the
+     * self-wait check in `waitOnThunk()` would otherwise produce false
+     * "infinite recursion" errors when two fibers running on the same
+     * thread touch the same thunk.
+     */
+    const uint32_t evalThreadId;
+
+    std::promise<void> promise;
+
+    work_t work;
+
+    /**
+     * The fiber's continuation. Valid while the fiber is queued or
+     * suspended; invalid while it's running or after it has finished.
+     */
+    boost::context::fiber ctx;
+
+    /**
+     * The scheduler's continuation. Valid while the fiber is running.
+     */
+    boost::context::fiber schedCtx;
+
+    /**
+     * Side channel for the suspension handshake, filled in by
+     * `suspendFiber()` immediately before switching back to the
+     * scheduler, and consumed by `runFiber()`.
+     */
+    detail::ValueBase * waitingOn = nullptr;
+    WaiterDomain * suspendDomain = nullptr;
+    std::unique_lock<std::mutex> * suspendLock = nullptr;
+
+    Fiber(Executor & executor, Item && item)
+        : executor(executor)
+        , evalThreadId(nextEvalThreadId++)
+        , promise(std::move(item.promise))
+        , work(std::move(item.work))
+    {
+    }
+
+    ~Fiber()
+    {
+        /* A fiber must never be destroyed while suspended, since that
+           would forcibly unwind its stack. Suspended fibers are always
+           resumed (with `quit` or an interrupt flag set) so that they
+           exit normally. */
+        assert(!ctx);
+    }
+};
 
 // cache line alignment to prevent false sharing
 struct alignas(64) WaiterDomain
 {
+    /* Note: not using `Sync` because the suspension handshake requires
+       locking the mutex on the fiber's stack and unlocking it from the
+       scheduler (see `Executor::runFiber()`), which `Sync::Lock` can't
+       express. */
+    std::mutex mutex;
+
+    /**
+     * Wakes up non-fiber threads (e.g. the main thread) blocked on a
+     * thunk in this domain.
+     */
     std::condition_variable cv;
+
+    /**
+     * Fibers suspended waiting for a specific value to be finished.
+     * Unlike the condition variable, this is keyed on the exact value,
+     * so fiber wakeups are never spurious.
+     */
+    std::unordered_multimap<detail::ValueBase *, Executor::FiberPtr> waiters;
 };
 
-static std::array<Sync<WaiterDomain>, 128> waiterDomains;
+static std::array<WaiterDomain, 128> waiterDomains;
 
-[[gnu::tls_model("initial-exec")]] thread_local bool Executor::amWorkerThread{false};
+/**
+ * Move all suspended fibers out of the wait lists and back onto their
+ * executor's ready queue, and wake up all non-fiber waiters. Called on
+ * interrupt and shutdown so that waiting fibers/threads can observe
+ * the interrupt/`quit` flag and unwind.
+ */
+static void flushWaiters()
+{
+    std::vector<Executor::FiberPtr> woken;
+    for (auto & domain : waiterDomains) {
+        std::unique_lock lk(domain.mutex);
+        for (auto & i : domain.waiters)
+            woken.push_back(std::move(i.second));
+        domain.waiters.clear();
+        domain.cv.notify_all();
+    }
+    for (auto & fiber : woken) {
+        auto & executor = fiber->executor;
+        executor.enqueueFiber(std::move(fiber));
+    }
+}
 
 unsigned int Executor::getEvalCores(const EvalSettings & evalSettings)
 {
@@ -28,8 +139,11 @@ Executor::Executor(const EvalSettings & evalSettings)
     : evalCores(getEvalCores(evalSettings))
     , enabled(evalCores > 1)
     , interruptCallback(createInterruptCallback([&]() {
-        for (auto & domain : waiterDomains)
-            domain.lock()->cv.notify_all();
+        /* Wake up all waiting fibers and threads so they can observe
+           the interrupt and unwind. Note: `_isInterrupted` has already
+           been set at this point. */
+        flushWaiters();
+        wakeup.notify_all();
     }))
 {
     debug("executor using %d threads", evalCores);
@@ -56,10 +170,19 @@ Executor::~Executor()
         debug("executor shutting down with %d items left", state->queue.size());
     }
 
+    /* Wake up suspended fibers and idle workers so they can wind
+       down. */
+    flushWaiters();
     wakeup.notify_all();
 
     for (auto & thr : threads)
         thr.join();
+
+    /* Handle any stragglers, e.g. fibers that were re-enqueued by
+       `notifyWaiters()` on the main thread after the workers already
+       exited. No fiber stack may outlive this destructor. */
+    flushWaiters();
+    drainQueue();
 }
 
 void Executor::createWorker(State & state)
@@ -79,6 +202,93 @@ void Executor::createWorker(State & state)
     }));
 }
 
+Executor::FiberPtr Executor::makeFiber(Item && item)
+{
+    auto fiber = std::make_unique<Fiber>(*this, std::move(item));
+    auto fib = fiber.get();
+    try {
+        fiber->ctx = boost::context::fiber(
+            std::allocator_arg,
+            boost::context::protected_fixedsize_stack(evalStackSize),
+            [fib](boost::context::fiber && sched) -> boost::context::fiber {
+                fib->schedCtx = std::move(sched);
+                try {
+                    fib->work();
+                    fib->promise.set_value();
+                } catch (const Interrupted &) {
+                    fib->executor.quit = true;
+                    fib->promise.set_exception(std::current_exception());
+                } catch (...) {
+                    fib->promise.set_exception(std::current_exception());
+                }
+                // Terminate the fiber, freeing its stack, and return
+                // to the scheduler.
+                return std::move(fib->schedCtx);
+            });
+    } catch (...) {
+        // Stack allocation failure. Report it to whoever is waiting
+        // on this work item.
+        fiber->promise.set_exception(std::current_exception());
+        return nullptr;
+    }
+    nrFibersSpawned++;
+    return fiber;
+}
+
+void Executor::runFiber(FiberPtr fiber)
+{
+    auto fib = fiber.get();
+    assert(fib->ctx);
+    assert(!currentFiber);
+
+    auto savedThreadId = myEvalThreadId;
+    currentFiber = fib;
+    myEvalThreadId = fib->evalThreadId;
+
+    fib->ctx = std::move(fib->ctx).resume();
+
+    currentFiber = nullptr;
+    myEvalThreadId = savedThreadId;
+
+    if (fib->ctx) {
+        /* The fiber suspended itself in `waitOnThunk()`. We are still
+           holding the waiter domain lock, which the fiber acquired on
+           this thread before switching back to us (so `std::mutex`
+           thread ownership is respected). Register the fiber in the
+           wait list, then release the lock. Only after the unlock can
+           `notifyWaiters()` extract and resume the fiber — at which
+           point `fib->ctx` is fully formed. Note that `suspendLock`
+           points into the fiber's (currently quiescent) stack. */
+        auto domain = fib->suspendDomain;
+        auto lock = fib->suspendLock;
+        assert(domain && lock && fib->waitingOn);
+        auto n = ++currentSuspendedFibers;
+        if (n > maxSuspendedFibers)
+            maxSuspendedFibers = n;
+        domain->waiters.emplace(fib->waitingOn, std::move(fiber));
+        lock->unlock();
+        /* `fib` may be resumed by another thread from this point on,
+           so don't touch it anymore. */
+    } else {
+        /* The fiber has finished; its promise has been fulfilled
+           inside the fiber. Destroying `fiber` frees the record (the
+           stack was already freed on fiber termination). */
+    }
+}
+
+void Executor::enqueueFiber(FiberPtr fiber)
+{
+    nrFiberWakeups++;
+    currentSuspendedFibers--;
+    {
+        auto state(state_.lock());
+        /* Note: key 0 means that resumed fibers run before any fresh
+           work items, so existing work is drained first. */
+        state->queue.emplace(0, std::move(fiber));
+    }
+    wakeup.notify_one();
+}
+
 void Executor::worker()
 {
     ReceiveInterrupts receiveInterrupts;
@@ -88,37 +298,64 @@ void Executor::worker()
     amWorkerThread = true;
 
     while (true) {
-        Item item;
+        QueueEntry entry;
+        bool gotEntry = false;
 
         while (true) {
             auto state(state_.lock());
-            if (quit) {
-                // Set an `Interrupted` exception on all promises so
-                // we get a nicer error than "std::future_error:
-                // Broken promise".
-                auto ex = std::make_exception_ptr(Interrupted("interrupted by the user"));
-                for (auto & item : state->queue)
-                    item.second.promise.set_exception(ex);
-                state->queue.clear();
-                return;
-            }
+            if (quit)
+                break;
             if (!state->queue.empty()) {
-                item = std::move(state->queue.begin()->second);
+                entry = std::move(state->queue.begin()->second);
                 state->queue.erase(state->queue.begin());
+                gotEntry = true;
                 break;
             }
             state.wait(wakeup);
         }
 
-        try {
-            item.work();
-            item.promise.set_value();
-        } catch (const Interrupted &) {
-            quit = true;
-            item.promise.set_exception(std::current_exception());
-        } catch (...) {
-            item.promise.set_exception(std::current_exception());
+        if (!gotEntry) {
+            drainQueue();
+            return;
         }
+
+        if (auto * item = std::get_if<Item>(&entry)) {
+            if (auto fiber = makeFiber(std::move(*item)))
+                runFiber(std::move(fiber));
+        } else
+            runFiber(std::move(std::get<FiberPtr>(entry)));
+    }
+}
+
+void Executor::drainQueue()
+{
+    while (true) {
+        /* Keep flushing the wait lists: a fiber resumed below can
+           finish thunks, which normally re-enqueues their waiters, but
+           late waiters may still be parked. */
+        flushWaiters();
+
+        QueueEntry entry;
+        {
+            auto state(state_.lock());
+            if (state->queue.empty())
+                return;
+            entry = std::move(state->queue.begin()->second);
+            state->queue.erase(state->queue.begin());
+        }
+
+        if (auto * item = std::get_if<Item>(&entry))
+            // Set an `Interrupted` exception on work items that
+            // haven't started, so we get a nicer error than
+            // "std::future_error: Broken promise". Note: a fresh
+            // exception per item, not a shared one.
+            item->promise.set_exception(std::make_exception_ptr(Interrupted("interrupted by the user")));
+        else
+            /* Resume the fiber so it can observe `quit` (or the
+               interrupt) and unwind; it cannot suspend again thanks to
+               the guard in `waitOnThunk()`. Never destroy a suspended
+               fiber. */
+            runFiber(std::move(std::get<FiberPtr>(entry)));
     }
 }
 
@@ -199,14 +436,46 @@ void FutureVector::finishAll()
         std::rethrow_exception(ex);
 }
 
-static Sync<WaiterDomain> & getWaiterDomain(detail::ValueBase & v)
+static WaiterDomain & getWaiterDomain(detail::ValueBase & v)
 {
     auto domain = (((size_t) &v) >> 5) % waiterDomains.size();
     return waiterDomains[domain];
 }
 
-static std::atomic<uint32_t> nextEvalThreadId{1};
-[[gnu::tls_model("initial-exec")]] thread_local uint32_t myEvalThreadId(nextEvalThreadId++);
+/**
+ * Suspend the current fiber until `v` is finished. Must be called with
+ * `lk` holding the domain's mutex and `v` in the "awaited" state. On
+ * return, the fiber has been resumed (possibly on a different thread)
+ * and the lock has been released.
+ *
+ * Note: `noinline` so that the compiler doesn't move TLS accesses of
+ * the caller across the context switch (the fiber may wake up on
+ * another thread).
+ */
+[[gnu::noinline]] static void
+suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::ValueBase & v)
+{
+    auto fib = currentFiber;
+    assert(fib);
+    /* A fiber must not suspend while an exception is being handled or
+       unwound: the C++ exception state lives in thread-local storage,
+       so it wouldn't survive being resumed on another thread. */
+    assert(!std::current_exception() && !std::uncaught_exceptions());
+    fib->waitingOn = &v;
+    fib->suspendDomain = &domain;
+    fib->suspendLock = &lk;
+    /* Switch back to the scheduler (`Executor::runFiber()`), which
+       will register us in the domain's wait list and then release the
+       lock. We can't do that here: the fiber's continuation only
+       materializes on the scheduler side, and publishing it before the
+       switch-out completes would allow another thread to resume a
+       half-suspended fiber. */
+    fib->schedCtx = std::move(fib->schedCtx).resume();
+    /* We've been resumed because the value was finished (or because
+       we're shutting down); the scheduler released the lock long
+       ago. */
+    assert(!lk.owns_lock());
+}
 
 template<>
 ValueStorage<sizeof(void *)>::PackedPointer
@@ -214,7 +483,8 @@ ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer expec
 {
     state.nrThunksAwaited++;
 
-    auto domain = getWaiterDomain(*this).lock();
+    auto & domain = getWaiterDomain(*this);
+    std::unique_lock lk(domain.mutex);
 
     auto threadId = expectedP0 >> discriminatorBits;
 
@@ -262,8 +532,44 @@ ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer expec
 
     auto now1 = std::chrono::steady_clock::now();
 
+    if (auto fib = currentFiber) {
+        /* Shutdown guard: `quit`/`_isInterrupted` are always set
+           *before* the wait lists are flushed, and flushing takes the
+           domain lock that we're currently holding. So either we see
+           the flag here and throw, or our registration completes
+           before the flush and we get woken by it — we can't be
+           stranded in the wait list. */
+        if (fib->executor.quit)
+            throw Interrupted("interrupted by the user");
+        checkInterrupt();
+
+        /* We're running on a fiber, so suspend it and let this thread
+           run other work. `notifyWaiters()` will re-enqueue the fiber
+           when the value is finished. */
+        suspendFiber(domain, lk, *this);
+
+        /* Note: use the `fib` captured before the suspension rather
+           than TLS variables, since we may have been resumed on a
+           different thread. */
+        if (fib->executor.quit)
+            throw Interrupted("interrupted by the user");
+        checkInterrupt();
+
+        auto p0_ = p0.load(std::memory_order_acquire);
+        auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
+        /* Unlike the condition variable path below, fiber wakeups
+           cannot be spurious: the wait list is keyed on the exact
+           value and we're only woken after it has been finished (or on
+           shutdown/interrupt, handled above). */
+        assert(pd != pdThunk && pd != pdPending && pd != pdAwaited);
+        auto now2 = std::chrono::steady_clock::now();
+        state.microsecondsWaiting += std::chrono::duration_cast<std::chrono::microseconds>(now2 - now1).count();
+        state.currentlyWaiting--;
+        return p0_;
+    }
+
     while (true) {
-        domain.wait(domain->cv);
+        domain.cv.wait(lk);
         auto p0_ = p0.load(std::memory_order_acquire);
         auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
         if (pd != pdAwaited) {
@@ -281,9 +587,26 @@ ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer expec
 template<>
 void ValueStorage<sizeof(void *)>::notifyWaiters()
 {
-    auto domain = getWaiterDomain(*this).lock();
+    auto & domain = getWaiterDomain(*this);
 
-    domain->cv.notify_all();
+    /* Extract the fibers waiting on this value, then re-enqueue them
+       after releasing the domain lock (to keep a trivial lock order
+       between domain mutexes and the executor's state lock). */
+    std::vector<Executor::FiberPtr> woken;
+    {
+        std::unique_lock lk(domain.mutex);
+        auto [b, e] = domain.waiters.equal_range(this);
+        for (auto i = b; i != e; ++i)
+            woken.push_back(std::move(i->second));
+        domain.waiters.erase(b, e);
+        /* Wake up any non-fiber waiters (e.g. the main thread). */
+        domain.cv.notify_all();
+    }
+
+    for (auto & fiber : woken) {
+        auto & executor = fiber->executor;
+        executor.enqueueFiber(std::move(fiber));
+    }
 }
 
 static void prim_parallel(EvalState & state, const PosIdx pos, Value ** args, Value & v)
