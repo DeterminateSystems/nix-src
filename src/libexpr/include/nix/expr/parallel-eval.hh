@@ -76,6 +76,14 @@ struct Executor
     {
         std::multimap<uint64_t, QueueEntry> queue;
         std::vector<std::thread> threads;
+
+        /**
+         * The number of workers currently blocked on `wakeup`.
+         * Producers wake up at most this many workers (and none when
+         * all workers are busy), to avoid pointless futex traffic and
+         * thundering herds.
+         */
+        size_t nrSleeping = 0;
     };
 
     std::atomic_bool quit{false};
