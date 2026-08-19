@@ -8,6 +8,10 @@
 
 #include <unordered_map>
 
+#if NIX_USE_BOEHMGC
+#  include <gc.h>
+#endif
+
 namespace nix {
 
 struct WaiterDomain;
@@ -202,7 +206,7 @@ Executor::Executor(const EvalSettings & evalSettings)
     for (size_t n = 0; n < evalCores; ++n)
         try {
             createWorker(*state);
-        } catch (boost::thread_resource_error & e) {
+        } catch (std::system_error & e) {
             if (n == 0)
                 throw Error("could not create any evaluator worker threads: %s", e.what());
             warn("could only create %d evaluator worker threads: %s", n, e.what());
@@ -212,7 +216,7 @@ Executor::Executor(const EvalSettings & evalSettings)
 
 Executor::~Executor()
 {
-    std::vector<boost::thread> threads;
+    std::vector<std::thread> threads;
     {
         auto state(state_.lock());
         quit = true;
@@ -237,10 +241,18 @@ Executor::~Executor()
 
 void Executor::createWorker(State & state)
 {
-    boost::thread::attributes attrs;
-    attrs.set_stack_size(evalStackSize);
-    state.threads.push_back(boost::thread(attrs, [&]() {
+    /* Note: worker threads can have a small (default-sized) stack,
+       since they only run the scheduler loop; the actual evaluation
+       happens on fibers, which have their own stacks. */
+    state.threads.push_back(std::thread([&]() {
 #if NIX_USE_BOEHMGC
+        /* Register the worker thread with the garbage collector. This
+           is not for the sake of the worker stack (which holds no GC
+           roots), but because fibers running on this thread allocate
+           from it: without registration, Boehm has no thread-local
+           allocation freelists for this thread and every allocation
+           takes the global allocation lock, which is several times
+           slower. */
         GC_stack_base sb;
         GC_get_stack_base(&sb);
         GC_register_my_thread(&sb);
