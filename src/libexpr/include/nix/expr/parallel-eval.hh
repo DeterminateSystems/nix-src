@@ -17,6 +17,27 @@
 
 namespace nix {
 
+/**
+ * If `sp` points into an in-use fiber stack, return the hi end
+ * ("base") of that stack, else null. Called by the garbage
+ * collector's sp corrector (with the world stopped); lock-free.
+ */
+void * fiberStackContaining(void * sp);
+
+/**
+ * Push the used portions of all suspended fibers' stacks onto the
+ * garbage collector's mark stack. Called from the GC's
+ * "push other roots" callback (with the world stopped); lock-free.
+ */
+void pushSuspendedFiberStacks();
+
+/**
+ * Whether the given pthread id belongs to an evaluator worker thread.
+ * Called by the garbage collector's sp corrector (with the world
+ * stopped); lock-free.
+ */
+bool isEvalWorkerThread(void * pthreadId);
+
 struct Executor
 {
     using work_t = MoveOnlyFunction<void()>;
