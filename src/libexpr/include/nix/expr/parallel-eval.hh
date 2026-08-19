@@ -5,9 +5,8 @@
 #include <queue>
 #include <future>
 #include <random>
+#include <thread>
 #include <variant>
-
-#include <boost/thread/thread.hpp>
 
 #include "nix/util/move-only-function.hh"
 #include "nix/util/sync.hh"
@@ -15,10 +14,6 @@
 #include "nix/util/environment-variables.hh"
 #include "nix/util/util.hh"
 #include "nix/util/signals.hh"
-
-#if NIX_USE_BOEHMGC
-#  include <gc.h>
-#endif
 
 namespace nix {
 
@@ -59,7 +54,7 @@ struct Executor
     struct State
     {
         std::multimap<uint64_t, QueueEntry> queue;
-        std::vector<boost::thread> threads;
+        std::vector<std::thread> threads;
     };
 
     std::atomic_bool quit{false};
