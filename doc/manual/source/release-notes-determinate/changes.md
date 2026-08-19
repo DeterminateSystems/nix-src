@@ -229,12 +229,4 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 
 <!-- Determinate Nix version 3.22.1 -->
 
-* Don't let missing store paths abort 'nix store optimise' by @edolstra in [DeterminateSystems/nix-src#590](https://github.com/DeterminateSystems/nix-src/pull/590)
-
-* Sync with upstream 2.35.2 by @edolstra in [DeterminateSystems/nix-src#592](https://github.com/DeterminateSystems/nix-src/pull/592)
-
-* Make ExprLet::eval a tail call by @edolstra in [DeterminateSystems/nix-src#593](https://github.com/DeterminateSystems/nix-src/pull/593)
-
-* Fix "waiting for exclusive access" hangs during schema migrations by @edolstra in [DeterminateSystems/nix-src#594](https://github.com/DeterminateSystems/nix-src/pull/594)
-
-* Upstream fixes by @edolstra in [DeterminateSystems/nix-src#595](https://github.com/DeterminateSystems/nix-src/pull/595)
+* Fix "waiting for exclusive access" hangs during schema migrations [DeterminateSystems/nix-src#594](https://github.com/DeterminateSystems/nix-src/pull/594)
