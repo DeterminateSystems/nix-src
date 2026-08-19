@@ -252,7 +252,13 @@ EvalMemory::EvalMemory()
     assertGCInitialized();
 }
 
-[[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext EvalState::evalContext;
+/**
+ * The evaluation context of non-fiber execution contexts (i.e. the
+ * main thread).
+ */
+static EvalState::EvalContext globalEvalContext;
+
+[[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext * EvalState::evalContext = &globalEvalContext;
 
 EvalState::EvalState(
     const LookupPath & lookupPathFromArguments,

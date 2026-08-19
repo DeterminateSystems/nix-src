@@ -1132,7 +1132,7 @@ private:
 public:
 
     /**
-     * Per-thread evaluation context. This context is propagated to worker threads when a value is evaluated
+     * Evaluation context. This context is propagated to worker threads when a value is evaluated
      * asynchronously.
      */
     struct EvalContext
@@ -1140,7 +1140,14 @@ public:
         std::shared_ptr<const Provenance> provenance;
     };
 
-    [[gnu::tls_model("initial-exec")]] thread_local static EvalContext evalContext;
+    /**
+     * The evaluation context of the current execution context: a
+     * fiber's own context while a fiber is running (switched by
+     * `Executor::runFiber()`), or a global default context otherwise.
+     * A plain pointer so that fiber switches don't need to touch the
+     * `provenance` shared_ptr's (atomic) reference count.
+     */
+    [[gnu::tls_model("initial-exec")]] thread_local static EvalContext * evalContext;
 
     /**
      * Create a work item that propagates the current evaluation context.
@@ -1148,8 +1155,8 @@ public:
     template<typename T>
     auto makeWork(T && t)
     {
-        return [this, t{std::move(t)}, evalContext(evalContext)]() {
-            this->evalContext = evalContext;
+        return [this, t{std::move(t)}, evalContext(*evalContext)]() {
+            *this->evalContext = evalContext;
             t();
         };
     }
@@ -1222,13 +1229,13 @@ struct PushProvenance
     PushProvenance(EvalState & state, std::shared_ptr<const Provenance> prov)
         : state(state)
     {
-        state.evalContext.provenance.swap(prev);
-        state.evalContext.provenance.swap(prov);
+        state.evalContext->provenance.swap(prev);
+        state.evalContext->provenance.swap(prov);
     }
 
     ~PushProvenance()
     {
-        state.evalContext.provenance.swap(prev);
+        state.evalContext->provenance.swap(prev);
     }
 };
 
