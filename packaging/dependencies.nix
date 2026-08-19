@@ -200,6 +200,11 @@ scope: {
       ];
       patches = [
         ./patches/0001-Fix-uncaught_exceptions-not-accounting-for-forced_un.patch
+        # Backport of an upstream fix missing from boost 1.89; without
+        # it, fibers that are resumed on a different thread corrupt the
+        # original thread's libstdc++ exception state. Remove both
+        # patches when boost contains them.
+        ./patches/0002-fix-re-apply-BOOST_NOINLINE-to-manage_exception_stat.patch
       ];
       enableIcu = false;
       inherit stdenv;
