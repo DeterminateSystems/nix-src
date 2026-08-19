@@ -164,11 +164,11 @@ struct Executor::Fiber
     const uint32_t evalThreadId;
 
     /**
-     * This fiber's Nix call stack depth (see
-     * `EvalState::callDepthPtr`). `EvalState::addCallDepth()` uses
-     * this counter instead of the thread-local one while the fiber is
-     * running, so that the depth accounting survives the fiber being
-     * suspended mid-call-chain and resumed on a different thread.
+     * This fiber's Nix call stack depth while it's not running.
+     * `runFiber()` swaps it with the thread-local counter (see
+     * `CallDepth`) on every switch-in/out, so that the depth
+     * accounting survives the fiber being suspended mid-call-chain
+     * and resumed on a different thread.
      */
     size_t callDepth = 0;
 
@@ -472,16 +472,17 @@ void Executor::runFiber(FiberPtr fiber)
     assert(!currentFiber);
 
     auto savedThreadId = myEvalThreadId;
-    auto savedCallDepthPtr = EvalState::callDepthPtr;
+    auto savedCallDepth = CallDepth::callDepth;
     currentFiber = fib;
     myEvalThreadId = fib->evalThreadId;
-    EvalState::callDepthPtr = &fib->callDepth;
+    CallDepth::callDepth = fib->callDepth;
 
     fib->ctx = std::move(fib->ctx).resume();
 
     currentFiber = nullptr;
     myEvalThreadId = savedThreadId;
-    EvalState::callDepthPtr = savedCallDepthPtr;
+    fib->callDepth = CallDepth::callDepth;
+    CallDepth::callDepth = savedCallDepth;
 
     if (fib->ctx) {
         /* The fiber suspended itself in `waitOnThunk()`. We are still

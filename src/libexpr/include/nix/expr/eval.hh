@@ -66,18 +66,24 @@ class EvalCache;
  */
 class CallDepth
 {
-    size_t & count;
-
 public:
-    CallDepth(size_t & count)
-        : count(count)
+    /**
+     * Current Nix call stack depth, used with `max-call-depth`
+     * setting to throw stack overflow hopefully before we run out of
+     * system stack. The fiber scheduler saves/restores this on fiber
+     * switches, since a fiber suspended mid-call-chain carries its
+     * depth to whatever thread resumes it.
+     */
+    [[gnu::tls_model("initial-exec")]] thread_local static size_t callDepth;
+
+    CallDepth()
     {
-        ++count;
+        ++callDepth;
     }
 
     ~CallDepth()
     {
-        --count;
+        --callDepth;
     }
 };
 
@@ -900,25 +906,7 @@ private:
         const SourcePath & basePath,
         const std::shared_ptr<StaticEnv> & staticEnv);
 
-    /**
-     * Current Nix call stack depth, used with `max-call-depth`
-     * setting to throw stack overflow hopefully before we run out of
-     * system stack.
-     */
-    [[gnu::tls_model("initial-exec")]] thread_local static size_t callDepth;
-
 public:
-
-    /**
-     * Points to the call-depth counter of the current execution
-     * context: `callDepth` (this thread's counter) when not running
-     * on a fiber, or the fiber's own counter while a fiber is running
-     * (see `Executor::runFiber()`). Fibers need their own counter
-     * since they can be suspended mid-call-chain and resumed on a
-     * different thread, and the `CallDepth` guards on their stack
-     * hold a reference to the counter.
-     */
-    [[gnu::tls_model("initial-exec")]] thread_local static size_t * callDepthPtr;
 
     /**
      * Check that the call depth is within limits, and increment it, until the returned object is destroyed.
