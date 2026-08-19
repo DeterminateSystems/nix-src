@@ -523,13 +523,16 @@ void Executor::enqueueFiber(FiberPtr fiber)
 {
     nrFiberWakeups++;
     currentSuspendedFibers--;
+    bool doWake;
     {
         auto state(state_.lock());
         /* Note: key 0 means that resumed fibers run before any fresh
            work items, so existing work is drained first. */
         state->queue.emplace(0, std::move(fiber));
+        doWake = state->nrSleeping > 0;
     }
-    wakeup.notify_one();
+    if (doWake)
+        wakeup.notify_one();
 }
 
 void Executor::worker()
@@ -554,7 +557,14 @@ void Executor::worker()
                 gotEntry = true;
                 break;
             }
+            /* Nothing to do; sleep until a producer wakes us up.
+               Note: `nrSleeping` is maintained under the state lock,
+               so a producer either sees our increment (and wakes us),
+               or its work insertion happened before our queue check
+               above — no lost wakeups. */
+            state->nrSleeping++;
             state.wait(wakeup);
+            state->nrSleeping--;
         }
 
         if (!gotEntry) {
@@ -609,6 +619,7 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
 
     std::vector<std::future<void>> futures;
 
+    size_t toWake;
     {
         auto state(state_.lock());
         for (auto & item : items) {
@@ -625,12 +636,14 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
             auto key = (uint64_t(item.second) << 48) | dist(rng);
             state->queue.emplace(key, Item{.promise = std::move(promise), .work = std::move(item.first)});
         }
+        /* Wake up one worker per item, but only workers that are
+           actually asleep. In the steady state (all workers busy),
+           this does no futex calls at all. */
+        toWake = std::min(items.size(), state->nrSleeping);
     }
 
-    if (items.size() == 1)
+    for (size_t n = 0; n < toWake; ++n)
         wakeup.notify_one();
-    else
-        wakeup.notify_all();
 
     return futures;
 }
