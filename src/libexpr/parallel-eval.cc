@@ -152,7 +152,7 @@ struct alignas(64) WaiterDomain
      * Unlike the condition variable, this is keyed on the exact value,
      * so fiber wakeups are never spurious.
      */
-    std::unordered_multimap<detail::ValueBase *, Executor::FiberPtr> waiters;
+    std::unordered_map<detail::ValueBase *, std::vector<Executor::FiberPtr>> waiters;
 };
 
 static std::array<WaiterDomain, 128> waiterDomains;
@@ -168,8 +168,9 @@ static void flushWaiters()
     std::vector<Executor::FiberPtr> woken;
     for (auto & domain : waiterDomains) {
         std::unique_lock lk(domain.mutex);
-        for (auto & i : domain.waiters)
-            woken.push_back(std::move(i.second));
+        for (auto & [_, fibers] : domain.waiters)
+            for (auto & fiber : fibers)
+                woken.push_back(std::move(fiber));
         domain.waiters.clear();
         domain.cv.notify_all();
     }
@@ -328,7 +329,7 @@ void Executor::runFiber(FiberPtr fiber)
         auto n = ++currentSuspendedFibers;
         if (n > maxSuspendedFibers)
             maxSuspendedFibers = n;
-        domain->waiters.emplace(fib->waitingOn, std::move(fiber));
+        domain->waiters[fib->waitingOn].push_back(std::move(fiber));
         domain->mutex.unlock();
         /* `fib` may be resumed by another thread from this point on,
            so don't touch it anymore. */
@@ -665,10 +666,8 @@ void ValueStorage<sizeof(void *)>::notifyWaiters()
     std::vector<Executor::FiberPtr> woken;
     {
         std::unique_lock lk(domain.mutex);
-        auto [b, e] = domain.waiters.equal_range(this);
-        for (auto i = b; i != e; ++i)
-            woken.push_back(std::move(i->second));
-        domain.waiters.erase(b, e);
+        if (auto nh = domain.waiters.extract(this))
+            woken = std::move(nh.mapped());
         /* Wake up any non-fiber waiters (e.g. the main thread). */
         domain.cv.notify_all();
     }
