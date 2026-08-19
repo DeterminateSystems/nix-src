@@ -14,7 +14,10 @@
 #  endif
 
 #  include <gc/gc_allocator.h>
+#  include <gc/gc_mark.h>    // For GC_push_all and GC_set_push_other_roots
 #  include <gc/gc_tiny_fl.h> // For GC_GRANULE_BYTES
+
+#  include "nix/expr/parallel-eval.hh"
 
 #  include <boost/coroutine2/coroutine.hpp>
 #  include <boost/coroutine2/protected_fixedsize_stack.hpp>
@@ -79,19 +82,35 @@ static size_t getFreeMem()
 }
 
 /**
- * When a thread goes into a coroutine, we lose its original sp until
- * control flow returns to the thread. This causes Boehm GC to crash
- * since it will scan memory between the coroutine's sp and the
- * original stack base of the thread. Therefore, we detect when the
- * current sp is outside of the original thread stack and push the
- * entire thread stack instead, as an approximation.
+ * When a thread goes into a fiber (of the parallel evaluator) or a
+ * coroutine, we lose its original sp until control flow returns to
+ * the thread. This causes Boehm GC to crash since it will scan memory
+ * between the fiber's or coroutine's sp and the original stack base
+ * of the thread. Therefore, we detect when the current sp is outside
+ * of the original thread stack, and:
  *
- * This is not optimal, because it causes the stack below sp to be
- * scanned. However, we usually we don't have active coroutines during
- * evaluation, so this is acceptable.
+ * - If the sp is inside a fiber stack, we push the used portion of
+ *   the fiber stack (`[sp, base)` — never the untouched pages below)
+ *   directly onto the mark stack. This is a slightly off-label use of
+ *   the sp corrector, but it runs in the same phase as
+ *   `GC_push_other_roots` (during root pushing, with the GC lock
+ *   held), so pushing here is mechanically equivalent while sparing
+ *   us any assumptions about the order in which bdwgc pushes thread
+ *   stacks vs. other roots.
+ *
+ * - We then point the sp back into the original thread stack: for
+ *   evaluator worker threads, at the hi end (their scheduler stacks
+ *   hold no GC roots, and scanning them in full would fault in
+ *   otherwise untouched pages); for other threads (e.g. the main
+ *   thread running a coroutine), at the lo end, so that the entire
+ *   thread stack is scanned as an approximation, since the frames
+ *   below the coroutine may hold GC roots.
  *
  * Note that we don't scan coroutine stacks. It's currently assumed
- * that we don't have GC roots in coroutines.
+ * that we don't have GC roots in coroutines. Also, if a *fiber*
+ * enters a coroutine, the fiber frames below the coroutine are
+ * currently not scanned (the sp is then in the coroutine stack, so we
+ * can't tell how much of the fiber stack is in use).
  */
 void fixupBoehmStackPointer(void ** sp_ptr, void * _pthread_id)
 {
@@ -122,8 +141,30 @@ void fixupBoehmStackPointer(void ** sp_ptr, void * _pthread_id)
     osStackHi = osStackLo + osStackSize;
 #  endif
 
-    if (sp >= osStackHi || sp < osStackLo) // sp is outside the os stack
-        sp = osStackLo;
+    if (sp >= osStackHi || sp < osStackLo) { // sp is outside the os stack
+        if (auto base = fiberStackContaining(sp)) {
+            /* Running fiber: push its used range directly, and don't
+               scan the worker's (root-free) scheduler stack. */
+            GC_push_all(sp, base);
+            sp = isEvalWorkerThread(_pthread_id) ? osStackHi : osStackLo;
+        } else
+            /* Coroutine: scan the entire thread stack, since the
+               frames below the coroutine may hold GC roots. */
+            sp = osStackLo;
+    }
+}
+
+static GC_push_other_roots_proc prevPushOtherRoots;
+
+/**
+ * Push the stacks of suspended fibers of the parallel evaluator.
+ * Called by the GC during root pushing, with the world stopped.
+ */
+static void GC_CALLBACK pushOtherRoots()
+{
+    if (prevPushOtherRoots)
+        prevPushOtherRoots();
+    pushSuspendedFiberStacks();
 }
 
 static inline void initGCReal()
@@ -158,6 +199,12 @@ static inline void initGCReal()
 
     GC_set_sp_corrector(&fixupBoehmStackPointer);
     assert(GC_get_sp_corrector());
+
+    /* Also scan the stacks of suspended fibers of the parallel
+       evaluator. (Running fibers are handled by the sp corrector
+       above.) */
+    prevPushOtherRoots = GC_get_push_other_roots();
+    GC_set_push_other_roots(&pushOtherRoots);
 
     /* Funnel boehm warnings into debug logs. */
     GC_set_warn_proc([](char * msg, GC_word word) noexcept {
