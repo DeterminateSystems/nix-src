@@ -17,6 +17,7 @@ namespace nix {
 class Store;
 class StorePath;
 struct SourceAccessor;
+struct ValidPathInfo;
 } // namespace nix
 
 namespace nix::fetchers {
@@ -127,6 +128,24 @@ public:
      * `specified.attrs` (i.e. we discard any new attributes).
      */
     static void checkLocks(Input specified, Input & result);
+
+    /**
+     * If this input has a `narHash` attribute, check that `narHash`
+     * matches it, and throw a NAR hash mismatch error (exit code 102)
+     * otherwise.
+     *
+     * @param storePath Optional printed store path of the object that
+     * was hashed, for the error message.
+     */
+    void checkNarHash(
+        const std::optional<Hash> & narHash, const std::optional<std::string> & storePath = std::nullopt) const;
+
+    /**
+     * Check that a store path has the NAR hash expected by this input
+     * (see `checkNarHash()`) and that it has no references (since
+     * references are not supported by fetcher trees).
+     */
+    void checkStorePath(Store & store, const ValidPathInfo & info) const;
 
     /**
      * Return a `SourceAccessor` that allows access to files in the

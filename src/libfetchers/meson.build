@@ -40,6 +40,7 @@ sources = files(
   'fetch-settings.cc',
   'fetch-to-store.cc',
   'fetchers.cc',
+  'fh-resolve.cc',
   'filtering-source-accessor.cc',
   'git-lfs-fetch.cc',
   'git-utils.cc',
