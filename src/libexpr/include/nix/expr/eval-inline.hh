@@ -32,7 +32,7 @@ Value * EvalMemory::allocValue()
 #if NIX_USE_BOEHMGC
     /* Allocation cache for GC'd Value objects. Boehm GC is already a global resource, so thread_local is
        a natural solution. Multiple EvalState instances on the same thread will reuse the same cache. */
-    static thread_local std::shared_ptr<void *> valueAllocCache{
+    [[gnu::tls_model("initial-exec")]] static thread_local std::shared_ptr<void *> valueAllocCache{
         std::allocate_shared<void *>(traceable_allocator<void *>(), nullptr)};
 
     /* We use the boehm batch allocator to speed up allocations of Values (of which there are many).
@@ -70,7 +70,7 @@ Env & EvalMemory::allocEnv(size_t size)
     if (size == 1) {
         /* Allocation cache for size-1 Env objects. Boehm GC is already a global resource, so thread_local is
            a natural solution. Multiple EvalState instances on the same thread will reuse the same cache. */
-        static thread_local std::shared_ptr<void *> env1AllocCache{
+        [[gnu::tls_model("initial-exec")]] static thread_local std::shared_ptr<void *> env1AllocCache{
             std::allocate_shared<void *>(traceable_allocator<void *>(), nullptr)};
         /* see allocValue for explanations. */
         if (!*env1AllocCache) {
@@ -92,34 +92,68 @@ Env & EvalMemory::allocEnv(size_t size)
     return *env;
 }
 
-[[gnu::always_inline]]
-void EvalState::forceValue(Value & v, const PosIdx pos)
+/**
+ * An identifier of the current thread for deadlock detection, stored
+ * in p0 of pending/awaited thunks. We're not using std::thread::id
+ * because it's not guaranteed to fit.
+ */
+[[gnu::tls_model("initial-exec")]] extern thread_local uint32_t myEvalThreadId;
+
+template<std::size_t ptrSize>
+void ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptrSize>>>::force(
+    EvalState & state, PosIdx pos)
 {
-    if (v.isThunk()) {
-        Env * env = v.thunk().env;
-        assert(env || v.isBlackhole());
-        Expr * expr = v.thunk().expr;
+    auto p0_ = p0.load(std::memory_order_acquire);
+
+    auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
+
+    if (pd == pdThunk) {
         try {
-            v.mkBlackhole();
-            if (env) [[likely]]
-                expr->eval(*this, *env, v);
-            else
-                ExprBlackHole::throwInfiniteRecursionError(*this, v);
+            // The value we get here is only valid if we can set the
+            // thunk to pending.
+            auto p1_ = p1;
+
+            // Atomically set the thunk to "pending".
+            if (!p0.compare_exchange_strong(
+                    p0_,
+                    pdPending | (myEvalThreadId << discriminatorBits),
+                    std::memory_order_acquire,
+                    std::memory_order_acquire)) {
+                pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
+                if (pd == pdPending || pd == pdAwaited) {
+                    // The thunk is already "pending" or "awaited", so
+                    // we need to wait for it.
+                    p0_ = waitOnThunk(state, p0_);
+                    goto done;
+                }
+                assert(pd != pdThunk);
+                // Another thread finished this thunk, no need to wait.
+                goto done;
+            }
+
+            bool isApp = p1_ & discriminatorMask;
+            if (isApp) {
+                auto left = untagPointer<Value *>(p0_);
+                auto right = untagPointer<Value *>(p1_);
+                state.callFunction(*left, *right, (Value &) *this, pos);
+            } else {
+                auto env = untagPointer<Env *>(p0_);
+                auto expr = untagPointer<Expr *>(p1_);
+                expr->eval(state, *env, (Value &) *this);
+            }
         } catch (...) {
-            handleEvalExceptionForThunk(env, expr, v, pos);
+            state.tryFixupBlackHolePos((Value &) *this, pos);
+            setStorage(new Value::Failed{.ex = std::current_exception()});
             throw;
         }
-    } else if (v.isApp()) {
-        Value savedApp = v;
-        try {
-            callFunction(*v.app().left, *v.app().right, v, pos);
-        } catch (...) {
-            handleEvalExceptionForApp(v, savedApp);
-            throw;
-        }
-    } else if (v.isFailed()) {
-        handleEvalFailed(v, pos);
     }
+
+    else if (pd == pdPending || pd == pdAwaited)
+        p0_ = waitOnThunk(state, p0_);
+
+done:
+    if (InternalType(p0_ & 0xff) == tFailed)
+        std::rethrow_exception((std::bit_cast<Failed *>(p1))->ex);
 }
 
 [[gnu::always_inline]]

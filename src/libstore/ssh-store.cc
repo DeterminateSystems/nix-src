@@ -2,7 +2,6 @@
 #include "nix/store/local-fs-store.hh"
 #include "nix/store/remote-store-connection.hh"
 #include "nix/util/source-accessor.hh"
-#include "nix/util/archive.hh"
 #include "nix/store/worker-protocol.hh"
 #include "nix/store/worker-protocol-impl.hh"
 #include "nix/util/pool.hh"
@@ -12,11 +11,15 @@
 namespace nix {
 
 SSHStoreConfig::SSHStoreConfig(const ParsedURL::Authority & authority, const Params & params)
-    : Store::Config{params}
-    , RemoteStore::Config{params}
+    : Store::Config{params, FilePathType::Unix}
+    , RemoteStore::Config{params, FilePathType::Unix}
     , CommonSSHStoreConfig{authority, params}
 {
 }
+
+void SSHStoreConfig::anchor() {}
+
+void MountedSSHStoreConfig::anchor() {}
 
 std::string SSHStoreConfig::doc()
 {
@@ -40,6 +43,10 @@ StoreReference SSHStoreConfig::getReference() const
 struct alignas(8) /* Work around ASAN failures on i686-linux. */
     SSHStore : virtual RemoteStore
 {
+private:
+    void anchor() override;
+
+public:
     using Config = SSHStoreConfig;
 
     ref<const Config> config;
@@ -54,6 +61,11 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
     {
     }
 
+    bool includeInProvenance() override
+    {
+        return true;
+    }
+
     // FIXME extend daemon protocol, move implementation to RemoteStore
     std::optional<std::string> getBuildLogExact(const StorePath & path) override
     {
@@ -64,6 +76,10 @@ protected:
 
     struct Connection : RemoteStore::Connection
     {
+    private:
+        void anchor() override;
+
+    public:
         std::unique_ptr<SSHMaster::Connection> sshConn;
 
         void closeWrite() override
@@ -88,9 +104,15 @@ protected:
     };
 };
 
+void RemoteStore::Connection::anchor() {}
+
+void SSHStore::Connection::anchor() {}
+
+void SSHStore::anchor() {}
+
 MountedSSHStoreConfig::MountedSSHStoreConfig(StringMap params)
-    : StoreConfig(params)
-    , RemoteStoreConfig(params)
+    : StoreConfig(params, FilePathType::Native)
+    , RemoteStoreConfig(params, FilePathType::Native)
     , CommonSSHStoreConfig(params)
     , SSHStoreConfig(params)
     , LocalFSStoreConfig(params)
@@ -98,8 +120,8 @@ MountedSSHStoreConfig::MountedSSHStoreConfig(StringMap params)
 }
 
 MountedSSHStoreConfig::MountedSSHStoreConfig(const ParsedURL::Authority & authority, StringMap params)
-    : StoreConfig(params)
-    , RemoteStoreConfig(params)
+    : StoreConfig(params, FilePathType::Native)
+    , RemoteStoreConfig(params, FilePathType::Native)
     , CommonSSHStoreConfig(authority, params)
     , SSHStoreConfig(authority, params)
     , LocalFSStoreConfig(params)
@@ -129,6 +151,10 @@ std::string MountedSSHStoreConfig::doc()
  */
 struct MountedSSHStore : virtual SSHStore, virtual LocalFSStore
 {
+private:
+    void anchor() override;
+
+public:
     using Config = MountedSSHStoreConfig;
 
     MountedSSHStore(ref<const Config> config)
@@ -187,6 +213,8 @@ struct MountedSSHStore : virtual SSHStore, virtual LocalFSStore
         return readString(conn->from);
     }
 };
+
+void MountedSSHStore::anchor() {}
 
 ref<Store> SSHStore::Config::openStore() const
 {

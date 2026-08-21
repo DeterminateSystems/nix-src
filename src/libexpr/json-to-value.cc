@@ -3,12 +3,13 @@
 #include "nix/expr/eval.hh"
 
 #include <limits>
-#include <variant>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 
 namespace nix {
+
+namespace {
 
 // for more information, refer to
 // https://github.com/nlohmann/json/blob/master/include/nlohmann/detail/input/json_sax.hpp
@@ -31,7 +32,7 @@ class JSONSax : nlohmann::json_sax<json>
         }
 
         explicit JSONState(Value * v)
-            : v(allocRootValue(v))
+            : v(RootValue(v))
         {
         }
 
@@ -40,7 +41,7 @@ class JSONSax : nlohmann::json_sax<json>
         Value & value(EvalState & state)
         {
             if (!v)
-                v = allocRootValue(state.allocValue());
+                v = RootValue(state.allocValue());
             return **v;
         }
 
@@ -65,7 +66,7 @@ class JSONSax : nlohmann::json_sax<json>
 
         void add() override
         {
-            v = nullptr;
+            v.reset();
         }
     public:
         void key(string_t & name, EvalState & state)
@@ -91,7 +92,7 @@ class JSONSax : nlohmann::json_sax<json>
         void add() override
         {
             values.push_back(*v);
-            v = nullptr;
+            v.reset();
         }
     public:
         JSONListState(std::unique_ptr<JSONState> && p, std::size_t reserve)
@@ -201,6 +202,8 @@ public:
     }
 };
 
+} // namespace
+
 void parseJSON(EvalState & state, const std::string_view & s_, Value & v)
 {
     JSONSax parser(state, v);
@@ -208,5 +211,7 @@ void parseJSON(EvalState & state, const std::string_view & s_, Value & v)
     if (!res)
         throw JSONParseError("Invalid JSON Value");
 }
+
+void JSONParseError::anchor() {}
 
 } // namespace nix

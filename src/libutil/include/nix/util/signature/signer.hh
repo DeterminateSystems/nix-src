@@ -18,6 +18,12 @@ namespace nix {
  */
 struct Signer
 {
+private:
+    /* VTable anchor to avoid weak linkage of the vtable - it breaks
+       dynamic_cast across shared libraries on Darwin. */
+    virtual void anchor();
+
+public:
     virtual ~Signer() = default;
 
     /**
@@ -46,7 +52,7 @@ using Signers = std::map<std::string, Signer *>;
  */
 struct LocalSigner : Signer
 {
-    LocalSigner(SecretKey && privateKey);
+    LocalSigner(std::unique_ptr<SecretKey> && privateKey);
 
     Signature signDetached(std::string_view s) const override;
 
@@ -54,8 +60,8 @@ struct LocalSigner : Signer
 
 private:
 
-    SecretKey privateKey;
-    PublicKey publicKey;
+    const std::unique_ptr<SecretKey> privateKey;
+    const std::unique_ptr<PublicKey> publicKey;
 };
 
 } // namespace nix

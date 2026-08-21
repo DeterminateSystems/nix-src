@@ -2,8 +2,6 @@
 
 source common.sh
 
-clearStoreIfPossible
-
 # Make sure that 'nix build' returns all outputs by default.
 nix build -f multiple-outputs.nix --json a b --no-link | jq --exit-status '
   (.[0] |
@@ -53,7 +51,7 @@ nix build -f multiple-outputs.nix --json nothing-to-install --no-link | jq --exi
     (.outputs | keys == ["out"]))
 '
 
-# But not when it's overriden.
+# But not when it's overridden.
 nix build -f multiple-outputs.nix --json e^a_a --no-link
 nix build -f multiple-outputs.nix --json e^a_a --no-link | jq --exit-status '
   (.[0] |
@@ -67,7 +65,7 @@ nix build -f multiple-outputs.nix --json 'e^*' --no-link | jq --exit-status '
     (.outputs | keys == ["a_a", "b", "c"]))
 '
 
-# test buidling from non-drv attr path
+# test building from non-drv attr path
 
 nix build -f multiple-outputs.nix --json 'e.a_a.outPath' --no-link | jq --exit-status '
   (.[0] |
@@ -158,46 +156,31 @@ printf "" | nix build --no-link --stdin --json | jq --exit-status '. == []'
 printf "%s\n" "$drv^*" | nix build --no-link --stdin --json | jq --exit-status '.[0]|has("drvPath")'
 
 # --keep-going and FOD
-if isDaemonNewer "2.34pre"; then
-    # With the fix, cancelled goals are not reported as failures.
-    # Use -j1 so only x1 starts and fails; x2, x3, x4 are cancelled.
-    out="$(nix build -f fod-failing.nix -j1 -L 2>&1)" && status=0 || status=$?
-    test "$status" = 1
-    # Only the hash mismatch error for x1. Cancelled goals not reported.
-    test "$(<<<"$out" grep -cE '^error:')" = 1
-    # Regression test: error messages should not be empty (end with just "failed:")
-    <<<"$out" grepQuietInverse -E "^error:.*failed: *$"
-else
-    out="$(nix build -f fod-failing.nix -L 2>&1)" && status=0 || status=$?
-    test "$status" = 1
-    # At minimum, check that x1 is reported as failing
-    <<<"$out" grepQuiet -E "error:.*-x1"
-fi
+out="$(nix build -f fod-failing.nix -j1 -L 2>&1)" && status=0 || status=$?
+test "$status" = 1
+# Only the hash mismatch error for the first failing goal (x1).
+# The other goals (x2, x3, x4) are cancelled and not reported as failures.
+test "$(<<<"$out" grep -cE '^error:')" = 1
 <<<"$out" grepQuiet -E "hash mismatch in fixed-output derivation '.*-x1\\.drv'"
 <<<"$out" grepQuiet -vE "hash mismatch in fixed-output derivation '.*-x3\\.drv'"
 <<<"$out" grepQuiet -vE "hash mismatch in fixed-output derivation '.*-x2\\.drv'"
 
 out="$(nix build -f fod-failing.nix -L x1 x2 x3 --keep-going 2>&1)" && status=0 || status=$?
 test "$status" = 1
-# three "hash mismatch" errors - for each failing fod, one "build of ... failed"
-test "$(<<<"$out" grep -cE '^error:')" = 4
+# three "hash mismatch" errors - for each failing fod
+test "$(<<<"$out" grep -cE '^error:')" = 3
 <<<"$out" grepQuiet -E "hash mismatch in fixed-output derivation '.*-x1\\.drv'"
 <<<"$out" grepQuiet -E "hash mismatch in fixed-output derivation '.*-x3\\.drv'"
 <<<"$out" grepQuiet -E "hash mismatch in fixed-output derivation '.*-x2\\.drv'"
-<<<"$out" grepQuiet -E "error: build of '.*-x[1-3]\\.drv\\^out', '.*-x[1-3]\\.drv\\^out', '.*-x[1-3]\\.drv\\^out' failed"
 
 out="$(nix build -f fod-failing.nix -L x4 2>&1)" && status=0 || status=$?
 test "$status" = 1
 # Precise number of errors depends on daemon version / goal refactorings
 (( "$(<<<"$out" grep -cE '^error:')" >= 2 ))
 
-if isDaemonNewer "2.31"; then
+if isDaemonNewer "2.29pre"; then
     <<<"$out" grepQuiet -E "error: Cannot build '.*-x4\\.drv'"
     <<<"$out" grepQuiet -E "Reason: 1 dependency failed."
-elif isDaemonNewer "2.29pre"; then
-    <<<"$out" grepQuiet -E "error: Cannot build '.*-x4\\.drv'"
-    <<<"$out" grepQuiet -E "Reason: 1 dependency failed."
-    <<<"$out" grepQuiet -E "Build failed due to failed dependency"
 else
     <<<"$out" grepQuiet -E "error: 1 dependencies of derivation '.*-x4\\.drv' failed to build"
 fi
@@ -222,7 +205,7 @@ fi
 # Only fast-fail should be reported as a failure.
 # Uses fifo for synchronization to ensure deterministic behavior.
 # Requires -j2 so slow and fast-fail run concurrently (fifo deadlocks if serialized).
-if isDaemonNewer "2.34pre" && canUseSandbox; then
+if isDaemonNewer "2.34pre" && canUseSandbox && unprivilegedUserNamespacesSupported; then
     fifoDir="$TEST_ROOT/cancelled-builds-fifo"
     mkdir -p "$fifoDir"
     mkfifo "$fifoDir/fifo"
@@ -235,7 +218,7 @@ if isDaemonNewer "2.34pre" && canUseSandbox; then
     if ! isTestOnNixOS; then
         sandboxPathsArg=(--option sandbox-paths "/nix/store")
     fi
-    out="$(nix flake check ./cancelled-builds --impure -L -j2 \
+    out="$(nix flake check ./cancelled-builds --no-sandbox-fallback --impure -L -j2 \
         --option sandbox true \
         "${sandboxPathsArg[@]}" \
         --option sandbox-build-dir /build-tmp \
@@ -261,7 +244,7 @@ if isDaemonNewer "2.34pre" && canUseSandbox; then
         sandboxPathsArg=(--option sandbox-paths "/nix/store")
     fi
     system=$(nix eval --raw --impure --expr builtins.currentSystem)
-    out="$(nix build --impure -L -j2 \
+    out="$(nix build --no-sandbox-fallback --impure -L -j2 \
         --option sandbox true \
         "${sandboxPathsArg[@]}" \
         --option sandbox-build-dir /build-tmp \

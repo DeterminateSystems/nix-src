@@ -1,5 +1,4 @@
 #include "nix/store/ssh.hh"
-#include "nix/util/finally.hh"
 #include "nix/util/current-process.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/os-string.hh"
@@ -21,12 +20,15 @@ static std::string parsePublicHostKey(std::string_view host, std::string_view ss
 
 class InvalidSSHAuthority final : public CloneableError<InvalidSSHAuthority, Error>
 {
+    void anchor() override;
 public:
     InvalidSSHAuthority(const ParsedURL::Authority & authority, std::string_view reason)
         : CloneableError("invalid SSH authority: '%s': %s", authority.to_string(), reason)
     {
     }
 };
+
+void InvalidSSHAuthority::anchor() {}
 
 /**
  * Checks if the hostname/username are valid for use with ssh.
@@ -66,7 +68,7 @@ OsStrings getNixSshOpts()
 
 SSHMaster::SSHMaster(
     const ParsedURL::Authority & authority,
-    std::filesystem::path keyFile,
+    std::optional<std::filesystem::path> keyFile,
     std::string_view sshPublicHostKey,
     bool useMaster,
     bool compress,
@@ -90,13 +92,13 @@ SSHMaster::SSHMaster(
     checkValidAuthority(authority);
 }
 
-void SSHMaster::addCommonSSHOpts(OsStrings & args)
+void SSHMaster::addCommonSSHOpts(OsStrings & args, std::optional<std::filesystem::path> socketPath)
 {
     auto sshArgs = getNixSshOpts();
     args.insert(args.end(), sshArgs.begin(), sshArgs.end());
 
-    if (!keyFile.empty())
-        args.insert(args.end(), {OS_STR("-i"), keyFile.native()});
+    if (keyFile)
+        args.insert(args.end(), {OS_STR("-i"), keyFile->native()});
     if (!sshPublicHostKey.empty()) {
         std::filesystem::path fileName = tmpDir->path() / "host-key";
         writeFile(fileName, authority.host + " " + sshPublicHostKey + "\n");
@@ -114,12 +116,15 @@ void SSHMaster::addCommonSSHOpts(OsStrings & args)
     // the remote session won't be garbled if the local command is slow.
     args.push_back(OS_STR("-oPermitLocalCommand=yes"));
     args.push_back(OS_STR("-oLocalCommand=echo started"));
+    args.insert(args.end(), {OS_STR("-S"), socketPath ? socketPath->native() : OS_STR("none")});
 }
 
-bool SSHMaster::isMasterRunning()
+bool SSHMaster::isMasterRunning(std::filesystem::path socketPath)
 {
+    assert(useMaster);
+
     OsStrings args = {OS_STR("-O"), OS_STR("check"), string_to_os_string(hostnameAndUser)};
-    addCommonSSHOpts(args);
+    addCommonSSHOpts(args, socketPath);
 
     auto res = runProgram(RunOptions{.program = "ssh", .args = std::move(args), .mergeStderrToStdout = true});
     return res.first == 0;
@@ -151,7 +156,7 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
 #ifdef _WIN32 // TODO re-enable on Windows, once we can start processes.
     throw UnimplementedError("cannot yet SSH on windows because spawning processes is not yet implemented");
 #else
-    std::filesystem::path socketPath = startMaster();
+    auto socketPath = startMaster();
 
     Pipe in, out;
     in.create();
@@ -184,12 +189,20 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
 
             if (!fakeSSH) {
                 args = {"ssh", hostnameAndUser.c_str(), "-x"};
-                addCommonSSHOpts(args);
-                if (!socketPath.empty())
-                    args.insert(args.end(), {"-S", socketPath.string()});
+                addCommonSSHOpts(args, socketPath);
                 if (verbosity >= lvlChatty)
                     args.push_back("-v");
                 args.splice(args.end(), std::move(extraSshArgs));
+                // Override LocalCommand to no-op on command SSHs; master
+                // already consumed "started". On fallback, "echo started"
+                // would leak into the nix protocol stream. #441
+                if (useMaster) {
+                    for (auto & arg : args) {
+                        if (arg.starts_with(OS_STR("-oLocalCommand="))) {
+                            arg = OS_STR("-oLocalCommand=true");
+                        }
+                    }
+                }
                 args.push_back("--");
             }
 
@@ -205,9 +218,9 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
     in.readSide = INVALID_DESCRIPTOR;
     out.writeSide = INVALID_DESCRIPTOR;
 
-    // Wait for the SSH connection to be established,
-    // So that we don't overwrite the password prompt with our progress bar.
-    if (!fakeSSH && !useMaster && !isMasterRunning()) {
+    // Skip readLine when useMaster: SSH connects via master socket, or
+    // falls back to direct connection where LocalCommand is now a no-op.
+    if (!fakeSSH && !useMaster && !(socketPath && isMasterRunning(*socketPath))) {
         std::string reply;
         try {
             reply = readLine(out.readSide.get());
@@ -229,14 +242,15 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
 
 #ifndef _WIN32 // TODO re-enable on Windows, once we can start processes.
 
-std::filesystem::path SSHMaster::startMaster()
+std::optional<std::filesystem::path> SSHMaster::startMaster()
 {
     if (!useMaster)
-        return {};
+        return std::nullopt;
 
     auto state(state_.lock());
 
-    if (state->sshMaster != INVALID_DESCRIPTOR)
+    // Check if the master is still alive before returning the cached socket.
+    if (state->sshMaster != INVALID_DESCRIPTOR && state->sshMaster.isAlive())
         return state->socketPath;
 
     state->socketPath = tmpDir->path() / "ssh.sock";
@@ -249,7 +263,7 @@ std::filesystem::path SSHMaster::startMaster()
 
     auto suspension = logger->suspend();
 
-    if (isMasterRunning())
+    if (isMasterRunning(state->socketPath))
         return state->socketPath;
 
     state->sshMaster = startProcess(
@@ -261,10 +275,10 @@ std::filesystem::path SSHMaster::startMaster()
             if (dup2(out.writeSide.get(), STDOUT_FILENO) == -1)
                 throw SysError("duping over stdout");
 
-            OsStrings args = {"ssh", hostnameAndUser.c_str(), "-M", "-N", "-S", state->socketPath.string()};
+            OsStrings args = {"ssh", hostnameAndUser.c_str(), "-M", "-N", "-oControlPersist=no"};
             if (verbosity >= lvlChatty)
                 args.push_back("-v");
-            addCommonSSHOpts(args);
+            addCommonSSHOpts(args, state->socketPath);
             auto env = createSSHEnv();
             nix::execvpe(args.begin()->c_str(), stringsToCharPtrs(args).data(), stringsToCharPtrs(env).data());
 

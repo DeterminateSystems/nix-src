@@ -10,6 +10,8 @@
 
 namespace nix::eval_cache {
 
+void CachedEvalError::anchor() {}
+
 CachedEvalError::CachedEvalError(ref<AttrCursor> cursor, Symbol attr)
     : CloneableError(cursor->root->state, "cached failure of attribute '%s'", cursor->getAttrPathStr(attr))
     , cursor(cursor)
@@ -106,7 +108,7 @@ struct AttrDb
     }
 
     template<typename F>
-    AttrId doSQLite(F && fun)
+    AttrId doSQLite(const F & fun)
     {
         if (failed)
             return 0;
@@ -124,13 +126,23 @@ struct AttrDb
         return doSQLite([&]() {
             auto state(_state->lock());
 
-            state->insertAttribute.use()(key.first)(symbols[key.second])(AttrType::FullAttrs) (0, false).exec();
+            state->insertAttribute.use()
+                .apply(key.first)
+                .apply(symbols[key.second])
+                .apply(AttrType::FullAttrs)
+                .apply(0, false)
+                .exec();
 
             AttrId rowId = state->db.getLastInsertedRowId();
             assert(rowId);
 
             for (auto & attr : attrs)
-                state->insertAttribute.use()(rowId)(symbols[attr])(AttrType::Placeholder) (0, false).exec();
+                state->insertAttribute.use()
+                    .apply(rowId)
+                    .apply(symbols[attr])
+                    .apply(AttrType::Placeholder)
+                    .apply(0, false)
+                    .exec();
 
             return rowId;
         });
@@ -150,10 +162,20 @@ struct AttrDb
                     ctx.append(elem->view());
                     first = false;
                 }
-                state->insertAttributeWithContext.use()(key.first)(symbols[key.second])(AttrType::String) (s) (ctx)
+                state->insertAttributeWithContext.use()
+                    .apply(key.first)
+                    .apply(symbols[key.second])
+                    .apply(AttrType::String)
+                    .apply(s)
+                    .apply(ctx)
                     .exec();
             } else {
-                state->insertAttribute.use()(key.first)(symbols[key.second])(AttrType::String) (s).exec();
+                state->insertAttribute.use()
+                    .apply(key.first)
+                    .apply(symbols[key.second])
+                    .apply(AttrType::String)
+                    .apply(s)
+                    .exec();
             }
 
             return state->db.getLastInsertedRowId();
@@ -165,7 +187,12 @@ struct AttrDb
         return doSQLite([&]() {
             auto state(_state->lock());
 
-            state->insertAttribute.use()(key.first)(symbols[key.second])(AttrType::Bool) (b ? 1 : 0).exec();
+            state->insertAttribute.use()
+                .apply(key.first)
+                .apply(symbols[key.second])
+                .apply(AttrType::Bool)
+                .apply(b ? 1 : 0)
+                .exec();
 
             return state->db.getLastInsertedRowId();
         });
@@ -176,7 +203,12 @@ struct AttrDb
         return doSQLite([&]() {
             auto state(_state->lock());
 
-            state->insertAttribute.use()(key.first)(symbols[key.second])(AttrType::Int) (n).exec();
+            state->insertAttribute.use()
+                .apply(key.first)
+                .apply(symbols[key.second])
+                .apply(AttrType::Int)
+                .apply(n)
+                .exec();
 
             return state->db.getLastInsertedRowId();
         });
@@ -187,9 +219,11 @@ struct AttrDb
         return doSQLite([&]() {
             auto state(_state->lock());
 
-            state->insertAttribute
-                .use()(key.first)(symbols[key.second])(
-                    AttrType::ListOfStrings) (dropEmptyInitThenConcatStringsSep("\t", l))
+            state->insertAttribute.use()
+                .apply(key.first)
+                .apply(symbols[key.second])
+                .apply(AttrType::ListOfStrings)
+                .apply(dropEmptyInitThenConcatStringsSep("\t", l))
                 .exec();
 
             return state->db.getLastInsertedRowId();
@@ -201,7 +235,12 @@ struct AttrDb
         return doSQLite([&]() {
             auto state(_state->lock());
 
-            state->insertAttribute.use()(key.first)(symbols[key.second])(AttrType::Placeholder) (0, false).exec();
+            state->insertAttribute.use()
+                .apply(key.first)
+                .apply(symbols[key.second])
+                .apply(AttrType::Placeholder)
+                .apply(0, false)
+                .exec();
 
             return state->db.getLastInsertedRowId();
         });
@@ -212,7 +251,12 @@ struct AttrDb
         return doSQLite([&]() {
             auto state(_state->lock());
 
-            state->insertAttribute.use()(key.first)(symbols[key.second])(AttrType::Missing) (0, false).exec();
+            state->insertAttribute.use()
+                .apply(key.first)
+                .apply(symbols[key.second])
+                .apply(AttrType::Missing)
+                .apply(0, false)
+                .exec();
 
             return state->db.getLastInsertedRowId();
         });
@@ -223,7 +267,12 @@ struct AttrDb
         return doSQLite([&]() {
             auto state(_state->lock());
 
-            state->insertAttribute.use()(key.first)(symbols[key.second])(AttrType::Misc) (0, false).exec();
+            state->insertAttribute.use()
+                .apply(key.first)
+                .apply(symbols[key.second])
+                .apply(AttrType::Misc)
+                .apply(0, false)
+                .exec();
 
             return state->db.getLastInsertedRowId();
         });
@@ -234,7 +283,12 @@ struct AttrDb
         return doSQLite([&]() {
             auto state(_state->lock());
 
-            state->insertAttribute.use()(key.first)(symbols[key.second])(AttrType::Failed) (0, false).exec();
+            state->insertAttribute.use()
+                .apply(key.first)
+                .apply(symbols[key.second])
+                .apply(AttrType::Failed)
+                .apply(0, false)
+                .exec();
 
             return state->db.getLastInsertedRowId();
         });
@@ -244,7 +298,7 @@ struct AttrDb
     {
         auto state(_state->lock());
 
-        auto queryAttribute(state->queryAttribute.use()(key.first)(symbols[key.second]));
+        auto queryAttribute(state->queryAttribute.use().apply(key.first).apply(symbols[key.second]));
         if (!queryAttribute.next())
             return {};
 
@@ -257,7 +311,7 @@ struct AttrDb
         case AttrType::FullAttrs: {
             // FIXME: expensive, should separate this out.
             std::vector<Symbol> attrs;
-            auto queryAttributes(state->queryAttributes.use()(rowId));
+            auto queryAttributes(state->queryAttributes.use().apply(rowId));
             while (queryAttributes.next())
                 attrs.emplace_back(symbols.create(queryAttributes.getStr(0)));
             return {{rowId, attrs}};
@@ -307,11 +361,12 @@ EvalCache::EvalCache(
 
 Value * EvalCache::getRootValue()
 {
-    if (!value) {
+    auto value(this->value.lock());
+    if (!*value) {
         debug("getting root value");
-        value = allocRootValue(rootLoader());
+        *value = RootValue(rootLoader());
     }
-    return *value;
+    return **value;
 }
 
 ref<AttrCursor> EvalCache::getRoot()
@@ -326,7 +381,7 @@ AttrCursor::AttrCursor(
     , cachedValue(std::move(cachedValue))
 {
     if (value)
-        _value = allocRootValue(value);
+        *_value.lock() = RootValue(value);
 }
 
 AttrKey AttrCursor::getKey()
@@ -342,18 +397,23 @@ AttrKey AttrCursor::getKey()
 
 Value & AttrCursor::getValue()
 {
-    if (!_value) {
+    /* Note: this lock is held while the value is being evaluated,
+       so concurrent calls block until the value is available. Lock
+       ordering is strictly child -> parent, so this cannot
+       deadlock. */
+    auto value(_value.lock());
+    if (!*value) {
         if (parent) {
             auto & vParent = parent->first->getValue();
             root->state.forceAttrs(vParent, noPos, "while searching for an attribute");
             auto attr = vParent.attrs()->get(parent->second);
             if (!attr)
                 throw Error("attribute '%s' is unexpectedly missing", getAttrPathStr());
-            _value = allocRootValue(attr->value);
+            *value = RootValue(attr->value);
         } else
-            _value = allocRootValue(root->getRootValue());
+            *value = RootValue(root->getRootValue());
     }
-    return **_value;
+    return ***value;
 }
 
 void AttrCursor::fetchCachedValue()
@@ -364,21 +424,31 @@ void AttrCursor::fetchCachedValue()
         throw CachedEvalError(parent->first, parent->second);
 }
 
-AttrPath AttrCursor::getAttrPath() const
+AttrPath AttrCursor::getAttrPathRaw() const
 {
     if (parent) {
-        auto attrPath = parent->first->getAttrPath();
+        auto attrPath = parent->first->getAttrPathRaw();
         attrPath.push_back(parent->second);
         return attrPath;
     } else
         return {};
 }
 
-AttrPath AttrCursor::getAttrPath(Symbol name) const
+AttrPath AttrCursor::getAttrPath() const
 {
-    auto attrPath = getAttrPath();
+    return root->cleanupAttrPath(getAttrPathRaw());
+}
+
+AttrPath AttrCursor::getAttrPathRaw(Symbol name) const
+{
+    auto attrPath = getAttrPathRaw();
     attrPath.push_back(name);
     return attrPath;
+}
+
+AttrPath AttrCursor::getAttrPath(Symbol name) const
+{
+    return root->cleanupAttrPath(getAttrPathRaw(name));
 }
 
 std::string AttrCursor::getAttrPathStr() const
@@ -554,18 +624,22 @@ string_t AttrCursor::getStringWithContext()
             if (auto s = std::get_if<string_t>(&cachedValue->second)) {
                 bool valid = true;
                 for (auto & c : s->second) {
-                    const StorePath & path = std::visit(
+                    const StorePath * path = std::visit(
                         overloaded{
-                            [&](const NixStringContextElem::DrvDeep & d) -> const StorePath & { return d.drvPath; },
-                            [&](const NixStringContextElem::Built & b) -> const StorePath & {
-                                return b.drvPath->getBaseStorePath();
+                            [&](const NixStringContextElem::DrvDeep & d) -> const StorePath * { return &d.drvPath; },
+                            [&](const NixStringContextElem::Built & b) -> const StorePath * {
+                                return &b.drvPath->getBaseStorePath();
                             },
-                            [&](const NixStringContextElem::Opaque & o) -> const StorePath & { return o.path; },
+                            [&](const NixStringContextElem::Opaque & o) -> const StorePath * { return &o.path; },
+                            [&](const NixStringContextElem::Path & p) -> const StorePath * { return nullptr; },
                         },
                         c.raw);
-                    if (!root->state.store->isValidPath(path)) {
-                        valid = false;
-                        break;
+                    if (path) {
+                        root->state.store->addTempRoot(*path);
+                        if (!root->state.store->isValidPath(*path)) {
+                            valid = false;
+                            break;
+                        }
                     }
                 }
                 if (valid) {
@@ -707,13 +781,17 @@ StorePath AttrCursor::forceDerivation()
     auto aDrvPath = getAttr(root->state.s.drvPath);
     auto drvPath = root->state.store->parseStorePath(aDrvPath->getString());
     drvPath.requireDerivation();
-    if (!root->state.store->isValidPath(drvPath) && !settings.readOnlyMode) {
-        /* The eval cache contains 'drvPath', but the actual path has
-           been garbage-collected. So force it to be regenerated. */
-        aDrvPath->forceValue();
-        if (!root->state.store->isValidPath(drvPath))
-            throw Error(
-                "don't know how to recreate store derivation '%s'!", root->state.store->printStorePath(drvPath));
+    if (!settings.readOnlyMode) {
+        root->state.store->addTempRoot(drvPath);
+        if (!root->state.store->isValidPath(drvPath)) {
+            /* The eval cache contains 'drvPath', but the actual path has
+               been garbage-collected. So force it to be regenerated. */
+            aDrvPath->forceValue();
+            root->state.waitForPath(drvPath);
+            if (!root->state.store->isValidPath(drvPath))
+                throw Error(
+                    "don't know how to recreate store derivation '%s'!", root->state.store->printStorePath(drvPath));
+        }
     }
     return drvPath;
 }

@@ -18,7 +18,7 @@ private:
     ParsedURL::Authority authority;
     std::string hostnameAndUser;
     bool fakeSSH;
-    const std::filesystem::path keyFile;
+    const std::optional<std::filesystem::path> keyFile;
     /**
      * Raw bytes, not Base64 encoding.
      */
@@ -39,18 +39,18 @@ private:
 
     Sync<State> state_;
 
-    void addCommonSSHOpts(OsStrings & args);
-    bool isMasterRunning();
+    void addCommonSSHOpts(OsStrings & args, std::optional<std::filesystem::path> socketPath);
+    bool isMasterRunning(std::filesystem::path socketPath);
 
 #ifndef _WIN32 // TODO re-enable on Windows, once we can start processes.
-    std::filesystem::path startMaster();
+    std::optional<std::filesystem::path> startMaster();
 #endif
 
 public:
 
     SSHMaster(
         const ParsedURL::Authority & authority,
-        std::filesystem::path keyFile,
+        std::optional<std::filesystem::path> keyFile,
         std::string_view sshPublicHostKey,
         bool useMaster,
         bool compress,

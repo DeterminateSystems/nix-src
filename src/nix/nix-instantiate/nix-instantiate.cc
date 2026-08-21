@@ -5,7 +5,6 @@
 #include "nix/expr/eval-inline.hh"
 #include "nix/expr/get-drvs.hh"
 #include "nix/expr/attr-path.hh"
-#include "nix/util/signals.hh"
 #include "nix/expr/value-to-xml.hh"
 #include "nix/expr/value-to-json.hh"
 #include "nix/store/store-open.hh"
@@ -14,10 +13,9 @@
 #include "nix/cmd/legacy.hh"
 #include "man-pages.hh"
 
-#include <map>
 #include <iostream>
 
-using namespace nix;
+namespace nix {
 
 std::filesystem::path gcRoot;
 static int rootNr = 0;
@@ -56,14 +54,18 @@ void processExpr(
             else
                 state.autoCallFunction(autoArgs, v, vRes);
             if (output == okRaw)
-                std::cout << *state.coerceToString(noPos, vRes, context, "while generating the nix-instantiate output");
+                std::cout << state.devirtualize(
+                    *state.coerceToString(noPos, vRes, context, "while generating the nix-instantiate output"),
+                    context);
             // We intentionally don't output a newline here. The default PS1 for Bash in NixOS starts with a newline
             // and other interactive shells like Zsh are smart enough to print a missing newline before the prompt.
-            else if (output == okXML)
-                printValueAsXML(state, strict, location, vRes, std::cout, context, noPos);
-            else if (output == okJSON) {
-                printValueAsJSON(state, strict, vRes, v.determinePos(noPos), std::cout, context);
-                std::cout << std::endl;
+            else if (output == okXML) {
+                std::ostringstream s;
+                printValueAsXML(state, strict, location, vRes, s, context, noPos);
+                std::cout << state.devirtualize(s.str(), context);
+            } else if (output == okJSON) {
+                auto j = printValueAsJSON(state, strict, vRes, v.determinePos(noPos), context);
+                std::cout << state.devirtualize(j.dump(), context) << std::endl;
             } else {
                 if (strict)
                     state.forceValueDeep(vRes);
@@ -209,3 +211,5 @@ static int main_nix_instantiate(int argc, char ** argv)
 }
 
 static RegisterLegacyCommand r_nix_instantiate("nix-instantiate", main_nix_instantiate);
+
+} // namespace nix

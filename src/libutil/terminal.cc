@@ -13,7 +13,6 @@
 #endif
 #include <unistd.h>
 #include <widechar_width.h>
-#include <mutex>
 #include <cstdlib> // for ptsname and ptsname_r
 
 namespace {
@@ -189,6 +188,14 @@ void updateWindowSize()
 std::pair<unsigned short, unsigned short> getWindowSize()
 {
     return *windowSize->lock();
+}
+
+unsigned int getWindowWidth()
+{
+    unsigned int width = getWindowSize().second;
+    if (width <= 0)
+        width = std::numeric_limits<unsigned int>::max();
+    return width;
 }
 
 #ifndef _WIN32

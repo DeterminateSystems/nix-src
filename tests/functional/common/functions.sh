@@ -54,7 +54,7 @@ doClearStore() {
     clearProfiles
 }
 
-clearCache() {
+clearBinaryCache() {
     rm -rf "${cacheDir?}"
 }
 
@@ -73,6 +73,7 @@ startDaemon() {
     fi
     # Start the daemon, wait for the socket to appear.
     rm -f "$NIX_DAEMON_SOCKET_PATH"
+    # TODO: remove the nix-command feature when we're no longer testing against old daemons.
     PATH=$DAEMON_PATH nix --extra-experimental-features 'nix-command' daemon &
     _NIX_TEST_DAEMON_PID=$!
     export _NIX_TEST_DAEMON_PID
@@ -101,7 +102,7 @@ killDaemon() {
       die "killDaemon: not supported when testing on NixOS. Is it really needed? If so add conditionals; e.g. if ! isTestOnNixOS; then ..."
     fi
 
-    # Don't fail trying to stop a non-existant daemon twice.
+    # Don't fail trying to stop a non-existent daemon twice.
     if [[ "${_NIX_TEST_DAEMON_PID-}" == '' ]]; then
         return
     fi
@@ -132,11 +133,11 @@ restartDaemon() {
 }
 
 isDaemonNewer () {
-  [[ -n "${NIX_DAEMON_PACKAGE:-}" ]] || return 0
-  local requiredVersion="$1"
-  local daemonVersion
-  daemonVersion=$("$NIX_DAEMON_PACKAGE/bin/nix" daemon --version | cut -d' ' -f3)
-  [[ $(nix eval --expr "builtins.compareVersions ''$daemonVersion'' ''$requiredVersion''") -ge 0 ]]
+    [[ -n "${NIX_DAEMON_PACKAGE:-}" ]] || return 0
+    local requiredVersion="$1"
+    local daemonVersion
+    daemonVersion=$("$NIX_DAEMON_PACKAGE/bin/nix" daemon --version | sed 's/.*) //')
+    [[ $(nix eval --expr "builtins.compareVersions ''$daemonVersion'' ''$requiredVersion''") -ge 0 ]]
 }
 
 skipTest () {
@@ -238,12 +239,15 @@ enableFeatures() {
 }
 
 onError() {
-    set +x
-    echo "$0: test failed at:" >&2
-    for ((i = 1; i < ${#BASH_SOURCE[@]}; i++)); do
-        if [[ -z ${BASH_SOURCE[i]} ]]; then break; fi
-        echo "  ${FUNCNAME[i]} in ${BASH_SOURCE[i]}:${BASH_LINENO[i-1]}" >&2
-    done
+    # Don't print the message if set +e has been explicitly set.
+    if [[ $- == *e* ]]; then
+        set +x
+        echo "$0: test failed at:" >&2
+        for ((i = 1; i < ${#BASH_SOURCE[@]}; i++)); do
+            if [[ -z ${BASH_SOURCE[i]} ]]; then break; fi
+            echo "  ${FUNCNAME[i]} in ${BASH_SOURCE[i]}:${BASH_LINENO[i-1]}" >&2
+        done
+    fi
 }
 
 # Prints an error message prefix referring to the last call into this file.
@@ -349,8 +353,14 @@ count() {
 
 trap onError ERR
 
+# Note: with newer AppArmor stacks, this restriction doesn't prevent *creating*
+# a user namespace, but denies mounting inside it, which Nix's sandbox needs.
+unprivilegedUserNamespacesSupported() {
+  ! { [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] && [[ $(< /proc/sys/kernel/apparmor_restrict_unprivileged_userns) -eq 1 ]]; }
+}
+
 requiresUnprivilegedUserNamespaces() {
-  if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] && [[ $(< /proc/sys/kernel/apparmor_restrict_unprivileged_userns) -eq 1 ]]; then
+  if ! unprivilegedUserNamespacesSupported; then
     skipTest "Unprivileged user namespaces are disabled. Run 'sudo sysctl -w /proc/sys/kernel/apparmor_restrict_unprivileged_userns=0' to allow, and run these tests."
   fi
 }

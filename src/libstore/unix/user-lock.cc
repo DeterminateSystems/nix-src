@@ -3,13 +3,15 @@
 #include <grp.h>
 
 #include "nix/store/user-lock.hh"
+#include "nix/store/local-settings.hh"
 #include "nix/util/file-system.hh"
-#include "nix/store/globals.hh"
 #include "nix/store/pathlocks.hh"
 #include "nix/util/users.hh"
 #include "nix/util/logging.hh"
 
 namespace nix {
+
+UserLock::~UserLock() {}
 
 #ifdef __linux__
 
@@ -34,6 +36,8 @@ static std::vector<gid_t> get_group_list(const char * username, gid_t group_id)
     return gids;
 }
 #endif
+
+namespace {
 
 struct SimpleUserLock : UserLock
 {
@@ -213,6 +217,8 @@ struct AutoUserLock : UserLock
         return nullptr;
     }
 };
+
+} // namespace
 
 std::unique_ptr<UserLock> acquireUserLock(
     const std::filesystem::path & stateDir, const LocalSettings & localSettings, uid_t nrIds, bool useUserNamespace)

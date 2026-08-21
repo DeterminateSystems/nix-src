@@ -3,8 +3,6 @@
 
 #include "nix/fetchers/fetchers.hh"
 #include "nix/fetchers/fetch-settings.hh"
-#include "nix/util/json-utils.hh"
-#include "nix/util/tests/characterization.hh"
 
 namespace nix::fetchers {
 
@@ -15,10 +13,7 @@ class AccessKeysTest : public ::testing::Test
 protected:
 
 public:
-    void SetUp() override
-    {
-        experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
-    }
+    void SetUp() override {}
 
     void TearDown() override {}
 };

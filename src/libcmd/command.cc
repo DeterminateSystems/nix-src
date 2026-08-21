@@ -166,6 +166,13 @@ ref<Store> EvalCommand::getEvalStore()
 ref<EvalState> EvalCommand::getEvalState()
 {
     if (!evalState) {
+        if (startReplOnEvalErrors && evalSettings.evalCores != 1U) {
+            // Disable parallel eval if the debugger is enabled, since
+            // they're incompatible at the moment.
+            warn("using the debugger disables multi-threaded evaluation");
+            evalSettings.evalCores = 1;
+        }
+
         evalState = std::allocate_shared<EvalState>(
             traceable_allocator<EvalState>(), lookupPath, getEvalStore(), fetchSettings, evalSettings, getStore());
 
@@ -440,9 +447,34 @@ void createOutLinks(const std::filesystem::path & outLink, const BuiltPaths & bu
 
 void MixOutLinkBase::createOutLinksMaybe(const std::vector<BuiltPathWithResult> & buildables, ref<Store> & store)
 {
-    if (outLink != "")
+    createOutLinksMaybe(toBuiltPaths(buildables), store);
+}
+
+void MixOutLinkBase::createOutLinksMaybe(const BuiltPaths & paths, ref<Store> & store)
+{
+    if (outLink)
         if (auto store2 = store.dynamic_pointer_cast<LocalFSStore>())
-            createOutLinks(outLink, toBuiltPaths(buildables), *store2);
+            createOutLinks(*outLink, paths, *store2);
+}
+
+void MixPrintOutPaths::printOutPathsMaybe(const BuiltPaths & paths, ref<Store> store)
+{
+    if (!printOutputPaths)
+        return;
+
+    logger->stop();
+    for (auto & path : paths) {
+        std::visit(
+            overloaded{
+                [&](const BuiltPath::Opaque & bo) { logger->cout(store->printStorePath(bo.path)); },
+                [&](const BuiltPath::Built & bfd) {
+                    for (auto & output : bfd.outputs) {
+                        logger->cout(store->printStorePath(output.second));
+                    }
+                },
+            },
+            path);
+    }
 }
 
 } // namespace nix

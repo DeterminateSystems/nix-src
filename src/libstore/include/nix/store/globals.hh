@@ -15,17 +15,22 @@
 
 namespace nix {
 
+template<>
+StoreReference BaseSetting<StoreReference>::parse(const std::string & str) const;
+template<>
+std::string BaseSetting<StoreReference>::to_string() const;
+
+template<>
+std::set<StoreReference> BaseSetting<std::set<StoreReference>>::parse(const std::string & str) const;
+template<>
+std::string BaseSetting<std::set<StoreReference>>::to_string() const;
+
 struct ProfileDirsOptions;
 
 struct LogFileSettings : public virtual Config
 {
-    /**
-     * The directory where we log various operations.
-     */
-    std::filesystem::path nixLogDir;
-
-protected:
-    LogFileSettings();
+private:
+    void anchor() override;
 
 public:
     Setting<bool> keepLog{
@@ -54,6 +59,10 @@ public:
 
 struct NarInfoDiskCacheSettings : public virtual Config
 {
+private:
+    void anchor() override;
+
+public:
     Setting<unsigned int> ttlNegative{
         this,
         3600,
@@ -67,8 +76,8 @@ struct NarInfoDiskCacheSettings : public virtual Config
           To wipe the lookup cache completely:
 
           ```shell-session
-          $ rm $HOME/.cache/nix/binary-cache-v*.sqlite*
-          # rm /root/.cache/nix/binary-cache-v*.sqlite*
+          $ rm $HOME/.cache/nix/binary-cache-*.sqlite*
+          # rm /root/.cache/nix/binary-cache-*.sqlite*
           ```
         )"};
 
@@ -105,6 +114,9 @@ class Settings : public virtual Config,
                  private WorkerSettings,
                  private NarInfoDiskCacheSettings
 {
+private:
+    void anchor() override;
+public:
     StringSet getDefaultSystemFeatures();
 
     StringSet getDefaultExtraPlatforms();
@@ -174,11 +186,6 @@ public:
      */
     std::filesystem::path nixStateDir;
 
-    /**
-     * File name of the socket the daemon listens to.
-     */
-    std::filesystem::path nixDaemonSocketFile;
-
     Setting<StoreReference> storeUri{
         this,
         StoreReference::parse(getEnv("NIX_REMOTE").value_or("auto")),
@@ -186,9 +193,14 @@ public:
         R"(
           The [URL of the Nix store](@docroot@/store/types/index.md#store-url-format)
           to use for most operations.
+
           See the
           [Store Types](@docroot@/store/types/index.md)
           section of the manual for supported store types and settings.
+
+          Can be overridden by the [`NIX_REMOTE`](@docroot@/command-ref/env-common.md#env-NIX_REMOTE) environment variable.
+
+          The default value is [`auto`](@docroot@/store/types/index.md#auto).
         )"};
 
     Setting<bool> useSQLiteWAL{this, !isWSL1(), "use-sqlite-wal", "Whether SQLite should use WAL mode."};
@@ -218,12 +230,8 @@ public:
           The following system types are widely used, as Nix is actively supported on these platforms:
 
           - `x86_64-linux`
-          - `x86_64-darwin`
-          - `i686-linux`
           - `aarch64-linux`
           - `aarch64-darwin`
-          - `armv6l-linux`
-          - `armv7l-linux`
 
           In general, you do not have to modify this setting.
           While you can force Nix to run a Darwin-specific `builder` executable on a Linux machine, the result would obviously be wrong.
@@ -423,6 +431,8 @@ public:
      * Get the options needed for profile directory functions.
      */
     ProfileDirsOptions getProfileDirsOptions() const;
+
+    const ExternalBuilder * findExternalDerivationBuilderIfSupported(const Derivation & drv);
 };
 
 // FIXME: don't use a global variable.
@@ -445,6 +455,8 @@ void loadConfFile(AbstractConfig & config);
  * not affected by the change.
  */
 extern std::string nixVersion;
+
+extern const std::string determinateNixVersion;
 
 /**
  * @param loadConfig Whether to load configuration from `nix.conf`, `NIX_CONFIG`, etc. May be disabled for unit tests.
