@@ -102,6 +102,16 @@ nix build -o "$TEST_ROOT/result" "git+file://$flake1Dir"
 (cd "$flake1Dir" && nix build -o "$TEST_ROOT/result" "path:.")
 (cd "$flake1Dir" && nix build -o "$TEST_ROOT/result" "git+file:.")
 
+# Test 'nix eval --drv-link'.
+drvPath=$(nix eval --raw --drv-link "$TEST_ROOT/drv" flake1#foo.drvPath)
+[[ $(readlink "$TEST_ROOT/drv") = "$drvPath" ]]
+[[ $(nix path-info "$TEST_ROOT/drv") = "$drvPath" ]]
+rm "$TEST_ROOT/drv"
+
+# '--drv-link' requires '--raw' or '--json'.
+expectStderr 1 nix eval --drv-link "$TEST_ROOT/drv" flake1#foo.drvPath | grepQuiet -- "--drv-link requires --raw or --json"
+[[ ! -e "$TEST_ROOT/drv" ]]
+
 # Test explicit packages.default.
 nix build -o "$TEST_ROOT/result" "$flake1Dir#default"
 nix build -o "$TEST_ROOT/result" "git+file://$flake1Dir#default"
