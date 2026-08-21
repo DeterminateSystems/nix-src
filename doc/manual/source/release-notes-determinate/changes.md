@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.22.1.<!-- differences -->
+This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.22.2.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -230,3 +230,13 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 <!-- Determinate Nix version 3.22.1 -->
 
 * Fix "waiting for exclusive access" hangs during schema migrations [DeterminateSystems/nix-src#594](https://github.com/DeterminateSystems/nix-src/pull/594)
+
+<!-- Determinate Nix version 3.22.2 -->
+
+* upgradeDBSchema(): Don't show "executing migration" messages on a new store by @edolstra in [DeterminateSystems/nix-src#600](https://github.com/DeterminateSystems/nix-src/pull/600)
+
+* Remove fallback behaviour for RemoteStore::addTempRoots() by @edolstra in [DeterminateSystems/nix-src#598](https://github.com/DeterminateSystems/nix-src/pull/598)
+
+* CachingFilteringSourceAccessor: Make the isAllowed() cache thread-safe by @edolstra in [DeterminateSystems/nix-src#601](https://github.com/DeterminateSystems/nix-src/pull/601)
+
+* nix eval: Add --drv-link flag to create symlinks to top-level derivations by @edolstra in [DeterminateSystems/nix-src#599](https://github.com/DeterminateSystems/nix-src/pull/599)
