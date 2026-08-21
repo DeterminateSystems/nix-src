@@ -294,6 +294,8 @@ LocalStore::LocalStore(ref<const Config> config)
                            : "database schema needs migrating, but this cannot be done in read-only mode");
     }
 
+    bool isNew = false;
+
     if (curSchema > nixSchemaVersion)
         throw Error("current Nix store schema is version %1%, but I only support %2%", curSchema, nixSchemaVersion);
 
@@ -301,6 +303,7 @@ LocalStore::LocalStore(ref<const Config> config)
         curSchema = nixSchemaVersion;
         openDB(*state, true);
         writeFile(schemaPath, fmt("%1%", curSchema), 0666, FsSync::Yes);
+        isNew = true;
     }
 
     else if (curSchema < nixSchemaVersion) {
@@ -356,7 +359,7 @@ LocalStore::LocalStore(ref<const Config> config)
     else
         openDB(*state, false);
 
-    upgradeDBSchema(*state);
+    upgradeDBSchema(*state, isNew);
 
     /* Prepare SQL statements. */
     state->stmts->RegisterValidPath.create(
@@ -597,7 +600,7 @@ void LocalStore::openDB(State & state, bool create)
     }
 }
 
-void LocalStore::upgradeDBSchema(State & state)
+void LocalStore::upgradeDBSchema(State & state, bool isNew)
 {
     state.db.exec("create table if not exists SchemaMigrations (migration text primary key not null);");
 
@@ -617,7 +620,8 @@ void LocalStore::upgradeDBSchema(State & state)
         if (schemaMigrations.contains(migrationName))
             return;
 
-        notice("executing Nix database schema migration '%s'...", migrationName);
+        if (!isNew)
+            notice("executing Nix database schema migration '%s'...", migrationName);
 
         retrySQLite<void>([&]() {
             SQLiteTxn txn(state.db);

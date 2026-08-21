@@ -507,7 +507,7 @@ private:
 
     void openDB(State & state, bool create);
 
-    void upgradeDBSchema(State & state);
+    void upgradeDBSchema(State & state, bool isNew);
 
     void makeStoreWritable();
 
