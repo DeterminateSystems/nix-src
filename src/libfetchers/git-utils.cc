@@ -16,6 +16,7 @@
 #include "nix/util/executable-path.hh"
 #include "nix/util/deleter.hh"
 
+#include <git2/version.h>
 #include <git2/attr.h>
 #include <git2/blob.h>
 #include <git2/branch.h>
@@ -123,10 +124,22 @@ typedef std::unique_ptr<git_index, Deleter<git_index_free>> Index;
 
 static Hash toHash(const git_oid & oid)
 {
-#ifdef GIT_EXPERIMENTAL_SHA256
-    assert(oid.type == GIT_OID_SHA1);
+    HashAlgorithm algo;
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+    switch (oid.type) {
+    case GIT_OID_SHA1:
+        algo = HashAlgorithm::SHA1;
+        break;
+    case GIT_OID_SHA256:
+        algo = HashAlgorithm::SHA256;
+        break;
+    default:
+        unreachable();
+    }
+#else
+    algo = HashAlgorithm::SHA1;
 #endif
-    Hash hash(HashAlgorithm::SHA1);
+    Hash hash(algo);
     memcpy(hash.hash, oid.id, hash.hashSize);
     return hash;
 }
@@ -143,8 +156,29 @@ static void initLibGit2()
 static git_oid hashToOID(const Hash & hash)
 {
     git_oid oid;
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+    git_oid_t t;
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wswitch-enum"
+    switch (hash.algo) {
+    case HashAlgorithm::SHA1:
+        t = GIT_OID_SHA1;
+        break;
+    case HashAlgorithm::SHA256:
+        t = GIT_OID_SHA256;
+        break;
+    default:
+        throw Error("unsupported hash algorithm for Git: %s", printHashAlgo(hash.algo));
+    }
+#  pragma GCC diagnostic pop
+    if (git_oid_from_raw(&oid, hash.hash, t))
+        /* This can really never happen, since libgit2 just reads out our raw bytes.
+           The only failure mode is us specifying an invalid `type` parameter. */
+        unreachable();
+#else
     if (git_oid_fromstr(&oid, hash.gitRev().c_str()))
         throw GitError("cannot convert '%s' to a Git OID", hash.gitRev());
+#endif
     return oid;
 }
 
@@ -310,7 +344,16 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
             if (git_odb_new(Setter(odb)))
                 throw GitError("creating Git object database");
 
-            if (git_odb_backend_pack(&packBackend, (path / "objects").string().c_str()))
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+            git_odb_backend_pack_options packOpts = GIT_ODB_OPTIONS_INIT;
+#endif
+            if (git_odb_backend_pack(
+                    &packBackend,
+                    (path / "objects").string().c_str()
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+                        , &packOpts // NOFORMAT
+#endif
+                    ))
                 throw GitError("creating pack backend");
 
             if (git_odb_add_backend(odb.get(), packBackend, 1))
@@ -368,7 +411,20 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
         //                     (synchronously on the git_packbuilder_write_buf thread)
         Indexer indexer;
         git_indexer_progress stats;
-        if (git_indexer_new(Setter(indexer), pack_dir_path.c_str(), 0, nullptr, nullptr))
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+        git_indexer_options indexerOpts = GIT_INDEXER_OPTIONS_INIT;
+#endif
+        if (git_indexer_new(
+                Setter(indexer),
+                pack_dir_path.c_str(),
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+                &indexerOpts
+#else
+                0,
+                nullptr,
+                nullptr
+#endif
+                ))
             throw GitError("creating git packfile indexer");
 
         // TODO: provide index callback for checkInterrupt() termination
