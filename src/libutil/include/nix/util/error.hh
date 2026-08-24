@@ -471,6 +471,16 @@ void throwExceptionSelfCheck();
 void panic(std::string_view msg);
 
 /**
+ * Print an error message and std::terminate(). Installed as the
+ * `std::new_handler` so that failing memory allocations produce a
+ * clear "out of memory" error instead of an opaque abort (in
+ * particular when `operator new` is overridden by mimalloc, which
+ * cannot throw `std::bad_alloc`).
+ */
+[[noreturn]]
+void outOfMemory();
+
+/**
  * Log the current exception (if any) and call abort().
  */
 [[noreturn]]

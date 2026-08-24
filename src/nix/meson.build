@@ -69,6 +69,8 @@ mandir = get_option('mandir')
 mandir = fs.is_absolute(mandir) ? mandir : prefix / mandir
 configdata.set_quoted('NIX_MAN_DIR', mandir)
 
+configdata.set('HAVE_MIMALLOC', mimalloc.found().to_int())
+
 sentry_required = get_option('sentry')
 configdata.set('HAVE_SENTRY', sentry_required.enabled().to_int())
 if sentry_required.enabled()

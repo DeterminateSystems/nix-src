@@ -35,6 +35,10 @@
 #  include <sentry.h>
 #endif
 
+#if HAVE_MIMALLOC
+#  include <mimalloc.h>
+#endif
+
 #ifndef _WIN32
 #  include <sys/socket.h>
 #  include <ifaddrs.h>
@@ -425,6 +429,21 @@ void mainWrapped(int argc, char ** argv)
 
     /* This must be called before Sentry since both initialize OpenSSL. */
     initLibUtil();
+
+#if HAVE_MIMALLOC
+    /* Make allocation failures print a proper error message instead
+       of aborting silently. Note that the `std::new_handler` installed
+       by `initLibUtil()` does not suffice, since mimalloc's `operator
+       new` override never sees it: libmimalloc is linked with
+       `-Bsymbolic`, so its weak null stub of `std::get_new_handler()`
+       shadows the real one from libstdc++. */
+    mi_register_error(
+        [](int err, void *) {
+            if (err == ENOMEM || err == EOVERFLOW)
+                outOfMemory();
+        },
+        nullptr);
+#endif
 
     bool sentryEnabled = false;
 
