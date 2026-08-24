@@ -91,13 +91,38 @@ static std::pair<FlakeRef, std::string>
 fromParsedURL(const fetchers::Settings & fetchSettings, ParsedURL && parsedURL, bool isFlake)
 {
     auto dir = getOr(parsedURL.query, "dir", "");
-    if (!fetchSettings.nix219Compat)
-        parsedURL.query.erase("dir");
+    parsedURL.query.erase("dir");
 
     std::string fragment;
     std::swap(fragment, parsedURL.fragment);
 
-    return {FlakeRef(fetchers::Input::fromURL(fetchSettings, parsedURL, isFlake), dir), fragment};
+    auto input = fetchers::Input::fromURL(fetchSettings, parsedURL, isFlake);
+
+    /* Backward compatibility hack: Nix < 2.20 retained the `dir`
+       query parameter in the `url` attribute of input types that have
+       one (i.e. `git`, `hg`, `tarball` and `file`), resulting in lock
+       file entries like
+
+         "original": {
+           "dir": "subdir",
+           "type": "git",
+           "url": "https://foo/bar?dir=subdir"
+         }
+
+       In compat mode, reproduce that behavior so that we write lock
+       files that Nix < 2.20 considers up to date. Input types that
+       don't have a `url` attribute (such as `github`) never included
+       the `dir` parameter in their attributes, so they're left
+       alone. */
+    if (fetchSettings.nix219Compat && dir != "") {
+        if (auto url = fetchers::maybeGetStrAttr(input.attrs, "url")) {
+            auto parsedUrlAttr = parseURL(*url, /*lenient=*/true);
+            parsedUrlAttr.query.insert_or_assign("dir", dir);
+            input.attrs.insert_or_assign("url", parsedUrlAttr.to_string());
+        }
+    }
+
+    return {FlakeRef(std::move(input), dir), fragment};
 }
 
 std::pair<FlakeRef, std::string> parsePathFlakeRefWithFragment(

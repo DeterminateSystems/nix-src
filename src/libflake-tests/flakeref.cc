@@ -268,6 +268,42 @@ INSTANTIATE_TEST_SUITE_P(
         }),
     [](const ::testing::TestParamInfo<InputFromURLTestCase> & info) { return info.param.description; });
 
+TEST(parseFlakeRef, nix219CompatRetainsDirInUrlAttr)
+{
+    fetchers::Settings fetchSettings;
+    fetchSettings.nix219Compat = true;
+
+    /* Nix < 2.20 retained the `dir` query parameter in the `url`
+       attribute of input types that have one. */
+    {
+        auto flakeref = parseFlakeRef(fetchSettings, "git+https://example.org/repo?dir=sub");
+        ASSERT_EQ(flakeref.subdir, "sub");
+        ASSERT_EQ(flakeref.toAttrs().at("url"), Attr("https://example.org/repo?dir=sub"));
+    }
+
+    {
+        auto flakeref = parseFlakeRef(fetchSettings, "https://example.org/foo.tar.gz?dir=sub");
+        ASSERT_EQ(flakeref.subdir, "sub");
+        ASSERT_EQ(flakeref.toAttrs().at("url"), Attr("https://example.org/foo.tar.gz?dir=sub"));
+    }
+
+    /* But for input types that don't have a `url` attribute (such as
+       `github`), the `dir` parameter was never part of the input
+       attributes, so it should not cause a parse failure. */
+    {
+        auto flakeref = parseFlakeRef(fetchSettings, "github:NixOS/nix?dir=perl");
+        ASSERT_EQ(flakeref.subdir, "perl");
+        ASSERT_EQ(
+            flakeref.toAttrs(),
+            (fetchers::Attrs{
+                {"dir", Attr("perl")},
+                {"owner", Attr("NixOS")},
+                {"repo", Attr("nix")},
+                {"type", Attr("github")},
+            }));
+    }
+}
+
 TEST(to_string, doesntReencodeUrl)
 {
     fetchers::Settings fetchSettings;
