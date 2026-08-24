@@ -246,7 +246,7 @@ struct curlFileTransfer : public FileTransfer
         {
             curlSList tmpSList = curlSList(::curl_slist_append(requestHeaders.get(), requireCString(header)));
             if (!tmpSList)
-                throw std::bad_alloc();
+                outOfMemory();
             requestHeaders.release();
             requestHeaders = std::move(tmpSList);
         }

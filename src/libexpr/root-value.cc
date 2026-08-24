@@ -46,7 +46,7 @@ RootValue::RootValue(Value * v)
             constexpr size_t slabSize = 4096;
             auto slab = (Slot *) GC_MALLOC_UNCOLLECTABLE(slabSize * sizeof(Slot));
             if (!slab)
-                throw std::bad_alloc();
+                outOfMemory();
             for (size_t i = 0; i + 1 < slabSize; ++i)
                 slab[i].nextFree = &slab[i + 1];
             slab[slabSize - 1].nextFree = nullptr;
