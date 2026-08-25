@@ -36,13 +36,10 @@ scope: {
       inherit stdenv;
     }).overrideAttrs
       (attrs: {
-        # Reduce contention on the GC allocation lock during parallel
-        # evaluation by handing out multiple heap blocks worth of
-        # objects per lock acquisition in GC_generic_malloc_many().
-        # The default batch size is set via GC_MANY_BLOCKS_DEFAULT
-        # below and can be overridden at runtime through the
-        # GC_MALLOC_MANY_BLOCKS environment variable.
-        patches = (attrs.patches or [ ]) ++ [ ./patches/boehmgc-batch-malloc-many.patch ];
+        patches = (attrs.patches or [ ]) ++ [
+          ./patches/boehmgc-batch-malloc-many.patch
+          ./patches/boehmgc-gctest-tiny-freelists-heap-growth.patch
+        ];
 
         env = (attrs.env or { }) // {
           # Increase the initial mark stack size to avoid stack
@@ -55,6 +52,14 @@ scope: {
             [
               "-DINITIAL_MARK_STACK_SIZE=1048576"
               "-DGC_MANY_BLOCKS_DEFAULT=64"
+              # Serve allocations up to 1520 bytes (95 granules) from
+              # the per-thread freelists instead of taking the global
+              # allocation lock. The default (25, i.e. <= 384 bytes) is
+              # too small for parallel evaluation: e.g. a typical
+              # derivation attrset (~46 attrs) is a 752-byte Bindings,
+              # of which nixpkgs evaluation does hundreds of thousands,
+              # all serialized on GC_allocate_ml.
+              "-DGC_TINY_FREELISTS=96"
             ]
             # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
             # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
