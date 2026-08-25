@@ -3,6 +3,7 @@
 #include "nix/expr/eval.hh"
 
 #include <limits>
+#include <boost/container/small_vector.hpp>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -75,9 +76,10 @@ class JSONSax : nlohmann::json_sax<json>
          * Note: deliberately not `ValueMap`: the values are rooted via
          * `JSONSax::rootValues`, so there is no need for a GC-visible
          * (uncollectable) container, whose allocations would take the
-         * global GC allocation lock.
+         * global GC allocation lock. The inline capacity avoids a heap
+         * allocation for small objects.
          */
-        std::vector<std::pair<Symbol, Value *>> attrs;
+        boost::container::small_vector<std::pair<Symbol, Value *>, 16> attrs;
 
         std::unique_ptr<JSONState> resolve(EvalState & state) override
         {
@@ -109,11 +111,13 @@ class JSONSax : nlohmann::json_sax<json>
 
     class JSONListState : public JSONState
     {
+        using JSONState::JSONState;
+
         /**
          * Note: deliberately not `ValueVector` (see
          * `JSONObjectState::attrs`).
          */
-        std::vector<Value *> values;
+        boost::container::small_vector<Value *, 16> values;
 
         std::unique_ptr<JSONState> resolve(EvalState & state) override
         {
@@ -128,12 +132,6 @@ class JSONSax : nlohmann::json_sax<json>
         {
             values.push_back(v);
             v = nullptr;
-        }
-    public:
-        JSONListState(std::unique_ptr<JSONState> && p, std::size_t reserve)
-            : JSONState(std::move(p))
-        {
-            values.reserve(reserve);
         }
     };
 
@@ -239,7 +237,7 @@ public:
 
     bool start_array(size_t len) override
     {
-        rs = std::make_unique<JSONListState>(std::move(rs), len != std::numeric_limits<size_t>::max() ? len : 128);
+        rs = std::make_unique<JSONListState>(std::move(rs));
         return true;
     }
 
