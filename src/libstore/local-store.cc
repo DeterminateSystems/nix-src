@@ -147,6 +147,22 @@ struct LocalStore::State::Stmts
     SQLiteStmt QuerySchemaMigration;
 };
 
+/**
+ * Write the schema version to `schemaPath` atomically: write it to a
+ * temporary file, fsync it, and atomically rename it into place. This
+ * ensures the schema file is never empty or partially written.
+ */
+static void writeSchemaFile(const std::filesystem::path & schemaPath, int version)
+{
+    auto tmp = schemaPath;
+    tmp += fmt(".tmp.%d", getpid());
+    AutoDelete del(tmp, false);
+    writeFile(tmp, std::to_string(version), 0666, FsSync::Yes);
+    std::filesystem::rename(tmp, schemaPath);
+    del.cancel();
+    syncParent(schemaPath);
+}
+
 LocalStore::LocalStore(ref<const Config> config)
     : Store{*config}
     , LocalFSStore{*config}
@@ -302,7 +318,7 @@ LocalStore::LocalStore(ref<const Config> config)
     else if (curSchema == 0) { /* new store */
         curSchema = nixSchemaVersion;
         openDB(*state, true);
-        writeFile(schemaPath, fmt("%1%", curSchema), 0666, FsSync::Yes);
+        writeSchemaFile(schemaPath, curSchema);
         isNew = true;
     }
 
@@ -351,7 +367,7 @@ LocalStore::LocalStore(ref<const Config> config)
             state->db.exec("alter table ValidPaths add column ca text");
         }
 
-        writeFile(schemaPath, fmt("%1%", nixSchemaVersion), 0666, FsSync::Yes);
+        writeSchemaFile(schemaPath, nixSchemaVersion);
 
         lockFile(globalLock.get(), ltRead, true);
     }
