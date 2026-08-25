@@ -77,14 +77,21 @@ class JSONSax : nlohmann::json_sax<json>
          * (uncollectable) container, whose allocations would take the
          * global GC allocation lock.
          */
-        boost::unordered_flat_map<Symbol, Value *, std::hash<Symbol>> attrs;
+        std::vector<std::pair<Symbol, Value *>> attrs;
 
         std::unique_ptr<JSONState> resolve(EvalState & state) override
         {
+            /* JSON allows duplicate keys, and the last occurrence
+               wins. `Bindings` requires unique keys, so drop all but
+               the last entry of every run of equal keys. The stable
+               sort keeps equal keys in insertion order. */
+            std::stable_sort(
+                attrs.begin(), attrs.end(), [](const auto & a, const auto & b) { return a.first < b.first; });
             auto attrs2 = state.buildBindings(attrs.size());
-            for (auto & i : attrs)
-                attrs2.insert(i.first, i.second);
-            parent->value(state).mkAttrs(attrs2);
+            for (auto i = attrs.begin(); i != attrs.end(); ++i)
+                if (std::next(i) == attrs.end() || std::next(i)->first != i->first)
+                    attrs2.insert(i->first, i->second);
+            parent->value(state).mkAttrs(attrs2.alreadySorted());
             return std::move(parent);
         }
 
@@ -96,7 +103,7 @@ class JSONSax : nlohmann::json_sax<json>
         void key(string_t & name, EvalState & state)
         {
             forceNoNullByte(name);
-            attrs.insert_or_assign(state.symbols.create(name), &value(state));
+            attrs.emplace_back(state.symbols.create(name), &value(state));
         }
     };
 
