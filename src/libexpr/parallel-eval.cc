@@ -625,15 +625,8 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
         for (auto & item : items) {
             std::promise<void> promise;
             futures.push_back(promise.get_future());
-            /* Note: this uses a cheap PRNG rather than std::random_device,
-               since the latter costs hundreds of cycles per call (RDRAND or
-               /dev/urandom), which adds up when spawning many work items. The
-               key only needs to spread items of the same priority around the
-               queue, not be cryptographically random. */
-            [[gnu::tls_model("initial-exec")]] static thread_local std::mt19937_64 rng{std::random_device{}()};
-            [[gnu::tls_model("initial-exec")]] static thread_local std::uniform_int_distribution<uint64_t> dist(
-                0, 1ULL << 48);
-            auto key = (uint64_t(item.second) << 48) | dist(rng);
+            static thread_local uint32_t local = 0;
+            auto key = (uint64_t(item.second) << 48) | local++;
             state->queue.emplace(key, Item{.promise = std::move(promise), .work = std::move(item.first)});
         }
         /* Wake up one worker per item, but only workers that are
