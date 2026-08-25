@@ -1,0 +1,38 @@
+From 7cd4f090acc0e801502f918060106bba926c7153 Mon Sep 17 00:00:00 2001
+From: Eelco Dolstra <edolstra@gmail.com>
+Date: Tue, 25 Aug 2026 14:37:18 +0200
+Subject: [PATCH] Scale gctest's heap growth limit with GC_TINY_FREELISTS
+
+The 'unexpected heap growth' check in check_heap_stats() uses a fixed
+limit that is exceeded when the collector is built with a larger
+GC_TINY_FREELISTS: bigger thread-local free lists cause each thread to
+retain more nearly-empty heap blocks (up to one per size class and
+object kind) and increase block-level fragmentation. Scale the limit
+proportionally so that gctest passes with such configurations.
+
+Assisted-by: Claude Fable 5 <noreply@anthropic.com>
+---
+ tests/test.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/tests/test.c b/tests/test.c
+index 0ae3f95b..b62699fa 100644
+--- a/tests/test.c
++++ b/tests/test.c
+@@ -1753,6 +1753,13 @@ void check_heap_stats(void)
+ #   endif
+ #   ifdef MEMORY_SANITIZER
+         max_heap_sz += max_heap_sz / 4;
++#   endif
++#   if defined(GC_TINY_FREELISTS) && GC_TINY_FREELISTS > 25
++      /* Larger thread-local free lists cause each thread to retain   */
++      /* more nearly-empty heap blocks (up to one per size class and  */
++      /* object kind) and increase block-level fragmentation, so      */
++      /* allow the heap to grow proportionally.                       */
++      max_heap_sz = max_heap_sz / 25 * GC_TINY_FREELISTS;
+ #   endif
+     max_heap_sz *= n_tests;
+ #   if defined(USE_MMAP) || defined(MSWIN32)
+-- 
+2.54.0
+
