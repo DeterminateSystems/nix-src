@@ -19,7 +19,18 @@ class JSONSax : nlohmann::json_sax<json>
     {
     protected:
         std::unique_ptr<JSONState> parent;
-        RootValue v;
+
+        /**
+         * The value being built by this state, or null. Kept alive by
+         * `JSONSax::rootValues`.
+         */
+        Value * v = nullptr;
+
+        /**
+         * Reference to `JSONSax::rootValues`.
+         */
+        ValueVector & rootValues;
+
     public:
         virtual std::unique_ptr<JSONState> resolve(EvalState &)
         {
@@ -28,11 +39,13 @@ class JSONSax : nlohmann::json_sax<json>
 
         explicit JSONState(std::unique_ptr<JSONState> && p)
             : parent(std::move(p))
+            , rootValues(parent->rootValues)
         {
         }
 
-        explicit JSONState(Value * v)
-            : v(RootValue(v))
+        JSONState(Value * v, ValueVector & rootValues)
+            : v(v)
+            , rootValues(rootValues)
         {
         }
 
@@ -40,9 +53,13 @@ class JSONSax : nlohmann::json_sax<json>
 
         Value & value(EvalState & state)
         {
-            if (!v)
-                v = RootValue(state.allocValue());
-            return **v;
+            if (!v) {
+                v = state.allocValue();
+                /* Root the value for the duration of the parse (see
+                   `JSONSax::rootValues`). */
+                rootValues.push_back(v);
+            }
+            return *v;
         }
 
         virtual ~JSONState() {}
@@ -53,7 +70,14 @@ class JSONSax : nlohmann::json_sax<json>
     class JSONObjectState : public JSONState
     {
         using JSONState::JSONState;
-        ValueMap attrs;
+
+        /**
+         * Note: deliberately not `ValueMap`: the values are rooted via
+         * `JSONSax::rootValues`, so there is no need for a GC-visible
+         * (uncollectable) container, whose allocations would take the
+         * global GC allocation lock.
+         */
+        boost::unordered_flat_map<Symbol, Value *, std::hash<Symbol>> attrs;
 
         std::unique_ptr<JSONState> resolve(EvalState & state) override
         {
@@ -66,7 +90,7 @@ class JSONSax : nlohmann::json_sax<json>
 
         void add() override
         {
-            v.reset();
+            v = nullptr;
         }
     public:
         void key(string_t & name, EvalState & state)
@@ -78,7 +102,11 @@ class JSONSax : nlohmann::json_sax<json>
 
     class JSONListState : public JSONState
     {
-        ValueVector values;
+        /**
+         * Note: deliberately not `ValueVector` (see
+         * `JSONObjectState::attrs`).
+         */
+        std::vector<Value *> values;
 
         std::unique_ptr<JSONState> resolve(EvalState & state) override
         {
@@ -91,8 +119,8 @@ class JSONSax : nlohmann::json_sax<json>
 
         void add() override
         {
-            values.push_back(*v);
-            v.reset();
+            values.push_back(v);
+            v = nullptr;
         }
     public:
         JSONListState(std::unique_ptr<JSONState> && p, std::size_t reserve)
@@ -103,12 +131,24 @@ class JSONSax : nlohmann::json_sax<json>
     };
 
     EvalState & state;
+
+    /**
+     * Keeps all values allocated during the parse alive. This is the
+     * only GC-visible container of the parser: the per-node containers
+     * in `JSONObjectState`/`JSONListState` use ordinary allocators,
+     * since GC-visible (uncollectable) allocations take the global GC
+     * allocation lock, and a big JSON document would otherwise do one
+     * or more of them per object/array node — a significant source of
+     * lock contention during parallel evaluation.
+     */
+    ValueVector rootValues;
+
     std::unique_ptr<JSONState> rs;
 
 public:
     JSONSax(EvalState & state, Value & v)
         : state(state)
-        , rs(new JSONState(&v)) {};
+        , rs(new JSONState(&v, rootValues)) {};
 
     bool null() override
     {
