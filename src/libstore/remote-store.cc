@@ -759,8 +759,14 @@ void RemoteStore::addTempRoots(const StorePathSet & paths)
         WorkerProto::write(*this, *conn, paths);
         conn.processStderr();
         readInt(conn->from);
+    } else {
+        /* Fallback for daemons that don't support the batched
+           operation. Note that this is very slow for large sets of
+           paths on high-latency links, due to a network round-trip per
+           path. */
+        for (auto & path : paths)
+            conn->addTempRoot(*this, &conn.daemonException, path);
     }
-    /* Note: there is no fallback for old daemons to prevent performance regressions. */
 }
 
 Roots RemoteStore::findRoots(bool censor)
