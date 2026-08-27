@@ -747,7 +747,7 @@ void RemoteStore::ensurePath(const StorePath & path)
     readInt(conn->from);
 }
 
-void RemoteStore::addTempRoots(const StorePathSet & paths)
+void RemoteStore::addTempRoots(const StorePathSet & paths, bool skipIfSlow)
 {
     if (paths.empty())
         return;
@@ -760,6 +760,8 @@ void RemoteStore::addTempRoots(const StorePathSet & paths)
         conn.processStderr();
         readInt(conn->from);
     } else {
+        if (skipIfSlow)
+            return;
         /* Fallback for daemons that don't support the batched
            operation. Note that this is very slow for large sets of
            paths on high-latency links, due to a network round-trip per

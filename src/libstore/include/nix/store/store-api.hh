@@ -895,7 +895,7 @@ public:
      * Add multiple store paths as temporary roots of the garbage collector.
      * The roots disappears as soon as we exit.
      */
-    virtual void addTempRoots(const StorePathSet & paths)
+    virtual void addTempRoots(const StorePathSet & paths, bool skipIfSlow = false)
     {
         debug("not creating temporary roots, store doesn't support GC");
     }
