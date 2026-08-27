@@ -1,0 +1,46 @@
+From 0921b9fd5c776aec7748475c6c10807e0d51bc6d Mon Sep 17 00:00:00 2001
+From: Vasily Sviridov <sviridovcomp@gmail.com>
+Date: Wed, 7 May 2026 23:20:37 +0000
+Subject: [PATCH] fix: re-apply BOOST_NOINLINE to manage_exception_state
+ (reverted in #324 merge)
+
+Backport of upstream boostorg/context commit
+0921b9fd5c776aec7748475c6c10807e0d51bc6d, which is missing from boost
+1.89 (the BOOST_NOINLINE was accidentally reverted by the merge of
+upstream PR #324, and 1.89 was released in that state).
+
+Without it, __cxa_get_globals() -- declared __attribute__((const)) --
+gets CSE'd by the compiler across the context switch between the
+constructor and the destructor of manage_exception_state. When a fiber
+suspends on one thread and is resumed on another, the destructor then
+restores the exception-state snapshot through the *original* thread's
+globals pointer, silently corrupting that thread's live libstdc++
+exception state (caughtExceptions/uncaughtExceptions) from another
+thread. This caused reproducible "std::terminate() called without
+exception" aborts and segfaults in the parallel evaluator whenever
+multiple fibers unwound exceptions concurrently. BOOST_NOINLINE keeps
+the two calls in separate non-inlined functions, so each fetches the
+globals of the thread it actually runs on.
+
+Assisted-by: Claude Fable 5 <noreply@anthropic.com>
+---
+--- a/boost/context/fiber_fcontext.hpp
++++ b/boost/context/fiber_fcontext.hpp
+@@ -89,7 +89,7 @@
+ 
+ class manage_exception_state {
+ public:
+-    manage_exception_state() {
++    BOOST_NOINLINE manage_exception_state() {
+         exception_state_ = *__cxa_get_globals();
+     }
+     // Hack to account for the forced_unwind exception thrown in fiber_unwind
+@@ -97,7 +97,7 @@
+     void from_forced_unwind() noexcept {
+         exception_state_.uncaughtExceptions += 1;
+     }
+-    ~manage_exception_state() {
++    BOOST_NOINLINE ~manage_exception_state() {
+         *__cxa_get_globals() = exception_state_;
+     }
+ private:

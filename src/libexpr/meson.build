@@ -43,7 +43,6 @@ boost = dependency(
   modules : [
     'container',
     'context',
-    'thread',
   ],
   include_type : 'system',
 )
