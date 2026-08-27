@@ -1066,7 +1066,9 @@ std::map<StorePath, StorePath> copyPaths(
     CheckSigsFlag checkSigs,
     SubstituteFlag substitute)
 {
-    dstStore.addTempRoots(storePaths);
+    /* This is optional to avoid a performance regression when talking to old daemons that don't have the AddTempRoots
+     * operation. */
+    dstStore.addTempRoots(storePaths, true);
 
     auto valid = dstStore.queryValidPaths(storePaths, substitute);
 

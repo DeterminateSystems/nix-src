@@ -313,7 +313,7 @@ public:
         RepairFlag repair,
         std::shared_ptr<const Provenance> provenance) override;
 
-    void addTempRoots(const StorePathSet & paths) override;
+    void addTempRoots(const StorePathSet & paths, bool skipIfSlow) override;
 
 private:
 

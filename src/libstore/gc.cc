@@ -81,7 +81,7 @@ void LocalStore::createTempRootsFile()
     }
 }
 
-void LocalStore::addTempRoots(const StorePathSet & paths)
+void LocalStore::addTempRoots(const StorePathSet & paths, bool _skipIfSlow)
 {
     if (config->readOnly) {
         debug(

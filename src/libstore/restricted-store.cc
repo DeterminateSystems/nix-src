@@ -130,7 +130,7 @@ public:
         unsupported("buildDerivation");
     }
 
-    void addTempRoots(const StorePathSet & paths) override {}
+    void addTempRoots(const StorePathSet & paths, bool skipIfSlow) override {}
 
     void addIndirectRoot(const std::filesystem::path & path) override {}
 
