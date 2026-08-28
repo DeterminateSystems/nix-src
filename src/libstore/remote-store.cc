@@ -13,6 +13,7 @@
 #include "nix/util/archive.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/derivations.hh"
+#include "nix/util/otel.hh"
 #include "nix/util/pool.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/logging.hh"
@@ -110,6 +111,17 @@ void RemoteStore::initConnection(Connection & conn)
                 tee.drainInto(nullSink);
             }
             throw Error("protocol mismatch, got '%s'", chomp(saved.s));
+        }
+
+        if (conn.protoVersion.features.contains(WorkerProto::featureOpenTelemetry)) {
+            /* Send our trace context so that the daemon can parent
+               its spans under ours. */
+            std::string traceparent;
+            for (auto & [name, value] : otel::rootSpan().injectContext())
+                if (name == "traceparent")
+                    traceparent = value;
+            conn.to << traceparent;
+            conn.to.flush();
         }
 
         static_cast<WorkerProto::ClientHandshakeInfo &>(conn) = conn.postHandshake(*this);

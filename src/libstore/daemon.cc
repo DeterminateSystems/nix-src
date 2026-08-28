@@ -12,6 +12,7 @@
 #include "nix/store/remote-store.hh"
 #include "nix/store/path-with-outputs.hh"
 #include "nix/util/finally.hh"
+#include "nix/util/otel.hh"
 #include "nix/util/archive.hh"
 #include "nix/store/derivations.hh"
 #include "nix/util/args.hh"
@@ -1114,6 +1115,15 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
 
     if (conn.protoVersion.number < WorkerProto::minimum.number)
         throw Error("the Nix client version is too old");
+
+    std::string traceparent;
+    if (conn.protoVersion.features.contains(WorkerProto::featureOpenTelemetry))
+        traceparent = readString(from);
+
+    /* Covers the lifetime of this connection; parented under the
+       client's root span if it sent a trace context. */
+    auto connectionSpan = otel::startSpanFromRemoteParent("daemon connection", traceparent, {}, otel::SpanKind::Server);
+    otel::setRootSpan(connectionSpan);
 
     conn.to = std::move(to);
     conn.from = std::move(from);

@@ -139,6 +139,15 @@ void setRootSpan(const Span & span);
 Span rootSpan();
 
 /**
+ * Discard all tracing state inherited from the parent process after a
+ * fork(): the exporter's worker thread does not exist in the child,
+ * so the inherited provider can neither export nor be shut down.
+ * Also unregisters the root span. Afterwards `init()` can be called
+ * again to start fresh tracing in the child.
+ */
+void resetAfterFork();
+
+/**
  * Flush all pending spans and shut down the exporter. Safe to call if
  * tracing was never initialized, and safe to call more than once.
  * Must be called explicitly before process exit: nothing is flushed

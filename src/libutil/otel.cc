@@ -142,6 +142,15 @@ bool isEnabled() noexcept
     return theState.load(std::memory_order_acquire) != nullptr;
 }
 
+void resetAfterFork()
+{
+    /* Deliberately leak the old state: it references a worker thread
+       that does not exist in this process, so it can neither flush
+       nor be destroyed safely. */
+    theState.exchange(nullptr);
+    setRootSpan(Span());
+}
+
 void forceFlushAndShutdown(std::chrono::milliseconds timeout)
 {
     auto * state = theState.exchange(nullptr);
@@ -259,6 +268,8 @@ bool isEnabled() noexcept
 {
     return false;
 }
+
+void resetAfterFork() {}
 
 void forceFlushAndShutdown(std::chrono::milliseconds) {}
 

@@ -8,6 +8,7 @@
 #include "nix/store/remote-store.hh"
 #include "nix/store/remote-store-connection.hh"
 #include "nix/store/store-open.hh"
+#include "nix/util/otel.hh"
 #include "nix/util/serialise.hh"
 #include "nix/store/globals.hh"
 #include "nix/util/config-global.hh"
@@ -366,6 +367,13 @@ static void daemonLoop(
                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
                         setInterrupted(false);
 
+                        /* The OpenTelemetry exporter's worker thread
+                           does not survive the fork, so set up
+                           tracing afresh. */
+                        otel::resetAfterFork();
+                        otel::init("nix-daemon");
+                        Finally flushOtel([] { otel::forceFlushAndShutdown(); });
+
                         closeListeners();
 
                         // Background the daemon.
@@ -390,6 +398,11 @@ static void daemonLoop(
                             FdSink(remote.get()),
                             trusted,
                             RecursiveFlag::NotRecursive);
+
+                        /* Flush explicitly, since exit() does not
+                           unwind the stack and so won't run
+                           `flushOtel`. */
+                        otel::forceFlushAndShutdown();
 
                         exit(0);
                     },
