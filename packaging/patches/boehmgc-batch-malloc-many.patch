@@ -124,31 +124,3 @@ diff -ur a/misc.c b/misc.c
          char * space_divisor_string = GETENV("GC_FREE_SPACE_DIVISOR");
          if (space_divisor_string != NULL) {
            int space_divisor = atoi(space_divisor_string);
-diff -ur a/os_dep.c b/os_dep.c
---- a/os_dep.c	2026-07-03 12:56:51.390341791 +0200
-+++ b/os_dep.c	2026-07-04 01:00:23.191858912 +0200
-@@ -2286,6 +2286,24 @@
-     if (((word)result % HBLKSIZE) != 0)
-       ABORT(
-        "GC_unix_get_mem: Memory returned by mmap is not aligned to HBLKSIZE.");
-+#   if defined(LINUX) && defined(MADV_HUGEPAGE)
-+      /* Optionally ask for transparent huge pages.  The heap is large    */
-+      /* and densely touched, so 2 MiB pages greatly reduce first-touch   */
-+      /* page-fault and TLB overhead.  However, under the "madvise" THP   */
-+      /* policy, faults in a MADV_HUGEPAGE region perform synchronous     */
-+      /* memory compaction, which can stall for a long time when          */
-+      /* physical memory is fragmented.  Hence this is opt-in via the     */
-+      /* GC_MADVISE_HUGEPAGES environment variable; setting the system    */
-+      /* THP policy to "always" (which takes huge pages opportunistically */
-+      /* without direct compaction) is generally preferable.              */
-+      {
-+        static int use_hugepages = -1;
-+        if (use_hugepages < 0)
-+          use_hugepages = GETENV("GC_MADVISE_HUGEPAGES") != NULL;
-+        if (use_hugepages)
-+          (void)madvise(result, bytes, MADV_HUGEPAGE);
-+      }
-+#   endif
-     return((ptr_t)result);
-   }
- # endif  /* !MSWIN_XBOX1 */
