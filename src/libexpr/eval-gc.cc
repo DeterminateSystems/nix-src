@@ -206,7 +206,7 @@ static inline void initGCReal()
     GC_set_push_other_roots(&pushOtherRoots);
 
     /* Funnel boehm warnings into debug logs. */
-    GC_set_warn_proc([](char * msg, GC_word word) noexcept {
+    GC_set_warn_proc([](const char * msg, GC_word word) noexcept {
         std::array<char, 4096> buffer{};
         auto res = snprintf(buffer.data(), buffer.size(), msg, word);
         /* Ignore garbage. */
