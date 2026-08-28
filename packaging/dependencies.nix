@@ -36,9 +36,10 @@ scope: {
       inherit stdenv;
     }).overrideAttrs
       (attrs: {
-        patches = (attrs.patches or [ ]) ++ [
-          ./patches/boehmgc-batch-malloc-many.patch
-          ./patches/boehmgc-gctest-tiny-freelists-heap-growth.patch
+        src = inputs.bdwgc;
+
+        nativeBuildInputs = (attrs.nativeBuildInputs or [ ]) ++ [
+          pkgs.buildPackages.autoreconfHook
         ];
 
         env = (attrs.env or { }) // {
