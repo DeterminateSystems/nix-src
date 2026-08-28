@@ -23,6 +23,8 @@
 #include "nix/expr/eval-cache.hh"
 #include "nix/flake/flake.hh"
 #include "nix/flake/settings.hh"
+#include "nix/util/exit.hh"
+#include "nix/util/otel.hh"
 #include "nix/util/sentry.hh"
 
 #include "self-exe.hh"
@@ -547,6 +549,12 @@ void mainWrapped(int argc, char ** argv)
         argc--;
     }
 
+    /* No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set in the
+       environment. */
+    otel::init(programName);
+
+    Finally flushOtel([] { otel::forceFlushAndShutdown(); });
+
     {
         if (auto legacy = get(RegisterLegacyCommand::commands(), programName))
             return (*legacy)(argc, argv);
@@ -706,6 +714,9 @@ void mainWrapped(int argc, char ** argv)
 
     setSentryTag("nix_subcommand", concatStringsSep(" ", subcommand).c_str());
 
+    /* Ended by RAII, including on exceptions. */
+    auto rootSpan = otel::startSpan("nix " + concatStringsSep(" ", subcommand));
+
     try {
         args.command->second->run();
     } catch (eval_cache::CachedEvalError & e) {
@@ -713,6 +724,12 @@ void mainWrapped(int argc, char ** argv)
            cached error so that we can show the original error to the
            user. */
         e.force();
+    } catch (Exit &) {
+        throw;
+    } catch (std::exception & e) {
+        // FIXME: privacy
+        rootSpan.setError(filterANSIEscapes(e.what(), true));
+        throw;
     }
 }
 
