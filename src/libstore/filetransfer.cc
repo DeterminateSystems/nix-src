@@ -163,7 +163,18 @@ struct curlFileTransfer : public FileTransfer
         FileTransferRequest request;
         FileTransferResult result;
         std::unique_ptr<Activity> _act;
-        otel::Span span;
+
+        /**
+         * Span covering the lifetime of this transfer, including
+         * retries.
+         */
+        otel::Span transferSpan;
+
+        /**
+         * Span covering the current HTTP request. Recreated on every
+         * attempt.
+         */
+        otel::Span requestSpan;
         Callback<FileTransferResult> callback;
         CURL * req = 0;
         // buffer to accompany the `req` above
@@ -299,18 +310,8 @@ struct curlFileTransfer : public FileTransfer
         {
             result.urls.push_back(request.uri.to_string());
 
-            if (!request.expectedETag.empty())
-                appendHeaders("If-None-Match: " + request.expectedETag);
-            if (!request.mimeType.empty())
-                appendHeaders("Content-Type: " + request.mimeType);
-            for (auto it = request.headers.begin(); it != request.headers.end(); ++it) {
-                appendHeaders(fmt("%s: %s", it->first, it->second));
-            }
-
-            span = otel::startSpan(request.verb(), otel::rootSpan(), otel::SpanKind::Client);
-            span.setAttribute("url.full", request.displayUri());
-            for (auto & [name, value] : span.injectContext())
-                appendHeaders(fmt("%s: %s", name, value));
+            transferSpan = otel::startSpan(request.verb(), otel::rootSpan());
+            transferSpan.setAttribute("url.full", request.displayUri());
         }
 
         ~TransferItem()
@@ -342,11 +343,15 @@ struct curlFileTransfer : public FileTransfer
                 std::rethrow_exception(ex);
             } catch (std::exception & e) {
                 // FIXME: privacy
-                span.setError(filterANSIEscapes(e.what(), true));
+                auto description = filterANSIEscapes(e.what(), true);
+                requestSpan.setError(description);
+                transferSpan.setError(description);
             } catch (...) {
-                span.setError("unknown error");
+                requestSpan.setError("unknown error");
+                transferSpan.setError("unknown error");
             }
-            span.end();
+            requestSpan.end();
+            transferSpan.end();
             callback.rethrow(ex);
         }
 
@@ -624,6 +629,23 @@ struct curlFileTransfer : public FileTransfer
 
             bytesReceived = 0;
 
+            requestSpan = otel::startSpan(request.verb(), transferSpan, otel::SpanKind::Client);
+            if (attempt > 0)
+                requestSpan.setAttribute("http.request.resend_count", (int64_t) attempt);
+
+            /* (Re)build the request headers, since the traceparent
+               header differs per attempt. */
+            requestHeaders = curlSList{};
+            if (!request.expectedETag.empty())
+                appendHeaders("If-None-Match: " + request.expectedETag);
+            if (!request.mimeType.empty())
+                appendHeaders("Content-Type: " + request.mimeType);
+            for (auto it = request.headers.begin(); it != request.headers.end(); ++it) {
+                appendHeaders(fmt("%s: %s", it->first, it->second));
+            }
+            for (auto & [name, value] : requestSpan.injectContext())
+                appendHeaders(fmt("%s: %s", name, value));
+
             if (verbosity >= lvlVomit) {
                 curl_easy_setopt(req, CURLOPT_VERBOSE, 1);
                 curl_easy_setopt(req, CURLOPT_DEBUGFUNCTION, TransferItem::debugCallback);
@@ -801,6 +823,9 @@ struct curlFileTransfer : public FileTransfer
                 httpStatus = std::to_underlying(HttpStatus::NotModified);
             }
 
+            if (httpStatus)
+                requestSpan.setAttribute("http.response.status_code", (int64_t) httpStatus);
+
             if (callbackException)
                 failEx(callbackException);
 
@@ -817,11 +842,8 @@ struct curlFileTransfer : public FileTransfer
                 curl_easy_getinfo(req, CURLINFO_SIZE_DOWNLOAD_T, &dlSize);
                 act().progress(dlSize, dlSize);
                 done = true;
-                if (httpStatus)
-                    span.setAttribute("http.response.status_code", (int64_t) httpStatus);
-                if (attempt > 0)
-                    span.setAttribute("http.request.resend_count", (int64_t) attempt);
-                span.end();
+                requestSpan.end();
+                transferSpan.end();
                 callback(std::move(result));
             }
 
@@ -945,6 +967,10 @@ struct curlFileTransfer : public FileTransfer
                                      curl_easy_strerror(code),
                                      code,
                                      errbuf);
+
+                // FIXME: privacy
+                requestSpan.setError(filterANSIEscapes(exc.what(), true));
+                requestSpan.end();
 
                 maybeRetry(err, httpStatus, std::move(exc));
             }
