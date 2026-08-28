@@ -729,7 +729,7 @@ void mainWrapped(int argc, char ** argv)
         throw;
     } catch (std::exception & e) {
         // FIXME: privacy
-        rootSpan.setError(filterANSIEscapes(e.what(), true));
+        rootSpan.setError(e.what());
         throw;
     }
 }

@@ -68,7 +68,8 @@ public:
     void setAttribute(std::string_view key, bool value);
 
     /**
-     * Mark this span as failed, with a description of the error.
+     * Mark this span as failed, with a description of the error. ANSI
+     * escape sequences are stripped from the description.
      */
     void setError(std::string_view description);
 

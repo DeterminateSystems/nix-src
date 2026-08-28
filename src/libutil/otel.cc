@@ -6,6 +6,7 @@
 
 #if HAVE_OTEL
 #  include "nix/util/environment-variables.hh"
+#  include "nix/util/terminal.hh"
 
 #  include <atomic>
 
@@ -224,8 +225,10 @@ void Span::setAttribute(std::string_view key, bool value)
 
 void Span::setError(std::string_view description)
 {
-    if (impl)
-        impl->span->SetStatus(opentelemetry::trace::StatusCode::kError, toNostd(description));
+    if (impl) {
+        auto filtered = filterANSIEscapes(description, true);
+        impl->span->SetStatus(opentelemetry::trace::StatusCode::kError, toNostd(filtered));
+    }
 }
 
 void Span::end()

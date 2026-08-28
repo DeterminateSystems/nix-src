@@ -6,7 +6,6 @@
 #include "nix/util/callback.hh"
 #include "nix/util/otel.hh"
 #include "nix/util/signals.hh"
-#include "nix/util/terminal.hh"
 #include "nix/util/util.hh"
 
 #include "nix/store/s3-url.hh"
@@ -343,9 +342,8 @@ struct curlFileTransfer : public FileTransfer
                 std::rethrow_exception(ex);
             } catch (std::exception & e) {
                 // FIXME: privacy
-                auto description = filterANSIEscapes(e.what(), true);
-                requestSpan.setError(description);
-                transferSpan.setError(description);
+                requestSpan.setError(e.what());
+                transferSpan.setError(e.what());
             } catch (...) {
                 requestSpan.setError("unknown error");
                 transferSpan.setError("unknown error");
@@ -969,7 +967,7 @@ struct curlFileTransfer : public FileTransfer
                                      errbuf);
 
                 // FIXME: privacy
-                requestSpan.setError(filterANSIEscapes(exc.what(), true));
+                requestSpan.setError(exc.what());
                 requestSpan.end();
 
                 maybeRetry(err, httpStatus, std::move(exc));
