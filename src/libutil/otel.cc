@@ -2,6 +2,8 @@
 
 #include "util-config-private.hh"
 
+#include <mutex>
+
 #if HAVE_OTEL
 #  include "nix/util/environment-variables.hh"
 
@@ -304,6 +306,21 @@ Span::~Span() = default;
 Span::Span(std::shared_ptr<SpanImpl> impl)
     : impl(std::move(impl))
 {
+}
+
+static std::mutex rootSpanMutex;
+static std::weak_ptr<SpanImpl> rootSpanImpl;
+
+void setRootSpan(const Span & span)
+{
+    std::lock_guard<std::mutex> lock(rootSpanMutex);
+    rootSpanImpl = span.impl;
+}
+
+Span rootSpan()
+{
+    std::lock_guard<std::mutex> lock(rootSpanMutex);
+    return Span(rootSpanImpl.lock());
 }
 
 } // namespace nix::otel

@@ -716,6 +716,7 @@ void mainWrapped(int argc, char ** argv)
 
     /* Ended by RAII, including on exceptions. */
     auto rootSpan = otel::startSpan("nix " + concatStringsSep(" ", subcommand));
+    otel::setRootSpan(rootSpan);
 
     try {
         args.command->second->run();

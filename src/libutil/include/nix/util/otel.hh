@@ -42,6 +42,8 @@ class Span
     friend Span startSpan(std::string_view name, const Span & parent, SpanKind kind);
     friend Span startSpanFromRemoteParent(
         std::string_view name, std::string_view traceparent, std::string_view tracestate, SpanKind kind);
+    friend void setRootSpan(const Span & span);
+    friend Span rootSpan();
 
     std::shared_ptr<SpanImpl> impl;
 
@@ -120,6 +122,20 @@ Span startSpanFromRemoteParent(
     std::string_view traceparent,
     std::string_view tracestate = {},
     SpanKind kind = SpanKind::Internal);
+
+/**
+ * Register the process-wide root span, used as the default parent by
+ * call sites that have no more specific parent (e.g. HTTP transfers).
+ * Only a weak reference is kept, so this does not extend the span's
+ * lifetime.
+ */
+void setRootSpan(const Span & span);
+
+/**
+ * The span registered with setRootSpan(), or an inert span if none
+ * was registered or it no longer exists.
+ */
+Span rootSpan();
 
 /**
  * Flush all pending spans and shut down the exporter. Safe to call if

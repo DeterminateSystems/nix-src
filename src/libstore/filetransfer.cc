@@ -4,7 +4,9 @@
 #include "nix/util/config-global.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/callback.hh"
+#include "nix/util/otel.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/terminal.hh"
 #include "nix/util/util.hh"
 
 #include "nix/store/s3-url.hh"
@@ -161,6 +163,7 @@ struct curlFileTransfer : public FileTransfer
         FileTransferRequest request;
         FileTransferResult result;
         std::unique_ptr<Activity> _act;
+        otel::Span span;
         Callback<FileTransferResult> callback;
         CURL * req = 0;
         // buffer to accompany the `req` above
@@ -303,6 +306,11 @@ struct curlFileTransfer : public FileTransfer
             for (auto it = request.headers.begin(); it != request.headers.end(); ++it) {
                 appendHeaders(fmt("%s: %s", it->first, it->second));
             }
+
+            span = otel::startSpan(request.verb(), otel::rootSpan(), otel::SpanKind::Client);
+            span.setAttribute("url.full", request.displayUri());
+            for (auto & [name, value] : span.injectContext())
+                appendHeaders(fmt("%s: %s", name, value));
         }
 
         ~TransferItem()
@@ -330,6 +338,15 @@ struct curlFileTransfer : public FileTransfer
             } catch (...) {
                 /* Can't add more context to the error. */
             }
+            try {
+                std::rethrow_exception(ex);
+            } catch (std::exception & e) {
+                // FIXME: privacy
+                span.setError(filterANSIEscapes(e.what(), true));
+            } catch (...) {
+                span.setError("unknown error");
+            }
+            span.end();
             callback.rethrow(ex);
         }
 
@@ -800,6 +817,11 @@ struct curlFileTransfer : public FileTransfer
                 curl_easy_getinfo(req, CURLINFO_SIZE_DOWNLOAD_T, &dlSize);
                 act().progress(dlSize, dlSize);
                 done = true;
+                if (httpStatus)
+                    span.setAttribute("http.response.status_code", (int64_t) httpStatus);
+                if (attempt > 0)
+                    span.setAttribute("http.request.resend_count", (int64_t) attempt);
+                span.end();
                 callback(std::move(result));
             }
 
