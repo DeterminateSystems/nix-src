@@ -124,6 +124,12 @@ cpuid = dependency(
 configdata_priv.set('HAVE_LIBCPUID', cpuid.found().to_int())
 deps_private += cpuid
 
+otel_required = get_option('otel')
+otel = dependency('opentelemetry_exporter_otlp_http', required : otel_required)
+otel_trace = dependency('opentelemetry_trace', required : otel_required)
+configdata_priv.set('HAVE_OTEL', (otel.found() and otel_trace.found()).to_int())
+deps_private += [ otel, otel_trace ]
+
 nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
 
@@ -178,6 +184,7 @@ sources = [ config_priv_h ] + files(
   'nar-accessor.cc',
   'nar-cache.cc',
   'nar-listing.cc',
+  'otel.cc',
   'pos-table.cc',
   'position.cc',
   'posix-source-accessor.cc',

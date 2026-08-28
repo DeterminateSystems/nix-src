@@ -5,3 +5,9 @@ option(
   type : 'feature',
   description : 'determine microarchitecture levels with libcpuid (only relevant on x86_64)',
 )
+
+option(
+  'otel',
+  type : 'feature',
+  description : 'distributed tracing via OpenTelemetry (OTLP/HTTP exporter)',
+)

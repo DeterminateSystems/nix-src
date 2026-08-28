@@ -219,6 +219,12 @@ scope: {
     inherit (scope) curl;
   };
 
+  opentelemetry-cpp = pkgs.opentelemetry-cpp.override {
+    # The default build has no OTLP exporters at all; we need the
+    # OTLP/HTTP one (and specifically not the gRPC one).
+    enableHttp = true;
+  };
+
   libmicrohttpd = pkgs.libmicrohttpd.overrideDerivation (old: {
     # Don't pull in gnutls since it's pretty big and we don't need it.
     configureFlags = old.configureFlags or [ ] ++ [ "--without-gnutls" ];
