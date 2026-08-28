@@ -1,5 +1,23 @@
 {
   "nodes": {
+    "bdwgc": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787927442,
+        "narHash": "sha256-Z5fTPKJJOxlfawRm4VGG4TmLbqfl/WuGCx6bLiMVTeo=",
+        "ref": "refs/heads/nix-patches-master",
+        "rev": "4ae90901832091c29d45a6d80be18ccbc6b51e2f",
+        "revCount": 6621,
+        "type": "git",
+        "url": "file:///home/eelco/Dev/bdwgc"
+      },
+      "original": {
+        "owner": "edolstra",
+        "ref": "nix-patches-master",
+        "repo": "bdwgc",
+        "type": "github"
+      }
+    },
     "flake-compat": {
       "flake": false,
       "locked": {
@@ -103,6 +121,7 @@
     },
     "root": {
       "inputs": {
+        "bdwgc": "bdwgc",
         "flake-parts": "flake-parts",
         "git-hooks-nix": "git-hooks-nix",
         "nixpkgs": "nixpkgs",
