@@ -1,5 +1,4 @@
 #include "flake-command.hh"
-#include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/thread-pool.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/util/exit.hh"
@@ -24,46 +23,48 @@ struct CmdFlakePrefetchInputs : FlakeCommand
 
     void run(nix::ref<nix::Store> store) override
     {
-        using namespace nix::flake;
         auto flake = lockFlake();
 
+        auto state = getEvalState();
+
+        /* Gather the attribute paths of all transitive inputs,
+           skipping build-time inputs and their dependencies. */
+        std::vector<std::pair<flake::InputAttrPath, FlakeRef>> inputs;
+
+        flake->visit(*state, [&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
+            auto inputInfo = std::get_if<flake::LockedFlake::InputInfo>(&input);
+
+            /* Skip "follows" inputs and build-time inputs (and their
+               dependencies). */
+            if (!inputInfo || inputInfo->buildTime)
+                return false;
+
+            /* Skip the root flake, which we've fetched already. */
+            if (!inputAttrPath.empty())
+                inputs.emplace_back(inputAttrPath, inputInfo->lockedRef);
+
+            return true;
+        });
+
+        /* Fetch the inputs in parallel. */
         ThreadPool pool{fileTransferSettings.httpConnections};
-
-        struct State
-        {
-            std::set<const Node *> done;
-        };
-
-        Sync<State> state_;
 
         std::atomic<size_t> nrFailed{0};
 
-        auto visit = [&](this const auto & visit, const Node & node) {
-            if (!state_.lock()->done.insert(&node).second)
-                return;
-
-            if (auto lockedNode = dynamic_cast<const LockedNode *>(&node)) {
-                if (lockedNode->buildTime)
-                    return;
+        for (auto & [inputAttrPath, lockedRef] : inputs) {
+            pool.enqueue([&, inputAttrPath, lockedRef]() {
                 try {
-                    Activity act(*logger, lvlInfo, actUnknown, fmt("fetching '%s'", lockedNode->lockedRef));
-                    auto accessor = lockedNode->lockedRef.input.getAccessor(fetchSettings, *store).first;
-                    if (!evalSettings.lazyTrees)
-                        fetchToStore(
-                            fetchSettings, *store, accessor, FetchMode::Copy, lockedNode->lockedRef.input.getName());
+                    Activity act(*logger, lvlInfo, actUnknown, fmt("fetching '%s'", lockedRef));
+                    /* Note: when lazy trees are disabled, this also
+                       copies the input to the store (via
+                       `EvalState::mountInput()`). */
+                    flake->getSourcePath(*state, inputAttrPath);
                 } catch (Error & e) {
                     printError("%s", e.what());
                     nrFailed++;
                 }
-            }
-
-            for (auto & [inputName, input] : node.inputs) {
-                if (auto inputNode = std::get_if<0>(&input))
-                    pool.enqueue(std::bind(visit, **inputNode));
-            }
-        };
-
-        pool.enqueue(std::bind(visit, *flake.lockFile.root));
+            });
+        }
 
         pool.process();
 

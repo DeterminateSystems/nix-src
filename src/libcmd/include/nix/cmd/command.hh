@@ -6,7 +6,6 @@
 #include "nix/cmd/common-eval-args.hh"
 #include "nix/store/path.hh"
 #include "nix/store/store-reference.hh"
-#include "nix/flake/lockfile.hh"
 
 #include <optional>
 

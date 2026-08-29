@@ -641,7 +641,7 @@ struct CmdDevelop : Common, MixEnvironment
 
             auto nixpkgsLockFlags = lockFlags;
             nixpkgsLockFlags.inputOverrides = {};
-            nixpkgsLockFlags.inputUpdates = {};
+            nixpkgsLockFlags.inputUpdates = std::set<flake::NonEmptyInputAttrPath>();
 
             auto nixpkgs = defaultNixpkgsFlakeRef();
             if (auto * i = dynamic_cast<const InstallableFlake *>(&*installable))

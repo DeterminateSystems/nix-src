@@ -310,7 +310,8 @@ ref<flake::LockedFlake> InstallableFlake::getLockedFlake() const
         flake::LockFlags lockFlagsApplyConfig = lockFlags;
         // FIXME why this side effect?
         lockFlagsApplyConfig.applyNixConfig = true;
-        _lockedFlake = make_ref<flake::LockedFlake>(lockFlake(flakeSettings, *state, flakeRef, lockFlagsApplyConfig));
+        _lockedFlake =
+            std::shared_ptr<flake::LockedFlake>(lockFlake(flakeSettings, *state, flakeRef, lockFlagsApplyConfig));
     }
     // _lockedFlake is now non-null but still just a shared_ptr
     return ref<flake::LockedFlake>(_lockedFlake);
@@ -328,12 +329,10 @@ FlakeRef InstallableFlake::nixpkgsFlakeRef() const
 {
     auto lockedFlake = getLockedFlake();
 
-    if (auto nixpkgsInput = lockedFlake->lockFile.findInput({"nixpkgs"})) {
-        if (auto lockedNode = std::dynamic_pointer_cast<const flake::LockedNode>(nixpkgsInput)) {
-            if (lockedNode->isFlake) {
-                debug("using nixpkgs flake '%s'", lockedNode->lockedRef);
-                return std::move(lockedNode->lockedRef);
-            }
+    if (auto nixpkgsInput = lockedFlake->findInput(*state, lockedFlake->resolveFollows(*state, {"nixpkgs"}))) {
+        if (nixpkgsInput->isFlake) {
+            debug("using nixpkgs flake '%s'", nixpkgsInput->lockedRef);
+            return std::move(nixpkgsInput->lockedRef);
         }
     }
 
