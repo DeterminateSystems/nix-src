@@ -70,7 +70,7 @@ static char * allocString(size_t size)
     char * t;
     t = (char *) GC_MALLOC_ATOMIC(size);
     if (!t)
-        throw std::bad_alloc();
+        outOfMemory();
     return t;
 }
 
@@ -96,7 +96,7 @@ StringData & StringData::alloc(EvalMemory & mem, size_t size)
 {
     void * t = mem.allocBytes(sizeof(StringData) + size + 1);
     if (!t)
-        throw std::bad_alloc();
+        outOfMemory();
     auto res = new (t) StringData(size);
     return *res;
 }

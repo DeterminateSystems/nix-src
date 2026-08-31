@@ -470,6 +470,11 @@ void panic(std::string_view msg)
     std::terminate();
 }
 
+void outOfMemory()
+{
+    panic("ran out of memory");
+}
+
 void unreachable(std::source_location loc)
 {
     char buf[512];

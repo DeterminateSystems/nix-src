@@ -40,8 +40,7 @@ static_assert(sizeof(void *) * 2 == GC_GRANULE_BYTES, "Boehm GC must use GC_GRAN
 /* Called when the Boehm GC runs out of memory. */
 static void * oomHandler(size_t requested)
 {
-    /* Convert this to a proper C++ exception. */
-    throw std::bad_alloc();
+    outOfMemory();
 }
 
 static size_t getFreeMem()

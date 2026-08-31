@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cctype>
+#include <new>
 
 #include <openssl/crypto.h>
 #include <sodium.h>
@@ -63,6 +64,11 @@ void initLibUtil()
        effect. */
     if (OPENSSL_init_crypto(OPENSSL_INIT_NO_ATEXIT, nullptr) != 1)
         throw Error("could not initialise OpenSSL");
+
+    /* Make sure that failing memory allocations don't result in an
+       opaque abort() (e.g. from mimalloc's `operator new` override,
+       which cannot throw `std::bad_alloc`). */
+    std::set_new_handler(outOfMemory);
 }
 
 //////////////////////////////////////////////////////////////////////

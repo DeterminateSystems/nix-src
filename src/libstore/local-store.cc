@@ -1433,7 +1433,7 @@ StorePath LocalStore::addToStoreFromDump(
             dumpBuffer.release();
             dumpBuffer.reset((char *) tmp);
         } else {
-            throw std::bad_alloc();
+            outOfMemory();
         }
         auto got = 0;
         Finally cleanup([&]() { dump = {dumpBuffer.get(), dump.size() + got}; });
