@@ -5232,7 +5232,9 @@ static void prim_concatStringsSep(EvalState & state, const PosIdx pos, Value ** 
             pos,
             elem,
             scratch,
-            "while evaluating one element of the list of strings to concat passed to builtins.concatStringsSep");
+            "while evaluating one element of the list of strings to concat passed to builtins.concatStringsSep",
+            false,
+            false);
     });
 
     std::string res;

@@ -2592,7 +2592,7 @@ BackedStringView EvalState::coerceToString(
             std::string result;
             auto listView = v.listView();
 
-            preForceListElements(v, pos, [this, pos, coerceMore, copyToStore, canonicalizePath](Value & elem) {
+            preForceListElements(v, pos, [this, pos, coerceMore, canonicalizePath](Value & elem) {
                 NixStringContext scratch;
                 coerceToString(
                     pos,
@@ -2600,7 +2600,7 @@ BackedStringView EvalState::coerceToString(
                     scratch,
                     "while evaluating one element of the list",
                     coerceMore,
-                    copyToStore,
+                    false,
                     canonicalizePath);
             });
 

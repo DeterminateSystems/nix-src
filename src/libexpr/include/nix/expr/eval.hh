@@ -739,8 +739,9 @@ public:
      * `consume` may run concurrently with the caller and after this
      * function returns. It must not capture pointers into the caller's
      * stack. It may only force values and do other memoized, thread-safe
-     * work (for example `coerceToString` into a scratch context). It must
-     * not write the caller's string context.
+     * work (for example `coerceToString` into a scratch context with
+     * `copyToStore = false`). It must not write the caller's string
+     * context.
      *
      * `Error` thrown by `consume` is discarded; the sequential walk
      * rethrows it. `Interrupted` propagates and stops the worker pool.
