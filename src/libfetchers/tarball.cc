@@ -408,6 +408,33 @@ struct CurlInputScheme : InputScheme
     {
         return (bool) input.getNarHash();
     }
+
+    /* Apply the "immutable" URL that the server sent in a `Link:
+       <...>; rel="immutable"` header (see the Lockable HTTP Protocol)
+       to the input.
+
+       The immutable URL must denote an input of the same type, because
+       the server cannot change how Nix reads the resource.
+
+       `requireTree` tells the parser whether the immutable URL denotes
+       a tree. */
+    Input applyImmutableUrl(
+        const Settings & settings, const Input & input, const std::string & immutableUrl, bool requireTree) const
+    {
+        // FIXME: would be nice to support arbitrary flakerefs
+        // here, e.g. git flakes.
+        auto immutableInput = Input::fromURL(settings, immutableUrl, requireTree);
+
+        if (immutableInput.getType() != schemeName())
+            throw Error(
+                "the immutable URL '%s' of input '%s' is a '%s' input, but a '%s' input is necessary",
+                immutableUrl,
+                input.to_string(),
+                immutableInput.getType(),
+                schemeName());
+
+        return immutableInput;
+    }
 };
 
 struct FileInputScheme : CurlInputScheme
@@ -445,6 +472,10 @@ struct FileInputScheme : CurlInputScheme
         auto file = downloadFile(store, settings, getStrAttr(input.attrs, "url"), input.getName());
 
         auto narHash = store.queryPathInfo(file.storePath)->narHash;
+
+        if (file.immutableUrl)
+            input = applyImmutableUrl(settings, input, *file.immutableUrl, false);
+
         input.attrs.insert_or_assign("narHash", narHash.to_string(HashFormat::SRI, true));
 
         auto accessor = ref{store.getFSAccessor(file.storePath)};
@@ -452,6 +483,14 @@ struct FileInputScheme : CurlInputScheme
         accessor->setPathDisplay("«" + input.to_string(true) + "»");
 
         return {accessor, input};
+    }
+
+    std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
+    {
+        if (auto narHash = input.getNarHash())
+            return "file:" + narHash->to_string(HashFormat::SRI, true);
+        else
+            return std::nullopt;
     }
 };
 
@@ -510,21 +549,15 @@ struct TarballInputScheme : CurlInputScheme
             return std::nullopt;
         auto & result = *res;
 
-        if (result.immutableUrl) {
-            auto immutableInput = Input::fromURL(settings, *result.immutableUrl);
-            // FIXME: would be nice to support arbitrary flakerefs
-            // here, e.g. git flakes.
-            if (immutableInput.getType() != "tarball")
-                throw Error("tarball 'Link' headers that redirect to non-tarball URLs are not supported");
-            input = immutableInput;
-        }
+        auto narHash = settings.getTarballCache()->treeHashToNarHash(settings, result.treeHash);
+
+        if (result.immutableUrl)
+            input = applyImmutableUrl(settings, input, *result.immutableUrl, true);
 
         if (result.lastModified && !input.attrs.contains("lastModified"))
             input.attrs.insert_or_assign("lastModified", uint64_t(result.lastModified));
 
-        input.attrs.insert_or_assign(
-            "narHash",
-            settings.getTarballCache()->treeHashToNarHash(settings, result.treeHash).to_string(HashFormat::SRI, true));
+        input.attrs.insert_or_assign("narHash", narHash.to_string(HashFormat::SRI, true));
 
         return {{result.accessor, input}};
     }
