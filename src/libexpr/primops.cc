@@ -5226,6 +5226,15 @@ static void prim_concatStringsSep(EvalState & state, const PosIdx pos, Value ** 
         pos,
         "while evaluating the second argument (the list of strings to concat) passed to builtins.concatStringsSep");
 
+    state.preForceListElements(*args[1], pos, [&state, pos](Value & elem) {
+        NixStringContext scratch;
+        state.coerceToString(
+            pos,
+            elem,
+            scratch,
+            "while evaluating one element of the list of strings to concat passed to builtins.concatStringsSep");
+    });
+
     std::string res;
     res.reserve((args[1]->listSize() + 32) * sep.size());
     bool first = true;
