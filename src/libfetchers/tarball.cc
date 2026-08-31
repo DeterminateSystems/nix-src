@@ -414,12 +414,18 @@ struct CurlInputScheme : InputScheme
        to the input.
 
        The immutable URL must denote an input of the same type, because
-       the server cannot change how Nix reads the resource.
+       the server cannot change how Nix reads the resource. If the
+       immutable URL contains a `narHash`, it must agree with `narHash`,
+       the NAR hash of the data that Nix downloaded.
 
        `requireTree` tells the parser whether the immutable URL denotes
        a tree. */
     Input applyImmutableUrl(
-        const Settings & settings, const Input & input, const std::string & immutableUrl, bool requireTree) const
+        const Settings & settings,
+        const Input & input,
+        const std::string & immutableUrl,
+        const Hash & narHash,
+        bool requireTree) const
     {
         // FIXME: would be nice to support arbitrary flakerefs
         // here, e.g. git flakes.
@@ -432,6 +438,15 @@ struct CurlInputScheme : InputScheme
                 input.to_string(),
                 immutableInput.getType(),
                 schemeName());
+
+        if (auto expected = immutableInput.getNarHash(); expected && *expected != narHash)
+            throw Error(
+                (unsigned int) 102,
+                "NAR hash mismatch in the immutable URL '%s' of input '%s': expected '%s', but got '%s'",
+                immutableUrl,
+                input.to_string(),
+                expected->to_string(HashFormat::SRI, true),
+                narHash.to_string(HashFormat::SRI, true));
 
         return immutableInput;
     }
@@ -474,7 +489,7 @@ struct FileInputScheme : CurlInputScheme
         auto narHash = store.queryPathInfo(file.storePath)->narHash;
 
         if (file.immutableUrl)
-            input = applyImmutableUrl(settings, input, *file.immutableUrl, false);
+            input = applyImmutableUrl(settings, input, *file.immutableUrl, narHash, false);
 
         input.attrs.insert_or_assign("narHash", narHash.to_string(HashFormat::SRI, true));
 
@@ -552,7 +567,7 @@ struct TarballInputScheme : CurlInputScheme
         auto narHash = settings.getTarballCache()->treeHashToNarHash(settings, result.treeHash);
 
         if (result.immutableUrl)
-            input = applyImmutableUrl(settings, input, *result.immutableUrl, true);
+            input = applyImmutableUrl(settings, input, *result.immutableUrl, narHash, true);
 
         if (result.lastModified && !input.attrs.contains("lastModified"))
             input.attrs.insert_or_assign("lastModified", uint64_t(result.lastModified));
