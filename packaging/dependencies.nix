@@ -219,11 +219,25 @@ scope: {
     inherit (scope) curl;
   };
 
-  opentelemetry-cpp = pkgs.opentelemetry-cpp.override {
-    # The default build has no OTLP exporters at all; we need the
-    # OTLP/HTTP one (and specifically not the gRPC one).
-    enableHttp = true;
-  };
+  opentelemetry-cpp =
+    (pkgs.opentelemetry-cpp.override {
+      # The default build has no OTLP exporters at all; we need the
+      # OTLP/HTTP one (and specifically not the gRPC one).
+      enableHttp = true;
+    }).overrideAttrs
+      (old: {
+        # Support OTEL_EXPORTER_OTLP_COMPRESSION=gzip.
+        cmakeFlags = old.cmakeFlags or [ ] ++ [ (pkgs.lib.cmakeBool "WITH_OTLP_HTTP_COMPRESSION" true) ];
+        buildInputs = old.buildInputs or [ ] ++ [ pkgs.zlib ];
+        # The gzip tests enabled by WITH_OTLP_HTTP_COMPRESSION do an
+        # HTTP round trip against a local test server and time out
+        # flakily in the build sandbox.
+        checkPhase = ''
+          runHook preCheck
+          ctest --output-on-failure -E 'BasicCurlHttpTests.Gzip'
+          runHook postCheck
+        '';
+      });
 
   libmicrohttpd = pkgs.libmicrohttpd.overrideDerivation (old: {
     # Don't pull in gnutls since it's pretty big and we don't need it.
