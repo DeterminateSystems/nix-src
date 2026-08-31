@@ -1,6 +1,6 @@
 #include "nix/store/s3-binary-cache-store.hh"
 #include "nix/store/http-binary-cache-store.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 
 #include <gtest/gtest.h>
 

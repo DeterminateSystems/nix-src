@@ -17,7 +17,7 @@
 #include "nix/util/finally.hh"
 #include "nix/util/logging.hh"
 #include "nix/util/callback.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/socket.hh"
 #include "nix/util/provenance.hh"

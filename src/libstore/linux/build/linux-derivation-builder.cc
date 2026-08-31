@@ -7,7 +7,7 @@
 
 #include "nix/store/globals.hh"
 #include "nix/store/personality.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/util/cgroup.hh"
 #include "nix/util/linux-namespaces.hh"
 #include "nix/util/file-system-at.hh"

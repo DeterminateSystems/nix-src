@@ -6,7 +6,7 @@
 #include "nix/expr/fetch-tree.hh"
 #include "nix/store/store-api.hh"
 #include "nix/fetchers/fetchers.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/fetchers/registry.hh"
 #include "nix/fetchers/tarball.hh"
 #include "nix/util/url.hh"

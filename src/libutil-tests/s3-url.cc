@@ -1,4 +1,4 @@
-#include "nix/store/s3-url.hh"
+#include "nix/util/s3-url.hh"
 #include "nix/util/tests/gmock-matchers.hh"
 
 #include <gtest/gtest.h>

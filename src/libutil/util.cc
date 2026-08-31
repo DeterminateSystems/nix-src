@@ -1,4 +1,6 @@
 #include "nix/util/util.hh"
+
+#include <curl/curl.h>
 #include "nix/util/ref.hh"
 #include "nix/util/fmt.hh"
 #include "nix/util/signals.hh"
@@ -63,6 +65,19 @@ void initLibUtil()
        effect. */
     if (OPENSSL_init_crypto(OPENSSL_INIT_NO_ATEXIT, nullptr) != 1)
         throw Error("could not initialise OpenSSL");
+
+    /* Because of an objc quirk[1], calling curl_global_init for the first time
+       after fork() will always result in a crash.
+       Up until now the solution has been to set OBJC_DISABLE_INITIALIZE_FORK_SAFETY
+       for every nix process to ignore that error.
+       Instead of working around that error we address it at the core -
+       by calling curl_global_init here, which should mean curl will already
+       have been initialized by the time we try to do so in a forked process.
+
+       [1]
+       https://github.com/apple-oss-distributions/objc4/blob/01edf1705fbc3ff78a423cd21e03dfc21eb4d780/runtime/objc-initialize.mm#L614-L636
+    */
+    curl_global_init(CURL_GLOBAL_ALL);
 }
 
 //////////////////////////////////////////////////////////////////////

@@ -5,3 +5,9 @@ option(
   type : 'feature',
   description : 'determine microarchitecture levels with libcpuid (only relevant on x86_64)',
 )
+
+option(
+  's3-aws-auth',
+  type : 'feature',
+  description : 'build support for AWS authentication with S3',
+)

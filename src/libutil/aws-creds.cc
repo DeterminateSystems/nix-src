@@ -1,9 +1,9 @@
-#include "nix/store/aws-creds.hh"
+#include "nix/util/aws-creds.hh"
 
 #if NIX_WITH_AWS_AUTH
 
 #  include <aws/crt/Types.h>
-#  include "nix/store/s3-url.hh"
+#  include "nix/util/s3-url.hh"
 #  include "nix/util/environment-variables.hh"
 #  include "nix/util/logging.hh"
 

@@ -1,16 +1,18 @@
-#include "nix/store/filetransfer.hh"
-#include "nix/store/filetransfer-impl.hh"
-#include "nix/store/globals.hh"
+#include "nix/util/filetransfer.hh"
+#include "nix/util/filetransfer-impl.hh"
+#include "nix/util/version.hh"
 #include "nix/util/config-global.hh"
+#include "nix/util/environment-variables.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/callback.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/sync.hh"
 #include "nix/util/util.hh"
 
-#include "nix/store/s3-url.hh"
+#include "nix/util/s3-url.hh"
 #include <optional>
 #if NIX_WITH_AWS_AUTH
-#  include "nix/store/aws-creds.hh"
+#  include "nix/util/aws-creds.hh"
 #endif
 
 #ifdef __linux__

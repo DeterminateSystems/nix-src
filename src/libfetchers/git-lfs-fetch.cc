@@ -1,6 +1,6 @@
 #include "nix/fetchers/git-lfs-fetch.hh"
 #include "nix/fetchers/git-utils.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/os-string.hh"

@@ -14,10 +14,32 @@ project(
 
 cxx = meson.get_compiler('cpp')
 
+fs = import('fs')
+
 subdir('nix-meson-build-support/deps-lists')
 
 configdata_pub = configuration_data()
 configdata_priv = configuration_data()
+
+# TODO rename, because it will conflict with downstream projects
+configdata_priv.set_quoted('PACKAGE_VERSION', meson.project_version())
+
+configdata_priv.set_quoted(
+  'DETERMINATE_NIX_VERSION',
+  fs.read('../../.version-determinate').strip(),
+)
+
+# sysconfdir doesn't get anything installed to directly, and is only used to
+# tell Nix where to look for nix.conf, so it doesn't get appended to prefix.
+# On Windows, NIX_CONF_DIR is determined at runtime using the Windows known
+# folders API (FOLDERID_ProgramData), so we don't define it at compile time.
+if host_machine.system() != 'windows'
+  sysconfdir = get_option('sysconfdir')
+  if not fs.is_absolute(sysconfdir)
+    sysconfdir = '/' / sysconfdir
+  endif
+  configdata_priv.set_quoted('NIX_CONF_DIR', sysconfdir / 'nix')
+endif
 
 deps_private_maybe_subproject = []
 deps_public_maybe_subproject = []
@@ -124,6 +146,27 @@ cpuid = dependency(
 configdata_priv.set('HAVE_LIBCPUID', cpuid.found().to_int())
 deps_private += cpuid
 
+# This is quite new, but curl has a bunch of known issues with write pausing and decompression.
+# Please use libcurl >= 8.17. See https://github.com/curl/curl/issues/19334, https://github.com/curl/curl/issues/16280, https://github.com/curl/curl/issues/16955 if in doubt.
+# Patch out this check at your own risk.
+curl = dependency('libcurl', 'curl', version : '>= 8.17.0')
+
+deps_private += curl
+
+s3_aws_auth = get_option('s3-aws-auth')
+aws_crt_cpp = dependency(
+  'aws-crt-cpp',
+  required : s3_aws_auth,
+  method : 'cmake',
+  modules : [ 'AWS::aws-crt-cpp' ],
+)
+
+if s3_aws_auth.enabled()
+  deps_other += aws_crt_cpp
+endif
+
+configdata_pub.set('NIX_WITH_AWS_AUTH', s3_aws_auth.enabled().to_int())
+
 nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
 
@@ -165,9 +208,11 @@ sources = [ config_priv_h ] + files(
   'file-content-address.cc',
   'file-descriptor.cc',
   'file-system.cc',
+  'filetransfer.cc',
   'forwarding-source-accessor.cc',
   'fs-sink.cc',
   'git.cc',
+  'global-paths.cc',
   'hash.cc',
   'hilite.cc',
   'json-utils.cc',
@@ -183,6 +228,7 @@ sources = [ config_priv_h ] + files(
   'posix-source-accessor.cc',
   'processes.cc',
   'provenance.cc',
+  's3-url.cc',
   'serialise.cc',
   'signature/local-keys.cc',
   'signature/signer.cc',
@@ -200,8 +246,13 @@ sources = [ config_priv_h ] + files(
   'url.cc',
   'users.cc',
   'util.cc',
+  'version.cc',
   'xml-writer.cc',
 )
+
+if s3_aws_auth.enabled()
+  sources += files('aws-creds.cc')
+endif
 
 subdir('include/nix/util')
 

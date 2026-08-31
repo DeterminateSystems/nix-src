@@ -2,7 +2,7 @@
 ///@file
 
 #include "nix/util/configuration.hh"
-#include "nix/store/global-paths.hh"
+#include "nix/util/global-paths.hh"
 #include "nix/store/store-reference.hh"
 
 namespace nix {

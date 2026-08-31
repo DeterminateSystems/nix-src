@@ -14,7 +14,7 @@
 #include "nix/store/derivations.hh"
 #include "nix/store/downstream-placeholder.hh"
 #include "nix/expr/eval-inline.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/expr/function-trace.hh"
 #include "nix/store/profiles.hh"
 #include "nix/expr/print.hh"

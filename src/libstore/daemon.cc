@@ -5,7 +5,7 @@
 #include "nix/store/worker-protocol-impl.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/store-cast.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/store/gc-store.hh"
 #include "nix/store/log-store.hh"
 #include "nix/store/indirect-root-store.hh"

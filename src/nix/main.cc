@@ -11,7 +11,7 @@
 #include "nix/main/shared.hh"
 #include "nix/store/store-open.hh"
 #include "nix/store/store-registration.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/main/loggers.hh"

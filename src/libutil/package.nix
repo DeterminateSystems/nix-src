@@ -3,8 +3,12 @@
   stdenv,
   mkMesonLibrary,
 
+  aws-c-common,
+  aws-crt-cpp,
   boost,
   brotli,
+  cmake, # for resolving aws-crt-cpp dep
+  curl,
   libarchive,
   libblake3,
   libcpuid,
@@ -16,6 +20,10 @@
   # Configuration Options
 
   version,
+
+  withAWS ?
+    # Default is this way because there have been issues building this dependency
+    (lib.meta.availableOn stdenv.hostPlatform aws-c-common) && !stdenv.hostPlatform.isStatic,
 }:
 
 let
@@ -32,6 +40,7 @@ mkMesonLibrary (finalAttrs: {
     ./nix-meson-build-support
     ../../.version
     ./.version
+    ../../.version-determinate
     ./widecharwidth
     ./meson.build
     ./meson.options
@@ -48,14 +57,18 @@ mkMesonLibrary (finalAttrs: {
     (fileset.fileFilter (file: file.hasExt "hh") ./.)
   ];
 
+  nativeBuildInputs = lib.optional withAWS cmake;
+
   buildInputs = [
     brotli
+    curl
     libblake3
     libsodium
     openssl
     zstd
   ]
-  ++ lib.optional stdenv.hostPlatform.isx86_64 libcpuid;
+  ++ lib.optional stdenv.hostPlatform.isx86_64 libcpuid
+  ++ lib.optional withAWS aws-crt-cpp;
 
   propagatedBuildInputs = [
     boost
@@ -65,6 +78,7 @@ mkMesonLibrary (finalAttrs: {
 
   mesonFlags = [
     (lib.mesonEnable "cpuid" stdenv.hostPlatform.isx86_64)
+    (lib.mesonEnable "s3-aws-auth" withAWS)
   ];
 
   meta = {

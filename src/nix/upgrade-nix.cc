@@ -3,7 +3,7 @@
 #include "nix/cmd/command.hh"
 #include "nix/main/common-args.hh"
 #include "nix/store/store-api.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/expr/eval.hh"
 #include "nix/expr/eval-settings.hh"
 #include "nix/expr/attr-path.hh"

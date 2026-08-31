@@ -3,7 +3,7 @@
 #include "nix/fetchers/fetchers.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/util/archive.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/store/store-open.hh"
 
 #include <nlohmann/json.hpp>

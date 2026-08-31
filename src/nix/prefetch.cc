@@ -2,7 +2,7 @@
 #include "nix/main/common-args.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-open.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/main/loggers.hh"
 #include "nix/util/tarfile.hh"
 #include "nix/expr/attr-path.hh"

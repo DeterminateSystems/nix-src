@@ -3,7 +3,7 @@
 
 #include "nix/util/url.hh"
 #include "nix/store/binary-cache-store.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/util/sync.hh"
 
 #include <chrono>

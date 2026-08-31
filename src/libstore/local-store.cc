@@ -17,7 +17,7 @@
 #include "nix/store/posix-fs-canonicalise.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/store/keys.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/util/users.hh"
 #include "nix/store/store-registration.hh"
 #include "nix/util/provenance.hh"

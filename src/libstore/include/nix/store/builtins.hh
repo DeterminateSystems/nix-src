@@ -5,7 +5,7 @@
 #include "nix/store/config.hh"
 
 #if NIX_WITH_AWS_AUTH
-#  include "nix/store/aws-creds.hh"
+#  include "nix/util/aws-creds.hh"
 #endif
 
 #include <nlohmann/json_fwd.hpp>

@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 
-#include "nix/store/filetransfer-impl.hh"
+#include "nix/util/filetransfer-impl.hh"
 
 namespace nix {
 

@@ -3,7 +3,7 @@
 
 #include "nix/store/config.hh"
 #include "nix/store/http-binary-cache-store.hh"
-#include "nix/store/s3-url.hh"
+#include "nix/util/s3-url.hh"
 
 namespace nix {
 

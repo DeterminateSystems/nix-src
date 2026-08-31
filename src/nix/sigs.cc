@@ -3,7 +3,7 @@
 #include "nix/main/shared.hh"
 #include "nix/store/store-open.hh"
 #include "nix/util/thread-pool.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 
 #include <atomic>
 

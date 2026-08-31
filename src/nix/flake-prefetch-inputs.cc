@@ -1,7 +1,7 @@
 #include "flake-command.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/thread-pool.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/util/exit.hh"
 
 #include <nlohmann/json.hpp>

@@ -13,11 +13,11 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/url.hh"
 
-#include "nix/store/config.hh"
+#include "nix/util/config.hh"
 #if NIX_WITH_AWS_AUTH
-#  include "nix/store/aws-creds.hh"
+#  include "nix/util/aws-creds.hh"
 #endif
-#include "nix/store/s3-url.hh"
+#include "nix/util/s3-url.hh"
 
 namespace nix {
 

@@ -26,11 +26,6 @@ configdata_priv = configuration_data()
 configdata_priv.set_quoted('PACKAGE_VERSION', meson.project_version())
 configdata_priv.set('IS_STATIC', get_option('default_library') == 'static')
 
-configdata_priv.set_quoted(
-  'DETERMINATE_NIX_VERSION',
-  fs.read('../../.version-determinate').strip(),
-)
-
 subdir('nix-meson-build-support/default-system-cpu')
 
 # Used in public header.
@@ -131,13 +126,6 @@ boost = dependency(
 # put in `deps_other`.
 deps_other += boost
 
-# This is quite new, but curl has a bunch of known issues with write pausing and decompression.
-# Please use libcurl >= 8.17. See https://github.com/curl/curl/issues/19334, https://github.com/curl/curl/issues/16280, https://github.com/curl/curl/issues/16955 if in doubt.
-# Patch out this check at your own risk.
-curl = dependency('libcurl', 'curl', version : '>= 8.17.0')
-
-deps_private += curl
-
 # seccomp only makes sense on Linux
 is_linux = host_machine.system() == 'linux'
 seccomp_required = get_option('seccomp-sandboxing')
@@ -169,20 +157,6 @@ deps_public += nlohmann_json
 
 sqlite = dependency('sqlite3', 'sqlite', version : '>=3.6.19')
 deps_private += sqlite
-
-s3_aws_auth = get_option('s3-aws-auth')
-aws_crt_cpp = dependency(
-  'aws-crt-cpp',
-  required : s3_aws_auth,
-  method : 'cmake',
-  modules : [ 'AWS::aws-crt-cpp' ],
-)
-
-if s3_aws_auth.enabled()
-  deps_other += aws_crt_cpp
-endif
-
-configdata_pub.set('NIX_WITH_AWS_AUTH', s3_aws_auth.enabled().to_int())
 
 subdir('nix-meson-build-support/generate-header')
 
@@ -249,26 +223,16 @@ foreach optname : path_opts
   endif
 endforeach
 
-# sysconfdir doesn't get anything installed to directly, and is only used to
-# tell Nix where to look for nix.conf, so it doesn't get appended to prefix.
-if host_machine.system() != 'windows'
-  sysconfdir = get_option('sysconfdir')
-  if not fs.is_absolute(sysconfdir)
-    sysconfdir = '/' / sysconfdir
-  endif
-endif
-
 # Aside from prefix itself, each of these was made into an absolute path
 # by joining it with prefix, unless it was already an absolute path
 # (which is the default for store-dir, localstatedir, and log-dir).
 configdata_priv.set_quoted('NIX_STORE_DIR', store_dir)
-# On Windows, NIX_STATE_DIR, NIX_LOG_DIR, and NIX_CONF_DIR are determined at
+# On Windows, NIX_STATE_DIR and NIX_LOG_DIR are determined at
 # runtime using the Windows known folders API (FOLDERID_ProgramData), so we
 # don't define them at compile time.
 if host_machine.system() != 'windows'
   configdata_priv.set_quoted('NIX_STATE_DIR', localstatedir / 'nix')
   configdata_priv.set_quoted('NIX_LOG_DIR', log_dir)
-  configdata_priv.set_quoted('NIX_CONF_DIR', sysconfdir / 'nix')
 endif
 
 lsof = find_program('lsof', required : false)
@@ -331,7 +295,6 @@ sources = files(
   'downstream-placeholder.cc',
   'dummy-store.cc',
   'export-import.cc',
-  'filetransfer.cc',
   'gc.cc',
   'globals.cc',
   'http-binary-cache-store.cc',
@@ -369,7 +332,6 @@ sources = files(
   'remote-store.cc',
   'restricted-store.cc',
   's3-binary-cache-store.cc',
-  's3-url.cc',
   'serve-protocol-connection.cc',
   'serve-protocol.cc',
   'sqlite.cc',
@@ -385,10 +347,6 @@ sources = files(
 )
 
 # AWS credentials code requires AWS CRT, so only compile when enabled
-if s3_aws_auth.enabled()
-  sources += files('aws-creds.cc')
-endif
-
 subdir('include/nix/store')
 
 if host_machine.system() == 'linux'

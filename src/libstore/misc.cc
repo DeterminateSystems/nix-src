@@ -9,7 +9,7 @@
 #include "nix/util/topo-sort.hh"
 #include "nix/util/callback.hh"
 #include "nix/util/closure.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/util/strings.hh"
 #include "nix/util/json-utils.hh"
 

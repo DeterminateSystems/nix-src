@@ -1,10 +1,10 @@
 #pragma once
 ///@file
-#include "nix/store/config.hh"
+#include "nix/util/config.hh"
 
 #if NIX_WITH_AWS_AUTH
 
-#  include "nix/store/s3-url.hh"
+#  include "nix/util/s3-url.hh"
 #  include "nix/util/ref.hh"
 #  include "nix/util/error.hh"
 

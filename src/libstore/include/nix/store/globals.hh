@@ -6,6 +6,7 @@
 #include "nix/util/types.hh"
 #include "nix/util/configuration.hh"
 #include "nix/util/environment-variables.hh"
+#include "nix/util/version.hh"
 #include "nix/store/build/derivation-builder.hh"
 #include "nix/store/local-settings.hh"
 #include "nix/store/store-reference.hh"
@@ -445,18 +446,6 @@ extern nix::Settings settings;
  * Usually called with `globalConfig`.
  */
 void loadConfFile(AbstractConfig & config);
-
-/**
- * The version of Nix itself.
- *
- * This is not `const`, so that the Nix CLI can provide a more detailed version
- * number including the git revision, without having to "re-compile" the entire
- * set of Nix libraries to include that version, even when those libraries are
- * not affected by the change.
- */
-extern std::string nixVersion;
-
-extern const std::string determinateNixVersion;
 
 /**
  * @param loadConfig Whether to load configuration from `nix.conf`, `NIX_CONFIG`, etc. May be disabled for unit tests.

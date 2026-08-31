@@ -1,7 +1,7 @@
 #include "nix/store/profiles.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/globals.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/store/store-open.hh"
 #include "nix/cmd/legacy.hh"
 #include "nix/cmd/common-eval-args.hh"

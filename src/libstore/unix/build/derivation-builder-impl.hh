@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nix/store/aws-creds.hh"
+#include "nix/util/aws-creds.hh"
 #include "nix/store/build/derivation-builder.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/local-store.hh"

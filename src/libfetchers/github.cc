@@ -1,4 +1,4 @@
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/fetchers/cache.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/types.hh"

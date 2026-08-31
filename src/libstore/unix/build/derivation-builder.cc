@@ -20,7 +20,7 @@
 #include "nix/store/globals.hh"
 #include "nix/store/build/derivation-env-desugar.hh"
 #include "nix/util/terminal.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/store/provenance.hh"
 
 #include <nlohmann/json.hpp>
@@ -74,8 +74,8 @@
 #endif
 
 #if NIX_WITH_AWS_AUTH
-#  include "nix/store/aws-creds.hh"
-#  include "nix/store/s3-url.hh"
+#  include "nix/util/aws-creds.hh"
+#  include "nix/util/s3-url.hh"
 #  include "nix/util/url.hh"
 #endif
 

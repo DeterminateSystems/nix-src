@@ -35,12 +35,6 @@ option(
 )
 
 option(
-  's3-aws-auth',
-  type : 'feature',
-  description : 'build support for AWS authentication with S3',
-)
-
-option(
   'wasm',
   type : 'feature',
   description : 'enable wasmtime integration into the Nix derivation builder',

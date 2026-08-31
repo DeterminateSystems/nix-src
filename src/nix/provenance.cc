@@ -11,7 +11,7 @@
 #include "nix/util/exit.hh"
 #include "nix/cmd/installable-flake.hh"
 #include "nix/store/derivations.hh"
-#include "nix/store/filetransfer.hh"
+#include "nix/util/filetransfer.hh"
 #include "nix/util/callback.hh"
 #include "nix/util/terminal.hh"
 

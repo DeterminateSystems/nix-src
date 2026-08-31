@@ -1,4 +1,4 @@
-#include "nix/store/s3-url.hh"
+#include "nix/util/s3-url.hh"
 #include "nix/util/abstract-setting-to-json.hh"
 #include "nix/util/config-impl.hh"
 #include "nix/util/error.hh"
