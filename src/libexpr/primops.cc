@@ -10,6 +10,7 @@
 #include "nix/store/names.hh"
 #include "nix/store/path-references.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/build.hh"
 #include "nix/util/util.hh"
 #include "nix/util/os-string.hh"
 #include "nix/util/processes.hh"
@@ -131,7 +132,7 @@ StringMap EvalState::realiseContext(const NixStringContext & context, StorePathS
     buildReqs.reserve(drvs.size());
     for (auto & d : drvs)
         buildReqs.emplace_back(DerivedPath{d});
-    buildStore->buildPaths(buildReqs, bmNormal, store);
+    buildStore->getBuilder(store)->buildPaths(buildReqs, bmNormal);
 
     StorePathSet outputsToCopyAndAllow;
 
@@ -2035,7 +2036,7 @@ static void prim_storePath(EvalState & state, const PosIdx pos, Value ** args, V
         state.error<EvalError>("path '%1%' is not in the Nix store", sourcePath).atPos(pos).debugThrow();
     auto storePath = state.store->toStorePath(sourcePath.path.abs()).first;
     if (!state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath))) && !settings.readOnlyMode)
-        state.store->ensurePath(storePath);
+        state.store->getBuilder()->ensurePath(storePath);
     context.insert(NixStringContextElem::Opaque{.path = storePath});
     v.mkString(sourcePath.path.abs(), context, state.mem);
 }
