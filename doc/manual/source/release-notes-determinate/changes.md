@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.22.2.<!-- differences -->
+This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.22.3.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -232,3 +232,5 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 <!-- Determinate Nix version 3.22.2 -->
 
 * `nix eval --json` has a flag `--drv-link` to create symlinks to top-level derivations. This prevents them from being garbage-collected. [DeterminateSystems/nix-src#599](https://github.com/DeterminateSystems/nix-src/pull/599)
+
+<!-- Determinate Nix version 3.22.3 -->
