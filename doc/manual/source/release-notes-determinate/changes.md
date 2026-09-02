@@ -234,31 +234,3 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 * `nix eval --json` has a flag `--drv-link` to create symlinks to top-level derivations. This prevents them from being garbage-collected. [DeterminateSystems/nix-src#599](https://github.com/DeterminateSystems/nix-src/pull/599)
 
 <!-- Determinate Nix version 3.22.3 -->
-
-* Fix `dir` attribute handling in nix-219-compat mode by @edolstra in [DeterminateSystems/nix-src#604](https://github.com/DeterminateSystems/nix-src/pull/604)
-
-* Update the schema file atomically by @edolstra in [DeterminateSystems/nix-src#606](https://github.com/DeterminateSystems/nix-src/pull/606)
-
-* Reduce contention on the bdwgc global lock by @edolstra in [DeterminateSystems/nix-src#608](https://github.com/DeterminateSystems/nix-src/pull/608)
-
-* fromJSON: Eliminate use of uncollectable containers  by @edolstra in [DeterminateSystems/nix-src#609](https://github.com/DeterminateSystems/nix-src/pull/609)
-
-* nix copy: Don't register temp roots if the remote doesn't have AddTempRoots by @edolstra in [DeterminateSystems/nix-src#610](https://github.com/DeterminateSystems/nix-src/pull/610)
-
-* Update Nixpkgs by @edolstra in [DeterminateSystems/nix-src#607](https://github.com/DeterminateSystems/nix-src/pull/607)
-
-* Fix crash when GC is interrupted by @edolstra in [DeterminateSystems/nix-src#612](https://github.com/DeterminateSystems/nix-src/pull/612)
-
-* Handle out-of-memory crashes better by @edolstra in [DeterminateSystems/nix-src#603](https://github.com/DeterminateSystems/nix-src/pull/603)
-
-* Fix forwarding netrc-file to the daemon by @edolstra in [DeterminateSystems/nix-src#616](https://github.com/DeterminateSystems/nix-src/pull/616)
-
-* Sync with upstream 2.35-maintenance by @edolstra in [DeterminateSystems/nix-src#617](https://github.com/DeterminateSystems/nix-src/pull/617)
-
-* Fix Ctrl-C handling when Sentry is enabled by @edolstra in [DeterminateSystems/nix-src#618](https://github.com/DeterminateSystems/nix-src/pull/618)
-
-* Eval cache: make the second evaluation hit the cache by @edolstra in [DeterminateSystems/nix-src#619](https://github.com/DeterminateSystems/nix-src/pull/619)
-
-* doc: mention that flake metadata's `Path` field is absent with lazy-trees by @edolstra in [DeterminateSystems/nix-src#620](https://github.com/DeterminateSystems/nix-src/pull/620)
-
-* Deduplicate `nix build --print-out-paths` output by @edolstra in [DeterminateSystems/nix-src#622](https://github.com/DeterminateSystems/nix-src/pull/622)
