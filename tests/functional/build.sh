@@ -17,6 +17,22 @@ nix build -f multiple-outputs.nix --json a b --no-link | jq --exit-status '
       (.out | match(".*multiple-outputs-b"))))
 '
 
+# Duplicate installables should yield one result per command-line
+# argument (not one per argument squared), in command-line order even
+# when duplicates are interleaved with other installables.
+[[ $(nix build -f multiple-outputs.nix --no-link --print-out-paths b b b | wc -l) = 3 ]]
+out=$(nix build -f multiple-outputs.nix --no-link --print-out-paths b nothing-to-install b)
+[[ $(echo "$out" | wc -l) = 3 ]]
+[[ $(echo "$out" | sed -n 1p) = $(echo "$out" | sed -n 3p) ]]
+echo "$out" | sed -n 1p | grepQuiet "multiple-outputs-b"
+echo "$out" | sed -n 2p | grepQuiet "nothing-to-install"
+nix build -f multiple-outputs.nix --no-link --json b nothing-to-install b | jq --exit-status '
+  length == 3
+  and (.[0].drvPath | match(".*multiple-outputs-b.drv"))
+  and (.[1].drvPath | match(".*nothing-to-install.drv"))
+  and (.[2].drvPath | match(".*multiple-outputs-b.drv"))
+'
+
 # Test output selection using the '^' syntax.
 nix build -f multiple-outputs.nix --json a^first --no-link | jq --exit-status '
   (.[0] |

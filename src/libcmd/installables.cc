@@ -535,19 +535,24 @@ std::vector<InstallableWithBuildResult> Installable::build2(
     if (mode == Realise::Nothing)
         settings.readOnlyMode = true;
 
-    struct Aux
+    struct Request
     {
+        DerivedPath path;
         ref<ExtraPathInfo> info;
         ref<Installable> installable;
     };
 
+    /* All requests in command-line order, which the results must
+       preserve; pathsToBuild holds each distinct derived path once. */
+    std::vector<Request> requests;
     std::vector<DerivedPath> pathsToBuild;
-    std::map<DerivedPath, std::vector<Aux>> backmap;
+    std::set<DerivedPath> seen;
 
     for (auto & i : installables) {
         for (auto b : i->toDerivedPaths()) {
-            pathsToBuild.push_back(b.path);
-            backmap[b.path].push_back({.info = b.info, .installable = i});
+            if (seen.insert(b.path).second)
+                pathsToBuild.push_back(b.path);
+            requests.push_back({.path = b.path, .info = b.info, .installable = i});
         }
     }
 
@@ -559,32 +564,30 @@ std::vector<InstallableWithBuildResult> Installable::build2(
     case Realise::Derivation:
         printMissing(store, pathsToBuild, lvlError);
 
-        for (auto & path : pathsToBuild) {
-            for (auto & aux : backmap[path]) {
-                std::visit(
-                    overloaded{
-                        [&](const DerivedPath::Built & bfd) {
-                            auto outputs = resolveDerivedPath(*store, bfd, &*evalStore);
-                            res.push_back(
-                                {.installable = aux.installable,
-                                 .result = InstallableWithBuildResult::Success{
-                                     .path =
-                                         BuiltPath::Built{
-                                             .drvPath = make_ref<SingleBuiltPath>(
-                                                 getBuiltPath(evalStore, store, *bfd.drvPath)),
-                                             .outputs = outputs,
-                                         },
-                                     .info = aux.info}});
-                        },
-                        [&](const DerivedPath::Opaque & bo) {
-                            res.push_back(
-                                {.installable = aux.installable,
-                                 .result = InstallableWithBuildResult::Success{
-                                     .path = BuiltPath::Opaque{bo.path}, .info = aux.info}});
-                        },
+        for (auto & req : requests) {
+            std::visit(
+                overloaded{
+                    [&](const DerivedPath::Built & bfd) {
+                        auto outputs = resolveDerivedPath(*store, bfd, &*evalStore);
+                        res.push_back(
+                            {.installable = req.installable,
+                             .result = InstallableWithBuildResult::Success{
+                                 .path =
+                                     BuiltPath::Built{
+                                         .drvPath =
+                                             make_ref<SingleBuiltPath>(getBuiltPath(evalStore, store, *bfd.drvPath)),
+                                         .outputs = outputs,
+                                     },
+                                 .info = req.info}});
                     },
-                    path.raw());
-            }
+                    [&](const DerivedPath::Opaque & bo) {
+                        res.push_back(
+                            {.installable = req.installable,
+                             .result = InstallableWithBuildResult::Success{
+                                 .path = BuiltPath::Opaque{bo.path}, .info = req.info}});
+                    },
+                },
+                req.path.raw());
         }
 
         break;
@@ -594,23 +597,25 @@ std::vector<InstallableWithBuildResult> Installable::build2(
             printMissing(store, pathsToBuild, lvlInfo);
 
         auto buildResults = store->buildPathsWithResults(pathsToBuild, bMode, evalStore);
-        for (auto & buildResult : buildResults) {
+
+        std::map<DerivedPath, KeyedBuildResult *> resultsByPath;
+        for (auto & buildResult : buildResults)
+            resultsByPath.emplace(buildResult.path, &buildResult);
+
+        for (auto & req : requests) {
+            auto & buildResult = *resultsByPath.at(req.path);
             if (buildResult.tryGetFailure()) {
-                for (auto & aux : backmap[buildResult.path]) {
-                    res.push_back({.installable = aux.installable, .result = buildResult});
-                }
+                res.push_back({.installable = req.installable, .result = buildResult});
                 continue;
             }
-            for (auto & aux : backmap[buildResult.path]) {
-                res.push_back({
-                    aux.installable,
-                    BuiltPathWithResult{
-                        .path = toBuiltPath(buildResult, evalStore, store),
-                        .info = aux.info,
-                        .result = buildResult,
-                    },
-                });
-            }
+            res.push_back({
+                req.installable,
+                BuiltPathWithResult{
+                    .path = toBuiltPath(buildResult, evalStore, store),
+                    .info = req.info,
+                    .result = buildResult,
+                },
+            });
         }
 
         break;
