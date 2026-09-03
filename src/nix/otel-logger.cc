@@ -23,6 +23,7 @@
 #  include <opentelemetry/sdk/trace/tracer_provider_factory.h>
 #  include <opentelemetry/semconv/service_attributes.h>
 #  include <opentelemetry/trace/context.h>
+#  include <opentelemetry/trace/default_span.h>
 #  include <opentelemetry/trace/propagation/http_trace_context.h>
 #  include <opentelemetry/trace/span.h>
 #  include <opentelemetry/trace/span_context.h>
@@ -286,6 +287,32 @@ public:
             if (isRemoteLogSource())
                 return;
 
+            /* An activity carrying a `traceparent` metadata field
+               exists only to link its child activities to a span in
+               another process (e.g. the client activity on whose
+               behalf the daemon is performing an operation). Don't
+               emit a span for the activity itself — there can be very
+               many of them (one per daemon operation) — but record
+               the remote context, or the local parent if the trace
+               context is absent or invalid, for parent lookups by
+               child activities. */
+            for (auto & [key, value] : metadata) {
+                if (key != "traceparent")
+                    continue;
+                std::optional<opentelemetry::trace::SpanContext> spanContext;
+                if (auto str = std::get_if<std::string>(&value.raw))
+                    spanContext = parseTraceparent(*str);
+                auto spans(spans_.lock());
+                if (!spanContext) {
+                    if (auto i = spans->find(parent); i != spans->end())
+                        spanContext = i->second->GetContext();
+                    else
+                        spanContext = rootSpan->GetContext();
+                }
+                spans->emplace(act, SpanPtr(new opentelemetry::trace::DefaultSpan(*spanContext)));
+                return;
+            }
+
             opentelemetry::trace::StartSpanOptions options;
 
             /* Per the OpenTelemetry semantic conventions, HTTP client
@@ -305,24 +332,12 @@ public:
             else
                 options.parent = rootSpan->GetContext();
 
-            /* A `traceparent` metadata field denotes a parent span in
-               another process (e.g. the client activity on whose
-               behalf the daemon is performing this activity), which
-               takes precedence over the local parent. */
-            for (auto & [key, value] : metadata)
-                if (key == "traceparent")
-                    if (auto str = std::get_if<std::string>(&value.raw))
-                        if (auto spanContext = parseTraceparent(*str))
-                            options.parent = *spanContext;
-
             auto span = tracer->StartSpan(toNostd(spanName), options);
 
             if (!s.empty())
                 span->SetAttribute("nix.activity.text", toNostd(filterANSIEscapes(s, true)));
 
             for (auto & [key, value] : metadata) {
-                if (key == "traceparent")
-                    continue;
                 if (auto str = std::get_if<std::string>(&value.raw))
                     span->SetAttribute(toNostd(key), toNostd(*str));
                 else if (auto n = std::get_if<uint64_t>(&value.raw))

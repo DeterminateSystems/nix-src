@@ -139,11 +139,10 @@ void RemoteStore::initConnection(Connection & conn)
 void RemoteStore::setOptions(Connection & conn)
 {
     conn.startOp(WorkerProto::Op::SetOptions);
-    conn.to << settings.keepFailed << settings.getWorkerSettings().keepGoing
-            << settings.getWorkerSettings().tryFallback << verbosity << settings.getWorkerSettings().maxBuildJobs
-            << settings.getWorkerSettings().maxSilentTime << true << (settings.verboseBuild ? lvlError : lvlVomit)
-            << 0 // obsolete log type
-            << 0 /* obsolete print build trace */
+    conn.to << settings.keepFailed << settings.getWorkerSettings().keepGoing << settings.getWorkerSettings().tryFallback
+            << verbosity << settings.getWorkerSettings().maxBuildJobs << settings.getWorkerSettings().maxSilentTime
+            << true << (settings.verboseBuild ? lvlError : lvlVomit) << 0 // obsolete log type
+            << 0                                                          /* obsolete print build trace */
             << settings.getLocalSettings().buildCores << settings.getWorkerSettings().useSubstitutes;
 
     std::map<std::string, nix::Config::SettingInfo> overrides;

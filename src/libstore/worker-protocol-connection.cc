@@ -237,7 +237,6 @@ WorkerProto::ClientHandshakeInfo WorkerProto::BasicClientConnection::postHandsha
     return WorkerProto::Serialise<ClientHandshakeInfo>::read(store, *this);
 }
 
-
 void WorkerProto::BasicClientConnection::startOp(WorkerProto::Op op)
 {
     to << op;

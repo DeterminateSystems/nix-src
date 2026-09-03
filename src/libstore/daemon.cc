@@ -1187,15 +1187,19 @@ void processConnection(
 
             /* Parent our work under the client activity that
                initiated this operation. */
-            Activity act(
-                *logger,
-                lvlDebug,
-                "daemon operation",
-                std::to_array<std::pair<std::string_view, Logger::Field>>({
-                    {"nix.daemon.op", (uint64_t) op},
-                    {"traceparent", traceparent},
-                }));
-            PushActivity pact(act.id);
+            std::optional<Activity> act;
+            std::optional<PushActivity> pact;
+            if (!traceparent.empty()) {
+                act.emplace(
+                    *logger,
+                    lvlDebug,
+                    "daemon operation",
+                    std::to_array<std::pair<std::string_view, Logger::Field>>({
+                        {"nix.daemon.op", (uint64_t) op},
+                        {"traceparent", traceparent},
+                    }));
+                pact.emplace(act->id);
+            }
 
             try {
                 performOp(tunnelLogger, store, trusted, recursive, conn, op);
