@@ -186,6 +186,12 @@ public:
                 options.parent = spanContext;
         }
         rootSpan = tracer->StartSpan(toNostd(rootSpanName), options);
+
+        if (getEnv("NIX_OTEL_DEBUG")) {
+            char buf[2 * opentelemetry::trace::TraceId::kSize];
+            rootSpan->GetContext().trace_id().ToLowerBase16(buf);
+            writeToStderr(fmt("OpenTelemetry trace ID: %s\n", std::string_view(buf, sizeof(buf))));
+        }
     }
 
     void log(Verbosity lvl, std::string_view s) noexcept override {}
