@@ -56,6 +56,18 @@ public:
             logger->startActivity(act, lvl, type, s, fields, parent);
     }
 
+    void startActivity(
+        ActivityId act,
+        Verbosity lvl,
+        std::string_view name,
+        ActivityMetadata metadata,
+        std::string_view s,
+        ActivityId parent) noexcept override
+    {
+        for (auto & logger : loggers)
+            logger->startActivity(act, lvl, name, metadata, s, parent);
+    }
+
     void stopActivity(ActivityId act) noexcept override
     {
         for (auto & logger : loggers)

@@ -224,6 +224,19 @@ Activity::Activity(
     logger.startActivity(id, lvl, type, s, fields, parent);
 }
 
+Activity::Activity(
+    Logger & logger,
+    Verbosity lvl,
+    std::string_view name,
+    Logger::ActivityMetadata metadata,
+    std::string_view s,
+    ActivityId parent)
+    : logger(logger)
+    , id(nextId++ + (((uint64_t) getPid()) << 32))
+{
+    logger.startActivity(id, lvl, name, metadata, s, parent);
+}
+
 void to_json(nlohmann::json & json, std::shared_ptr<const Pos> pos)
 {
     if (pos) {
@@ -363,6 +376,29 @@ struct JSONLogger : Logger
         json["text"] = s;
         json["parent"] = parent;
         addFields(json, fields);
+        write(std::move(json));
+    }
+
+    void startActivity(
+        ActivityId act,
+        Verbosity lvl,
+        std::string_view name,
+        ActivityMetadata metadata,
+        std::string_view s,
+        ActivityId parent) noexcept override
+    {
+        nlohmann::json json;
+        json["action"] = "start";
+        json["id"] = act;
+        json["level"] = lvl;
+        json["type"] = actStringly;
+        json["text"] = s;
+        json["parent"] = parent;
+        json["name"] = name;
+        auto payload = nlohmann::json::object();
+        for (auto & [key, value] : metadata)
+            std::visit([&](auto & v) { payload[std::string(key)] = v; }, value.raw);
+        json["payload"] = std::move(payload);
         write(std::move(json));
     }
 

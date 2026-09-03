@@ -118,8 +118,11 @@ std::string_view activityName(ActivityType type)
         ACTIVITY_NAME(PostBuildHook)
         ACTIVITY_NAME(BuildWaiting)
         ACTIVITY_NAME(FetchTree)
-        ACTIVITY_NAME(FileTransferAttempt)
 #  undef ACTIVITY_NAME
+    case actStringly:
+        /* Only reached via a Logger that flattens string-named
+           activities; the text fallback is the best we can do. */
+        return {};
     }
     return {};
 }
@@ -202,19 +205,11 @@ public:
                 return;
 
             opentelemetry::trace::StartSpanOptions options;
-            if (type == actFileTransferAttempt)
-                options.kind = opentelemetry::trace::SpanKind::kClient;
 
             auto name = activityName(type);
             bool textIsName = name.empty();
             if (textIsName)
                 name = s.empty() ? "activity" : std::string_view(s);
-
-            /* Per the OpenTelemetry semantic conventions, HTTP client
-               spans are named after the request method. */
-            if (type == actFileTransferAttempt)
-                if (auto method = getS(fields, 2); !method.empty())
-                    name = method;
 
             auto spans(spans_.lock());
 
@@ -233,14 +228,7 @@ public:
 #  pragma GCC diagnostic ignored "-Wswitch-enum"
             switch (type) {
             case actFileTransfer:
-            case actFileTransferAttempt:
                 span->SetAttribute("url.full", toNostd(getS(fields, 0)));
-                if (type == actFileTransferAttempt) {
-                    if (auto attempt = getI(fields, 1))
-                        span->SetAttribute("http.request.resend_count", (int64_t) attempt);
-                    if (auto method = getS(fields, 2); !method.empty())
-                        span->SetAttribute("http.request.method", toNostd(method));
-                }
                 break;
             case actBuild:
             case actPostBuildHook:
@@ -262,6 +250,54 @@ public:
                 break;
             }
 #  pragma GCC diagnostic pop
+
+            spans->emplace(act, std::move(span));
+        } catch (...) {
+        }
+    }
+
+    void startActivity(
+        ActivityId act,
+        Verbosity lvl,
+        std::string_view name,
+        ActivityMetadata metadata,
+        std::string_view s,
+        ActivityId parent) noexcept override
+    {
+        try {
+            if (isRemoteLogSource())
+                return;
+
+            opentelemetry::trace::StartSpanOptions options;
+
+            /* Per the OpenTelemetry semantic conventions, HTTP client
+               spans are named after the request method. */
+            auto spanName = name;
+            for (auto & [key, value] : metadata)
+                if (key == "http.request.method")
+                    if (auto method = std::get_if<std::string>(&value.raw)) {
+                        options.kind = opentelemetry::trace::SpanKind::kClient;
+                        spanName = *method;
+                    }
+
+            auto spans(spans_.lock());
+
+            if (auto i = spans->find(parent); i != spans->end())
+                options.parent = i->second->GetContext();
+            else
+                options.parent = rootSpan->GetContext();
+
+            auto span = tracer->StartSpan(toNostd(spanName), options);
+
+            if (!s.empty())
+                span->SetAttribute("nix.activity.text", toNostd(filterANSIEscapes(s, true)));
+
+            for (auto & [key, value] : metadata) {
+                if (auto str = std::get_if<std::string>(&value.raw))
+                    span->SetAttribute(toNostd(key), toNostd(*str));
+                else if (auto n = std::get_if<uint64_t>(&value.raw))
+                    span->SetAttribute(toNostd(key), (int64_t) *n);
+            }
 
             spans->emplace(act, std::move(span));
         } catch (...) {

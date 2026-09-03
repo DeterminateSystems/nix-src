@@ -9,6 +9,7 @@
 #include "nix/util/fun.hh"
 
 #include <filesystem>
+#include <span>
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -30,12 +31,12 @@ typedef enum {
     actBuildWaiting = 111,
     actFetchTree = 112,
     /**
-     * A single HTTP request within an `actFileTransfer` activity
-     * (there can be several due to retries). Fields: [0] the URI
-     * (string), [1] the number of preceding attempts (int), [2] the
-     * request method (string, e.g. `GET`).
+     * The type under which string-named activities (created via the
+     * name-based `Activity` constructor) are reported on legacy code
+     * paths, cf. the name-based `Logger::startActivity()`. Do not use
+     * directly.
      */
-    actFileTransferAttempt = 113,
+    actStringly = 113,
 } ActivityType;
 
 typedef enum {
@@ -128,6 +129,12 @@ public:
 
     typedef std::vector<Field> Fields;
 
+    /**
+     * Key/value meta-information about a string-named activity, cf.
+     * the name-based `startActivity()`.
+     */
+    using ActivityMetadata = std::span<const std::pair<std::string_view, Field>>;
+
     virtual ~Logger();
 
     virtual void stop() {};
@@ -182,6 +189,26 @@ public:
         const std::string & s,
         const Fields & fields,
         ActivityId parent) noexcept {};
+
+    /**
+     * Start a string-named activity carrying key/value
+     * meta-information. The default implementation reports it via the
+     * `ActivityType`-based overload as `actStringly`, discarding the
+     * name and metadata, so legacy loggers work unchanged. Metadata
+     * keys follow the OpenTelemetry attribute naming conventions
+     * where applicable (e.g. `http.request.method`); Nix-specific
+     * keys use a `nix.` prefix.
+     */
+    virtual void startActivity(
+        ActivityId act,
+        Verbosity lvl,
+        std::string_view name,
+        ActivityMetadata metadata,
+        std::string_view s,
+        ActivityId parent) noexcept
+    {
+        startActivity(act, lvl, actStringly, std::string(s), {}, parent);
+    };
 
     virtual void stopActivity(ActivityId act) noexcept {};
 
@@ -251,6 +278,18 @@ struct Activity
     Activity(
         Logger & logger, ActivityType type, const Logger::Fields & fields = {}, ActivityId parent = getCurActivity())
         : Activity(logger, lvlError, type, "", fields, parent) {};
+
+    /**
+     * Start a string-named activity carrying key/value
+     * meta-information, cf. the name-based `Logger::startActivity()`.
+     */
+    Activity(
+        Logger & logger,
+        Verbosity lvl,
+        std::string_view name,
+        Logger::ActivityMetadata metadata = {},
+        std::string_view s = {},
+        ActivityId parent = getCurActivity());
 
     Activity(const Activity & act) = delete;
 

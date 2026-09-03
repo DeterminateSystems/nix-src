@@ -631,9 +631,13 @@ struct curlFileTransfer : public FileTransfer
             attemptAct = std::make_unique<Activity>(
                 *logger,
                 lvlDebug,
-                actFileTransferAttempt,
+                "FileTransferAttempt",
+                std::to_array<std::pair<std::string_view, Logger::Field>>({
+                    {"url.full", request.displayUri()},
+                    {"http.request.method", httpMethodName(request.method)},
+                    {"http.request.resend_count", (uint64_t) attempt},
+                }),
                 "",
-                Logger::Fields{request.displayUri(), (uint64_t) attempt, httpMethodName(request.method)},
                 act().id);
 
             /* (Re)build the request headers, since the traceparent
