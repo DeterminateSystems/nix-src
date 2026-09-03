@@ -60,6 +60,20 @@ Goal::Co PathSubstitutionGoal::init()
         throw Error(
             "cannot substitute path '%s' - no write access to the Nix store", worker.store.printStorePath(storePath));
 
+    /* Covers the lifetime of this goal, including querying
+       substituters and the actual substitution. Note that the
+       progress bar only shows the `actSubstitute` activity, which
+       denotes that the actual substitution is happening. */
+    Activity act(
+        *logger,
+        lvlDebug,
+        "SubstitutionGoal",
+        std::to_array<std::pair<std::string_view, Logger::Field>>({
+            {"nix.store.path", worker.store.printStorePath(storePath)},
+        }),
+        "",
+        worker.actSubstitutions.id);
+
     auto subs = worker.getSubstituters();
 
     bool substituterFailed = false;
@@ -92,7 +106,12 @@ Goal::Co PathSubstitutionGoal::init()
 
         try {
             info = co_await AsyncCallback<ref<const ValidPathInfo>>(
-                [sub, path = subPath.value_or(storePath)](auto cb) { sub->queryPathInfo(path, std::move(cb)); });
+                [&act, sub, path = subPath.value_or(storePath)](auto cb) {
+                    /* Note: narrowly scoped so that the `PushActivity`
+                       does not extend across a suspension point. */
+                    PushActivity pact(act.id);
+                    sub->queryPathInfo(path, std::move(cb));
+                });
         } catch (InvalidPath &) {
             continue;
         } catch (SubstituterDisabled & e) {
@@ -152,7 +171,7 @@ Goal::Co PathSubstitutionGoal::init()
 
         // FIXME: consider returning boolean instead of passing in reference
         bool out = false; // is mutated by tryToRun
-        co_await tryToRun(subPath ? *subPath : storePath, sub, info, out);
+        co_await tryToRun(subPath ? *subPath : storePath, sub, info, out, act.id);
         substituterFailed = substituterFailed || out;
     }
 
@@ -184,7 +203,11 @@ Goal::Co PathSubstitutionGoal::init()
 }
 
 Goal::Co PathSubstitutionGoal::tryToRun(
-    StorePath subPath, nix::ref<Store> sub, std::shared_ptr<const ValidPathInfo> info, bool & substituterFailed)
+    StorePath subPath,
+    nix::ref<Store> sub,
+    std::shared_ptr<const ValidPathInfo> info,
+    bool & substituterFailed,
+    ActivityId parentAct)
 {
     trace("all references realised");
 
@@ -238,7 +261,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
                        sub,
                        maybeWaker = worker.getCrossThreadWaker(),
                        maybeWorkerStore = worker.store.weak_from_this(),
-                       parentAct = worker.actSubstitutions.id]() mutable {
+                       parentAct]() mutable {
         try {
             ReceiveInterrupts receiveInterrupts;
 

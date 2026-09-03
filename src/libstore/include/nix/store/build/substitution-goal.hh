@@ -60,7 +60,11 @@ public:
     Co init();
     Co gotInfo();
     Co tryToRun(
-        StorePath subPath, nix::ref<Store> sub, std::shared_ptr<const ValidPathInfo> info, bool & substituterFailed);
+        StorePath subPath,
+        nix::ref<Store> sub,
+        std::shared_ptr<const ValidPathInfo> info,
+        bool & substituterFailed,
+        ActivityId parentAct);
     Co finished();
 
     /* Called by destructor, can't be overridden */
