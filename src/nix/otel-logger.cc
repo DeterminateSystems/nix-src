@@ -41,6 +41,12 @@ struct OtelState
 {
     std::unique_ptr<opentelemetry::sdk::trace::TracerProvider> provider;
     opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> tracer;
+
+    /**
+     * The root span's trace ID, to be printed on shutdown if
+     * NIX_OTEL_DEBUG is set.
+     */
+    std::string debugTraceId;
 };
 
 /* Owned here rather than via opentelemetry's global Provider
@@ -203,7 +209,9 @@ public:
         if (getEnv("NIX_OTEL_DEBUG")) {
             char buf[2 * opentelemetry::trace::TraceId::kSize];
             rootSpan->GetContext().trace_id().ToLowerBase16(buf);
-            writeToStderr(fmt("OpenTelemetry trace ID: %s\n", std::string_view(buf, sizeof(buf))));
+            /* Printed by flushOtelAndShutdown() once the trace has
+               been uploaded. */
+            state.debugTraceId = std::string(buf, sizeof(buf));
         }
     }
 
@@ -459,6 +467,10 @@ void flushOtelAndShutdown()
     auto timeout = std::chrono::microseconds(std::chrono::seconds(5));
     state->provider->ForceFlush(timeout);
     state->provider->Shutdown(timeout);
+
+    if (!state->debugTraceId.empty())
+        writeToStderr(fmt("OpenTelemetry trace ID: %s\n", state->debugTraceId));
+
     /* Deliberately leak `state`: outstanding span handles may still
        reference the tracer; after Shutdown() their spans are simply
        dropped. */
