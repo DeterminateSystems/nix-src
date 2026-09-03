@@ -72,6 +72,26 @@ struct ExtractCarrier : opentelemetry::context::propagation::TextMapCarrier
     void Set(opentelemetry::nostd::string_view, opentelemetry::nostd::string_view) noexcept override {}
 };
 
+/**
+ * Parse a W3C `traceparent` value into a span context usable as a
+ * remote parent. Returns std::nullopt on an empty or invalid value.
+ * (Extract() returns the input context unchanged on a parse failure,
+ * leaving an invalid SpanContext.)
+ */
+std::optional<opentelemetry::trace::SpanContext> parseTraceparent(std::string_view traceparent)
+{
+    if (traceparent.empty())
+        return std::nullopt;
+    ExtractCarrier carrier;
+    carrier.traceparent = toNostd(traceparent);
+    opentelemetry::context::Context emptyCtx;
+    auto ctx = opentelemetry::trace::propagation::HttpTraceContext{}.Extract(carrier, emptyCtx);
+    auto spanContext = opentelemetry::trace::GetSpan(ctx)->GetContext();
+    if (!spanContext.IsValid())
+        return std::nullopt;
+    return spanContext;
+}
+
 struct InjectCarrier : opentelemetry::context::propagation::TextMapCarrier
 {
     Headers headers;
@@ -174,16 +194,8 @@ public:
         opentelemetry::trace::StartSpanOptions options;
         if (!remoteParentTraceparent.empty()) {
             options.kind = opentelemetry::trace::SpanKind::kServer;
-            /* Extract() returns the input context unchanged on a
-               parse failure, leaving an invalid SpanContext, i.e. an
-               unparented root span. */
-            ExtractCarrier carrier;
-            carrier.traceparent = toNostd(remoteParentTraceparent);
-            opentelemetry::context::Context emptyCtx;
-            auto ctx = opentelemetry::trace::propagation::HttpTraceContext{}.Extract(carrier, emptyCtx);
-            auto spanContext = opentelemetry::trace::GetSpan(ctx)->GetContext();
-            if (spanContext.IsValid())
-                options.parent = spanContext;
+            if (auto spanContext = parseTraceparent(remoteParentTraceparent))
+                options.parent = *spanContext;
         }
         rootSpan = tracer->StartSpan(toNostd(rootSpanName), options);
 
@@ -293,12 +305,24 @@ public:
             else
                 options.parent = rootSpan->GetContext();
 
+            /* A `traceparent` metadata field denotes a parent span in
+               another process (e.g. the client activity on whose
+               behalf the daemon is performing this activity), which
+               takes precedence over the local parent. */
+            for (auto & [key, value] : metadata)
+                if (key == "traceparent")
+                    if (auto str = std::get_if<std::string>(&value.raw))
+                        if (auto spanContext = parseTraceparent(*str))
+                            options.parent = *spanContext;
+
             auto span = tracer->StartSpan(toNostd(spanName), options);
 
             if (!s.empty())
                 span->SetAttribute("nix.activity.text", toNostd(filterANSIEscapes(s, true)));
 
             for (auto & [key, value] : metadata) {
+                if (key == "traceparent")
+                    continue;
                 if (auto str = std::get_if<std::string>(&value.raw))
                     span->SetAttribute(toNostd(key), toNostd(*str));
                 else if (auto n = std::get_if<uint64_t>(&value.raw))

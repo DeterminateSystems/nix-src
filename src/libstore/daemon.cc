@@ -1175,11 +1175,27 @@ void processConnection(
                 break;
             }
 
+            std::string traceparent;
+            if (conn.protoVersion.features.contains(WorkerProto::featureOpenTelemetry))
+                traceparent = readString(conn.from);
+
             printMsgUsing(prevLogger, lvlDebug, "received daemon op %d", op);
 
             opCount++;
 
             debug("performing daemon worker op: %d", op);
+
+            /* Parent our work under the client activity that
+               initiated this operation. */
+            Activity act(
+                *logger,
+                lvlDebug,
+                "daemon operation",
+                std::to_array<std::pair<std::string_view, Logger::Field>>({
+                    {"nix.daemon.op", (uint64_t) op},
+                    {"traceparent", traceparent},
+                }));
+            PushActivity pact(act.id);
 
             try {
                 performOp(tunnelLogger, store, trusted, recursive, conn, op);

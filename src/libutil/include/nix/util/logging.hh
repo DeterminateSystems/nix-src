@@ -360,6 +360,13 @@ void applyExtraLogger(std::unique_ptr<Logger> extraLogger);
 void applyJSONLogger();
 
 /**
+ * Extract the value of the `traceparent` header from trace context
+ * headers returned by `Logger::getTraceContext()`, or the empty
+ * string if there is none.
+ */
+std::string getTraceparent(const Headers & headers);
+
+/**
  * Marks, for the duration of its existence, Logger calls made on this
  * thread as replaying messages that originated in another process
  * (e.g. activities forwarded from the daemon to its client). Loggers

@@ -1,5 +1,6 @@
 #include "nix/store/worker-protocol-connection.hh"
 #include "nix/store/worker-protocol-impl.hh"
+#include "nix/util/logging.hh"
 #include "nix/store/build-result.hh"
 #include "nix/store/derivations.hh"
 
@@ -236,6 +237,16 @@ WorkerProto::ClientHandshakeInfo WorkerProto::BasicClientConnection::postHandsha
     return WorkerProto::Serialise<ClientHandshakeInfo>::read(store, *this);
 }
 
+
+void WorkerProto::BasicClientConnection::startOp(WorkerProto::Op op)
+{
+    to << op;
+    if (protoVersion.features.contains(WorkerProto::featureOpenTelemetry))
+        /* Send the trace context of the current activity, so that the
+           daemon can parent its work under it. */
+        to << getTraceparent(logger->getTraceContext(getCurActivity()));
+}
+
 void WorkerProto::BasicServerConnection::postHandshake(const StoreDirConfig & store, const ClientHandshakeInfo & info)
 {
     if (protoVersion >= WorkerProto::Version{.number = {1, 14}} && readInt(from)) {
@@ -252,7 +263,8 @@ void WorkerProto::BasicServerConnection::postHandshake(const StoreDirConfig & st
 std::optional<UnkeyedValidPathInfo> WorkerProto::BasicClientConnection::queryPathInfo(
     const StoreDirConfig & store, bool * daemonException, const StorePath & path)
 {
-    to << WorkerProto::Op::QueryPathInfo << store.printStorePath(path);
+    startOp(WorkerProto::Op::QueryPathInfo);
+    to << store.printStorePath(path);
     try {
         processStderr(daemonException);
     } catch (Error & e) {
@@ -274,7 +286,7 @@ StorePathSet WorkerProto::BasicClientConnection::queryValidPaths(
     const StoreDirConfig & store, bool * daemonException, const StorePathSet & paths, SubstituteFlag maybeSubstitute)
 {
     assert((protoVersion >= WorkerProto::Version{.number = {1, 12}}));
-    to << WorkerProto::Op::QueryValidPaths;
+    startOp(WorkerProto::Op::QueryValidPaths);
     WorkerProto::write(store, *this, paths);
     if (protoVersion >= WorkerProto::Version{.number = {1, 27}}) {
         to << maybeSubstitute;
@@ -286,7 +298,8 @@ StorePathSet WorkerProto::BasicClientConnection::queryValidPaths(
 void WorkerProto::BasicClientConnection::addTempRoot(
     const StoreDirConfig & store, bool * daemonException, const StorePath & path)
 {
-    to << WorkerProto::Op::AddTempRoot << store.printStorePath(path);
+    startOp(WorkerProto::Op::AddTempRoot);
+    to << store.printStorePath(path);
     processStderr(daemonException);
     readInt(from);
 }
@@ -298,7 +311,8 @@ void WorkerProto::BasicClientConnection::putBuildDerivationRequest(
     const BasicDerivation & drv,
     BuildMode buildMode)
 {
-    to << WorkerProto::Op::BuildDerivation << store.printStorePath(drvPath);
+    startOp(WorkerProto::Op::BuildDerivation);
+    to << store.printStorePath(drvPath);
     writeDerivation(to, store, drv);
     to << buildMode;
 }
@@ -312,7 +326,8 @@ WorkerProto::BasicClientConnection::getBuildDerivationResponse(const StoreDirCon
 void WorkerProto::BasicClientConnection::narFromPath(
     const StoreDirConfig & store, bool * daemonException, const StorePath & path, fun<void(Source &)> receiveNar)
 {
-    to << WorkerProto::Op::NarFromPath << store.printStorePath(path);
+    startOp(WorkerProto::Op::NarFromPath);
+    to << store.printStorePath(path);
     processStderr(daemonException);
 
     receiveNar(from);

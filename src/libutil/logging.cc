@@ -466,6 +466,14 @@ std::unique_ptr<Logger> makeJSONLogger(const std::filesystem::path & path, bool 
     return std::make_unique<JSONFileLogger>(std::move(fd), includeNixPrefix);
 }
 
+std::string getTraceparent(const Headers & headers)
+{
+    for (auto & [name, value] : headers)
+        if (name == "traceparent")
+            return value;
+    return "";
+}
+
 void applyJSONLogger()
 {
     if (auto & opt = loggerSettings.jsonLogPath.get()) {
