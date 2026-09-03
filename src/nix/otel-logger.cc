@@ -90,42 +90,36 @@ struct InjectCarrier : opentelemetry::context::propagation::TextMapCarrier
 };
 
 /**
- * The span name for an activity. An empty result means the activity's
- * text should be used instead.
+ * The span name for an activity: the name of the enum value without
+ * the `act` prefix, e.g. `OptimiseStore`. An empty result means the
+ * activity's text should be used instead.
+ *
+ * TODO: Use C++26 reflection to derive this from the enum
+ * definition generically instead of enumerating the values here.
  */
 std::string_view activityName(ActivityType type)
 {
     switch (type) {
     case actUnknown:
         return {};
-    case actCopyPath:
-        return "copy path";
-    case actFileTransfer:
-        return "file transfer";
-    case actRealise:
-        return "realise";
-    case actCopyPaths:
-        return "copy paths";
-    case actBuilds:
-        return "builds";
-    case actBuild:
-        return "build";
-    case actOptimiseStore:
-        return "optimise store";
-    case actVerifyPaths:
-        return "verify paths";
-    case actSubstitute:
-        return "substitute";
-    case actQueryPathInfo:
-        return "query path info";
-    case actPostBuildHook:
-        return "post-build hook";
-    case actBuildWaiting:
-        return "build waiting";
-    case actFetchTree:
-        return "fetch tree";
-    case actFileTransferAttempt:
-        return "http request";
+#  define ACTIVITY_NAME(name) \
+      case act##name:         \
+          return #name;
+        ACTIVITY_NAME(CopyPath)
+        ACTIVITY_NAME(FileTransfer)
+        ACTIVITY_NAME(Realise)
+        ACTIVITY_NAME(CopyPaths)
+        ACTIVITY_NAME(Builds)
+        ACTIVITY_NAME(Build)
+        ACTIVITY_NAME(OptimiseStore)
+        ACTIVITY_NAME(VerifyPaths)
+        ACTIVITY_NAME(Substitute)
+        ACTIVITY_NAME(QueryPathInfo)
+        ACTIVITY_NAME(PostBuildHook)
+        ACTIVITY_NAME(BuildWaiting)
+        ACTIVITY_NAME(FetchTree)
+        ACTIVITY_NAME(FileTransferAttempt)
+#  undef ACTIVITY_NAME
     }
     return {};
 }
