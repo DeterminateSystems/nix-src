@@ -265,3 +265,62 @@ test_gitlink_without_gitmodules() {
   done
 }
 test_gitlink_without_gitmodules
+
+# The backward compatibility hack for Nix < 2.20 locks must also work for repos
+# fetched with `submodules = true`. Since the NAR hash of such a repo covers the
+# submodule contents, deciding whether a lock was produced with Nix < 2.20
+# semantics requires hashing the *mounted* tree, and the submodules have to be
+# exported using those same semantics.
+test_legacy_export_with_submodules() {
+  local root=$TEST_ROOT/legacySubmodulesRoot
+  local sub=$TEST_ROOT/legacySubmodulesSub
+
+  rm -rf "$TEST_HOME"/.cache/nix
+
+  createGitRepo "$sub"
+  # `text eol=crlf` is a Git filter, so it's applied by `git checkout` (which is
+  # what Nix < 2.20 used for repos with submodules) but not by libgit2.
+  printf "crlf text eol=crlf\n" > "$sub"/.gitattributes
+  printf "Hello\nWorld\n" > "$sub"/crlf
+  git -C "$sub" add .gitattributes crlf
+  git -C "$sub" commit -m "Add crlf"
+
+  createGitRepo "$root"
+  git -C "$root" submodule add "$sub" sub
+  git -C "$root" commit -m "Add submodule"
+
+  local rev
+  rev=$(git -C "$root" rev-parse HEAD)
+
+  local input="{ type = \"git\"; url = \"file://$root\"; rev = \"$rev\"; submodules = true; }"
+
+  # Determine the two NAR hashes in a throwaway store: `builtins.fetchTree` marks
+  # inputs with a `narHash` as final, so if a tree with the expected hash is
+  # already in the store, it is returned without running the fetcher at all,
+  # which would mask the behaviour we want to test below.
+  local scratch=$TEST_ROOT/legacySubmodulesStore
+  local legacyHash modernHash
+  legacyHash=$(nix eval --store "$scratch" --nix-219-compat --raw --expr "(builtins.fetchTree $input).narHash")
+  modernHash=$(nix eval --store "$scratch" --raw --expr "(builtins.fetchTree $input).narHash")
+
+  # If the Git filter in the submodule didn't make a difference, this test
+  # wouldn't be testing anything.
+  [[ $legacyHash != "$modernHash" ]]
+
+  # A NAR hash produced by Nix < 2.20 must still be accepted by default (with a
+  # warning), and must yield the filtered submodule contents.
+  expectStderr 0 nix eval --expr \
+      "let tree = builtins.fetchTree ($input // { narHash = \"$legacyHash\"; }); in assert builtins.readFile \"\${tree}/sub/crlf\" == \"Hello\r\nWorld\r\n\"; true" \
+      | grepQuiet "Please update the NAR hash to '$modernHash'"
+
+  # Conversely, a NAR hash produced by Nix >= 2.20 must be accepted even when
+  # `nix-219-compat` is enabled.
+  nix eval --nix-219-compat --expr \
+      "let tree = builtins.fetchTree ($input // { narHash = \"$modernHash\"; }); in assert builtins.readFile \"\${tree}/sub/crlf\" == \"Hello\nWorld\n\"; true"
+
+  # A NAR hash that matches neither must still be an error.
+  expectStderr 102 nix eval --expr \
+      "builtins.fetchTree ($input // { narHash = \"sha256-DLDvcwdcwCxnuPTxSQ6gLAyopB20lD0bOQoQB3i2hsA=\"; })" \
+      | grepQuiet "NAR hash mismatch"
+}
+test_legacy_export_with_submodules
