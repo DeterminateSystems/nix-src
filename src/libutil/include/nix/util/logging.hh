@@ -32,7 +32,8 @@ typedef enum {
     /**
      * A single HTTP request within an `actFileTransfer` activity
      * (there can be several due to retries). Fields: [0] the URI
-     * (string), [1] the number of preceding attempts (int).
+     * (string), [1] the number of preceding attempts (int), [2] the
+     * request method (string, e.g. `GET`).
      */
     actFileTransferAttempt = 113,
 } ActivityType;
@@ -51,10 +52,10 @@ typedef enum {
     resBuildResult = 110,
     /**
      * Emitted via the JSON `result()` overload: an object describing
-     * the response to an HTTP request, with the fields `method` (the
-     * request method, e.g. `GET`), `httpStatus` (the status code,
-     * absent for non-HTTP protocols) and `bodySize` (the number of
-     * body bytes received). More fields may be added in the future.
+     * the response to an HTTP request, with the fields `httpStatus`
+     * (the status code, absent for non-HTTP protocols) and `bodySize`
+     * (the number of body bytes received). More fields may be added
+     * in the future.
      */
     resHttpStatus = 111,
 } ResultType;

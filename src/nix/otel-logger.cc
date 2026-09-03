@@ -212,6 +212,12 @@ public:
             if (textIsName)
                 name = s.empty() ? "activity" : std::string_view(s);
 
+            /* Per the OpenTelemetry semantic conventions, HTTP client
+               spans are named after the request method. */
+            if (type == actFileTransferAttempt)
+                if (auto method = getS(fields, 2); !method.empty())
+                    name = method;
+
             auto spans(spans_.lock());
 
             if (auto i = spans->find(parent); i != spans->end())
@@ -234,6 +240,8 @@ public:
                 if (type == actFileTransferAttempt) {
                     if (auto attempt = getI(fields, 1))
                         span->SetAttribute("http.request.resend_count", (int64_t) attempt);
+                    if (auto method = getS(fields, 2); !method.empty())
+                        span->SetAttribute("http.request.method", toNostd(method));
                 }
                 break;
             case actBuild:
@@ -284,8 +292,6 @@ public:
             if (type == resHttpStatus) {
                 auto spans(spans_.lock());
                 if (auto i = spans->find(act); i != spans->end()) {
-                    if (auto method = json.find("method"); method != json.end() && method->is_string())
-                        i->second->SetAttribute("http.request.method", toNostd(method->get_ref<const std::string &>()));
                     if (auto status = json.find("httpStatus"); status != json.end() && status->is_number())
                         i->second->SetAttribute("http.response.status_code", status->get<int64_t>());
                     if (auto bodySize = json.find("bodySize"); bodySize != json.end() && bodySize->is_number())

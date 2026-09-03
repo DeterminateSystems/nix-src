@@ -633,7 +633,7 @@ struct curlFileTransfer : public FileTransfer
                 lvlDebug,
                 actFileTransferAttempt,
                 "",
-                Logger::Fields{request.displayUri(), (uint64_t) attempt},
+                Logger::Fields{request.displayUri(), (uint64_t) attempt, httpMethodName(request.method)},
                 act().id);
 
             /* (Re)build the request headers, since the traceparent
@@ -828,7 +828,6 @@ struct curlFileTransfer : public FileTransfer
 
             if (attemptAct) {
                 nlohmann::json json;
-                json["method"] = httpMethodName(request.method);
                 if (httpStatus)
                     json["httpStatus"] = httpStatus;
                 json["bodySize"] = result.bodySize;
