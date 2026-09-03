@@ -132,18 +132,19 @@ makeTeeLogger(std::unique_ptr<Logger> mainLogger, std::vector<std::unique_ptr<Lo
 
 void applyExtraLogger(std::unique_ptr<Logger> extraLogger)
 {
-    if (auto teeLogger = dynamic_cast<TeeLogger *>(logger))
-        teeLogger->addLogger(std::move(extraLogger));
-    else {
-        std::vector<std::unique_ptr<Logger>> loggers;
-        loggers.push_back(std::move(extraLogger));
+    auto teeLogger = dynamic_cast<TeeLogger *>(logger);
+    if (!teeLogger) {
         try {
-            logger = makeTeeLogger(std::unique_ptr<Logger>(logger), std::move(loggers)).release();
+            std::vector<std::unique_ptr<Logger>> loggers;
+            loggers.push_back(std::unique_ptr<Logger>(logger));
+            teeLogger = new TeeLogger(std::move(loggers));
         } catch (...) {
             // `logger` is now gone so give up.
             abort();
         }
+        logger = teeLogger;
     }
+    teeLogger->addLogger(std::move(extraLogger));
 }
 
 } // namespace nix
