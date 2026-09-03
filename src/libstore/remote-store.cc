@@ -13,7 +13,6 @@
 #include "nix/util/archive.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/derivations.hh"
-#include "nix/util/otel.hh"
 #include "nix/util/pool.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/logging.hh"
@@ -117,7 +116,7 @@ void RemoteStore::initConnection(Connection & conn)
             /* Send our trace context so that the daemon can parent
                its spans under ours. */
             std::string traceparent;
-            for (auto & [name, value] : otel::rootSpan().injectContext())
+            for (auto & [name, value] : logger->getTraceContext(0))
                 if (name == "traceparent")
                     traceparent = value;
             conn.to << traceparent;

@@ -4,7 +4,6 @@
 #include "nix/util/config-global.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/callback.hh"
-#include "nix/util/otel.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/util.hh"
 
@@ -22,6 +21,8 @@
 #include <fcntl.h>
 
 #include <curl/curl.h>
+
+#include <nlohmann/json.hpp>
 
 #include <array>
 #include <algorithm>
@@ -164,16 +165,10 @@ struct curlFileTransfer : public FileTransfer
         std::unique_ptr<Activity> _act;
 
         /**
-         * Span covering the lifetime of this transfer, including
-         * retries.
+         * Activity covering the current HTTP request. Recreated on
+         * every attempt, as a child of the transfer activity.
          */
-        otel::Span transferSpan;
-
-        /**
-         * Span covering the current HTTP request. Recreated on every
-         * attempt.
-         */
-        otel::Span requestSpan;
+        std::unique_ptr<Activity> attemptAct;
         Callback<FileTransferResult> callback;
         CURL * req = 0;
         // buffer to accompany the `req` above
@@ -308,9 +303,6 @@ struct curlFileTransfer : public FileTransfer
             })
         {
             result.urls.push_back(request.uri.to_string());
-
-            transferSpan = otel::startSpan(request.verb(), otel::rootSpan());
-            transferSpan.setAttribute("url.full", request.displayUri());
         }
 
         ~TransferItem()
@@ -338,18 +330,6 @@ struct curlFileTransfer : public FileTransfer
             } catch (...) {
                 /* Can't add more context to the error. */
             }
-            try {
-                std::rethrow_exception(ex);
-            } catch (std::exception & e) {
-                // FIXME: privacy
-                requestSpan.setError(e.what());
-                transferSpan.setError(e.what());
-            } catch (...) {
-                requestSpan.setError("unknown error");
-                transferSpan.setError("unknown error");
-            }
-            requestSpan.end();
-            transferSpan.end();
             callback.rethrow(ex);
         }
 
@@ -627,9 +607,17 @@ struct curlFileTransfer : public FileTransfer
 
             bytesReceived = 0;
 
-            requestSpan = otel::startSpan(request.verb(), transferSpan, otel::SpanKind::Client);
-            if (attempt > 0)
-                requestSpan.setAttribute("http.request.resend_count", (int64_t) attempt);
+            /* Start an activity for this HTTP request. Note that
+               act() is called here (rather than lazily from a libcurl
+               callback) so that the activity exists before the
+               request headers are built. */
+            attemptAct = std::make_unique<Activity>(
+                *logger,
+                lvlDebug,
+                actFileTransferAttempt,
+                "",
+                Logger::Fields{request.displayUri(), (uint64_t) attempt},
+                act().id);
 
             /* (Re)build the request headers, since the traceparent
                header differs per attempt. */
@@ -641,7 +629,7 @@ struct curlFileTransfer : public FileTransfer
             for (auto it = request.headers.begin(); it != request.headers.end(); ++it) {
                 appendHeaders(fmt("%s: %s", it->first, it->second));
             }
-            for (auto & [name, value] : requestSpan.injectContext())
+            for (auto & [name, value] : logger->getTraceContext(attemptAct->id))
                 appendHeaders(fmt("%s: %s", name, value));
 
             if (verbosity >= lvlVomit) {
@@ -821,8 +809,11 @@ struct curlFileTransfer : public FileTransfer
                 httpStatus = std::to_underlying(HttpStatus::NotModified);
             }
 
-            if (httpStatus)
-                requestSpan.setAttribute("http.response.status_code", (int64_t) httpStatus);
+            if (attemptAct) {
+                if (httpStatus)
+                    logger->result(attemptAct->id, resHttpStatus, nlohmann::json{{"httpStatus", httpStatus}});
+                attemptAct.reset();
+            }
 
             if (callbackException)
                 failEx(callbackException);
@@ -840,8 +831,6 @@ struct curlFileTransfer : public FileTransfer
                 curl_easy_getinfo(req, CURLINFO_SIZE_DOWNLOAD_T, &dlSize);
                 act().progress(dlSize, dlSize);
                 done = true;
-                requestSpan.end();
-                transferSpan.end();
                 callback(std::move(result));
             }
 
@@ -965,10 +954,6 @@ struct curlFileTransfer : public FileTransfer
                                      curl_easy_strerror(code),
                                      code,
                                      errbuf);
-
-                // FIXME: privacy
-                requestSpan.setError(exc.what());
-                requestSpan.end();
 
                 maybeRetry(err, httpStatus, std::move(exc));
             }

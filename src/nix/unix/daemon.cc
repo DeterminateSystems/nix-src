@@ -8,7 +8,6 @@
 #include "nix/store/remote-store.hh"
 #include "nix/store/remote-store-connection.hh"
 #include "nix/store/store-open.hh"
-#include "nix/util/otel.hh"
 #include "nix/util/serialise.hh"
 #include "nix/store/globals.hh"
 #include "nix/util/config-global.hh"
@@ -17,6 +16,7 @@
 #include "nix/cmd/unix-socket-server.hh"
 #include "nix/store/daemon.hh"
 #include "man-pages.hh"
+#include "otel-logger.hh"
 #include "nix/util/socket.hh"
 
 #include <algorithm>
@@ -40,6 +40,18 @@
 #endif
 
 namespace nix {
+
+/**
+ * Set up distributed tracing for a daemon connection: create a span
+ * covering the connection's lifetime, parented under the trace
+ * context received from the client, if any. No-op unless
+ * OpenTelemetry export is configured.
+ */
+static void setupConnectionTelemetry(std::string_view traceparent)
+{
+    if (auto otelLogger = makeOpenTelemetryLogger("daemon connection", traceparent))
+        applyExtraLogger(std::move(otelLogger));
+}
 
 /**
  * Settings related to authenticating clients for the Nix daemon.
@@ -370,9 +382,8 @@ static void daemonLoop(
                         /* The OpenTelemetry exporter's worker thread
                            does not survive the fork, so set up
                            tracing afresh. */
-                        otel::resetAfterFork();
-                        otel::init("nix-daemon");
-                        Finally flushOtel([] { otel::forceFlushAndShutdown(); });
+                        resetOtelAfterFork();
+                        initOtel("nix-daemon");
 
                         closeListeners();
 
@@ -397,12 +408,14 @@ static void daemonLoop(
                             FdSource(remote.get()),
                             FdSink(remote.get()),
                             trusted,
-                            RecursiveFlag::NotRecursive);
+                            RecursiveFlag::NotRecursive,
+                            setupConnectionTelemetry);
 
-                        /* Flush explicitly, since exit() does not
-                           unwind the stack and so won't run
-                           `flushOtel`. */
-                        otel::forceFlushAndShutdown();
+                        /* End the connection span and export all
+                           telemetry. This has to be done explicitly,
+                           since exit() does not unwind the stack. */
+                        logger->stop();
+                        flushOtelAndShutdown();
 
                         exit(0);
                     },
@@ -468,7 +481,13 @@ static void forwardStdioConnection(RemoteStore & store)
  */
 static void processStdioConnection(ref<Store> store, TrustedFlag trustClient)
 {
-    processConnection(store, FdSource(STDIN_FILENO), FdSink(STDOUT_FILENO), trustClient, daemon::NotRecursive);
+    processConnection(
+        store,
+        FdSource(STDIN_FILENO),
+        FdSink(STDOUT_FILENO),
+        trustClient,
+        daemon::NotRecursive,
+        setupConnectionTelemetry);
 }
 
 /**

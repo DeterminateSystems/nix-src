@@ -24,11 +24,11 @@
 #include "nix/flake/flake.hh"
 #include "nix/flake/settings.hh"
 #include "nix/util/exit.hh"
-#include "nix/util/otel.hh"
 #include "nix/util/sentry.hh"
 
 #include "self-exe.hh"
 #include "crash-handler.hh"
+#include "otel-logger.hh"
 #include "cli-config-private.hh"
 
 #include <sys/types.h>
@@ -535,6 +535,11 @@ void mainWrapped(int argc, char ** argv)
         tryEnterPrivateMountNamespace();
 #endif
 
+    /* Note: registered before the logger->stop() Finally below, so
+       that at exit, the loggers are stopped (ending any open spans)
+       before the spans are exported. */
+    Finally flushOtel([] { flushOtelAndShutdown(); });
+
     Finally f([] { logger->stop(); });
 
     programPath = argv[0];
@@ -551,9 +556,7 @@ void mainWrapped(int argc, char ** argv)
 
     /* No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set in the
        environment. */
-    otel::init(programName);
-
-    Finally flushOtel([] { otel::forceFlushAndShutdown(); });
+    initOtel(programName);
 
     {
         if (auto legacy = get(RegisterLegacyCommand::commands(), programName))
@@ -714,9 +717,13 @@ void mainWrapped(int argc, char ** argv)
 
     setSentryTag("nix_subcommand", concatStringsSep(" ", subcommand).c_str());
 
-    /* Ended by RAII, including on exceptions. */
-    auto rootSpan = otel::startSpan("nix " + concatStringsSep(" ", subcommand));
-    otel::setRootSpan(rootSpan);
+    /* Map activities to OpenTelemetry spans, under a root span named
+       after the subcommand. */
+    OpenTelemetryLogger * otelLogger = nullptr;
+    if (auto l = makeOpenTelemetryLogger("nix " + concatStringsSep(" ", subcommand))) {
+        otelLogger = l.get();
+        applyExtraLogger(std::move(l));
+    }
 
     try {
         args.command->second->run();
@@ -728,8 +735,9 @@ void mainWrapped(int argc, char ** argv)
     } catch (Exit &) {
         throw;
     } catch (std::exception & e) {
-        // FIXME: privacy
-        rootSpan.setError(e.what());
+        if (otelLogger)
+            // FIXME: privacy
+            otelLogger->setRootError(e.what());
         throw;
     }
 }

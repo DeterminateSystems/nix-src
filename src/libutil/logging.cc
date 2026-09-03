@@ -36,6 +36,23 @@ void setCurActivity(const ActivityId activityId)
     curActivity = activityId;
 }
 
+[[gnu::tls_model("initial-exec")]] static thread_local unsigned int remoteLogSourceDepth = 0;
+
+RemoteLogSource::RemoteLogSource()
+{
+    remoteLogSourceDepth++;
+}
+
+RemoteLogSource::~RemoteLogSource()
+{
+    remoteLogSourceDepth--;
+}
+
+bool isRemoteLogSource()
+{
+    return remoteLogSourceDepth > 0;
+}
+
 /**
  * This is a raw pointer to allow it to leak.
  * Avoids races in activity teardown.
@@ -420,14 +437,7 @@ void applyJSONLogger()
 {
     if (auto & opt = loggerSettings.jsonLogPath.get()) {
         try {
-            std::vector<std::unique_ptr<Logger>> loggers;
-            loggers.push_back(makeJSONLogger(*opt, false));
-            try {
-                logger = makeTeeLogger(std::unique_ptr<Logger>(logger), std::move(loggers)).release();
-            } catch (...) {
-                // `logger` is now gone so give up.
-                abort();
-            }
+            applyExtraLogger(makeJSONLogger(*opt, false));
         } catch (...) {
             ignoreExceptionExceptInterrupt();
         }

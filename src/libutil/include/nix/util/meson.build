@@ -70,7 +70,6 @@ headers = [ config_pub_h ] + files(
   'nar-cache.hh',
   'nar-listing.hh',
   'os-string.hh',
-  'otel.hh',
   'override-provenance-source-accessor.hh',
   'pool.hh',
   'pos-idx.hh',

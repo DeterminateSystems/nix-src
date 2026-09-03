@@ -11,14 +11,11 @@
   libsodium,
   nlohmann_json,
   openssl,
-  opentelemetry-cpp,
   zstd,
 
   # Configuration Options
 
   version,
-
-  withOtel ? !stdenv.hostPlatform.isStatic && stdenv.buildPlatform.canExecute stdenv.hostPlatform,
 }:
 
 let
@@ -58,8 +55,7 @@ mkMesonLibrary (finalAttrs: {
     openssl
     zstd
   ]
-  ++ lib.optional stdenv.hostPlatform.isx86_64 libcpuid
-  ++ lib.optional withOtel opentelemetry-cpp;
+  ++ lib.optional stdenv.hostPlatform.isx86_64 libcpuid;
 
   propagatedBuildInputs = [
     boost
@@ -69,7 +65,6 @@ mkMesonLibrary (finalAttrs: {
 
   mesonFlags = [
     (lib.mesonEnable "cpuid" stdenv.hostPlatform.isx86_64)
-    (lib.mesonEnable "otel" withOtel)
   ];
 
   meta = {

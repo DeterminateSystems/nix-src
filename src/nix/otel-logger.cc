@@ -1,0 +1,409 @@
+#include "otel-logger.hh"
+
+#include "cli-config-private.hh"
+
+#if HAVE_OTEL
+#  include "nix/util/environment-variables.hh"
+#  include "nix/util/sync.hh"
+#  include "nix/util/terminal.hh"
+
+#  include <atomic>
+#  include <map>
+
+#  include <nlohmann/json.hpp>
+
+#  include <opentelemetry/context/context.h>
+#  include <opentelemetry/context/propagation/text_map_propagator.h>
+#  include <opentelemetry/exporters/otlp/otlp_http_exporter_factory.h>
+#  include <opentelemetry/nostd/shared_ptr.h>
+#  include <opentelemetry/sdk/resource/resource.h>
+#  include <opentelemetry/sdk/trace/batch_span_processor_factory.h>
+#  include <opentelemetry/sdk/trace/batch_span_processor_options.h>
+#  include <opentelemetry/sdk/trace/tracer_provider.h>
+#  include <opentelemetry/sdk/trace/tracer_provider_factory.h>
+#  include <opentelemetry/semconv/service_attributes.h>
+#  include <opentelemetry/trace/context.h>
+#  include <opentelemetry/trace/propagation/http_trace_context.h>
+#  include <opentelemetry/trace/span.h>
+#  include <opentelemetry/trace/span_context.h>
+#  include <opentelemetry/trace/span_startoptions.h>
+#  include <opentelemetry/trace/tracer.h>
+#endif
+
+namespace nix {
+
+#if HAVE_OTEL
+
+namespace {
+
+struct OtelState
+{
+    std::unique_ptr<opentelemetry::sdk::trace::TracerProvider> provider;
+    opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> tracer;
+};
+
+/* Owned here rather than via opentelemetry's global Provider
+   singleton, and deliberately leaked: the provider's destructor joins
+   the batch exporter's worker thread, which must never happen from
+   static destructors at exit() time (cf. the OPENSSL_INIT_NO_ATEXIT
+   note in util.cc; in the daemon's forked children that thread does
+   not even exist). Teardown happens only via an explicit
+   flushOtelAndShutdown(). */
+std::atomic<OtelState *> otelState{nullptr};
+
+inline opentelemetry::nostd::string_view toNostd(std::string_view sv) noexcept
+{
+    return {sv.data(), sv.size()};
+}
+
+struct ExtractCarrier : opentelemetry::context::propagation::TextMapCarrier
+{
+    opentelemetry::nostd::string_view traceparent, tracestate;
+
+    opentelemetry::nostd::string_view Get(opentelemetry::nostd::string_view key) const noexcept override
+    {
+        if (key == "traceparent")
+            return traceparent;
+        if (key == "tracestate")
+            return tracestate;
+        return {};
+    }
+
+    void Set(opentelemetry::nostd::string_view, opentelemetry::nostd::string_view) noexcept override {}
+};
+
+struct InjectCarrier : opentelemetry::context::propagation::TextMapCarrier
+{
+    Headers headers;
+
+    opentelemetry::nostd::string_view Get(opentelemetry::nostd::string_view) const noexcept override
+    {
+        return {};
+    }
+
+    void Set(opentelemetry::nostd::string_view key, opentelemetry::nostd::string_view value) noexcept override
+    {
+        /* Copy immediately: `value` may point into a stack buffer of
+           the propagator. */
+        headers.emplace_back(std::string(key.data(), key.size()), std::string(value.data(), value.size()));
+    }
+};
+
+/**
+ * The span name for an activity. An empty result means the activity's
+ * text should be used instead.
+ */
+std::string_view activityName(ActivityType type)
+{
+    switch (type) {
+    case actUnknown:
+        return {};
+    case actCopyPath:
+        return "copy path";
+    case actFileTransfer:
+        return "file transfer";
+    case actRealise:
+        return "realise";
+    case actCopyPaths:
+        return "copy paths";
+    case actBuilds:
+        return "builds";
+    case actBuild:
+        return "build";
+    case actOptimiseStore:
+        return "optimise store";
+    case actVerifyPaths:
+        return "verify paths";
+    case actSubstitute:
+        return "substitute";
+    case actQueryPathInfo:
+        return "query path info";
+    case actPostBuildHook:
+        return "post-build hook";
+    case actBuildWaiting:
+        return "build waiting";
+    case actFetchTree:
+        return "fetch tree";
+    case actFileTransferAttempt:
+        return "http request";
+    }
+    return {};
+}
+
+/* Defensive field accessors, like the progress bar's. */
+std::string_view getS(const Logger::Fields & fields, size_t n)
+{
+    if (n >= fields.size() || fields[n].type != Logger::Field::tString)
+        return {};
+    return fields[n].s;
+}
+
+uint64_t getI(const Logger::Fields & fields, size_t n)
+{
+    if (n >= fields.size() || fields[n].type != Logger::Field::tInt)
+        return 0;
+    return fields[n].i;
+}
+
+class OpenTelemetryLoggerImpl : public OpenTelemetryLogger
+{
+    using SpanPtr = opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span>;
+
+    opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> tracer;
+
+    SpanPtr rootSpan;
+
+    Sync<std::map<ActivityId, SpanPtr>> spans_;
+
+    static Headers injectContext(const SpanPtr & span)
+    {
+        if (!span->GetContext().IsValid())
+            return {};
+        InjectCarrier carrier;
+        opentelemetry::context::Context ctx;
+        auto withSpan = opentelemetry::trace::SetSpan(ctx, span);
+        opentelemetry::trace::propagation::HttpTraceContext{}.Inject(carrier, withSpan);
+        return std::move(carrier.headers);
+    }
+
+public:
+    OpenTelemetryLoggerImpl(OtelState & state, std::string_view rootSpanName, std::string_view remoteParentTraceparent)
+        : tracer(state.tracer)
+    {
+        opentelemetry::trace::StartSpanOptions options;
+        if (!remoteParentTraceparent.empty()) {
+            options.kind = opentelemetry::trace::SpanKind::kServer;
+            /* Extract() returns the input context unchanged on a
+               parse failure, leaving an invalid SpanContext, i.e. an
+               unparented root span. */
+            ExtractCarrier carrier;
+            carrier.traceparent = toNostd(remoteParentTraceparent);
+            opentelemetry::context::Context emptyCtx;
+            auto ctx = opentelemetry::trace::propagation::HttpTraceContext{}.Extract(carrier, emptyCtx);
+            auto spanContext = opentelemetry::trace::GetSpan(ctx)->GetContext();
+            if (spanContext.IsValid())
+                options.parent = spanContext;
+        }
+        rootSpan = tracer->StartSpan(toNostd(rootSpanName), options);
+    }
+
+    void log(Verbosity lvl, std::string_view s) noexcept override {}
+
+    void logEI(const ErrorInfo & ei) noexcept override {}
+
+    void startActivity(
+        ActivityId act,
+        Verbosity lvl,
+        ActivityType type,
+        const std::string & s,
+        const Fields & fields,
+        ActivityId parent) noexcept override
+    {
+        try {
+            if (isRemoteLogSource())
+                return;
+
+            opentelemetry::trace::StartSpanOptions options;
+            if (type == actFileTransferAttempt)
+                options.kind = opentelemetry::trace::SpanKind::kClient;
+
+            auto name = activityName(type);
+            bool textIsName = name.empty();
+            if (textIsName)
+                name = s.empty() ? "activity" : std::string_view(s);
+
+            auto spans(spans_.lock());
+
+            if (auto i = spans->find(parent); i != spans->end())
+                options.parent = i->second->GetContext();
+            else
+                options.parent = rootSpan->GetContext();
+
+            auto span = tracer->StartSpan(toNostd(name), options);
+
+            if (!s.empty() && !textIsName)
+                span->SetAttribute("nix.activity.text", toNostd(filterANSIEscapes(s, true)));
+
+// Allow handling a subset of enum values
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wswitch-enum"
+            switch (type) {
+            case actFileTransfer:
+            case actFileTransferAttempt:
+                span->SetAttribute("url.full", toNostd(getS(fields, 0)));
+                if (type == actFileTransferAttempt) {
+                    if (auto attempt = getI(fields, 1))
+                        span->SetAttribute("http.request.resend_count", (int64_t) attempt);
+                }
+                break;
+            case actBuild:
+            case actPostBuildHook:
+                span->SetAttribute("nix.drv.path", toNostd(getS(fields, 0)));
+                if (auto machine = getS(fields, 1); !machine.empty())
+                    span->SetAttribute("nix.machine", toNostd(machine));
+                break;
+            case actSubstitute:
+            case actQueryPathInfo:
+                span->SetAttribute("nix.store.path", toNostd(getS(fields, 0)));
+                span->SetAttribute("nix.substituter", toNostd(getS(fields, 1)));
+                break;
+            case actCopyPath:
+                span->SetAttribute("nix.store.path", toNostd(getS(fields, 0)));
+                span->SetAttribute("nix.src.store", toNostd(getS(fields, 1)));
+                span->SetAttribute("nix.dst.store", toNostd(getS(fields, 2)));
+                break;
+            default:
+                break;
+            }
+#  pragma GCC diagnostic pop
+
+            spans->emplace(act, std::move(span));
+        } catch (...) {
+        }
+    }
+
+    void stopActivity(ActivityId act) noexcept override
+    {
+        try {
+            if (isRemoteLogSource())
+                return;
+            auto spans(spans_.lock());
+            if (auto i = spans->find(act); i != spans->end()) {
+                i->second->End();
+                spans->erase(i);
+            }
+        } catch (...) {
+        }
+    }
+
+    void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept override
+    {
+        try {
+            if (isRemoteLogSource())
+                return;
+            if (type == resHttpStatus) {
+                auto spans(spans_.lock());
+                if (auto i = spans->find(act); i != spans->end())
+                    if (auto status = json.find("httpStatus"); status != json.end() && status->is_number())
+                        i->second->SetAttribute("http.response.status_code", status->get<int64_t>());
+            }
+        } catch (...) {
+        }
+    }
+
+    Headers getTraceContext(ActivityId act) override
+    {
+        try {
+            if (act) {
+                auto spans(spans_.lock());
+                if (auto i = spans->find(act); i != spans->end())
+                    return injectContext(i->second);
+            }
+            return injectContext(rootSpan);
+        } catch (...) {
+            return {};
+        }
+    }
+
+    void setRootError(std::string_view description) noexcept override
+    {
+        try {
+            rootSpan->SetStatus(
+                opentelemetry::trace::StatusCode::kError, toNostd(filterANSIEscapes(description, true)));
+        } catch (...) {
+        }
+    }
+
+    void stop() override
+    {
+        try {
+            auto spans(spans_.lock());
+            for (auto & [_, span] : *spans)
+                span->End();
+            spans->clear();
+            rootSpan->End();
+        } catch (...) {
+        }
+    }
+};
+
+} // namespace
+
+void initOtel(std::string_view serviceName)
+{
+    if (otelState.load(std::memory_order_acquire))
+        return;
+
+    /* Without an explicitly configured endpoint, stay off: the SDK's
+       default would silently export to http://localhost:4318. */
+    if (!getEnv("OTEL_EXPORTER_OTLP_ENDPOINT") && !getEnv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
+        return;
+
+    namespace sdktrace = opentelemetry::sdk::trace;
+
+    /* Default-constructed options read the OTEL_EXPORTER_OTLP_*
+       environment variables (endpoint, headers, TLS, compression). */
+    auto exporter = opentelemetry::exporter::otlp::OtlpHttpExporterFactory::Create();
+    auto processor =
+        sdktrace::BatchSpanProcessorFactory::Create(std::move(exporter), sdktrace::BatchSpanProcessorOptions{});
+    auto resource = opentelemetry::sdk::resource::Resource::Create({
+        {opentelemetry::semconv::service::kServiceName, std::string(serviceName)},
+    });
+
+    auto state = std::make_unique<OtelState>();
+    state->provider = sdktrace::TracerProviderFactory::Create(std::move(processor), resource);
+    state->tracer = state->provider->GetTracer("nix");
+
+    OtelState * expected = nullptr;
+    if (otelState.compare_exchange_strong(expected, state.get()))
+        state.release();
+}
+
+void flushOtelAndShutdown()
+{
+    auto * state = otelState.exchange(nullptr);
+    if (!state)
+        return;
+    /* Bound the timeouts: the SDK defaults are microseconds::max(),
+       and a hung collector must not hang process exit. */
+    auto timeout = std::chrono::microseconds(std::chrono::seconds(5));
+    state->provider->ForceFlush(timeout);
+    state->provider->Shutdown(timeout);
+    /* Deliberately leak `state`: outstanding span handles may still
+       reference the tracer; after Shutdown() their spans are simply
+       dropped. */
+}
+
+void resetOtelAfterFork()
+{
+    /* Deliberately leak the old state: it references a worker thread
+       that does not exist in this process, so it can be neither
+       flushed nor destroyed safely. */
+    otelState.exchange(nullptr);
+}
+
+std::unique_ptr<OpenTelemetryLogger>
+makeOpenTelemetryLogger(std::string_view rootSpanName, std::string_view remoteParentTraceparent)
+{
+    auto * state = otelState.load(std::memory_order_acquire);
+    if (!state)
+        return nullptr;
+    return std::make_unique<OpenTelemetryLoggerImpl>(*state, rootSpanName, remoteParentTraceparent);
+}
+
+#else
+
+void initOtel(std::string_view) {}
+
+void flushOtelAndShutdown() {}
+
+void resetOtelAfterFork() {}
+
+std::unique_ptr<OpenTelemetryLogger> makeOpenTelemetryLogger(std::string_view, std::string_view)
+{
+    return nullptr;
+}
+
+#endif // HAVE_OTEL
+
+} // namespace nix

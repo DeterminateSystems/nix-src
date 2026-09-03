@@ -74,6 +74,21 @@ public:
             logger->result(act, type, json);
     }
 
+    Headers getTraceContext(ActivityId act) override
+    {
+        for (auto & logger : loggers) {
+            auto headers = logger->getTraceContext(act);
+            if (!headers.empty())
+                return headers;
+        }
+        return {};
+    }
+
+    void addLogger(std::unique_ptr<Logger> logger)
+    {
+        loggers.push_back(std::move(logger));
+    }
+
     void writeToStdout(std::string_view s) override
     {
         for (auto & logger : loggers) {
@@ -113,6 +128,22 @@ makeTeeLogger(std::unique_ptr<Logger> mainLogger, std::vector<std::unique_ptr<Lo
     for (auto & l : extraLoggers)
         allLoggers.push_back(std::move(l));
     return std::make_unique<TeeLogger>(std::move(allLoggers));
+}
+
+void applyExtraLogger(std::unique_ptr<Logger> extraLogger)
+{
+    if (auto teeLogger = dynamic_cast<TeeLogger *>(logger))
+        teeLogger->addLogger(std::move(extraLogger));
+    else {
+        std::vector<std::unique_ptr<Logger>> loggers;
+        loggers.push_back(std::move(extraLogger));
+        try {
+            logger = makeTeeLogger(std::unique_ptr<Logger>(logger), std::move(loggers)).release();
+        } catch (...) {
+            // `logger` is now gone so give up.
+            abort();
+        }
+    }
 }
 
 } // namespace nix

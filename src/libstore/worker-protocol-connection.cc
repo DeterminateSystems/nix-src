@@ -82,11 +82,13 @@ WorkerProto::BasicClientConnection::processStderrReturn(Sink * sink, Source * so
             auto s = readString(from);
             auto fields = readFields(from);
             auto parent = readNum<ActivityId>(from);
+            RemoteLogSource remoteLogSource;
             logger->startActivity(act, lvl, type, s, fields, parent);
         }
 
         else if (msg == STDERR_STOP_ACTIVITY) {
             auto act = readNum<ActivityId>(from);
+            RemoteLogSource remoteLogSource;
             logger->stopActivity(act);
         }
 
@@ -94,6 +96,7 @@ WorkerProto::BasicClientConnection::processStderrReturn(Sink * sink, Source * so
             auto act = readNum<ActivityId>(from);
             auto type = (ResultType) readInt(from);
             auto fields = readFields(from);
+            RemoteLogSource remoteLogSource;
             logger->result(act, type, fields);
         }
 

@@ -3,6 +3,7 @@
 
 #include "nix/util/error.hh"
 #include "nix/util/configuration.hh"
+#include "nix/util/types.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/fun.hh"
@@ -28,6 +29,12 @@ typedef enum {
     actPostBuildHook = 110,
     actBuildWaiting = 111,
     actFetchTree = 112,
+    /**
+     * A single HTTP request within an `actFileTransfer` activity
+     * (there can be several due to retries). Fields: [0] the URI
+     * (string), [1] the number of preceding attempts (int).
+     */
+    actFileTransferAttempt = 113,
 } ActivityType;
 
 typedef enum {
@@ -42,6 +49,12 @@ typedef enum {
     resFetchStatus = 108,
     resHashMismatch = 109,
     resBuildResult = 110,
+    /**
+     * Emitted via the JSON `result()` overload: an object with an
+     * `httpStatus` field containing the status code of an HTTP
+     * response. More fields may be added in the future.
+     */
+    resHttpStatus = 111,
 } ResultType;
 
 typedef uint64_t ActivityId;
@@ -180,6 +193,19 @@ public:
 
     virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept {};
 
+    /**
+     * Return distributed tracing context for the given activity as
+     * W3C Trace Context headers (`traceparent`, `tracestate`), for
+     * propagation to another process (e.g. as HTTP request headers).
+     * `act == 0` denotes the root context of this process. Returns an
+     * empty list if this logger does not do tracing or has no context
+     * for `act`.
+     */
+    virtual Headers getTraceContext(ActivityId act)
+    {
+        return {};
+    }
+
     virtual void writeToStdout(std::string_view s);
 
     template<typename... Args>
@@ -297,7 +323,33 @@ std::unique_ptr<Logger> makeJSONLogger(Descriptor fd, bool includeNixPrefix = tr
 
 std::unique_ptr<Logger> makeJSONLogger(const std::filesystem::path & path, bool includeNixPrefix = true);
 
+/**
+ * Add an additional logger to the global `logger` by combining them
+ * into a `TeeLogger`. The current logger keeps responsibility for
+ * stdout and user interaction.
+ */
+void applyExtraLogger(std::unique_ptr<Logger> extraLogger);
+
 void applyJSONLogger();
+
+/**
+ * Marks, for the duration of its existence, Logger calls made on this
+ * thread as replaying messages that originated in another process
+ * (e.g. activities forwarded from the daemon to its client). Loggers
+ * that export telemetry should ignore such messages, since the
+ * originating process is responsible for exporting them.
+ */
+struct RemoteLogSource
+{
+    RemoteLogSource();
+    ~RemoteLogSource();
+};
+
+/**
+ * Whether Logger calls on this thread are currently replaying
+ * messages from another process, cf. `RemoteLogSource`.
+ */
+bool isRemoteLogSource();
 
 /**
  * @param source A noun phrase describing the source of the message, e.g. "the builder".

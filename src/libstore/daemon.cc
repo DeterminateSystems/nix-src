@@ -12,7 +12,6 @@
 #include "nix/store/remote-store.hh"
 #include "nix/store/path-with-outputs.hh"
 #include "nix/util/finally.hh"
-#include "nix/util/otel.hh"
 #include "nix/util/archive.hh"
 #include "nix/store/derivations.hh"
 #include "nix/util/args.hh"
@@ -1085,7 +1084,13 @@ static void performOp(
     }
 }
 
-void processConnection(ref<Store> store, FdSource && from, FdSink && to, TrustedFlag trusted, RecursiveFlag recursive)
+void processConnection(
+    ref<Store> store,
+    FdSource && from,
+    FdSink && to,
+    TrustedFlag trusted,
+    RecursiveFlag recursive,
+    std::function<void(std::string_view traceparent)> setupTelemetry)
 {
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
     auto monitor = !recursive ? std::make_unique<MonitorFdHup>(from.fd) : nullptr;
@@ -1120,11 +1125,6 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
     if (conn.protoVersion.features.contains(WorkerProto::featureOpenTelemetry))
         traceparent = readString(from);
 
-    /* Covers the lifetime of this connection; parented under the
-       client's root span if it sent a trace context. */
-    auto connectionSpan = otel::startSpanFromRemoteParent("daemon connection", traceparent, {}, otel::SpanKind::Server);
-    otel::setRootSpan(connectionSpan);
-
     conn.to = std::move(to);
     conn.from = std::move(from);
 
@@ -1135,6 +1135,9 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
         logger = tunnelLogger;
         applyJSONLogger();
     }
+
+    if (setupTelemetry)
+        setupTelemetry(traceparent);
 
     unsigned int opCount = 0;
 
