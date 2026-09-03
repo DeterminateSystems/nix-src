@@ -103,8 +103,8 @@ std::string_view activityName(ActivityType type)
     case actUnknown:
         return {};
 #  define ACTIVITY_NAME(name) \
-      case act##name:         \
-          return #name;
+  case act##name:             \
+      return #name;
         ACTIVITY_NAME(CopyPath)
         ACTIVITY_NAME(FileTransfer)
         ACTIVITY_NAME(Realise)
@@ -127,16 +127,20 @@ std::string_view activityName(ActivityType type)
 /* Defensive field accessors, like the progress bar's. */
 std::string_view getS(const Logger::Fields & fields, size_t n)
 {
-    if (n >= fields.size() || fields[n].type != Logger::Field::tString)
-        return {};
-    return fields[n].s;
+    if (n < fields.size()) {
+        if (auto p = std::get_if<std::string>(&fields[n].raw))
+            return *p;
+    }
+    return {};
 }
 
 uint64_t getI(const Logger::Fields & fields, size_t n)
 {
-    if (n >= fields.size() || fields[n].type != Logger::Field::tInt)
-        return 0;
-    return fields[n].i;
+    if (n < fields.size()) {
+        if (auto p = std::get_if<uint64_t>(&fields[n].raw))
+            return *p;
+    }
+    return 0;
 }
 
 class OpenTelemetryLoggerImpl : public OpenTelemetryLogger

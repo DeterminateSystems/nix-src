@@ -108,27 +108,20 @@ public:
 
     struct Field
     {
-        // FIXME: use std::variant.
-        enum { tInt = 0, tString = 1 } type;
-
-        uint64_t i = 0;
-        std::string s;
+        std::variant<std::string, uint64_t> raw;
 
         Field(const std::string & s)
-            : type(tString)
-            , s(s)
+            : raw(s)
         {
         }
 
         Field(const char * s)
-            : type(tString)
-            , s(s)
+            : raw(std::string(s))
         {
         }
 
         Field(const uint64_t & i)
-            : type(tInt)
-            , i(i)
+            : raw(i)
         {
         }
     };

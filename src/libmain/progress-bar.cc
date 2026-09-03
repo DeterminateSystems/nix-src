@@ -19,16 +19,20 @@ namespace {
 
 static std::string_view getS(const std::vector<Logger::Field> & fields, size_t n)
 {
-    if (n >= fields.size() || fields[n].type != Logger::Field::tString)
-        throw Error("could not get expected log field of type 'string' at index %d", n);
-    return fields[n].s;
+    if (n < fields.size()) {
+        if (auto p = std::get_if<std::string>(&fields[n].raw))
+            return *p;
+    }
+    throw Error("could not get expected log field of type 'string' at index %d", n);
 }
 
 static uint64_t getI(const std::vector<Logger::Field> & fields, size_t n)
 {
-    if (n >= fields.size() || fields[n].type != Logger::Field::tInt)
-        throw Error("could not get expected log field of type 'int' at index %d", n);
-    return fields[n].i;
+    if (n < fields.size()) {
+        if (auto p = std::get_if<uint64_t>(&fields[n].raw))
+            return *p;
+    }
+    throw Error("could not get expected log field of type 'int' at index %d", n);
 }
 
 static std::string_view storePathToName(std::string_view path)

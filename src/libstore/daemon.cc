@@ -35,12 +35,13 @@ Sink & operator<<(Sink & sink, const Logger::Fields & fields)
 {
     sink << fields.size();
     for (auto & f : fields) {
-        sink << f.type;
-        if (f.type == Logger::Field::tInt)
-            sink << f.i;
-        else if (f.type == Logger::Field::tString)
-            sink << f.s;
-        else
+        if (auto p = std::get_if<uint64_t>(&f.raw)) {
+            sink << 0;
+            sink << *p;
+        } else if (auto p = std::get_if<std::string>(&f.raw)) {
+            sink << 1;
+            sink << *p;
+        } else
             unreachable();
     }
     return sink;

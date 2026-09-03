@@ -167,13 +167,10 @@ public:
 
     void result(ActivityId act, ResultType type, const Fields & fields) noexcept override
     {
-        if (type == resBuildLogLine && printBuildLogs) {
-            auto lastLine = fields[0].s;
-            printError(lastLine);
-        } else if (type == resPostBuildLogLine && printBuildLogs) {
-            auto lastLine = fields[0].s;
-            printError("post-build-hook: " + lastLine);
-        }
+        if (type == resBuildLogLine && printBuildLogs)
+            printError(std::get<std::string>(fields[0].raw));
+        else if (type == resPostBuildLogLine && printBuildLogs)
+            printError("post-build-hook: " + std::get<std::string>(fields[0].raw));
     }
 };
 
@@ -276,10 +273,10 @@ struct JSONLogger : Logger
             return;
         auto & arr = json["fields"] = nlohmann::json::array();
         for (auto & f : fields)
-            if (f.type == Logger::Field::tInt)
-                arr.push_back(f.i);
-            else if (f.type == Logger::Field::tString)
-                arr.push_back(f.s);
+            if (auto p = std::get_if<uint64_t>(&f.raw))
+                arr.push_back(*p);
+            else if (auto p = std::get_if<std::string>(&f.raw))
+                arr.push_back(*p);
             else
                 unreachable();
     }
