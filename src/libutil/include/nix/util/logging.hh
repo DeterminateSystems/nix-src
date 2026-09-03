@@ -50,9 +50,11 @@ typedef enum {
     resHashMismatch = 109,
     resBuildResult = 110,
     /**
-     * Emitted via the JSON `result()` overload: an object with an
-     * `httpStatus` field containing the status code of an HTTP
-     * response. More fields may be added in the future.
+     * Emitted via the JSON `result()` overload: an object describing
+     * the response to an HTTP request, with the fields `method` (the
+     * request method, e.g. `GET`), `httpStatus` (the status code,
+     * absent for non-HTTP protocols) and `bodySize` (the number of
+     * body bytes received). More fields may be added in the future.
      */
     resHttpStatus = 111,
 } ResultType;

@@ -283,9 +283,14 @@ public:
                 return;
             if (type == resHttpStatus) {
                 auto spans(spans_.lock());
-                if (auto i = spans->find(act); i != spans->end())
+                if (auto i = spans->find(act); i != spans->end()) {
+                    if (auto method = json.find("method"); method != json.end() && method->is_string())
+                        i->second->SetAttribute("http.request.method", toNostd(method->get_ref<const std::string &>()));
                     if (auto status = json.find("httpStatus"); status != json.end() && status->is_number())
                         i->second->SetAttribute("http.response.status_code", status->get<int64_t>());
+                    if (auto bodySize = json.find("bodySize"); bodySize != json.end() && bodySize->is_number())
+                        i->second->SetAttribute("http.response.body.size", bodySize->get<int64_t>());
+                }
             }
         } catch (...) {
         }

@@ -62,6 +62,23 @@ constexpr bool operator==(long lhs, HttpStatus rhs) noexcept
     return lhs == static_cast<long>(rhs);
 }
 
+const char * httpMethodName(HttpMethod method)
+{
+    switch (method) {
+    case HttpMethod::Get:
+        return "GET";
+    case HttpMethod::Put:
+        return "PUT";
+    case HttpMethod::Head:
+        return "HEAD";
+    case HttpMethod::Post:
+        return "POST";
+    case HttpMethod::Delete:
+        return "DELETE";
+    }
+    unreachable();
+}
+
 } // namespace
 
 std::chrono::milliseconds computeRetryDelayMs(const RetryDelayParams & p, std::mt19937 & rng)
@@ -810,8 +827,12 @@ struct curlFileTransfer : public FileTransfer
             }
 
             if (attemptAct) {
+                nlohmann::json json;
+                json["method"] = httpMethodName(request.method);
                 if (httpStatus)
-                    logger->result(attemptAct->id, resHttpStatus, nlohmann::json{{"httpStatus", httpStatus}});
+                    json["httpStatus"] = httpStatus;
+                json["bodySize"] = result.bodySize;
+                logger->result(attemptAct->id, resHttpStatus, json);
                 attemptAct.reset();
             }
 
