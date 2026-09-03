@@ -237,7 +237,8 @@ Goal::Co PathSubstitutionGoal::tryToRun(
                        repair = repair,
                        sub,
                        maybeWaker = worker.getCrossThreadWaker(),
-                       maybeWorkerStore = worker.store.weak_from_this()]() mutable {
+                       maybeWorkerStore = worker.store.weak_from_this(),
+                       parentAct = worker.actSubstitutions.id]() mutable {
         try {
             ReceiveInterrupts receiveInterrupts;
 
@@ -249,7 +250,8 @@ Goal::Co PathSubstitutionGoal::tryToRun(
             Activity act(
                 *logger,
                 actSubstitute,
-                Logger::Fields{workerStore->printStorePath(storePath), sub->config.getHumanReadableURI()});
+                Logger::Fields{workerStore->printStorePath(storePath), sub->config.getHumanReadableURI()},
+                parentAct);
             PushActivity pact(act.id);
 
             promise.set_value(
