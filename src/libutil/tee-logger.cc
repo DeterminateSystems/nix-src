@@ -120,16 +120,6 @@ public:
 
 } // namespace
 
-std::unique_ptr<Logger>
-makeTeeLogger(std::unique_ptr<Logger> mainLogger, std::vector<std::unique_ptr<Logger>> && extraLoggers)
-{
-    std::vector<std::unique_ptr<Logger>> allLoggers;
-    allLoggers.push_back(std::move(mainLogger));
-    for (auto & l : extraLoggers)
-        allLoggers.push_back(std::move(l));
-    return std::make_unique<TeeLogger>(std::move(allLoggers));
-}
-
 void applyExtraLogger(std::unique_ptr<Logger> extraLogger)
 {
     auto teeLogger = dynamic_cast<TeeLogger *>(logger);
