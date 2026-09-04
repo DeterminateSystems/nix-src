@@ -20,6 +20,10 @@
 #  include <opentelemetry/sdk/resource/resource.h>
 #  include <opentelemetry/sdk/trace/batch_span_processor_factory.h>
 #  include <opentelemetry/sdk/trace/batch_span_processor_options.h>
+#  include <opentelemetry/sdk/trace/samplers/always_off.h>
+#  include <opentelemetry/sdk/trace/samplers/always_on.h>
+#  include <opentelemetry/sdk/trace/samplers/parent.h>
+#  include <opentelemetry/sdk/trace/samplers/trace_id_ratio.h>
 #  include <opentelemetry/sdk/trace/tracer_provider.h>
 #  include <opentelemetry/sdk/trace/tracer_provider_factory.h>
 #  include <opentelemetry/semconv/service_attributes.h>
@@ -456,8 +460,44 @@ void initOtel(std::string_view serviceName)
         {opentelemetry::semconv::service::kServiceName, std::string(serviceName)},
     });
 
+    /* Support the standard OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG
+       environment variables, which the C++ SDK does not read itself.
+       "parentbased" samplers follow the sampling decision of the
+       parent span, which propagates in the sampled flag of the W3C
+       trace context — so the daemon follows the client's decision. */
+    auto sampler = [&]() -> std::unique_ptr<sdktrace::Sampler> {
+        auto ratio = [&]() -> double {
+            auto arg = getEnv("OTEL_TRACES_SAMPLER_ARG");
+            if (!arg)
+                return 1.0;
+            try {
+                return std::stod(*arg);
+            } catch (...) {
+                warn("invalid OTEL_TRACES_SAMPLER_ARG '%s'; assuming 1.0", *arg);
+                return 1.0;
+            }
+        };
+        auto parentBased = [](std::shared_ptr<sdktrace::Sampler> delegate) -> std::unique_ptr<sdktrace::Sampler> {
+            return std::make_unique<sdktrace::ParentBasedSampler>(std::move(delegate));
+        };
+        auto name = getEnv("OTEL_TRACES_SAMPLER").value_or("parentbased_always_on");
+        if (name == "always_on")
+            return std::make_unique<sdktrace::AlwaysOnSampler>();
+        if (name == "always_off")
+            return std::make_unique<sdktrace::AlwaysOffSampler>();
+        if (name == "traceidratio")
+            return std::make_unique<sdktrace::TraceIdRatioBasedSampler>(ratio());
+        if (name == "parentbased_always_off")
+            return parentBased(std::make_shared<sdktrace::AlwaysOffSampler>());
+        if (name == "parentbased_traceidratio")
+            return parentBased(std::make_shared<sdktrace::TraceIdRatioBasedSampler>(ratio()));
+        if (name != "parentbased_always_on")
+            warn("unknown OTEL_TRACES_SAMPLER '%s'; assuming 'parentbased_always_on'", name);
+        return parentBased(std::make_shared<sdktrace::AlwaysOnSampler>());
+    }();
+
     auto state = std::make_unique<OtelState>();
-    state->provider = sdktrace::TracerProviderFactory::Create(std::move(processor), resource);
+    state->provider = sdktrace::TracerProviderFactory::Create(std::move(processor), resource, std::move(sampler));
     state->tracer = state->provider->GetTracer("nix");
 
     OtelState * expected = nullptr;
