@@ -7,6 +7,7 @@
   # Configuration Options
 
   version,
+  withPluginCAPI,
 }:
 
 let
@@ -14,7 +15,7 @@ let
 in
 
 mkMesonLibrary (finalAttrs: {
-  pname = "nix-util-c";
+  pname = "determinate-nix-util-c";
   inherit version;
 
   workDir = ./.;
@@ -35,6 +36,7 @@ mkMesonLibrary (finalAttrs: {
   ];
 
   mesonFlags = [
+    (lib.mesonBool "plugin-c-api" withPluginCAPI)
   ];
 
   meta = {

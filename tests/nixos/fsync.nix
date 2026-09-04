@@ -23,7 +23,6 @@ in
     {
       virtualisation.emptyDiskImages = [ 1024 ];
       environment.systemPackages = [ pkg1 ];
-      nix.settings.experimental-features = [ "nix-command" ];
       nix.settings.fsync-store-paths = true;
       nix.settings.require-sigs = false;
       boot.supportedFilesystems = [

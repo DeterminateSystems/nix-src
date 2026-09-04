@@ -6,8 +6,6 @@ needLocalStore "the sandbox only runs on the builder side, so it makes no sense 
 
 TODO_NixOS
 
-clearStore
-
 requireSandboxSupport
 requiresUnprivilegedUserNamespaces
 
@@ -18,9 +16,6 @@ requiresUnprivilegedUserNamespaces
 if [[ ! $SHELL =~ /nix/store ]]; then skipTest "Shell is not from Nix store"; fi
 # An alias to automatically bind-mount the $SHELL on nix-build invocations
 nix-sandbox-build () { nix-build --no-out-link --sandbox-paths /nix/store "$@"; }
-
-chmod -R u+w "$TEST_ROOT"/store0 || true
-rm -rf "$TEST_ROOT"/store0
 
 export NIX_STORE_DIR=/my/store
 export NIX_REMOTE=$TEST_ROOT/store0
@@ -41,7 +36,7 @@ nix-sandbox-build dependencies.nix --check
 # Test that sandboxed builds with --check and -K can move .check directory to store
 nix-sandbox-build check.nix -A nondeterministic
 
-# `100 + 4` means non-determinstic, see doc/manual/source/command-ref/status-build-failure.md
+# `100 + 4` means non-deterministic, see doc/manual/source/command-ref/status-build-failure.md
 expectStderr 104 nix-sandbox-build check.nix -A nondeterministic --check -K > "$TEST_ROOT"/log
 grepQuietInverse 'error: renaming' "$TEST_ROOT"/log
 grepQuiet 'may not be deterministic' "$TEST_ROOT"/log
@@ -96,3 +91,85 @@ nix-sandbox-build symlink-derivation.nix -A test_sandbox_paths \
     --option extra-sandbox-paths "/dir=$TEST_ROOT" \
     --option extra-sandbox-paths "/symlinkDir=$symlinkDir" \
     --option extra-sandbox-paths "/symlink=$symlinkcert"
+
+invalidLeafPaths=(
+    "/foo/.."
+    "/foo/."
+    "/.."
+    "/."
+)
+
+for badPath in "${invalidLeafPaths[@]}"; do
+    expectStderr 1 nix-sandbox-build simple-failing.nix --option extra-sandbox-paths "$badPath=$cert" |
+        grepQuiet "invalid filename"
+done
+
+badPaths=(
+    "/../escape"
+    "/foo/../../escape"
+    "//foo///.//../../escape"
+    "/./../escape"
+    "///.//./../escape//"
+    "/a/b/../../../escape"
+)
+
+sources=(
+    "$cert"
+    "$symlinkcert"
+    "$symlinkDir"
+    "$TEST_ROOT"
+)
+
+for badPath in "${badPaths[@]}"; do
+    for source in "${sources[@]}"; do
+        expectStderr 1 nix-sandbox-build simple-failing.nix --option extra-sandbox-paths "$badPath=$source" |
+            grepQuiet "escapes the chroot"
+    done
+done
+
+# Trailing slash in the destination should fail for non-directory files.
+expectStderr 1 nix-sandbox-build simple-failing.nix --option extra-sandbox-paths "/a/=$cert" | grepQuiet "error: creating regular file.*: No such file or directory"
+expectStderr 1 nix-sandbox-build simple-failing.nix --option extra-sandbox-paths "/a/=$symlinkcert" | grepQuiet "error: creating symlink.*: No such file or directory"
+
+# Escaping to chroot directory.
+expectStderr 1 nix-sandbox-build simple-failing.nix --option extra-sandbox-paths "/foo/../=$cert" | grepQuiet "error: creating regular file.*: No such file or directory"
+
+# Can't overmount the chroot.
+expectStderr 1 nix-sandbox-build simple-failing.nix --option extra-sandbox-paths "/foo/../=$TEST_ROOT" | grepQuiet "error: .*escapes the chroot"
+
+# The build should fail, not the mounting.
+expectStderr 100 nix-sandbox-build simple-failing.nix --option extra-sandbox-paths "/a/=$TEST_ROOT"
+expectStderr 100 nix-sandbox-build simple-failing.nix --option extra-sandbox-paths "/a/=$TEST_ROOT/"
+
+nix-sandbox-build symlink-derivation.nix -A test_sandbox_paths \
+    --option extra-sandbox-paths "/./file=$cert" \
+    --option extra-sandbox-paths "//dir/=$TEST_ROOT/" \
+    --option extra-sandbox-paths "///./symlinkDir=$symlinkDir" \
+    --option extra-sandbox-paths "/symlink=$symlinkcert"
+
+# Nonexistent sandbox paths should error early in the build process
+# shellcheck disable=SC2016
+expectStderr 1 nix-sandbox-build --option extra-sandbox-paths '/does-not-exist' \
+    -E 'with import '"${config_nix}"'; mkDerivation { name = "trivial"; buildCommand = "echo > $out"; }' |
+    grepQuiet "path \"/does-not-exist\" is configured as part of the \`sandbox-paths\` option, but is inaccessible"
+
+# Test pre-build-hook.
+DEST="$TEST_ROOT/hook-output"
+HOOK="$TEST_ROOT/pre-build-hook"
+
+echo foo > "$TEST_ROOT"/fnord
+
+cat > "$HOOK" <<EOF
+#! $SHELL -e
+jq -r .env.name < "\$NIX_DERIVATION_V4" > "$DEST"
+echo "hello from hook!" >&2
+echo "extra-sandbox-paths"
+echo "/foo/bar=$TEST_ROOT/fnord"
+EOF
+chmod +x "$HOOK"
+
+outPath=$(nix-build --no-out-link --sandbox-paths /nix/store --pre-build-hook "$HOOK" symlink-derivation.nix -A test_sandbox_paths_2)
+
+[[ $(cat "$TEST_ROOT/store0/nix/store/$(basename "$outPath")/xyzzy") = foo ]]
+
+[[ "$(cat "$DEST")" == "test-sandbox-paths-2" ]]

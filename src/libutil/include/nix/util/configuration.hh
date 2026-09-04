@@ -1,13 +1,13 @@
 #pragma once
 ///@file
 
-#include <cassert>
 #include <filesystem>
 #include <map>
 #include <set>
 
 #include <nlohmann/json_fwd.hpp>
 
+#include "nix/util/error.hh"
 #include "nix/util/json-non-null.hh"
 #include "nix/util/types.hh"
 #include "nix/util/fmt.hh"
@@ -52,6 +52,11 @@ class AbstractSetting;
 
 class AbstractConfig
 {
+private:
+    /* VTable anchor to avoid weak linkage of the vtable - it breaks
+       dynamic_cast across shared libraries on Darwin. */
+    virtual void anchor();
+
 protected:
     StringMap unknownSettings;
 
@@ -141,6 +146,8 @@ class Config : public AbstractConfig
 {
     friend class AbstractSetting;
 
+    void anchor() override;
+
 public:
 
     struct SettingData
@@ -190,6 +197,8 @@ public:
 
     std::optional<ExperimentalFeature> experimentalFeature;
 
+    bool isOverridden() const;
+
 protected:
 
     AbstractSetting(
@@ -215,28 +224,101 @@ protected:
     virtual std::map<std::string, nlohmann::json> toJSONObject() const;
 
     virtual void convertToArg(Args & args, const std::string & category);
-
-    bool isOverridden() const;
 };
 
 /**
  * For `Setting<AbsolutePath>`. `parse()` calls `canonPath`,
  * rejecting empty and relative paths.
+ *
+ * Constructors throw `Error` if the path is not absolute.
  */
-struct AbsolutePath : std::filesystem::path
+struct AbsolutePath
 {
-    using path::path;
-    using path::operator=;
-
-    AbsolutePath(const std::filesystem::path & p)
-        : path(p)
+    AbsolutePath(std::filesystem::path p)
+        : _path(std::move(p))
     {
+        if (!_path.is_absolute())
+            throw Error("not an absolute path: %s", PathFmt(_path));
     }
 
-    AbsolutePath(std::filesystem::path && p)
-        : path(std::move(p))
+    AbsolutePath(const char * s)
+        : _path(s)
     {
+        if (!_path.is_absolute())
+            throw Error("not an absolute path: %s", PathFmt(_path));
     }
+
+#ifdef _WIN32
+    AbsolutePath(const wchar_t * s)
+        : _path(s)
+    {
+        if (!_path.is_absolute())
+            throw Error("not an absolute path: %s", PathFmt(_path));
+    }
+#endif
+
+    const std::filesystem::path & path() const
+    {
+        return _path;
+    }
+
+    operator const std::filesystem::path &() const
+    {
+        return _path;
+    }
+
+    std::string string() const
+    {
+        return _path.string();
+    }
+
+    const auto & native() const
+    {
+        return _path.native();
+    }
+
+    const std::filesystem::path::value_type * c_str() const
+    {
+        return _path.c_str();
+    }
+
+    bool empty() const
+    {
+        return _path.empty();
+    }
+
+    std::filesystem::path operator/(const std::filesystem::path & rhs) const
+    {
+        return _path / rhs;
+    }
+
+    bool operator==(const AbsolutePath & rhs) const
+    {
+        return _path == rhs._path;
+    }
+
+    bool operator==(const std::filesystem::path & rhs) const
+    {
+        return _path == rhs;
+    }
+
+    bool operator==(const std::string & rhs) const
+    {
+        return _path == rhs;
+    }
+
+    auto operator<=>(const AbsolutePath & rhs) const
+    {
+        return _path <=> rhs._path;
+    }
+
+    friend std::ostream & operator<<(std::ostream & os, const AbsolutePath & p)
+    {
+        return os << p._path.string();
+    }
+
+private:
+    std::filesystem::path _path;
 };
 
 template<>
@@ -406,6 +488,63 @@ public:
     }
 };
 
+/**
+ * A setting whose value is represented as JSON. The type `T` must be supported by `nlohmann::json`'s `get<T>()`.
+ */
+template<typename T>
+class JSONSetting : public Setting<T>
+{
+public:
+    using Setting<T>::Setting;
+
+    T parse(const std::string & str) const override;
+
+    std::string to_string() const override;
+};
+
+/**
+ * `AbsolutePath` wraps `std::filesystem::path`, so implicit conversion
+ * from `Setting<AbsolutePath>` to `const path &` requires two
+ * user-defined conversions (`Setting` -> `AbsolutePath` -> `path`),
+ * which C++ does not allow in a single implicit conversion sequence.
+ * This specialization provides a direct conversion operator.
+ *
+ * See https://en.cppreference.com/w/cpp/language/implicit_conversion.html
+ */
+template<>
+class Setting<AbsolutePath> : public BaseSetting<AbsolutePath>
+{
+public:
+    using BaseSetting<AbsolutePath>::BaseSetting;
+    using BaseSetting<AbsolutePath>::operator=;
+
+    Setting(
+        Config * options,
+        const AbsolutePath & def,
+        const std::string & name,
+        const std::string & description,
+        const StringSet & aliases = {},
+        const bool documentDefault = true,
+        std::optional<ExperimentalFeature> experimentalFeature = std::nullopt)
+        : BaseSetting<AbsolutePath>(def, documentDefault, name, description, aliases, std::move(experimentalFeature))
+    {
+        options->addSetting(this);
+    }
+
+    /* To appease -Wweak-vtables. */
+    ~Setting() override;
+
+    void operator=(const AbsolutePath & v)
+    {
+        this->assign(v);
+    }
+
+    operator const std::filesystem::path &() const
+    {
+        return this->value.path();
+    }
+};
+
 /* Delete these overloads to avoid footguns with implicit quoting of Setting<AbsolutePath> in fmt(). */
 
 template<class F, typename... Args>
@@ -425,7 +564,10 @@ void BaseSetting<std::set<std::filesystem::path>>::appendOrSet(std::set<std::fil
 
 struct ExperimentalFeatureSettings : Config
 {
+private:
+    void anchor() override;
 
+public:
     Setting<std::set<ExperimentalFeature>> experimentalFeatures{
         this,
         {},
@@ -436,7 +578,7 @@ struct ExperimentalFeatureSettings : Config
           Example:
 
           ```
-          experimental-features = nix-command flakes
+          experimental-features = ca-derivations
           ```
 
           The following experimental features are available:
@@ -463,7 +605,7 @@ struct ExperimentalFeatureSettings : Config
      */
     template<typename GetReason>
         requires std::invocable<GetReason> && std::convertible_to<std::invoke_result_t<GetReason>, std::string>
-    void require(const ExperimentalFeature & feature, GetReason && getReason) const
+    void require(const ExperimentalFeature & feature, const GetReason & getReason) const
     {
         if (isEnabled(feature))
             return;
@@ -482,6 +624,12 @@ struct ExperimentalFeatureSettings : Config
      */
     void require(const std::optional<ExperimentalFeature> &) const;
 };
+
+#define NIX_DECLARE_CONFIG_SERIALISER(TY)                     \
+    template<>                                                \
+    TY BaseSetting<TY>::parse(const std::string & str) const; \
+    template<>                                                \
+    std::string BaseSetting<TY>::to_string() const;
 
 // FIXME: don't use a global variable.
 extern ExperimentalFeatureSettings experimentalFeatureSettings;

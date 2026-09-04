@@ -1,19 +1,20 @@
+#include "nix/cmd/command.hh"
 #include "nix/util/config-global.hh"
 #include "nix/expr/eval.hh"
+#include "nix/fetchers/fetch-settings.hh"
 #include "nix/cmd/installable-flake.hh"
-#include "nix/cmd/command-installable-value.hh"
 #include "nix/main/common-args.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/outputs-spec.hh"
+#include "nix/store/outputs-query.hh"
 #include "nix/store/derivations.hh"
 
 #ifndef _WIN32 // TODO re-enable on Windows
 #  include "run.hh"
 #endif
 
-#include <iterator>
 #include <memory>
 #include <sstream>
 #include <nlohmann/json.hpp>
@@ -21,7 +22,7 @@
 
 #include "nix/util/strings.hh"
 
-using namespace nix;
+namespace nix {
 
 struct DevelopSettings : Config
 {
@@ -300,7 +301,7 @@ static StorePath getDerivationEnvironment(ref<Store> store, ref<Store> evalStore
 
     // `get-env.sh` will write its JSON output to an arbitrary output
     // path, so return the first non-empty output path.
-    for (auto & [_0, optPath] : evalStore->queryPartialDerivationOutputMap(shellDrvPath)) {
+    for (auto & [_0, optPath] : deepQueryPartialDerivationOutputMap(*evalStore, shellDrvPath)) {
         assert(optPath);
         auto accessor = evalStore->requireStoreObjectAccessor(*optPath);
         if (auto st = accessor->maybeLstat(CanonPath::root); st && st->fileSize.value_or(0))
@@ -383,7 +384,8 @@ struct Common : InstallableCommand, MixProfile
 
         /* Substitute occurrences of output paths. */
         auto outputs = buildEnvironment.vars.find("outputs");
-        assert(outputs != buildEnvironment.vars.end());
+        if (outputs == buildEnvironment.vars.end())
+            throw Error("derivation does not have an 'outputs' attribute");
 
         StringMap rewrites;
         if (buildEnvironment.providesStructuredAttrs()) {
@@ -455,22 +457,9 @@ struct Common : InstallableCommand, MixProfile
         rewrites.insert({BuildEnvironment::getString(fileInBuilderEnv->second), targetFilePath.string()});
     }
 
-    Strings getDefaultFlakeAttrPaths() override
+    StringSet getRoles() override
     {
-        Strings paths{
-            "devShells." + settings.thisSystem.get() + ".default",
-            "devShell." + settings.thisSystem.get(),
-        };
-        for (auto & p : SourceExprCommand::getDefaultFlakeAttrPaths())
-            paths.push_back(p);
-        return paths;
-    }
-
-    Strings getDefaultFlakeAttrPathPrefixes() override
-    {
-        auto res = SourceExprCommand::getDefaultFlakeAttrPathPrefixes();
-        res.emplace_front("devShells." + settings.thisSystem.get() + ".");
-        return res;
+        return {"nix-develop"};
     }
 
     StorePath getShellOutPath(ref<Store> store, ref<Installable> installable)
@@ -505,6 +494,11 @@ struct Common : InstallableCommand, MixProfile
             BuildEnvironment::parseJSON(store->requireStoreObjectAccessor(shellOutPath)->readFile(CanonPath::root)),
             shellOutPath,
         };
+    }
+
+    void preRun(ref<Store> store) override
+    {
+        fetchSettings.warnDirty = false;
     }
 };
 
@@ -604,7 +598,13 @@ struct CmdDevelop : Common, MixEnvironment
             // FIXME: foundMakefile is set by buildPhase, need to get
             // rid of that.
             script += fmt("foundMakefile=1\n");
-            script += fmt("runHook %1%Phase\n", *phase);
+            script +=
+                fmt("if declare -f runPhase >/dev/null; then\n"
+                    "  runPhase %1%Phase\n"
+                    "else\n"
+                    "  runHook %1%Phase\n"
+                    "fi\n",
+                    *phase);
         }
 
         else if (!command.empty()) {
@@ -653,9 +653,9 @@ struct CmdDevelop : Common, MixEnvironment
                 std::move(nixpkgs),
                 "bashInteractive",
                 ExtendedOutputsSpec::Default(),
-                Strings{},
-                Strings{"legacyPackages." + settings.thisSystem.get() + "."},
-                nixpkgsLockFlags);
+                StringSet{"nix-build"},
+                nixpkgsLockFlags,
+                std::nullopt);
 
             for (auto & path : Installable::toStorePathSet(
                      getEvalStore(), store, Realise::Outputs, OperateOn::Output, {bashInstallable})) {
@@ -751,3 +751,5 @@ struct CmdPrintDevEnv : Common, MixJSON
 
 static auto rCmdPrintDevEnv = registerCommand<CmdPrintDevEnv>("print-dev-env");
 static auto rCmdDevelop = registerCommand<CmdDevelop>("develop");
+
+} // namespace nix

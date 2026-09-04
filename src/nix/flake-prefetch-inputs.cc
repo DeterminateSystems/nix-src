@@ -6,8 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
-using namespace nix;
-using namespace nix::flake;
+namespace nix {
 
 struct CmdFlakePrefetchInputs : FlakeCommand
 {
@@ -25,6 +24,7 @@ struct CmdFlakePrefetchInputs : FlakeCommand
 
     void run(nix::ref<nix::Store> store) override
     {
+        using namespace nix::flake;
         auto flake = lockFlake();
 
         ThreadPool pool{fileTransferSettings.httpConnections};
@@ -43,11 +43,14 @@ struct CmdFlakePrefetchInputs : FlakeCommand
                 return;
 
             if (auto lockedNode = dynamic_cast<const LockedNode *>(&node)) {
+                if (lockedNode->buildTime)
+                    return;
                 try {
                     Activity act(*logger, lvlInfo, actUnknown, fmt("fetching '%s'", lockedNode->lockedRef));
                     auto accessor = lockedNode->lockedRef.input.getAccessor(fetchSettings, *store).first;
-                    fetchToStore(
-                        fetchSettings, *store, accessor, FetchMode::Copy, lockedNode->lockedRef.input.getName());
+                    if (!evalSettings.lazyTrees)
+                        fetchToStore(
+                            fetchSettings, *store, accessor, FetchMode::Copy, lockedNode->lockedRef.input.getName());
                 } catch (Error & e) {
                     printError("%s", e.what());
                     nrFailed++;
@@ -56,11 +59,11 @@ struct CmdFlakePrefetchInputs : FlakeCommand
 
             for (auto & [inputName, input] : node.inputs) {
                 if (auto inputNode = std::get_if<0>(&input))
-                    pool.enqueue(std::bind(visit, **inputNode));
+                    pool.enqueue([&visit, inputNode(*inputNode)] { visit(*inputNode); });
             }
         };
 
-        pool.enqueue(std::bind(visit, *flake.lockFile.root));
+        pool.enqueue([&] { visit(*flake.lockFile.root); });
 
         pool.process();
 
@@ -69,3 +72,5 @@ struct CmdFlakePrefetchInputs : FlakeCommand
 };
 
 static auto rCmdFlakePrefetchInputs = registerCommand2<CmdFlakePrefetchInputs>({"flake", "prefetch-inputs"});
+
+} // namespace nix
