@@ -164,33 +164,28 @@ scope: {
         ];
       });
 
-  libgit2 =
-    (
-      if lib.versionAtLeast pkgs.libgit2.version "1.9.4" then
-        pkgs.libgit2
-      else
-        # Grab newer libgit2.
-        pkgs.libgit2.overrideAttrs rec {
-          version = "1.9.4";
-          src = pkgs.fetchFromGitHub {
-            owner = "libgit2";
-            repo = "libgit2";
-            tag = "v${version}";
-            hash = "sha256-ZKUiz3pdFE2SKxh53X2oyr7hs32Njj5YVA0OXDXz7h0=";
-          };
-        }
-    ).overrideAttrs
-      (old: {
-        separateDebugInfo = true;
+  libgit2 = pkgs.libgit2.overrideAttrs (
+    finalAttrs: prevAttrs: {
+      version = "2.0.0-rc.1";
+      src = pkgs.fetchFromGitHub {
+        owner = "libgit2";
+        repo = "libgit2";
+        rev = "ae45d0d168f7e8dbfdb8c623589cb51caac96ab3";
+        hash = "sha256-3sbqHm37SOwBeFgtjI2DLN6kx1F7G2N1m6rRIkqDXNI=";
+      };
+      patches = prevAttrs.patches or [ ] ++ [
+        ./patches/0002-memory-config.patch
 
-        patches = old.patches or [ ] ++ [
-          # Fix a use-after-free crash when `git_thread_create` fails during
-          # pack building (e.g. with EAGAIN under thread pressure), leaving
-          # orphaned delta-search worker threads running while the
-          # packbuilder is freed.
-          ./patches/libgit2-packbuilder-dont-fail-on-thread-create-error.patch
-        ];
-      });
+        # Fix a use-after-free crash when `git_thread_create` fails during
+        # pack building (e.g. with EAGAIN under thread pressure), leaving
+        # orphaned delta-search worker threads running while the
+        # packbuilder is freed.
+        # TODO: we can probably drop this patch since we're not finding deltas anymore.
+        ./patches/libgit2-packbuilder-dont-fail-on-thread-create-error.patch
+      ];
+      separateDebugInfo = true;
+    }
+  );
 
   # TODO Hack until https://github.com/NixOS/nixpkgs/issues/45462 is fixed.
   boost =
