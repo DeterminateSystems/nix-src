@@ -8,6 +8,7 @@
 #  include "nix/util/terminal.hh"
 
 #  include <atomic>
+#  include <exception>
 #  include <map>
 
 #  include <nlohmann/json.hpp>
@@ -364,6 +365,13 @@ public:
                 return;
             auto spans(spans_.lock());
             if (auto i = spans->find(act); i != spans->end()) {
+                /* If the activity is being stopped while an exception
+                   is in flight, i.e. the `Activity` is being destroyed
+                   by stack unwinding, assume that the activity
+                   failed. */
+                if (std::uncaught_exceptions())
+                    i->second->SetStatus(
+                        opentelemetry::trace::StatusCode::kError, "activity terminated by an exception");
                 i->second->End();
                 spans->erase(i);
             }
