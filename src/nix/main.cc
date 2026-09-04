@@ -23,10 +23,12 @@
 #include "nix/expr/eval-cache.hh"
 #include "nix/flake/flake.hh"
 #include "nix/flake/settings.hh"
+#include "nix/util/exit.hh"
 #include "nix/util/sentry.hh"
 
 #include "self-exe.hh"
 #include "crash-handler.hh"
+#include "otel-logger.hh"
 #include "cli-config-private.hh"
 
 #include <sys/types.h>
@@ -533,6 +535,11 @@ void mainWrapped(int argc, char ** argv)
         tryEnterPrivateMountNamespace();
 #endif
 
+    /* Note: registered before the logger->stop() Finally below, so
+       that at exit, the loggers are stopped (ending any open spans)
+       before the spans are exported. */
+    Finally flushOtel([] { flushOtelAndShutdown(); });
+
     Finally f([] { logger->stop(); });
 
     programPath = argv[0];
@@ -546,6 +553,10 @@ void mainWrapped(int argc, char ** argv)
         argv++;
         argc--;
     }
+
+    /* No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set in the
+       environment. */
+    initOtel(programName);
 
     {
         if (auto legacy = get(RegisterLegacyCommand::commands(), programName))
@@ -706,6 +717,14 @@ void mainWrapped(int argc, char ** argv)
 
     setSentryTag("nix_subcommand", concatStringsSep(" ", subcommand).c_str());
 
+    /* Map activities to OpenTelemetry spans, under a root span named
+       after the subcommand. */
+    OpenTelemetryLogger * otelLogger = nullptr;
+    if (auto l = makeOpenTelemetryLogger("nix " + concatStringsSep(" ", subcommand))) {
+        otelLogger = l.get();
+        applyExtraLogger(std::move(l));
+    }
+
     try {
         args.command->second->run();
     } catch (eval_cache::CachedEvalError & e) {
@@ -713,6 +732,13 @@ void mainWrapped(int argc, char ** argv)
            cached error so that we can show the original error to the
            user. */
         e.force();
+    } catch (Exit &) {
+        throw;
+    } catch (std::exception & e) {
+        if (otelLogger)
+            // FIXME: privacy
+            otelLogger->setRootError(e.what());
+        throw;
     }
 }
 

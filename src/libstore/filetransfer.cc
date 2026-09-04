@@ -22,6 +22,8 @@
 
 #include <curl/curl.h>
 
+#include <nlohmann/json.hpp>
+
 #include <array>
 #include <algorithm>
 #include <array>
@@ -58,6 +60,23 @@ enum struct HttpStatus : long {
 constexpr bool operator==(long lhs, HttpStatus rhs) noexcept
 {
     return lhs == static_cast<long>(rhs);
+}
+
+const char * httpMethodName(HttpMethod method)
+{
+    switch (method) {
+    case HttpMethod::Get:
+        return "GET";
+    case HttpMethod::Put:
+        return "PUT";
+    case HttpMethod::Head:
+        return "HEAD";
+    case HttpMethod::Post:
+        return "POST";
+    case HttpMethod::Delete:
+        return "DELETE";
+    }
+    unreachable();
 }
 
 } // namespace
@@ -161,6 +180,12 @@ struct curlFileTransfer : public FileTransfer
         FileTransferRequest request;
         FileTransferResult result;
         std::unique_ptr<Activity> _act;
+
+        /**
+         * Activity covering the current HTTP request. Recreated on
+         * every attempt, as a child of the transfer activity.
+         */
+        std::unique_ptr<Activity> attemptAct;
         Callback<FileTransferResult> callback;
         CURL * req = 0;
         // buffer to accompany the `req` above
@@ -295,14 +320,6 @@ struct curlFileTransfer : public FileTransfer
             })
         {
             result.urls.push_back(request.uri.to_string());
-
-            if (!request.expectedETag.empty())
-                appendHeaders("If-None-Match: " + request.expectedETag);
-            if (!request.mimeType.empty())
-                appendHeaders("Content-Type: " + request.mimeType);
-            for (auto it = request.headers.begin(); it != request.headers.end(); ++it) {
-                appendHeaders(fmt("%s: %s", it->first, it->second));
-            }
         }
 
         ~TransferItem()
@@ -607,6 +624,35 @@ struct curlFileTransfer : public FileTransfer
 
             bytesReceived = 0;
 
+            /* Start an activity for this HTTP request. Note that
+               act() is called here (rather than lazily from a libcurl
+               callback) so that the activity exists before the
+               request headers are built. */
+            attemptAct = std::make_unique<Activity>(
+                *logger,
+                lvlDebug,
+                "FileTransferAttempt",
+                std::to_array<std::pair<std::string_view, Logger::Field>>({
+                    {"url.full", request.displayUri()},
+                    {"http.request.method", httpMethodName(request.method)},
+                    {"http.request.resend_count", (uint64_t) attempt},
+                }),
+                "",
+                act().id);
+
+            /* (Re)build the request headers, since the traceparent
+               header differs per attempt. */
+            requestHeaders = curlSList{};
+            if (!request.expectedETag.empty())
+                appendHeaders("If-None-Match: " + request.expectedETag);
+            if (!request.mimeType.empty())
+                appendHeaders("Content-Type: " + request.mimeType);
+            for (auto it = request.headers.begin(); it != request.headers.end(); ++it) {
+                appendHeaders(fmt("%s: %s", it->first, it->second));
+            }
+            for (auto & [name, value] : logger->getTraceContext(attemptAct->id))
+                appendHeaders(fmt("%s: %s", name, value));
+
             if (verbosity >= lvlVomit) {
                 curl_easy_setopt(req, CURLOPT_VERBOSE, 1);
                 curl_easy_setopt(req, CURLOPT_DEBUGFUNCTION, TransferItem::debugCallback);
@@ -782,6 +828,15 @@ struct curlFileTransfer : public FileTransfer
             if (code == CURLE_WRITE_ERROR && result.etag == request.expectedETag) {
                 code = CURLE_OK;
                 httpStatus = std::to_underlying(HttpStatus::NotModified);
+            }
+
+            if (attemptAct) {
+                nlohmann::json json;
+                if (httpStatus)
+                    json["httpStatus"] = httpStatus;
+                json["bodySize"] = result.bodySize;
+                logger->result(attemptAct->id, resHttpStatus, json);
+                attemptAct.reset();
             }
 
             if (callbackException)

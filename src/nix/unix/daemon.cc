@@ -16,6 +16,7 @@
 #include "nix/cmd/unix-socket-server.hh"
 #include "nix/store/daemon.hh"
 #include "man-pages.hh"
+#include "otel-logger.hh"
 #include "nix/util/socket.hh"
 
 #include <algorithm>
@@ -39,6 +40,18 @@
 #endif
 
 namespace nix {
+
+/**
+ * Set up distributed tracing for a daemon connection: create a span
+ * covering the connection's lifetime, parented under the trace
+ * context received from the client, if any. No-op unless
+ * OpenTelemetry export is configured.
+ */
+static void setupConnectionTelemetry(std::string_view traceparent)
+{
+    if (auto otelLogger = makeOpenTelemetryLogger("daemon connection", traceparent))
+        applyExtraLogger(std::move(otelLogger));
+}
 
 /**
  * Settings related to authenticating clients for the Nix daemon.
@@ -366,6 +379,12 @@ static void daemonLoop(
                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
                         setInterrupted(false);
 
+                        /* The OpenTelemetry exporter's worker thread
+                           does not survive the fork, so set up
+                           tracing afresh. */
+                        resetOtelAfterFork();
+                        initOtel("nix-daemon");
+
                         closeListeners();
 
                         // Background the daemon.
@@ -389,7 +408,14 @@ static void daemonLoop(
                             FdSource(remote.get()),
                             FdSink(remote.get()),
                             trusted,
-                            RecursiveFlag::NotRecursive);
+                            RecursiveFlag::NotRecursive,
+                            setupConnectionTelemetry);
+
+                        /* End the connection span and export all
+                           telemetry. This has to be done explicitly,
+                           since exit() does not unwind the stack. */
+                        logger->stop();
+                        flushOtelAndShutdown();
 
                         exit(0);
                     },
@@ -455,7 +481,13 @@ static void forwardStdioConnection(RemoteStore & store)
  */
 static void processStdioConnection(ref<Store> store, TrustedFlag trustClient)
 {
-    processConnection(store, FdSource(STDIN_FILENO), FdSink(STDOUT_FILENO), trustClient, daemon::NotRecursive);
+    processConnection(
+        store,
+        FdSource(STDIN_FILENO),
+        FdSink(STDOUT_FILENO),
+        trustClient,
+        daemon::NotRecursive,
+        setupConnectionTelemetry);
 }
 
 /**

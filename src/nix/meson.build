@@ -82,6 +82,12 @@ if sentry_required.enabled()
   configdata.set_quoted('CRASHPAD_HANDLER_PATH', crashpad_handler_path)
 endif
 
+otel_required = get_option('otel')
+otel = dependency('opentelemetry_exporter_otlp_http', required : otel_required)
+otel_trace = dependency('opentelemetry_trace', required : otel_required)
+configdata.set('HAVE_OTEL', (otel.found() and otel_trace.found()).to_int())
+deps_private += [ otel, otel_trace ]
+
 config_priv_h = configure_file(
   configuration : configdata,
   output : 'cli-config-private.hh',
@@ -124,6 +130,7 @@ nix_sources = [ config_priv_h ] + files(
   'nar.cc',
   'nario.cc',
   'optimise-store.cc',
+  'otel-logger.cc',
   'path-from-hash-part.cc',
   'path-info.cc',
   'prefetch.cc',

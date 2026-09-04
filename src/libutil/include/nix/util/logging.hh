@@ -3,11 +3,13 @@
 
 #include "nix/util/error.hh"
 #include "nix/util/configuration.hh"
+#include "nix/util/types.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/fun.hh"
 
 #include <filesystem>
+#include <span>
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -28,6 +30,13 @@ typedef enum {
     actPostBuildHook = 110,
     actBuildWaiting = 111,
     actFetchTree = 112,
+    /**
+     * The type under which string-named activities (created via the
+     * name-based `Activity` constructor) are reported on legacy code
+     * paths, cf. the name-based `Logger::startActivity()`. Do not use
+     * directly.
+     */
+    actStringly = 113,
 } ActivityType;
 
 typedef enum {
@@ -42,6 +51,14 @@ typedef enum {
     resFetchStatus = 108,
     resHashMismatch = 109,
     resBuildResult = 110,
+    /**
+     * Emitted via the JSON `result()` overload: an object describing
+     * the response to an HTTP request, with the fields `httpStatus`
+     * (the status code, absent for non-HTTP protocols) and `bodySize`
+     * (the number of body bytes received). More fields may be added
+     * in the future.
+     */
+    resHttpStatus = 111,
 } ResultType;
 
 typedef uint64_t ActivityId;
@@ -92,32 +109,31 @@ public:
 
     struct Field
     {
-        // FIXME: use std::variant.
-        enum { tInt = 0, tString = 1 } type;
-
-        uint64_t i = 0;
-        std::string s;
+        std::variant<std::string, uint64_t> raw;
 
         Field(const std::string & s)
-            : type(tString)
-            , s(s)
+            : raw(s)
         {
         }
 
         Field(const char * s)
-            : type(tString)
-            , s(s)
+            : raw(std::string(s))
         {
         }
 
         Field(const uint64_t & i)
-            : type(tInt)
-            , i(i)
+            : raw(i)
         {
         }
     };
 
     typedef std::vector<Field> Fields;
+
+    /**
+     * Key/value meta-information about a string-named activity, cf.
+     * the name-based `startActivity()`.
+     */
+    using ActivityMetadata = std::span<const std::pair<std::string_view, Field>>;
 
     virtual ~Logger();
 
@@ -174,11 +190,44 @@ public:
         const Fields & fields,
         ActivityId parent) noexcept {};
 
+    /**
+     * Start a string-named activity carrying key/value
+     * meta-information. The default implementation reports it via the
+     * `ActivityType`-based overload as `actStringly`, discarding the
+     * name and metadata, so legacy loggers work unchanged. Metadata
+     * keys follow the OpenTelemetry attribute naming conventions
+     * where applicable (e.g. `http.request.method`); Nix-specific
+     * keys use a `nix.` prefix.
+     */
+    virtual void startActivity(
+        ActivityId act,
+        Verbosity lvl,
+        std::string_view name,
+        ActivityMetadata metadata,
+        std::string_view s,
+        ActivityId parent) noexcept
+    {
+        startActivity(act, lvl, actStringly, std::string(s), {}, parent);
+    };
+
     virtual void stopActivity(ActivityId act) noexcept {};
 
     virtual void result(ActivityId act, ResultType type, const Fields & fields) noexcept {};
 
     virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept {};
+
+    /**
+     * Return distributed tracing context for the given activity as
+     * W3C Trace Context headers (`traceparent`, `tracestate`), for
+     * propagation to another process (e.g. as HTTP request headers).
+     * `act == 0` denotes the root context of this process. Returns an
+     * empty list if this logger does not do tracing or has no context
+     * for `act`.
+     */
+    virtual Headers getTraceContext(ActivityId act)
+    {
+        return {};
+    }
 
     virtual void writeToStdout(std::string_view s);
 
@@ -229,6 +278,18 @@ struct Activity
     Activity(
         Logger & logger, ActivityType type, const Logger::Fields & fields = {}, ActivityId parent = getCurActivity())
         : Activity(logger, lvlError, type, "", fields, parent) {};
+
+    /**
+     * Start a string-named activity carrying key/value
+     * meta-information, cf. the name-based `Logger::startActivity()`.
+     */
+    Activity(
+        Logger & logger,
+        Verbosity lvl,
+        std::string_view name,
+        Logger::ActivityMetadata metadata = {},
+        std::string_view s = {},
+        ActivityId parent = getCurActivity());
 
     Activity(const Activity & act) = delete;
 
@@ -285,19 +346,44 @@ extern Logger * logger;
 
 std::unique_ptr<Logger> makeSimpleLogger(bool printBuildLogs = true);
 
-/**
- * Create a logger that sends log messages to `mainLogger` and the
- * list of loggers in `extraLoggers`. Only `mainLogger` is used for
- * writing to stdout and getting user input.
- */
-std::unique_ptr<Logger>
-makeTeeLogger(std::unique_ptr<Logger> mainLogger, std::vector<std::unique_ptr<Logger>> && extraLoggers);
-
 std::unique_ptr<Logger> makeJSONLogger(Descriptor fd, bool includeNixPrefix = true);
 
 std::unique_ptr<Logger> makeJSONLogger(const std::filesystem::path & path, bool includeNixPrefix = true);
 
+/**
+ * Add an additional logger to the global `logger` by combining them
+ * into a `TeeLogger`. The current logger keeps responsibility for
+ * stdout and user interaction.
+ */
+void applyExtraLogger(std::unique_ptr<Logger> extraLogger);
+
 void applyJSONLogger();
+
+/**
+ * Extract the value of the `traceparent` header from trace context
+ * headers returned by `Logger::getTraceContext()`, or the empty
+ * string if there is none.
+ */
+std::string getTraceparent(const Headers & headers);
+
+/**
+ * Marks, for the duration of its existence, Logger calls made on this
+ * thread as replaying messages that originated in another process
+ * (e.g. activities forwarded from the daemon to its client). Loggers
+ * that export telemetry should ignore such messages, since the
+ * originating process is responsible for exporting them.
+ */
+struct RemoteLogSource
+{
+    RemoteLogSource();
+    ~RemoteLogSource();
+};
+
+/**
+ * Whether Logger calls on this thread are currently replaying
+ * messages from another process, cf. `RemoteLogSource`.
+ */
+bool isRemoteLogSource();
 
 /**
  * @param source A noun phrase describing the source of the message, e.g. "the builder".
