@@ -167,6 +167,35 @@ Likewise for the state and cache directories.
   Indicator that tells if the current environment was set up by
   `nix-shell`. It can have the values `pure` or `impure`.
 
+## OpenTelemetry tracing environment variables
+
+Nix can emit [OpenTelemetry](https://opentelemetry.io/) traces of its activities (such as evaluation, builds, substitutions and HTTP requests), exported using the OTLP/HTTP protocol.
+Tracing is a no-op unless one of the endpoint variables below is set.
+When talking to the Nix daemon or to a binary cache server, Nix propagates the [W3C trace context](https://www.w3.org/TR/trace-context/), so that work done on your behalf by other processes or servers shows up in the same trace.
+
+- <span id="env-OTEL_EXPORTER_OTLP_ENDPOINT">[`OTEL_EXPORTER_OTLP_ENDPOINT`](#env-OTEL_EXPORTER_OTLP_ENDPOINT)</span>
+
+  The base URL of the OpenTelemetry collector to which traces are sent, e.g. `https://otel.example.org`.
+  The path `/v1/traces` is appended automatically.
+  Note: the URL should *not* have a trailing slash, since the resulting double slash confuses some collectors.
+
+- <span id="env-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT">[`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`](#env-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT)</span>
+
+  The full URL to which traces are sent, used as-is (nothing is appended).
+  Takes precedence over `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+- Other standard [OTLP exporter variables](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/) are also honored, such as `OTEL_EXPORTER_OTLP_HEADERS` (e.g. to pass an authorization header) and `OTEL_EXPORTER_OTLP_COMPRESSION` (set to `gzip` to compress uploads).
+
+- <span id="env-OTEL_TRACES_SAMPLER">[`OTEL_TRACES_SAMPLER`](#env-OTEL_TRACES_SAMPLER)</span>
+
+  Selects the [sampler](https://opentelemetry.io/docs/languages/sdk-configuration/general/#otel_traces_sampler) used to decide which traces are recorded.
+  One of `always_on`, `always_off`, `traceidratio`, `parentbased_always_on` (the default), `parentbased_always_off` or `parentbased_traceidratio`.
+  The `parentbased_*` samplers follow the sampling decision of the parent span, which propagates in the W3C trace context — so the Nix daemon and binary cache servers follow the client's decision, keeping traces complete or absent as a whole.
+
+- <span id="env-OTEL_TRACES_SAMPLER_ARG">[`OTEL_TRACES_SAMPLER_ARG`](#env-OTEL_TRACES_SAMPLER_ARG)</span>
+
+  For the `traceidratio` samplers: the fraction of traces to record, e.g. `0.01`. Defaults to `1.0`.
+
 ## Appendix: OS-specific conventions
 
 This information is not Nix-specific, but is referenced above.
