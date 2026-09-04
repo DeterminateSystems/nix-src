@@ -105,7 +105,9 @@ Input Input::fromAttrs(const Settings & settings, Attrs && attrs)
     auto allowedAttrs = inputScheme->allowedAttrs();
 
     for (auto & [name, _] : attrs)
-        if (name != "type" && name != "__final" && allowedAttrs.count(name) == 0)
+        /* `__final` and `__legacyExport` are purely internal attributes, so they're not listed in
+           `allowedAttrs()`. */
+        if (name != "type" && name != "__final" && name != "__legacyExport" && allowedAttrs.count(name) == 0)
             throw Error("input attribute '%s' not supported by scheme '%s'", name, schemeName);
 
     auto res = inputScheme->inputFromAttrs(settings, attrs);

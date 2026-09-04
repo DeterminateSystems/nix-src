@@ -618,6 +618,19 @@ struct GitInputScheme : InputScheme
         return maybeGetBoolAttr(input.attrs, "allRefs").value_or(false);
     }
 
+    /**
+     * Whether to export this input using Nix < 2.20 semantics. This is a purely internal
+     * attribute: it is set only on the submodule inputs synthesized by
+     * `getAccessorFromCommit()`, so that the export of a repository composes the export of the
+     * top-level repo with exports of its submodules using the *same* semantics. If it's absent,
+     * we're a top-level input and the `nix-219-compat` setting decides. It is deliberately not
+     * part of `allowedAttrs()`.
+     */
+    std::optional<bool> getLegacyExportAttr(const Input & input) const
+    {
+        return maybeGetBoolAttr(input.attrs, "__legacyExport");
+    }
+
     RepoInfo getRepoInfo(const Input & input) const
     {
         auto checkHashAlgorithm = [&](const std::optional<Hash> & hash) {
@@ -832,6 +845,7 @@ struct GitInputScheme : InputScheme
             .exportIgnore = getExportIgnoreAttr(input),
             .smudgeLfs = getLfsAttr(input),
             .submodules = getSubmodulesAttr(input),
+            .legacy = getLegacyExportAttr(input).value_or(false),
         };
     }
 
@@ -850,7 +864,9 @@ struct GitInputScheme : InputScheme
         if (!options.submodules)
             options.exportIgnore = true;
 
-        auto fingerprint = options.makeFingerprint(rev) + ";legacy";
+        options.legacy = true;
+
+        auto fingerprint = options.makeFingerprint(rev);
 
         auto cacheKey =
             makeSourcePathToHashCacheKey(fingerprint, ContentAddressMethod::Raw::NixArchive, CanonPath::root);
@@ -1073,92 +1089,105 @@ struct GitInputScheme : InputScheme
 
         auto expectedNarHash = input.getNarHash();
 
-        auto accessor = repo->getAccessor(rev, options, "«" + input.to_string(true) + "»");
+        /* Return an accessor for the complete tree denoted by `rev`, that is, the top-level repo
+           with any submodules mounted into it. If `legacy` is set, Nix < 2.20 semantics are used
+           (i.e. `git archive` / `git checkout`, which apply Git filters, `export-ignore` and
+           `export-subst`); the submodules are then exported using those semantics as well.
 
-        if (settings.nix219Compat && !options.smudgeLfs) {
-            /* Use Nix 2.19 semantics to generate locks, but if a NAR hash is specified, support Nix >= 2.20 semantics
-             * as well. */
-            warn("Using Nix 2.19 semantics to export Git repository '%s'.", input.to_string());
-            auto accessorModern = accessor;
-            accessor = getLegacyGitAccessor(settings, store, repoInfo, repoDir, rev, options);
-            if (expectedNarHash) {
-                auto narHashLegacy =
-                    fetchToStore2(settings, store, {accessor}, FetchMode::DryRun, input.getName()).second;
-                if (expectedNarHash != narHashLegacy) {
-                    auto narHashModern =
-                        fetchToStore2(settings, store, {accessorModern}, FetchMode::DryRun, input.getName()).second;
-                    if (expectedNarHash == narHashModern)
-                        accessor = accessorModern;
+           Note that submodules must be mounted before the NAR hash of the tree can be compared
+           against `expectedNarHash`, since that hash covers the submodule contents as well. */
+        auto getTree = [&](bool legacy) -> nix::ref<SourceAccessor> {
+            auto options2 = options;
+            options2.legacy = legacy;
+
+            auto accessor = legacy ? getLegacyGitAccessor(settings, store, repoInfo, repoDir, rev, options2)
+                                   : repo->getAccessor(rev, options2, "«" + input.to_string(true) + "»");
+
+            /* If the repo has submodules, fetch them and return a mounted
+               input accessor consisting of the accessor for the top-level
+               repo and the accessors for the submodules. */
+            if (options2.submodules) {
+                std::map<CanonPath, nix::ref<SourceAccessor>> mounts;
+
+                for (auto & [submodule, submoduleRev] : repo->getSubmodules(rev, options2.exportIgnore)) {
+                    auto resolved = repo->resolveSubmoduleUrl(submodule.url);
+                    debug(
+                        "Git submodule %s: %s %s %s -> %s",
+                        submodule.path,
+                        submodule.url,
+                        submodule.branch,
+                        submoduleRev.gitRev(),
+                        resolved);
+                    fetchers::Attrs attrs;
+                    attrs.insert_or_assign("type", "git");
+                    attrs.insert_or_assign("url", resolved);
+                    if (submodule.branch != "") {
+                        // A special value of . is used to indicate that the name of the branch in the submodule
+                        // should be the same name as the current branch in the current repository.
+                        // https://git-scm.com/docs/gitmodules
+                        if (submodule.branch == ".") {
+                            attrs.insert_or_assign("ref", ref);
+                        } else {
+                            attrs.insert_or_assign("ref", submodule.branch);
+                        }
+                    }
+                    attrs.insert_or_assign("rev", submoduleRev.gitRev());
+                    attrs.insert_or_assign("exportIgnore", Explicit<bool>{options2.exportIgnore});
+                    attrs.insert_or_assign("submodules", Explicit<bool>{true});
+                    attrs.insert_or_assign("lfs", Explicit<bool>{options2.smudgeLfs});
+                    attrs.insert_or_assign("allRefs", Explicit<bool>{true});
+                    /* Export the submodule using the same semantics as the top-level repo,
+                       regardless of the `nix-219-compat` setting. */
+                    attrs.insert_or_assign("__legacyExport", Explicit<bool>{options2.legacy});
+                    auto submoduleInput = fetchers::Input::fromAttrs(settings, std::move(attrs));
+                    auto [submoduleAccessor, submoduleInput2] = submoduleInput.getAccessor(settings, store);
+                    submoduleAccessor->setPathDisplay("«" + submoduleInput.to_string(true) + "»");
+                    mounts.insert_or_assign(submodule.path, submoduleAccessor);
+                }
+
+                if (!mounts.empty()) {
+                    auto newFingerprint = accessor->getFingerprint(CanonPath::root).second->append(";s");
+                    mounts.insert_or_assign(CanonPath::root, accessor);
+                    auto mounted = makeMountedSourceAccessor(std::move(mounts));
+                    mounted->fingerprint = newFingerprint;
+                    return mounted;
                 }
             }
-        } else {
-            /* Backward compatibility hack for locks produced by Nix < 2.20 that depend on Nix applying Git filters,
-             * `export-ignore` or `export-subst`. Nix >= 2.20 doesn't do those, so we may get a NAR hash mismatch. If
-             * that happens, try again using `git archive`. */
-            if (expectedNarHash) {
-                auto narHashNew = fetchToStore2(settings, store, {accessor}, FetchMode::DryRun, input.getName()).second;
-                if (expectedNarHash != narHashNew) {
-                    auto accessorLegacy = getLegacyGitAccessor(settings, store, repoInfo, repoDir, rev, options);
-                    auto narHashLegacy =
-                        fetchToStore2(settings, store, {accessorLegacy}, FetchMode::DryRun, input.getName()).second;
-                    if (expectedNarHash == narHashLegacy) {
+
+            return accessor;
+        };
+
+        /* Use Nix 2.19 semantics if requested. If we're a submodule, follow whatever the top-level
+           repo is being exported with instead of the setting. */
+        auto legacyExport = getLegacyExportAttr(input);
+        bool useLegacy = legacyExport.value_or(settings.nix219Compat) && !options.smudgeLfs;
+
+        if (useLegacy && !legacyExport)
+            warn("Using Nix 2.19 semantics to export Git repository '%s'.", input.to_string());
+
+        auto accessor = getTree(useLegacy);
+
+        /* Backward compatibility hack: a lock may have been produced by a Nix version that used the
+           other export semantics. In particular, locks produced by Nix < 2.20 depend on Nix applying
+           Git filters, `export-ignore` or `export-subst`, while Nix >= 2.20 doesn't do those. So if
+           we get a NAR hash mismatch, try again using the other semantics. */
+        if (expectedNarHash) {
+            auto narHash = fetchToStore2(settings, store, {accessor}, FetchMode::DryRun, input.getName()).second;
+            if (*expectedNarHash != narHash) {
+                auto accessorOther = getTree(!useLegacy);
+                auto narHashOther =
+                    fetchToStore2(settings, store, {accessorOther}, FetchMode::DryRun, input.getName()).second;
+                if (*expectedNarHash == narHashOther) {
+                    if (!useLegacy)
                         warn(
                             "Git input '%s' specifies a NAR hash '%s' that was created by Nix < 2.20.\n"
                             "Nix >= 2.20 does not apply Git filters, `export-ignore` and `export-subst` by default, which changes the NAR hash.\n"
                             "Please update the NAR hash to '%s'.",
                             input.to_string(),
                             expectedNarHash->to_string(HashFormat::SRI, true),
-                            narHashNew.to_string(HashFormat::SRI, true));
-                        accessor = accessorLegacy;
-                    }
+                            narHash.to_string(HashFormat::SRI, true));
+                    accessor = accessorOther;
                 }
-            }
-        }
-
-        /* If the repo has submodules, fetch them and return a mounted
-           input accessor consisting of the accessor for the top-level
-           repo and the accessors for the submodules. */
-        if (options.submodules) {
-            std::map<CanonPath, nix::ref<SourceAccessor>> mounts;
-
-            for (auto & [submodule, submoduleRev] : repo->getSubmodules(rev, options.exportIgnore)) {
-                auto resolved = repo->resolveSubmoduleUrl(submodule.url);
-                debug(
-                    "Git submodule %s: %s %s %s -> %s",
-                    submodule.path,
-                    submodule.url,
-                    submodule.branch,
-                    submoduleRev.gitRev(),
-                    resolved);
-                fetchers::Attrs attrs;
-                attrs.insert_or_assign("type", "git");
-                attrs.insert_or_assign("url", resolved);
-                if (submodule.branch != "") {
-                    // A special value of . is used to indicate that the name of the branch in the submodule
-                    // should be the same name as the current branch in the current repository.
-                    // https://git-scm.com/docs/gitmodules
-                    if (submodule.branch == ".") {
-                        attrs.insert_or_assign("ref", ref);
-                    } else {
-                        attrs.insert_or_assign("ref", submodule.branch);
-                    }
-                }
-                attrs.insert_or_assign("rev", submoduleRev.gitRev());
-                attrs.insert_or_assign("exportIgnore", Explicit<bool>{options.exportIgnore});
-                attrs.insert_or_assign("submodules", Explicit<bool>{true});
-                attrs.insert_or_assign("lfs", Explicit<bool>{options.smudgeLfs});
-                attrs.insert_or_assign("allRefs", Explicit<bool>{true});
-                auto submoduleInput = fetchers::Input::fromAttrs(settings, std::move(attrs));
-                auto [submoduleAccessor, submoduleInput2] = submoduleInput.getAccessor(settings, store);
-                submoduleAccessor->setPathDisplay("«" + submoduleInput.to_string(true) + "»");
-                mounts.insert_or_assign(submodule.path, submoduleAccessor);
-            }
-
-            if (!mounts.empty()) {
-                auto newFingerprint = accessor->getFingerprint(CanonPath::root).second->append(";s");
-                mounts.insert_or_assign(CanonPath::root, accessor);
-                accessor = makeMountedSourceAccessor(std::move(mounts));
-                accessor->fingerprint = newFingerprint;
             }
         }
 
