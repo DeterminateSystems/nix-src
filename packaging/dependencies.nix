@@ -224,6 +224,13 @@ scope: {
       # The default build has no OTLP exporters at all; we need the
       # OTLP/HTTP one (and specifically not the gRPC one).
       enableHttp = true;
+      protobuf = pkgs.protobuf.overrideAttrs {
+        outputs = [
+          "out"
+          "lib"
+          "dev"
+        ];
+      };
     }).overrideAttrs
       (old: {
         # Support OTEL_EXPORTER_OTLP_COMPRESSION=gzip.
