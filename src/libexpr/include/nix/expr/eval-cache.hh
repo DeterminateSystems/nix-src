@@ -120,8 +120,6 @@ private:
 
     AttrKey getKey();
 
-    Value & getValue();
-
     /**
      * If `cachedValue` is unset, try to initialize it from the
      * database. It is not an error if it does not exist. Throw a
@@ -180,6 +178,14 @@ public:
 
     bool isDerivation();
 
+    /**
+     * Return the value, which may be in a thunk state.
+     */
+    Value & getValue();
+
+    /**
+     * Force and return the value.
+     */
     Value & forceValue();
 
     /**
