@@ -175,6 +175,7 @@ scope: {
       };
       patches = prevAttrs.patches or [ ] ++ [
         ./patches/0002-memory-config.patch
+        ./patches/0003-packbuilder-correct-config.patch
 
         # Fix a use-after-free crash when `git_thread_create` fails during
         # pack building (e.g. with EAGAIN under thread pressure), leaving
