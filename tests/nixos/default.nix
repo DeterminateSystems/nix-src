@@ -166,6 +166,8 @@ in
 
   githubFlakes = runNixOSTest ./github-flakes.nix;
 
+  fhResolve = runNixOSTest ./fh-resolve.nix;
+
   gitSubmodules = runNixOSTest ./git-submodules.nix;
 
   sourcehutFlakes = runNixOSTest ./sourcehut-flakes.nix;
