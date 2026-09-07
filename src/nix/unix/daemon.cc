@@ -531,6 +531,10 @@ static void runDaemon(
     std::visit(
         overloaded{
             [&](StdIO) {
+                /* FIXME: we don't currently trace connections served
+                   over stdio. */
+                resetOtelAfterFork();
+
                 auto store = storeConfig->openStore();
                 store->init();
 
@@ -550,6 +554,14 @@ static void runDaemon(
                     processStdioConnection(store, forceTrustClientOpt.value_or(Trusted));
             },
             [&](UnixSocket socketPathOverride) {
+                /* We fork a child per connection, and the exporter's
+                   worker threads don't survive a fork(), so don't
+                   trace in this process; the children set up tracing
+                   themselves. (This discards any tracing state set up
+                   by `main()`, without touching the exporter, which
+                   is what we want.) */
+                resetOtelAfterFork();
+
                 auto socketPath = std::move(socketPathOverride)
                                       .or_else([&]() -> std::optional<std::filesystem::path> {
                                           return getDaemonSocketPath(*storeConfig);

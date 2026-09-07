@@ -3,20 +3,30 @@
 #include "cli-config-private.hh"
 
 #if HAVE_OTEL
+#  include "nix/store/filetransfer.hh"
+#  include "nix/util/base-n.hh"
+#  include "nix/util/compression.hh"
 #  include "nix/util/environment-variables.hh"
+#  include "nix/util/serialise.hh"
 #  include "nix/util/sync.hh"
 #  include "nix/util/terminal.hh"
+#  include "nix/util/url.hh"
 
 #  include <atomic>
 #  include <exception>
 #  include <map>
 
+#  include <boost/unordered/concurrent_flat_set.hpp>
+
 #  include <nlohmann/json.hpp>
 
 #  include <opentelemetry/context/context.h>
 #  include <opentelemetry/context/propagation/text_map_propagator.h>
-#  include <opentelemetry/exporters/otlp/otlp_http_exporter_factory.h>
 #  include <opentelemetry/nostd/shared_ptr.h>
+#  include <opentelemetry/nostd/variant.h>
+#  include <opentelemetry/sdk/common/exporter_utils.h>
+#  include <opentelemetry/sdk/trace/exporter.h>
+#  include <opentelemetry/sdk/trace/span_data.h>
 #  include <opentelemetry/sdk/resource/resource.h>
 #  include <opentelemetry/sdk/trace/batch_span_processor_factory.h>
 #  include <opentelemetry/sdk/trace/batch_span_processor_options.h>
@@ -67,6 +77,14 @@ inline opentelemetry::nostd::string_view toNostd(std::string_view sv) noexcept
 {
     return {sv.data(), sv.size()};
 }
+
+/**
+ * The name of the activity under which we upload spans. Since the
+ * upload itself creates activities (namely the file transfer), we
+ * must not create spans for this activity or its children, since
+ * that would create an infinite regress.
+ */
+constexpr std::string_view uploadActivityName = "UploadOpenTelemetry";
 
 struct ExtractCarrier : opentelemetry::context::propagation::TextMapCarrier
 {
@@ -188,6 +206,25 @@ class OpenTelemetryLoggerImpl : public OpenTelemetryLogger
 
     Sync<std::map<ActivityId, SpanPtr>> spans_;
 
+    /**
+     * Activities for which we don't create spans, namely the
+     * `UploadOpenTelemetry` activities and their children.
+     */
+    boost::concurrent_flat_set<ActivityId> ignoredActs;
+
+    /**
+     * Whether this activity should be ignored, i.e. whether it's an
+     * `UploadOpenTelemetry` activity or a child of one. If so, record
+     * it so that its children are ignored as well.
+     */
+    bool ignoreActivity(ActivityId act, std::string_view name, ActivityId parent)
+    {
+        if (name != uploadActivityName && !ignoredActs.contains(parent))
+            return false;
+        ignoredActs.insert(act);
+        return true;
+    }
+
     static Headers injectContext(const SpanPtr & span)
     {
         if (!span->GetContext().IsValid())
@@ -242,6 +279,9 @@ public:
             bool textIsName = name.empty();
             if (textIsName)
                 name = s.empty() ? "activity" : std::string_view(s);
+
+            if (ignoreActivity(act, name, parent))
+                return;
 
             auto spans(spans_.lock());
 
@@ -298,6 +338,9 @@ public:
     {
         try {
             if (isRemoteLogSource())
+                return;
+
+            if (ignoreActivity(act, name, parent))
                 return;
 
             /* An activity carrying a `traceparent` metadata field
@@ -366,6 +409,8 @@ public:
     {
         try {
             if (isRemoteLogSource())
+                return;
+            if (ignoredActs.erase(act))
                 return;
             auto spans(spans_.lock());
             if (auto i = spans->find(act); i != spans->end()) {
@@ -437,6 +482,241 @@ public:
     }
 };
 
+/**
+ * Serialize an attribute value to its OTLP/JSON representation, i.e.
+ * an `AnyValue` object such as `{"stringValue": "foo"}`. Note that
+ * 64-bit integers are represented as strings in OTLP/JSON.
+ */
+nlohmann::json toAnyValue(const opentelemetry::sdk::common::OwnedAttributeValue & value)
+{
+    return opentelemetry::nostd::visit(
+        [](const auto & v) -> nlohmann::json {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, bool>)
+                return {{"boolValue", v}};
+            else if constexpr (std::is_same_v<T, double>)
+                return {{"doubleValue", v}};
+            else if constexpr (std::is_same_v<T, std::string>)
+                return {{"stringValue", v}};
+            else if constexpr (std::is_integral_v<T>)
+                return {{"intValue", std::to_string(v)}};
+            else if constexpr (std::is_same_v<T, std::vector<uint8_t>>)
+                return {{"bytesValue", base64::encode(std::as_bytes(std::span{v}))}};
+            else {
+                /* Any other vector: an OTLP array of AnyValues. Note
+                   that we can't take the elements by reference, since
+                   `std::vector<bool>` yields proxy references. */
+                auto values = nlohmann::json::array();
+                for (auto x : v) {
+                    using E = std::decay_t<decltype(x)>;
+                    if constexpr (std::is_same_v<E, bool>)
+                        values.push_back({{"boolValue", (bool) x}});
+                    else if constexpr (std::is_same_v<E, double>)
+                        values.push_back({{"doubleValue", x}});
+                    else if constexpr (std::is_same_v<E, std::string>)
+                        values.push_back({{"stringValue", x}});
+                    else
+                        values.push_back({{"intValue", std::to_string(x)}});
+                }
+                return {{"arrayValue", {{"values", std::move(values)}}}};
+            }
+        },
+        value);
+}
+
+/**
+ * Serialize an attribute map to an OTLP/JSON `KeyValue` array.
+ */
+template<typename Map>
+nlohmann::json toAttributes(const Map & map)
+{
+    auto res = nlohmann::json::array();
+    for (auto & [key, value] : map)
+        res.push_back({{"key", key}, {"value", toAnyValue(value)}});
+    return res;
+}
+
+template<typename Id>
+std::string toHex(const Id & id)
+{
+    char buf[2 * Id::kSize];
+    id.ToLowerBase16(buf);
+    return std::string(buf, sizeof(buf));
+}
+
+std::string toUnixNano(std::chrono::nanoseconds t)
+{
+    return std::to_string(t.count());
+}
+
+/**
+ * A span exporter that serializes spans to OTLP/JSON and uploads them
+ * using Nix's own `FileTransfer`. Compared to the exporter that comes
+ * with opentelemetry-cpp, this avoids a dependency on protobuf (which
+ * is very large), and it reuses the HTTP client that Nix already has.
+ */
+class OtlpJsonSpanExporter final : public opentelemetry::sdk::trace::SpanExporter
+{
+    std::string endpoint;
+    Headers headers;
+    bool compress;
+
+    std::atomic<bool> isShutdown{false};
+
+public:
+
+    OtlpJsonSpanExporter(std::string endpoint, Headers headers, bool compress)
+        : endpoint(std::move(endpoint))
+        , headers(std::move(headers))
+        , compress(compress)
+    {
+    }
+
+    std::unique_ptr<opentelemetry::sdk::trace::Recordable> MakeRecordable() noexcept override
+    {
+        return std::make_unique<opentelemetry::sdk::trace::SpanData>();
+    }
+
+    opentelemetry::sdk::common::ExportResult Export(
+        const opentelemetry::nostd::span<std::unique_ptr<opentelemetry::sdk::trace::Recordable>> & recordables) noexcept
+        override
+    {
+        using opentelemetry::sdk::common::ExportResult;
+
+        if (isShutdown.load(std::memory_order_acquire))
+            return ExportResult::kFailure;
+
+        try {
+            if (recordables.empty())
+                return ExportResult::kSuccess;
+
+            /* All spans in a batch come from the same tracer provider,
+               so they share a resource and (in our case) a scope. */
+            auto spans = nlohmann::json::array();
+            const opentelemetry::sdk::resource::Resource * resource = nullptr;
+            const opentelemetry::sdk::trace::InstrumentationScope * scope = nullptr;
+
+            for (auto & recordable : recordables) {
+                /* Safe: `MakeRecordable()` only ever returns `SpanData`. */
+                auto & span = static_cast<opentelemetry::sdk::trace::SpanData &>(*recordable);
+
+                resource = &span.GetResource();
+                scope = &span.GetInstrumentationScope();
+
+                nlohmann::json json{
+                    {"traceId", toHex(span.GetTraceId())},
+                    {"spanId", toHex(span.GetSpanId())},
+                    {"name", std::string(span.GetName().data(), span.GetName().size())},
+                    /* `SpanKind` is declared in the same order as in
+                       OTLP, which starts counting at `unspecified`. */
+                    {"kind", (int) span.GetSpanKind() + 1},
+                    {"startTimeUnixNano", toUnixNano(span.GetStartTime().time_since_epoch())},
+                    {"endTimeUnixNano", toUnixNano(span.GetStartTime().time_since_epoch() + span.GetDuration())},
+                    {"attributes", toAttributes(span.GetAttributes())},
+                    {"flags", span.GetFlags().flags()},
+                };
+
+                if (span.GetParentSpanId().IsValid())
+                    json["parentSpanId"] = toHex(span.GetParentSpanId());
+
+                if (span.GetStatus() != opentelemetry::trace::StatusCode::kUnset) {
+                    auto description = span.GetDescription();
+                    json["status"] = {
+                        {"code", (int) span.GetStatus()},
+                        {"message", std::string(description.data(), description.size())},
+                    };
+                }
+
+                spans.push_back(std::move(json));
+            }
+
+            nlohmann::json doc{
+                {"resourceSpans",
+                 {{
+                     {"resource", {{"attributes", toAttributes(resource->GetAttributes())}}},
+                     {"scopeSpans",
+                      {{
+                          {"scope", {{"name", scope->GetName()}, {"version", scope->GetVersion()}}},
+                          {"spans", std::move(spans)},
+                      }}},
+                 }}},
+            };
+
+            upload(doc.dump());
+
+            return ExportResult::kSuccess;
+        } catch (...) {
+            /* Note that nothing retries a failed export, so all we can
+               do is drop the spans. Don't let the exception escape,
+               since this method is noexcept. Also don't bother the
+               user about it: failing to export telemetry should not
+               be noise on top of whatever they're actually doing. */
+            ignoreExceptionInDestructor(lvlDebug);
+            return ExportResult::kFailure;
+        }
+    }
+
+    void upload(std::string payload)
+    {
+        /* The upload creates activities of its own, which would be
+           exported as spans, which would create more activities, ad
+           infinitum. So do it inside an activity that the
+           OpenTelemetryLogger ignores, along with its children. */
+        Activity act(*logger, lvlDebug, uploadActivityName, {}, "", 0);
+        PushActivity pact(act.id);
+
+        FileTransferRequest request(parseURL(endpoint));
+        request.method = HttpMethod::Post;
+        request.mimeType = "application/json";
+        request.headers = headers;
+
+        if (compress) {
+            payload = nix::compress(CompressionAlgo::gzip, payload);
+            request.headers.emplace_back("Content-Encoding", "gzip");
+        }
+
+        StringSource source{payload};
+        request.data = {source};
+
+        /* Don't hold up the process at exit retrying telemetry. */
+        request.retryAttempts = 0;
+
+        getFileTransfer()->upload(request);
+    }
+
+    bool ForceFlush(std::chrono::microseconds) noexcept override
+    {
+        /* We upload synchronously in `Export()`, so there is never
+           anything buffered here. */
+        return true;
+    }
+
+    bool Shutdown(std::chrono::microseconds) noexcept override
+    {
+        isShutdown.store(true, std::memory_order_release);
+        return true;
+    }
+};
+
+/**
+ * Parse `OTEL_EXPORTER_OTLP_HEADERS`, a comma-separated list of
+ * percent-encoded `name=value` pairs.
+ */
+Headers parseOtlpHeaders(std::string_view s)
+{
+    Headers headers;
+    for (auto & item : tokenizeString<Strings>(s, ",")) {
+        auto eq = item.find('=');
+        if (eq == std::string::npos)
+            continue;
+        auto name = trim(item.substr(0, eq));
+        auto value = trim(item.substr(eq + 1));
+        if (!name.empty())
+            headers.emplace_back(percentDecode(name), percentDecode(value));
+    }
+    return headers;
+}
+
 } // namespace
 
 void initOtel(std::string_view serviceName)
@@ -444,16 +724,25 @@ void initOtel(std::string_view serviceName)
     if (otelState.load(std::memory_order_acquire))
         return;
 
-    /* Without an explicitly configured endpoint, stay off: the SDK's
-       default would silently export to http://localhost:4318. */
-    if (!getEnv("OTEL_EXPORTER_OTLP_ENDPOINT") && !getEnv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
+    /* Without an explicitly configured endpoint, stay off; we don't
+       want to export to some default endpoint behind the user's
+       back. */
+    auto endpoint = [&]() -> std::string {
+        if (auto s = getEnv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
+            return *s;
+        if (auto s = getEnv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+            return *s + "/v1/traces";
+        return "";
+    }();
+    if (endpoint.empty())
         return;
 
     namespace sdktrace = opentelemetry::sdk::trace;
 
-    /* Default-constructed options read the OTEL_EXPORTER_OTLP_*
-       environment variables (endpoint, headers, TLS, compression). */
-    auto exporter = opentelemetry::exporter::otlp::OtlpHttpExporterFactory::Create();
+    auto exporter = std::make_unique<OtlpJsonSpanExporter>(
+        endpoint,
+        parseOtlpHeaders(getEnv("OTEL_EXPORTER_OTLP_HEADERS").value_or("")),
+        getEnv("OTEL_EXPORTER_OTLP_COMPRESSION").value_or("gzip") == "gzip");
     auto processor =
         sdktrace::BatchSpanProcessorFactory::Create(std::move(exporter), sdktrace::BatchSpanProcessorOptions{});
     auto resource = opentelemetry::sdk::resource::Resource::Create({
