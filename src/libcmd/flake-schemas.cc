@@ -4,6 +4,10 @@
 #include "nix/util/memory-source-accessor.hh"
 #include "nix/util/mounted-source-accessor.hh"
 #include "nix/flake/provenance.hh"
+#include "nix/expr/parallel-eval.hh"
+#include "nix/store/globals.hh"
+
+#include <nlohmann/json.hpp>
 
 namespace nix::flake_schemas {
 
@@ -358,6 +362,113 @@ Schemas getSchemas(ref<AttrCursor> inventory)
     }
 
     return schemas;
+}
+
+nlohmann::json getFlakeInventory(
+    EvalState & state,
+    Store & evalStore,
+    LockedFlake & flake,
+    ref<eval_cache::EvalCache> cache,
+    const FlakeInventoryOptions & options)
+{
+    auto inventory = cache->getRoot()->getAttr("inventory");
+    auto outputs = cache->getRoot()->getAttr("outputs");
+
+    auto localSystem = std::string(settings.thisSystem.get());
+
+    FutureVector futures(*state.executor);
+
+    std::function<void(ref<eval_cache::AttrCursor> node, nlohmann::json & obj)> visit;
+
+    visit = [&](ref<eval_cache::AttrCursor> node, nlohmann::json & obj) {
+        flake_schemas::visit(
+            options.showAllSystems ? std::optional<std::string>() : localSystem,
+            options.showLegacy,
+            node,
+            flake.flake.provenance,
+
+            [&](const flake_schemas::Leaf & leaf) {
+                if (auto what = leaf.what())
+                    obj.emplace("what", *what);
+
+                if (auto shortDescription = leaf.shortDescription())
+                    obj.emplace("shortDescription", *shortDescription);
+
+                if (auto drv = leaf.derivation(outputs)) {
+                    auto drvObj = nlohmann::json::object();
+
+                    if (options.showDrvNames)
+                        drvObj.emplace("name", drv->getAttr(state.s.name)->getString());
+
+                    if (options.showDrvPaths) {
+                        auto drvPath = drv->forceDerivation();
+                        drvObj.emplace("path", state.store->printStorePath(drvPath));
+                    }
+
+                    if (options.showOutputPaths) {
+                        auto outputs = nlohmann::json::object();
+                        auto drvPath = drv->forceDerivation();
+                        auto drv = evalStore.derivationFromPath(drvPath);
+                        for (auto & i : drv.outputsAndOptPaths(*state.store)) {
+                            if (auto outPath = i.second.second)
+                                outputs.emplace(i.first, state.store->printStorePath(*outPath));
+                            else
+                                outputs.emplace(i.first, nullptr);
+                        }
+                        drvObj.emplace("outputs", std::move(outputs));
+                    }
+
+                    obj.emplace("derivation", std::move(drvObj));
+                }
+
+                if (auto forSystems = leaf.forSystems())
+                    obj.emplace("forSystems", *forSystems);
+            },
+
+            [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
+                auto children = nlohmann::json::object();
+                forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
+                    auto & j = children.emplace(state.symbols[attrName], nlohmann::json::object()).first.value();
+                    state.spawn(futures, 1, [&visit, &j, node]() {
+                        try {
+                            visit(node, j);
+                        } catch (EvalError & e) {
+                            // FIXME: make it a flake schema attribute whether to ignore evaluation errors.
+                            if (node->root->state.symbols[node->getAttrPath()[0]] == "legacyPackages")
+                                j.emplace("failed", true);
+                            else
+                                throw;
+                        }
+                    });
+                });
+                obj.emplace("children", std::move(children));
+            },
+
+            [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
+                obj.emplace("filtered", true);
+            },
+
+            [&](ref<eval_cache::AttrCursor> node) { obj.emplace("isLegacy", true); });
+    };
+
+    auto inv = nlohmann::json::object();
+
+    flake_schemas::forEachOutput(
+        inventory,
+        [&](Symbol outputName, std::shared_ptr<eval_cache::AttrCursor> output, const std::string & doc, bool isLast) {
+            auto & j = inv.emplace(state.symbols[outputName], nlohmann::json::object()).first.value();
+
+            if (output) {
+                j.emplace("doc", doc);
+                auto & j2 = j.emplace("output", nlohmann::json::object()).first.value();
+                state.spawn(futures, 1, [&visit, output, &j2]() { visit(ref(output), j2); });
+            } else
+                j.emplace("unknown", true);
+        });
+
+    futures.finishAll();
+
+    return inv;
 }
 
 } // namespace nix::flake_schemas
