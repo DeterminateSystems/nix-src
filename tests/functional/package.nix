@@ -92,6 +92,10 @@ mkMesonDerivation (
       "--print-errorlogs"
     ];
 
+    mesonFlags = [
+      (lib.mesonBool "plugin-c-api" nix-cli.exportsPluginCApi)
+    ];
+
     doCheck = true;
 
     installPhase = ''

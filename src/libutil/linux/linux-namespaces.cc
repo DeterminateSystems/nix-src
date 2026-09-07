@@ -1,16 +1,13 @@
 #include "nix/util/linux-namespaces.hh"
-#include "nix/util/current-process.hh"
 #include "nix/util/util.hh"
-#include "nix/util/finally.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/processes.hh"
-#include "nix/util/signals.hh"
 
 #include <mutex>
 #include <sys/resource.h>
-#include "nix/util/cgroup.hh"
 
 #include <sys/mount.h>
+#include <sys/statvfs.h>
 
 namespace nix {
 
@@ -94,25 +91,98 @@ bool mountAndPidNamespacesSupported()
 
 static AutoCloseFD fdSavedMountNamespace;
 static AutoCloseFD fdSavedRoot;
+static bool havePrivateMountNs = false;
 
-void saveMountNamespace()
+/* Save the current mount namespace so restoreMountNamespace() can return
+   to it later. Ignored if called more than once. */
+static void saveMountNamespace()
 {
     static std::once_flag done;
     std::call_once(done, []() {
-        fdSavedMountNamespace = open("/proc/self/ns/mnt", O_RDONLY);
+        fdSavedMountNamespace = open("/proc/self/ns/mnt", O_RDONLY | O_CLOEXEC);
         if (!fdSavedMountNamespace)
             throw SysError("saving parent mount namespace");
 
-        fdSavedRoot = open("/proc/self/root", O_RDONLY);
+        fdSavedRoot = open("/proc/self/root", O_RDONLY | O_CLOEXEC);
     });
 }
 
-void restoreMountNamespace()
+void tryEnterPrivateMountNamespace()
 {
     try {
+        saveMountNamespace();
+        if (unshare(CLONE_NEWNS) == -1)
+            throw SysError("setting up a private mount namespace");
+        havePrivateMountNs = true;
+    } catch (Error & e) {
+        debug("failed to set up a private mount namespace: %s", e.message());
+    }
+}
+
+void remountReadOnlyWritable(const std::filesystem::path & path)
+{
+    struct statvfs stat;
+    if (statvfs(path.c_str(), &stat) != 0)
+        throw SysError("getting mount info for %s", PathFmt(path));
+
+    if (!(stat.f_flag & ST_RDONLY))
+        return;
+
+    if (!havePrivateMountNs)
+        throw Error(
+            "cannot remount %s writable: not in a private mount namespace, "
+            "so the remount would affect the host mount table. "
+            "This usually happens inside containers or user namespaces where unshare(CLONE_NEWNS) is not permitted",
+            PathFmt(path));
+
+    /* In a user namespace, mount flags like `nodev` and `nosuid` are
+       locked and dropping them causes `EPERM`, so here we translate each
+       `statvfs` flag to the corresponding `mount` flag individually. */
+    unsigned long flags = MS_REMOUNT | MS_BIND;
+    if (stat.f_flag & ST_NODEV)
+        flags |= MS_NODEV;
+    if (stat.f_flag & ST_NOSUID)
+        flags |= MS_NOSUID;
+    if (stat.f_flag & ST_NOEXEC)
+        flags |= MS_NOEXEC;
+    if (stat.f_flag & ST_NOATIME)
+        flags |= MS_NOATIME;
+    if (stat.f_flag & ST_NODIRATIME)
+        flags |= MS_NODIRATIME;
+    if (stat.f_flag & ST_RELATIME)
+        flags |= MS_RELATIME;
+    if (stat.f_flag & ST_SYNCHRONOUS)
+        flags |= MS_SYNCHRONOUS;
+#ifdef ST_NOSYMFOLLOW
+    if (stat.f_flag & ST_NOSYMFOLLOW)
+        flags |= MS_NOSYMFOLLOW;
+#endif
+    if (mount(0, path.c_str(), "none", flags, 0) == -1)
+        throw SysError("remounting %s writable", PathFmt(path));
+}
+
+/* This code runs in a (possibly) vfork-ed child, so technically everything you see below is beyond
+   broken because vfork()-ed child:
+
+   * Must not trample parent's memory in any way shape or form. That includes (but not limited to)
+     * Throwing any exceptions (because that would unwind into the parent stack frame and do who knows what).
+     * Modify any state - obviously that includes global state.
+     * Not allocate any memory, since that can also lead to a deadlock if some thread in the (now stopped) parent
+       holds a lock while we are running. That's because *all* of the parent tasks are suspended for the duration
+       of the vfork.
+
+   As it stands now, this code should be considered incredibly fragile and slated for a complete rework.
+   */
+void restoreMountNamespace()
+{
+    if (!havePrivateMountNs)
+        return;
+
+    try {
+        /* FIXME: Allocation in a possibly vforked child. */
         auto savedCwd = std::filesystem::current_path();
 
-        if (fdSavedMountNamespace && setns(fdSavedMountNamespace.get(), CLONE_NEWNS) == -1)
+        if (setns(fdSavedMountNamespace.get(), CLONE_NEWNS) == -1)
             throw SysError("restoring parent mount namespace");
 
         if (fdSavedRoot) {
@@ -124,6 +194,9 @@ void restoreMountNamespace()
 
         if (chdir(savedCwd.c_str()) == -1)
             throw SysError("restoring cwd");
+
+        /* Do not reset havePrivateMountNs! This code can run in a vfork-ed child and we absolutely
+           must not trample any of the parent's state. */
     } catch (Error & e) {
         debug(e.msg());
     }

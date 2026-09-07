@@ -47,6 +47,10 @@ std::string BaseSetting<std::vector<ExternalBuilder>>::to_string() const;
 
 struct GCSettings : public virtual Config
 {
+private:
+    void anchor() override;
+
+public:
     Setting<off_t> reservedSize{
         this,
         8 * 1024 * 1024,
@@ -69,6 +73,9 @@ struct GCSettings : public virtual Config
           collector still deletes store paths that are used only at build
           time (e.g., the C compiler, or source tarballs downloaded from the
           network). To prevent it from doing so, set this option to `true`.
+
+          This option only applies to garbage collection of the whole store
+          and does not affect deleting explicit paths.
         )",
         {"gc-keep-outputs"},
     };
@@ -88,6 +95,9 @@ struct GCSettings : public virtual Config
           store path was built), so by default this option is on. Turn it off
           to save a bit of disk space (or a lot if `keep-outputs` is also
           turned on).
+
+          This option only applies to garbage collection of the whole store
+          and does not affect deleting explicit paths.
         )",
         {"gc-keep-derivations"},
     };
@@ -136,6 +146,10 @@ const uint32_t maxIdsPerBuild =
 
 struct AutoAllocateUidSettings : public virtual Config
 {
+private:
+    void anchor() override;
+
+public:
     Setting<uint32_t> startId{
         this,
 #ifdef __linux__
@@ -171,6 +185,10 @@ struct AutoAllocateUidSettings : public virtual Config
  */
 struct LocalSettings : public virtual Config, public GCSettings, public AutoAllocateUidSettings
 {
+private:
+    void anchor() override;
+
+public:
     /**
      * Get the GC settings.
      */
@@ -198,7 +216,7 @@ struct LocalSettings : public virtual Config, public GCSettings, public AutoAllo
         0,
         "cores",
         R"(
-          Sets the value of the `NIX_BUILD_CORES` environment variable in the [invocation of the `builder` executable](@docroot@/store/building.md#builder-execution) of a derivation.
+          Sets the value of the `NIX_BUILD_CORES` environment variable in the [invocation of the `builder` executable](@docroot@/store/building.md#env-vars) of a derivation.
           The `builder` executable can use this variable to control its own maximum amount of parallelism.
 
           <!--
@@ -350,7 +368,7 @@ struct LocalSettings : public virtual Config, public GCSettings, public AutoAllo
 
     Setting<SandboxMode> sandboxMode{
         this,
-#ifdef __linux__
+#if defined(__linux__) || defined(__FreeBSD__)
         smEnabled
 #else
         smDisabled
@@ -536,7 +554,7 @@ public:
      * Get the diff hook path if run-diff-hook is enabled.
      * @return Pointer to path if enabled, nullptr otherwise.
      */
-    const std::filesystem::path * getDiffHook() const
+    const AbsolutePath * getDiffHook() const
     {
         if (!runDiffHook.get()) {
             return nullptr;
@@ -673,41 +691,47 @@ public:
         {},
         "external-builders",
         R"(
-          Helper programs that execute derivations.
+          Helper programs for building derivations, specified in JSON format, e.g.
 
-          The program is passed a JSON document that describes the build environment as the final argument.
+          ```json
+          [ {"systems": ["aarch64-linux"], "program": "/path/to/helper", "args": ["bla"]} ]
+          ```
+
+          Whenever Nix needs to build a derivation for a system contained in *systems*, it will invoke *program* with the command line arguments *args*, and an additional argument containing the path of a JSON document that describes the build environment.
           The JSON document looks like this:
 
-            {
-              "args": [
-                "-e",
-                "/nix/store/vj1c3wf9…-source-stdenv.sh",
-                "/nix/store/shkw4qm9…-default-builder.sh"
-              ],
+          ```json
+          {
+            "args": [
+              "-e",
+              "/nix/store/vj1c3wf9…-source-stdenv.sh",
+              "/nix/store/shkw4qm9…-default-builder.sh"
+            ],
+            "builder": "/nix/store/s1qkj0ph…-bash-5.2p37/bin/bash",
+            "env": {
+              "HOME": "/homeless-shelter",
               "builder": "/nix/store/s1qkj0ph…-bash-5.2p37/bin/bash",
-              "env": {
-                "HOME": "/homeless-shelter",
-                "builder": "/nix/store/s1qkj0ph…-bash-5.2p37/bin/bash",
-                "nativeBuildInputs": "/nix/store/l31j72f1…-version-check-hook",
-                "out": "/nix/store/2yx2prgx…-hello-2.12.2"
-                …
-              },
-              "inputPaths": [
-                "/nix/store/14dciax3…-glibc-2.32-54-dev",
-                "/nix/store/1azs5s8z…-gettext-0.21",
-                …
-              ],
-              "outputs": {
-                "out": "/nix/store/2yx2prgx…-hello-2.12.2"
-              },
-              "realStoreDir": "/nix/store",
-              "storeDir": "/nix/store",
-              "system": "aarch64-linux",
-              "tmpDir": "/private/tmp/nix-build-hello-2.12.2.drv-0/build",
-              "tmpDirInSandbox": "/build",
-              "topTmpDir": "/private/tmp/nix-build-hello-2.12.2.drv-0",
-              "version": 1
-            }
+              "nativeBuildInputs": "/nix/store/l31j72f1…-version-check-hook",
+              "out": "/nix/store/2yx2prgx…-hello-2.12.2"
+              …
+            },
+            "inputPaths": [
+              "/nix/store/14dciax3…-glibc-2.32-54-dev",
+              "/nix/store/1azs5s8z…-gettext-0.21",
+              …
+            ],
+            "outputs": {
+              "out": "/nix/store/2yx2prgx…-hello-2.12.2"
+            },
+            "realStoreDir": "/nix/store",
+            "storeDir": "/nix/store",
+            "system": "aarch64-linux",
+            "tmpDir": "/private/tmp/nix-build-hello-2.12.2.drv-0/build",
+            "tmpDirInSandbox": "/build",
+            "topTmpDir": "/private/tmp/nix-build-hello-2.12.2.drv-0",
+            "version": 1
+          }
+          ```
         )",
         {},   // aliases
         true, // document default
@@ -736,5 +760,11 @@ public:
      */
     const ExternalBuilder * findExternalDerivationBuilderIfSupported(const Derivation & drv);
 };
+
+template<>
+LocalSettings::ExternalBuilders BaseSetting<LocalSettings::ExternalBuilders>::parse(const std::string & str) const;
+
+template<>
+std::string BaseSetting<LocalSettings::ExternalBuilders>::to_string() const;
 
 } // namespace nix

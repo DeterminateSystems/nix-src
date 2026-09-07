@@ -26,19 +26,22 @@ template<typename T>
 using GetEdgesAsync = fun<asio::awaitable<std::set<T>>(const T & elt)>;
 
 template<typename T, typename CompletionToken>
-auto computeClosure(std::set<T> startElts, std::set<T> & res, GetEdgesAsync<T> getEdges, CompletionToken && token)
+auto computeClosure(std::set<T> startElts, std::set<T> & res, GetEdgesAsync<T> getEdges, CompletionToken token)
 {
     auto initiator = [&res, startElts = std::move(startElts), getEdges = std::move(getEdges)](auto handler) {
         auto executor = asio::make_strand(asio::get_associated_executor(handler));
+
+        using Executor = decltype(executor);
+        using Handler = decltype(handler);
 
         /* Hand-rolled dynamic async graph traversal. ASIO/Cobalt and standard
          * C++ will get channels and task groups at some point, but this will
          * have to suffice for now. */
         struct State : std::enable_shared_from_this<State>
         {
-            decltype(executor) executor;
-            decltype(getEdges) getEdges;
-            decltype(handler) handler;
+            Executor executor;
+            GetEdgesAsync<T> getEdges;
+            Handler handler;
             std::set<T> & res;
             /**
              * Needed to keep the ctx.run() alive because actual work might be happening on another thread
@@ -53,7 +56,7 @@ auto computeClosure(std::set<T> startElts, std::set<T> & res, GetEdgesAsync<T> g
             /**
              * Maximum number of concurrent coroutines. Implements primitive rate limiting.
              */
-            std::size_t maxConcurrent = 64;
+            std::size_t maxConcurrent = 1024;
             /**
              * Nodes to handle next.
              */
@@ -64,8 +67,7 @@ auto computeClosure(std::set<T> startElts, std::set<T> & res, GetEdgesAsync<T> g
              */
             std::exception_ptr error;
 
-            State(
-                decltype(executor) executor_, decltype(getEdges) getEdges, decltype(handler) handler, std::set<T> & res)
+            State(Executor executor_, GetEdgesAsync<T> getEdges, Handler handler, std::set<T> & res)
                 : executor(executor_)
                 , getEdges(std::move(getEdges))
                 , handler(std::move(handler))

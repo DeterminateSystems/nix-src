@@ -1,5 +1,5 @@
 #!/usr/bin/env nix
-#!nix shell --inputs-from . nixpkgs#sentry-cli nixpkgs#python3 nixpkgs#binutils --command python3
+#!nix shell --inputs-from . nixpkgs#sentry-cli nixpkgs#python3 nixpkgs#binutils nixpkgs#xz nixpkgs#zstd --command python3
 
 import argparse
 import json
@@ -65,21 +65,27 @@ def download_nar(build_id: str, archive: str) -> str:
 
 
 def extract_debug_symbols(nar_path: str, member: str, build_id: str) -> str:
-    """Extract a member from a .nar.xz into /tmp/debug-info/<build_id>.debug. Returns the output path."""
+    """Extract a member from a compressed NAR into /tmp/debug-info/<build_id>.debug. Returns the output path."""
     out_path = os.path.join(DEBUG_INFO_DIR, f"{build_id}.debug")
     if os.path.exists(out_path):
         print(f"    already extracted {out_path}", file=sys.stderr)
         return out_path
     os.makedirs(DEBUG_INFO_DIR, exist_ok=True)
     print(f"    extracting {member} -> {out_path} ...", file=sys.stderr)
-    xz = subprocess.Popen(["xz", "-d"], stdin=open(nar_path, "rb"), stdout=subprocess.PIPE)
+    if nar_path.endswith(".zst"):
+        decompress_cmd = ["zstd", "-d", "-c"]
+    elif nar_path.endswith(".xz"):
+        decompress_cmd = ["xz", "-d"]
+    else:
+        raise Exception(f"unknown NAR compression format: {nar_path}")
+    decompress = subprocess.Popen(decompress_cmd, stdin=open(nar_path, "rb"), stdout=subprocess.PIPE)
     nar_cat = subprocess.run(
         ["nix", "nar", "cat", "/dev/stdin", member],
-        stdin=xz.stdout,
+        stdin=decompress.stdout,
         capture_output=True,
         check=True,
     )
-    xz.wait()
+    decompress.wait()
     with open(out_path, "wb") as f:
         f.write(nar_cat.stdout)
     return out_path

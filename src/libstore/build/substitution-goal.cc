@@ -1,11 +1,11 @@
+#include "goal-impl.hh"
+
 #include "nix/store/build/worker.hh"
 #include "nix/store/build/substitution-goal.hh"
 #include "nix/store/nar-info.hh"
-#include "nix/util/finally.hh"
+#include "nix/store/worker-settings.hh"
 #include "nix/util/signals.hh"
-#include "nix/store/globals.hh"
-
-#include <coroutine>
+#include "nix/util/callback.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -91,9 +91,9 @@ Goal::Co PathSubstitutionGoal::init()
         }
 
         try {
-            // FIXME: make async
-            info = sub->queryPathInfo(subPath ? *subPath : storePath);
-        } catch (InvalidPath & e) {
+            info = co_await AsyncCallback<ref<const ValidPathInfo>>(
+                [sub, path = subPath.value_or(storePath)](auto cb) { sub->queryPathInfo(path, std::move(cb)); });
+        } catch (InvalidPath &) {
             continue;
         } catch (SubstituterDisabled & e) {
             continue;
@@ -165,7 +165,7 @@ Goal::Co PathSubstitutionGoal::init()
     }
     if (lastStoresException.has_value()) {
         if (!worker.settings.tryFallback) {
-            throw *lastStoresException;
+            throw std::move(*lastStoresException);
         } else
             logError(lastStoresException->info());
     }
@@ -223,56 +223,53 @@ Goal::Co PathSubstitutionGoal::tryToRun(
     auto maintainRunningSubstitutions = std::make_unique<MaintainCount<uint64_t>>(worker.runningSubstitutions);
     worker.updateProgress();
 
-#ifndef _WIN32
-    outPipe.create();
-#else
-    outPipe.createAsyncPipe(worker.ioport.get());
-#endif
-
     auto promise = std::promise<std::shared_ptr<const ValidPathInfo>>();
+    auto future = promise.get_future();
 
-    thr = std::thread([this, &promise, &subPath, &sub]() {
+    /* Be careful with ownership. cleanup() doesn't signal the worker thread
+       to cleanly shutdown, so the worker can die while the thread is still
+       running. That's why we use weak_ptr for everything that is owned by the
+       Worker. */
+    thr = std::thread([weakGoal = weak_from_this(),
+                       promise = std::move(promise),
+                       subPath,
+                       storePath = storePath,
+                       repair = repair,
+                       sub,
+                       maybeWaker = worker.getCrossThreadWaker(),
+                       maybeWorkerStore = worker.store.weak_from_this()]() mutable {
         try {
             ReceiveInterrupts receiveInterrupts;
 
-            /* Wake up the worker loop when we're done. */
-            Finally updateStats([this]() { outPipe.writeSide.close(); });
+            /* The Worker might have died while we were starting up. */
+            auto workerStore = maybeWorkerStore.lock();
+            if (!workerStore)
+                return;
 
             Activity act(
                 *logger,
                 actSubstitute,
-                Logger::Fields{worker.store.printStorePath(storePath), sub->config.getHumanReadableURI()});
+                Logger::Fields{workerStore->printStorePath(storePath), sub->config.getHumanReadableURI()});
             PushActivity pact(act.id);
 
             promise.set_value(
-                copyStorePath(*sub, worker.store, subPath, repair, sub->config.isTrusted ? NoCheckSigs : CheckSigs));
+                copyStorePath(*sub, *workerStore, subPath, repair, sub->config.isTrusted ? NoCheckSigs : CheckSigs));
         } catch (...) {
             promise.set_exception(std::current_exception());
         }
+
+        /* The Worker might have already died (and the waker with it) by the
+           time we finished. N.B. if enqueueing to the waker throws, we better
+           std::terminate, since something has gone very wrong. This intentionally
+           lets the thread crash on exceptions for that reason. */
+        if (auto waker = maybeWaker.lock())
+            waker->enqueue(weakGoal);
     });
 
-    worker.childStarted(
-        shared_from_this(),
-        {
-#ifndef _WIN32
-            outPipe.readSide.get()
-#else
-            &outPipe
-#endif
-        },
-        true,
-        false);
-
-    while (true) {
-        auto event = co_await WaitForChildEvent{};
-        if (std::get_if<ChildOutput>(&event)) {
-            // Substitution doesn't process child output
-        } else if (std::get_if<ChildEOF>(&event)) {
-            break;
-        } else if (std::get_if<TimedOut>(&event)) {
-            unreachable(); // Substitution doesn't use timeouts
-        }
-    }
+    /* Use up the substitution slot. */
+    worker.childStarted(shared_from_this(), /*channels=*/{}, /*inBuildSlot=*/true, /*respectTimeouts=*/false);
+    /* Suspend until the thread finishes. */
+    co_await waitUntilWoken();
 
     trace("substitute finished");
 
@@ -282,7 +279,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
     std::shared_ptr<const Provenance> provenance;
 
     try {
-        auto info = promise.get_future().get();
+        auto info = future.get();
         if (info)
             provenance = info->provenance;
     } catch (std::exception & e) {
@@ -341,8 +338,6 @@ void PathSubstitutionGoal::cleanup()
             thr.join();
             worker.childTerminated(this, JobCategory::Substitution);
         }
-
-        outPipe.close();
     } catch (...) {
         ignoreExceptionInDestructor();
     }

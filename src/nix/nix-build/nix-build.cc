@@ -1,5 +1,4 @@
 #include <cstring>
-#include <fstream>
 #include <iostream>
 #include <filesystem>
 #include <regex>
@@ -17,6 +16,7 @@
 #include "nix/store/globals.hh"
 #include "nix/store/realisation.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/outputs-query.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/path-with-outputs.hh"
 #include "nix/expr/eval.hh"
@@ -31,10 +31,11 @@
 #include "nix/util/fun.hh"
 #include "man-pages.hh"
 
-using namespace nix;
 using namespace std::string_literals;
 
 extern char ** environ __attribute__((weak));
+
+namespace nix {
 
 /* Recreate the effect of the perl shellwords function, breaking up a
  * string into arguments like a shell word, including escapes
@@ -536,7 +537,7 @@ static void main_nix_build(int argc, char ** argv)
             return;
 
         if (shellDrv) {
-            auto shellDrvOutputs = store->queryPartialDerivationOutputMap(shellDrv.value(), &*evalStore);
+            auto shellDrvOutputs = deepQueryPartialDerivationOutputMap(*store, shellDrv.value(), &*evalStore);
             shell = store->printStorePath(shellDrvOutputs.at("out").value()) + "/bin/bash";
         }
 
@@ -592,7 +593,7 @@ static void main_nix_build(int argc, char ** argv)
 
             fun<void(const StorePath &, const DerivedPathMap<StringSet>::ChildNode &)> accumInputClosure =
                 [&](const StorePath & inputDrv, const DerivedPathMap<StringSet>::ChildNode & inputNode) {
-                    auto outputs = store->queryPartialDerivationOutputMap(inputDrv, &*evalStore);
+                    auto outputs = deepQueryPartialDerivationOutputMap(*store, inputDrv, &*evalStore);
                     for (auto & i : inputNode.value) {
                         auto o = outputs.at(i);
                         store->computeFSClosure(*o, inputs);
@@ -728,11 +729,9 @@ static void main_nix_build(int argc, char ** argv)
             if (counter)
                 drvPrefix += fmt("-%d", counter + 1);
 
-            auto builtOutputs = store->queryPartialDerivationOutputMap(drvPath, &*evalStore);
-
-            auto maybeOutputPath = builtOutputs.at(outputName);
-            assert(maybeOutputPath);
-            auto outputPath = *maybeOutputPath;
+            auto outPath = deepQueryPartialDerivationOutput(*store, drvPath, outputName, &*evalStore);
+            assert(outPath);
+            auto outputPath = *outPath;
 
             if (auto store2 = store.dynamic_pointer_cast<LocalFSStore>()) {
                 std::string symlink = drvPrefix;
@@ -753,3 +752,5 @@ static void main_nix_build(int argc, char ** argv)
 
 static RegisterLegacyCommand r_nix_build("nix-build", main_nix_build);
 static RegisterLegacyCommand r_nix_shell("nix-shell", main_nix_build);
+
+} // namespace nix

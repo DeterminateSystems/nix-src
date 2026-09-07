@@ -1,26 +1,23 @@
+#include "nix/util/environment-variables.hh"
 #include "nix/util/error.hh"
 #include "nix/fetchers/fetchers.hh"
 #include "nix/util/users.hh"
 #include "nix/fetchers/cache.hh"
-#include "nix/store/globals.hh"
 #include "nix/util/tarfile.hh"
 #include "nix/store/store-api.hh"
-#include "nix/util/url-parts.hh"
 #include "nix/store/pathlocks.hh"
 #include "nix/util/os-string.hh"
 #include "nix/util/processes.hh"
 #include "nix/util/git.hh"
 #include "nix/fetchers/git-utils.hh"
 #include "nix/util/logging.hh"
-#include "nix/util/finally.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/util/archive.hh"
+#include "nix/util/memo.hh"
 #include "nix/util/mounted-source-accessor.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 
-#include <regex>
-#include <string.h>
 #include <sys/time.h>
 
 #ifndef _WIN32
@@ -168,6 +165,13 @@ std::vector<PublicKey> getPublicKeys(const Attrs & attrs)
 } // end namespace
 
 static const Hash nullRev{HashAlgorithm::SHA1};
+
+static LazyAttr makeLazyAttr(fun<ResolvedAttr()> compute)
+{
+    return make_ref<LazyAttrComputation>(LazyAttrComputation{
+        .compute = memo<ResolvedAttr>(std::move(compute)),
+    });
+}
 
 struct GitInputScheme : InputScheme
 {
@@ -463,7 +467,7 @@ struct GitInputScheme : InputScheme
 
         args.push_back(destDir.native());
 
-        runProgram("git", true, args, {}, true);
+        runProgram("git", true, args, true);
     }
 
     std::optional<std::filesystem::path> getSourcePath(const Input & input) const override
@@ -523,6 +527,10 @@ struct GitInputScheme : InputScheme
                 });
 
             if (commitMsg) {
+                auto [tempFd, tempPath] = createTempFile("nix-msg");
+                AutoDelete delTemp(tempPath, /*recursive=*/false);
+                writeFull(tempFd.get(), *commitMsg);
+
                 // Pause the logger to allow for user input (such as a gpg passphrase) in `git commit`
                 auto suspension = logger->suspend();
                 runProgram(
@@ -536,9 +544,10 @@ struct GitInputScheme : InputScheme
                         OS_STR("commit"),
                         string_to_os_string(std::string(path.rel())),
                         OS_STR("-F"),
-                        OS_STR("-"),
-                    },
-                    *commitMsg);
+                        tempPath.native(),
+                    });
+
+                delTemp.deletePath();
             }
         }
     }
@@ -726,14 +735,12 @@ struct GitInputScheme : InputScheme
     }
 
     uint64_t getRevCount(
-        const Settings & settings,
-        const RepoInfo & repoInfo,
-        const std::filesystem::path & repoDir,
-        const Hash & rev) const
+        ref<Cache> cache, const RepoInfo & repoInfo, const std::filesystem::path & repoDir, const Hash & rev) const
     {
-        Cache::Key key{"gitRevCount", {{"rev", rev.gitRev()}}};
+        if (GitRepo::openRepo(repoDir, {})->isShallow())
+            throw Error("'%s' is a shallow Git repository, so 'revCount' is not available", repoInfo.locationToArg());
 
-        auto cache = settings.getCache();
+        Cache::Key key{"gitRevCount", {{"rev", rev.gitRev()}}};
 
         if (auto revCountAttrs = cache->lookup(key))
             return getIntAttr(*revCountAttrs, "revCount");
@@ -748,11 +755,26 @@ struct GitInputScheme : InputScheme
         return revCount;
     }
 
+    LazyAttr lazyRevCount(
+        const Settings & settings,
+        const RepoInfo & repoInfo,
+        const std::filesystem::path & repoDir,
+        const Hash & rev) const
+    {
+        auto cache = settings.getCache();
+        return makeLazyAttr([this, cache, repoInfo, repoDir, rev]() -> ResolvedAttr {
+            return getRevCount(cache, repoInfo, repoDir, rev);
+        });
+    }
+
     std::string getDefaultRef(const Settings & settings, const RepoInfo & repoInfo, bool shallow) const
     {
         auto head = std::visit(
             overloaded{
-                [&](const std::filesystem::path & path) { return GitRepo::openRepo(path, {})->getWorkdirRef(); },
+                [&](const std::filesystem::path & path) -> std::optional<std::string> {
+                    /* A detached HEAD is still resolvable by libgit2. */
+                    return GitRepo::openRepo(path, {})->getWorkdirRef().value_or("HEAD");
+                },
                 [&](const ParsedURL & url) { return readHeadCached(settings, url.to_string(), shallow); }},
             repoInfo.location);
         if (!head) {
@@ -771,7 +793,7 @@ struct GitInputScheme : InputScheme
                     "\n"
                     "To make it visible to Nix, run:\n"
                     "\n"
-                    "git -C %2% add \"%1%\"",
+                    "git -C %2% add -N \"%1%\"",
                     path.rel(),
                     PathFmt(repoPath));
             else
@@ -942,7 +964,7 @@ struct GitInputScheme : InputScheme
                 }
             }
 
-            std::filesystem::create_directories(cacheDir.parent_path());
+            createDirs(cacheDir.parent_path());
             PathLocks cacheDirLock({cacheDir.string()});
 
             auto repo = GitRepo::openRepo(cacheDir, {.create = true, .bare = true});
@@ -1040,7 +1062,7 @@ struct GitInputScheme : InputScheme
                     "'%s' is a shallow Git repository, but shallow repositories are only allowed when `shallow = true;` is specified",
                     repoInfo.locationToArg());
 
-            input.attrs.insert_or_assign("revCount", getRevCount(settings, repoInfo, repoDir, rev));
+            input.attrs.insert_or_assign("revCount", lazyRevCount(settings, repoInfo, repoDir, rev));
         }
 
         printTalkative("using revision %s of repo '%s'", rev.gitRev(), repoInfo.locationToArg());
@@ -1150,10 +1172,9 @@ struct GitInputScheme : InputScheme
     {
         auto repoPath = repoInfo.getPath().value();
 
-        if (getSubmodulesAttr(input))
-            /* Create mountpoints for the submodules. */
-            for (auto & submodule : repoInfo.workdirInfo.submodules)
-                repoInfo.workdirInfo.files.insert(submodule.path);
+        /* Create mountpoints for the submodules. */
+        for (auto & submodule : repoInfo.workdirInfo.submodules)
+            repoInfo.workdirInfo.files.insert(submodule.path);
 
         auto repo = GitRepo::openRepo(repoPath, {});
 
@@ -1163,12 +1184,19 @@ struct GitInputScheme : InputScheme
             repo->getAccessor(repoInfo.workdirInfo, {.exportIgnore = exportIgnore}, makeNotAllowedError(repoPath));
 
         /* If the repo has submodules, return a mounted input accessor
-           consisting of the accessor for the top-level repo and the
-           accessors for the submodule workdirs. */
-        if (getSubmodulesAttr(input) && !repoInfo.workdirInfo.submodules.empty()) {
+           consisting of the accessor for the top-level repo and, per
+           submodule, either its workdir accessor or an empty directory
+           where getAccessorFromCommit() would produce one (submodules
+           disabled, or a gitlink without a .gitmodules entry). */
+        if (!repoInfo.workdirInfo.submodules.empty()) {
             std::map<CanonPath, nix::ref<SourceAccessor>> mounts;
 
             for (auto & submodule : repoInfo.workdirInfo.submodules) {
+                if (!getSubmodulesAttr(input) || submodule.url.empty()) {
+                    mounts.insert_or_assign(submodule.path, makeEmptySourceAccessor());
+                    continue;
+                }
+
                 auto submodulePath = repoPath / submodule.path.rel();
                 fetchers::Attrs attrs;
                 attrs.insert_or_assign("type", "git");
@@ -1205,8 +1233,11 @@ struct GitInputScheme : InputScheme
 
             input.attrs.insert_or_assign("rev", rev.gitRev());
             if (!getShallowAttr(input)) {
-                input.attrs.insert_or_assign(
-                    "revCount", rev == nullRev ? 0 : getRevCount(settings, repoInfo, repoPath, rev));
+                if (rev == nullRev) {
+                    input.attrs.insert_or_assign("revCount", uint64_t(0));
+                } else {
+                    input.attrs.insert_or_assign("revCount", lazyRevCount(settings, repoInfo, repoPath, rev));
+                }
             }
 
             verifyCommit(input, repo);
@@ -1267,7 +1298,7 @@ struct GitInputScheme : InputScheme
                 for (auto & file : repoInfo.workdirInfo.dirtyFiles) {
                     writeString("modified:", hashSink);
                     writeString(file.abs(), hashSink);
-                    dumpPath((*repoPath / file.rel()).string(), hashSink);
+                    dumpPath(*repoPath / file.rel(), hashSink);
                 }
                 for (auto & file : repoInfo.workdirInfo.deletedFiles) {
                     writeString("deleted:", hashSink);

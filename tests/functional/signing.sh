@@ -7,7 +7,7 @@ source common.sh
 runTests() {
 
 clearStoreIfPossible
-clearCache
+clearBinaryCache
 
 keyType="$1"
 

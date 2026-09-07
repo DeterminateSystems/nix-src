@@ -13,6 +13,7 @@
 #include "nix/store/store-registration.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/util/finally.hh"
+#include "nix/util/json-utils.hh"
 #include "nix/main/loggers.hh"
 #include "nix/cmd/markdown.hh"
 #include "nix/util/memory-source-accessor.hh"
@@ -22,7 +23,6 @@
 #include "nix/expr/eval-cache.hh"
 #include "nix/flake/flake.hh"
 #include "nix/flake/settings.hh"
-#include "nix/util/json-utils.hh"
 #include "nix/util/sentry.hh"
 
 #include "self-exe.hh"
@@ -35,26 +35,31 @@
 #  include <sentry.h>
 #endif
 
+#if HAVE_MIMALLOC
+#  include <mimalloc.h>
+#endif
+
 #ifndef _WIN32
 #  include <sys/socket.h>
 #  include <ifaddrs.h>
 #  include <netdb.h>
 #  include <netinet/in.h>
+#  include <signal.h>
 #endif
 
 #ifdef __linux__
 #  include "nix/util/linux-namespaces.hh"
 #endif
 
+#include "nix/util/strings.hh"
+
+namespace nix {
+
 #ifndef _WIN32
 extern std::string chrootHelperName;
 
 void chrootHelper(int argc, char ** argv);
 #endif
-
-#include "nix/util/strings.hh"
-
-namespace nix {
 
 /* Check if we have a non-loopback/link-local network interface. */
 static bool haveInternet()
@@ -180,6 +185,7 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             {"make-content-addressable", {AliasStatus::Deprecated, {"store", "make-content-addressed"}}},
             {"optimise-store", {AliasStatus::Deprecated, {"store", "optimise"}}},
             {"ping-store", {AliasStatus::Deprecated, {"store", "info"}}},
+            {"realisation", {AliasStatus::Deprecated, {"store", "build-trace"}}},
             {"sign-paths", {AliasStatus::Deprecated, {"store", "sign"}}},
             {"shell", {AliasStatus::AcceptedShorthand, {"env", "shell"}}},
             {"show-derivation", {AliasStatus::Deprecated, {"derivation", "show"}}},
@@ -406,9 +412,7 @@ static void terminateHandler()
         }
     }
 
-    // Call the original terminate handler.
-    std::set_terminate(nullptr);
-    std::terminate();
+    onTerminate();
 }
 
 void mainWrapped(int argc, char ** argv)
@@ -424,6 +428,53 @@ void mainWrapped(int argc, char ** argv)
     }
 #endif
 
+#if HAVE_MIMALLOC
+    /* Make allocation failures print a proper error message instead
+       of aborting silently. Note that the `std::new_handler` installed
+       by `initLibUtil()` does not suffice, since mimalloc's `operator
+       new` override never sees it: libmimalloc is linked with
+       `-Bsymbolic`, so its weak null stub of `std::get_new_handler()`
+       shadows the real one from libstdc++. Register this before
+       `initLibUtil()` so allocation failures during initialization
+       are handled as well. */
+    mi_register_error(
+        [](int err, void *) {
+            if (err == ENOMEM || err == EOVERFLOW)
+                outOfMemory();
+            /* EFAULT means mimalloc detected heap corruption (e.g. a
+               double free) in secure mode; don't continue with a
+               corrupted heap. EINVAL (bad pointer passed to
+               `mi_free()`) is non-fatal, so just return. */
+            if (err == EFAULT)
+                panic("mimalloc detected heap corruption");
+        },
+        nullptr);
+#endif
+
+    /* This must be called before Sentry since both initialize OpenSSL. */
+    initLibUtil();
+
+    /* Set the build hook location
+
+       For builds we perform a self-invocation, so Nix has to be
+       self-aware. That is, it has to know where it is installed. We
+       don't think it's sentient.
+     */
+    settings.getWorkerSettings().buildHook.setDefault(
+        Strings{
+            getNixBin({}).string(),
+            "__build-remote",
+        });
+
+    initNix();
+
+    /* Initialize Sentry only after initNix(), i.e. after
+       startSignalHandlerThread() has blocked SIGINT etc. in the
+       calling thread. The worker threads spawned by `sentry_init()`
+       inherit that signal mask; if they were started earlier, the
+       kernel could deliver a Ctrl-C's SIGINT to one of them, where its
+       default disposition would kill the process immediately (without
+       printing an error or restoring the terminal cursor). */
     bool sentryEnabled = false;
 
 #if HAVE_SENTRY
@@ -452,6 +503,17 @@ void mainWrapped(int argc, char ** argv)
         setSentryTag("nix_command", argc > 0 ? std::string(baseNameOf(argv[0])).c_str() : "");
         std::set_terminate(terminateHandler);
         sentryEnabled = true;
+
+        /* Reset SIGQUIT, for which `sentry_init()` installed a crash
+           handler, to its default disposition: SIGQUIT is a
+           user-initiated "quit with core dump" action (e.g. Ctrl-\ at
+           a terminal), not a crash, so it should not be reported. */
+        struct sigaction act;
+        sigemptyset(&act.sa_mask);
+        act.sa_flags = 0;
+        act.sa_handler = SIG_DFL;
+        if (sigaction(SIGQUIT, &act, 0))
+            throw SysError("handling SIGQUIT");
     }
 
     Finally cleanupSentry([&]() {
@@ -463,31 +525,12 @@ void mainWrapped(int argc, char ** argv)
     if (!sentryEnabled)
         registerCrashHandler();
 
-    /* Set the build hook location
-
-       For builds we perform a self-invocation, so Nix has to be
-       self-aware. That is, it has to know where it is installed. We
-       don't think it's sentient.
-     */
-    settings.getWorkerSettings().buildHook.setDefault(
-        Strings{
-            getNixBin({}).string(),
-            "__build-remote",
-        });
-
-    initNix();
     initGC();
     flakeSettings.configureEvalSettings(evalSettings);
 
 #ifdef __linux__
-    if (isRootUser()) {
-        try {
-            saveMountNamespace();
-            if (unshare(CLONE_NEWNS) == -1)
-                throw SysError("setting up a private mount namespace");
-        } catch (Error & e) {
-        }
-    }
+    if (isRootUser())
+        tryEnterPrivateMountNamespace();
 #endif
 
     Finally f([] { logger->stop(); });
@@ -680,12 +723,6 @@ int main(int argc, char ** argv)
     using namespace nix;
 
     // The CLI has a more detailed version than the libraries; see nixVersion.
-    nixVersion = NIX_CLI_VERSION;
-#ifndef _WIN32
-    // Increase the default stack size for the evaluator and for
-    // libstdc++'s std::regex.
-    setStackSize(evalStackSize);
-#endif
-
-    return handleExceptions(argv[0], [&]() { mainWrapped(argc, argv); });
+    nix::nixVersion = NIX_CLI_VERSION;
+    return nix::handleExceptions(argv[0], [&]() { nix::mainWrapped(argc, argv); });
 }

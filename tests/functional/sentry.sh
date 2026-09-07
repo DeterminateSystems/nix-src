@@ -15,6 +15,15 @@ if ! [[ -d $sentryDir ]]; then
     skipTest "not built with sentry support"
 fi
 
+# The crashpad handler captures a crash by ptrace-attaching to the crashing
+# process. Yama ptrace_scope >= 2 restricts ptrace to CAP_SYS_PTRACE, which an
+# unprivileged test run does not have (and PR_SET_PTRACER only helps at scope
+# 1), so no minidump can ever be written on such kernels — e.g. hardened hosts
+# or CI sandboxes.
+if [[ -r /proc/sys/kernel/yama/ptrace_scope && $(< /proc/sys/kernel/yama/ptrace_scope) -ge 2 ]]; then
+    skipTest "ptrace is restricted by Yama (kernel.yama.ptrace_scope >= 2)"
+fi
+
 waitForCrashDump() {
     local i
     for ((i = 0; i < 10; i++)); do
@@ -27,7 +36,7 @@ waitForCrashDump() {
     return 1
 }
 
-for type in segfault assert logic-error panic terminate; do
+for type in segfault assert logic-error panic terminate abort; do
     if [[ $type = logic-error && $(uname) = Darwin ]]; then continue; fi
 
     rm -rf "$sentryDir"

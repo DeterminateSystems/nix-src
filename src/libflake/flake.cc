@@ -17,7 +17,6 @@
 #include <utility>
 #include <variant>
 #include <vector>
-#include <format>
 
 #include "nix/util/terminal.hh"
 #include "nix/util/ref.hh"
@@ -40,6 +39,7 @@
 #include "nix/fetchers/input-cache.hh"
 #include "nix/expr/attr-set.hh"
 #include "nix/expr/eval-error.hh"
+#include "nix/expr/fetch-tree.hh"
 #include "nix/expr/nixexpr.hh"
 #include "nix/expr/symbol-table.hh"
 #include "nix/expr/value.hh"
@@ -58,7 +58,6 @@
 #include "nix/util/logging.hh"
 #include "nix/util/pos-idx.hh"
 #include "nix/util/pos-table.hh"
-#include "nix/util/position.hh"
 #include "nix/util/source-path.hh"
 #include "nix/util/types.hh"
 #include "nix/util/util.hh"
@@ -66,7 +65,6 @@
 namespace nix {
 struct SourceAccessor;
 
-using namespace flake;
 using namespace fetchers;
 
 namespace flake {
@@ -915,8 +913,6 @@ LockedFlake lockFlake(
                                 CanonPath((topRef.subdir == "" ? "" : topRef.subdir + "/") + "flake.lock"),
                                 newLockFileS,
                                 commitMessage);
-
-                            flake.lockFilePath().invalidateCache();
                         }
 
                         /* Rewriting the lockfile changed the top-level
@@ -1038,11 +1034,24 @@ std::optional<Fingerprint> LockedFlake::getFingerprint(Store & store, const fetc
 
     *fingerprint += fmt(";%s;%s", flake.lockedRef.subdir, lockFile);
 
-    /* Include revCount and lastModified because they're not
-       necessarily implied by the content fingerprint (e.g. for
-       tarball flakes) but can influence the evaluation result. */
-    if (auto revCount = flake.lockedRef.input.getRevCount())
-        *fingerprint += fmt(";revCount=%d", *revCount);
+    if (auto revCount = get(flake.lockedRef.input.attrs, "revCount")) {
+        if (std::get_if<fetchers::LazyAttr>(revCount)) {
+            /* A lazy revCount is computed by the fetcher, so its
+               value is functionally determined by `rev`. We only
+               need to record its presence, not force its value.
+
+               This means a lazy and a concrete revCount that would
+               resolve to the same value produce different
+               fingerprints, sacrificing some cache hits to avoid
+               the cost of forcing. */
+            *fingerprint += ";hasRevCount";
+        } else if (auto n = flake.lockedRef.input.getRevCount()) {
+            /* A concrete revCount comes from a lockfile or explicit
+               user input. The fetcher passes it through as-is, so
+               it can affect evaluation and must be fingerprinted. */
+            *fingerprint += fmt(";revCount=%d", *n);
+        }
+    }
     if (auto lastModified = flake.lockedRef.input.getLastModified())
         *fingerprint += fmt(";lastModified=%d", *lastModified);
 

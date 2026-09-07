@@ -1,5 +1,4 @@
 #include "nix/store/ssh.hh"
-#include "nix/util/finally.hh"
 #include "nix/util/current-process.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/os-string.hh"
@@ -21,12 +20,15 @@ static std::string parsePublicHostKey(std::string_view host, std::string_view ss
 
 class InvalidSSHAuthority final : public CloneableError<InvalidSSHAuthority, Error>
 {
+    void anchor() override;
 public:
     InvalidSSHAuthority(const ParsedURL::Authority & authority, std::string_view reason)
         : CloneableError("invalid SSH authority: '%s': %s", authority.to_string(), reason)
     {
     }
 };
+
+void InvalidSSHAuthority::anchor() {}
 
 /**
  * Checks if the hostname/username are valid for use with ssh.
@@ -66,7 +68,7 @@ OsStrings getNixSshOpts()
 
 SSHMaster::SSHMaster(
     const ParsedURL::Authority & authority,
-    std::filesystem::path keyFile,
+    std::optional<std::filesystem::path> keyFile,
     std::string_view sshPublicHostKey,
     bool useMaster,
     bool compress,
@@ -95,8 +97,8 @@ void SSHMaster::addCommonSSHOpts(OsStrings & args, std::optional<std::filesystem
     auto sshArgs = getNixSshOpts();
     args.insert(args.end(), sshArgs.begin(), sshArgs.end());
 
-    if (!keyFile.empty())
-        args.insert(args.end(), {OS_STR("-i"), keyFile.native()});
+    if (keyFile)
+        args.insert(args.end(), {OS_STR("-i"), keyFile->native()});
     if (!sshPublicHostKey.empty()) {
         std::filesystem::path fileName = tmpDir->path() / "host-key";
         writeFile(fileName, authority.host + " " + sshPublicHostKey + "\n");
@@ -191,6 +193,16 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
                 if (verbosity >= lvlChatty)
                     args.push_back("-v");
                 args.splice(args.end(), std::move(extraSshArgs));
+                // Override LocalCommand to no-op on command SSHs; master
+                // already consumed "started". On fallback, "echo started"
+                // would leak into the nix protocol stream. #441
+                if (useMaster) {
+                    for (auto & arg : args) {
+                        if (arg.starts_with(OS_STR("-oLocalCommand="))) {
+                            arg = OS_STR("-oLocalCommand=true");
+                        }
+                    }
+                }
                 args.push_back("--");
             }
 
@@ -206,9 +218,9 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
     in.readSide = INVALID_DESCRIPTOR;
     out.writeSide = INVALID_DESCRIPTOR;
 
-    // Wait for the SSH connection to be established,
-    // So that we don't overwrite the password prompt with our progress bar.
-    if (!fakeSSH && !(socketPath && isMasterRunning(*socketPath))) {
+    // Skip readLine when useMaster: SSH connects via master socket, or
+    // falls back to direct connection where LocalCommand is now a no-op.
+    if (!fakeSSH && !useMaster && !(socketPath && isMasterRunning(*socketPath))) {
         std::string reply;
         try {
             reply = readLine(out.readSide.get());
@@ -237,7 +249,8 @@ std::optional<std::filesystem::path> SSHMaster::startMaster()
 
     auto state(state_.lock());
 
-    if (state->sshMaster != INVALID_DESCRIPTOR)
+    // Check if the master is still alive before returning the cached socket.
+    if (state->sshMaster != INVALID_DESCRIPTOR && state->sshMaster.isAlive())
         return state->socketPath;
 
     state->socketPath = tmpDir->path() / "ssh.sock";

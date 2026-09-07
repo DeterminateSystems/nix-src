@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <set>
 #include <sstream>
 #include <bit>
 #include <optional>
@@ -31,7 +32,7 @@ template<class... Parts>
 auto concatStrings(Parts &&... parts)
     -> std::enable_if_t<(... && std::is_convertible_v<Parts, std::string_view>), std::string>
 {
-    std::string_view views[sizeof...(parts)] = {parts...};
+    std::string_view views[sizeof...(parts)] = {std::forward<Parts>(parts)...};
     return concatStringsSep({}, views);
 }
 
@@ -83,7 +84,12 @@ std::string trim(std::string_view s, std::string_view whitespace = " \n\r\t");
  */
 std::string replaceStrings(std::string s, std::string_view from, std::string_view to);
 
-std::string rewriteStrings(std::string s, const StringMap & rewrites);
+/**
+ * Replace all occurrences of the keys in `rewrites` with their corresponding values. Optionally returns the positions
+ * of the matches in `matches`.
+ */
+std::string rewriteStrings(
+    std::string s, const StringMap & rewrites, std::set<uint64_t> * matches = nullptr, uint64_t offsetShift = 0);
 
 /**
  * Parse a string into an integer.

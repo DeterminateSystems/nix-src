@@ -10,6 +10,8 @@
 
 namespace nix::eval_cache {
 
+void CachedEvalError::anchor() {}
+
 CachedEvalError::CachedEvalError(ref<AttrCursor> cursor, Symbol attr)
     : CloneableError(cursor->root->state, "cached failure of attribute '%s'", cursor->getAttrPathStr(attr))
     , cursor(cursor)
@@ -56,6 +58,9 @@ struct AttrDb
         SQLiteStmt insertAttributeWithContext;
         SQLiteStmt queryAttribute;
         SQLiteStmt queryAttributes;
+        SQLiteStmt upsertAttribute;
+        SQLiteStmt insertAttributeIfNotExists;
+        SQLiteStmt deleteMissingChildren;
         std::unique_ptr<SQLiteTxn> txn;
     };
 
@@ -90,6 +95,17 @@ struct AttrDb
 
         state->queryAttributes.create(state->db, "select name from Attributes where parent = ?");
 
+        state->upsertAttribute.create(
+            state->db,
+            "insert into Attributes(parent, name, type, value) values (?, ?, ?, ?) "
+            "on conflict(parent, name) do update set type = excluded.type, value = excluded.value "
+            "returning rowid");
+
+        state->insertAttributeIfNotExists.create(
+            state->db, "insert or ignore into Attributes(parent, name, type, value) values (?, ?, ?, ?)");
+
+        state->deleteMissingChildren.create(state->db, "delete from Attributes where parent = ? and type = 3");
+
         state->txn = std::make_unique<SQLiteTxn>(state->db);
     }
 
@@ -106,7 +122,7 @@ struct AttrDb
     }
 
     template<typename F>
-    AttrId doSQLite(F && fun)
+    AttrId doSQLite(const F & fun)
     {
         if (failed)
             return 0;
@@ -124,18 +140,20 @@ struct AttrDb
         return doSQLite([&]() {
             auto state(_state->lock());
 
-            state->insertAttribute.use()
-                .apply(key.first)
-                .apply(symbols[key.second])
-                .apply(AttrType::FullAttrs)
-                .apply(0, false)
-                .exec();
-
-            AttrId rowId = state->db.getLastInsertedRowId();
+            // Seal the attribute names: we now know the complete set.
+            auto upsertAttribute(state->upsertAttribute.use()
+                                     .apply(key.first)
+                                     .apply(symbols[key.second])
+                                     .apply(AttrType::FullAttrs)
+                                     .apply(0, false));
+            upsertAttribute.next();
+            auto rowId = (AttrId) upsertAttribute.getInt(0);
             assert(rowId);
+            state->deleteMissingChildren.use().apply(rowId).exec();
 
+            // Insert children as placeholders, but don't replace existing entries
             for (auto & attr : attrs)
-                state->insertAttribute.use()
+                state->insertAttributeIfNotExists.use()
                     .apply(rowId)
                     .apply(symbols[attr])
                     .apply(AttrType::Placeholder)
@@ -359,11 +377,12 @@ EvalCache::EvalCache(
 
 Value * EvalCache::getRootValue()
 {
-    if (!value) {
+    auto value(this->value.lock());
+    if (!*value) {
         debug("getting root value");
-        value = allocRootValue(rootLoader());
+        *value = RootValue(rootLoader());
     }
-    return *value;
+    return **value;
 }
 
 ref<AttrCursor> EvalCache::getRoot()
@@ -378,7 +397,7 @@ AttrCursor::AttrCursor(
     , cachedValue(std::move(cachedValue))
 {
     if (value)
-        _value = allocRootValue(value);
+        *_value.lock() = RootValue(value);
 }
 
 AttrKey AttrCursor::getKey()
@@ -394,18 +413,23 @@ AttrKey AttrCursor::getKey()
 
 Value & AttrCursor::getValue()
 {
-    if (!_value) {
+    /* Note: this lock is held while the value is being evaluated,
+       so concurrent calls block until the value is available. Lock
+       ordering is strictly child -> parent, so this cannot
+       deadlock. */
+    auto value(_value.lock());
+    if (!*value) {
         if (parent) {
             auto & vParent = parent->first->getValue();
             root->state.forceAttrs(vParent, noPos, "while searching for an attribute");
             auto attr = vParent.attrs()->get(parent->second);
             if (!attr)
                 throw Error("attribute '%s' is unexpectedly missing", getAttrPathStr());
-            _value = allocRootValue(attr->value);
+            *value = RootValue(attr->value);
         } else
-            _value = allocRootValue(root->getRootValue());
+            *value = RootValue(root->getRootValue());
     }
-    return **_value;
+    return ***value;
 }
 
 void AttrCursor::fetchCachedValue()
@@ -469,9 +493,13 @@ Value & AttrCursor::forceValue()
     }
 
     if (root->db && (!cachedValue || std::get_if<placeholder_t>(&cachedValue->second))) {
-        if (v.type() == nString)
-            cachedValue = {root->db->setString(getKey(), v.string_view(), v.context()), string_t{v.string_view(), {}}};
-        else if (v.type() == nPath) {
+        if (v.type() == nString) {
+            NixStringContext context;
+            copyContext(v, context);
+            cachedValue = {
+                root->db->setString(getKey(), v.string_view(), v.context()),
+                string_t{v.string_view(), std::move(context)}};
+        } else if (v.type() == nPath) {
             auto path = v.path().path;
             cachedValue = {root->db->setString(getKey(), path.abs()), string_t{path.abs(), {}}};
         } else if (v.type() == nBool)
@@ -626,9 +654,12 @@ string_t AttrCursor::getStringWithContext()
                             [&](const NixStringContextElem::Path & p) -> const StorePath * { return nullptr; },
                         },
                         c.raw);
-                    if (!path || !root->state.store->isValidPath(*path)) {
-                        valid = false;
-                        break;
+                    if (path) {
+                        root->state.store->addTempRoot(*path);
+                        if (!root->state.store->isValidPath(*path)) {
+                            valid = false;
+                            break;
+                        }
                     }
                 }
                 if (valid) {
@@ -770,14 +801,17 @@ StorePath AttrCursor::forceDerivation()
     auto aDrvPath = getAttr(root->state.s.drvPath);
     auto drvPath = root->state.store->parseStorePath(aDrvPath->getString());
     drvPath.requireDerivation();
-    if (!root->state.store->isValidPath(drvPath) && !settings.readOnlyMode) {
-        /* The eval cache contains 'drvPath', but the actual path has
-           been garbage-collected. So force it to be regenerated. */
-        aDrvPath->forceValue();
-        root->state.waitForPath(drvPath);
-        if (!root->state.store->isValidPath(drvPath))
-            throw Error(
-                "don't know how to recreate store derivation '%s'!", root->state.store->printStorePath(drvPath));
+    if (!settings.readOnlyMode) {
+        root->state.store->addTempRoot(drvPath);
+        if (!root->state.store->isValidPath(drvPath)) {
+            /* The eval cache contains 'drvPath', but the actual path has
+               been garbage-collected. So force it to be regenerated. */
+            aDrvPath->forceValue();
+            root->state.waitForPath(drvPath);
+            if (!root->state.store->isValidPath(drvPath))
+                throw Error(
+                    "don't know how to recreate store derivation '%s'!", root->state.store->printStorePath(drvPath));
+        }
     }
     return drvPath;
 }

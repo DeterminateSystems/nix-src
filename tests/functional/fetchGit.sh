@@ -4,15 +4,11 @@ source common.sh
 
 requireGit
 
-clearStoreIfPossible
-
 # Intentionally not in a canonical form
 # See https://github.com/NixOS/nix/issues/6195
 repo=$TEST_ROOT/./git
 
 export _NIX_FORCE_HTTP=1
-
-rm -rf "${repo}"-tmp "$TEST_HOME"/.cache/nix "$TEST_ROOT"/worktree "$TEST_ROOT"/minimal
 
 createGitRepo "$repo"
 
@@ -35,7 +31,7 @@ nix-instantiate --eval -E "builtins.readFile ((builtins.fetchGit \"file://$TEST_
 
 # Fetch a worktree.
 unset _NIX_FORCE_HTTP
-expectStderr 0 nix eval -vvvv --impure --raw --expr "(builtins.fetchGit \"file://$TEST_ROOT/worktree\").outPath" | grepQuiet "copying '$TEST_ROOT/worktree/' to the store"
+expectStderr 0 nix eval -vvvv --impure --raw --expr "(builtins.fetchGit \"file://$TEST_ROOT/worktree\").outPath" | grepQuiet "copying '$TEST_ROOT/worktree' to the store"
 path0=$(nix eval --impure --raw --expr "(builtins.fetchGit \"file://$TEST_ROOT/worktree\").outPath")
 path0_=$(nix eval --impure --raw --expr "(builtins.fetchTree { type = \"git\"; url = \"file://$TEST_ROOT/worktree\"; }).outPath")
 [[ $path0 = "$path0_" ]]
@@ -215,6 +211,9 @@ createGitRepo "$TEST_ROOT"/minimal
 git -C "$TEST_ROOT"/minimal fetch "$repo" "$rev2"
 git -C "$TEST_ROOT"/minimal checkout "$rev2"
 [[ $(nix eval --impure --raw --expr "(builtins.fetchGit { url = $TEST_ROOT/minimal; }).rev") = "$rev2" ]]
+# Detached HEAD must not fall back to a guessed 'master' ref.
+expectStderr 0 nix eval --raw --expr "(builtins.fetchGit { url = $TEST_ROOT/minimal; rev = \"$rev2\"; }).outPath" \
+    | grepQuietInverse "could not read HEAD ref"
 
 # Explicit ref = "HEAD" should work, and produce the same outPath as without ref
 path7=$(nix eval --impure --raw --expr "(builtins.fetchGit { url = \"file://$repo\"; ref = \"HEAD\"; }).outPath")

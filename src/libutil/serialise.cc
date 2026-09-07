@@ -1,12 +1,12 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/file-descriptor.hh"
-#include "nix/util/compression.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/socket.hh"
 #include "nix/util/util.hh"
 
 #include <cstring>
 #include <cerrno>
+#include <limits>
 #include <memory>
 
 #include <boost/coroutine2/coroutine.hpp>
@@ -20,6 +20,50 @@
 
 namespace nix {
 
+void SerialisationError::anchor() {}
+
+void Sink::anchor() {}
+
+void BufferedSink::anchor() {}
+
+void FdSink::anchor() {}
+
+void StringSink::anchor() {}
+
+void TeeSink::anchor() {}
+
+void FinishSink::anchor() {}
+
+void LambdaSink::anchor() {}
+
+void NullSink::anchor() {}
+
+void FramedSink::anchor() {}
+
+void Source::anchor() {}
+
+void BufferedSource::anchor() {}
+
+void RestartableSource::anchor() {}
+
+void FdSource::anchor() {}
+
+void TeeSource::anchor() {}
+
+void StringSource::anchor() {}
+
+void LambdaSource::anchor() {}
+
+void FramedSource::anchor() {}
+
+void LengthSource::anchor() {}
+
+void EnsureRead::anchor() {}
+
+void ChainSource::anchor() {}
+
+void SizedSource::anchor() {}
+
 void BufferedSink::operator()(std::string_view data)
 {
     if (!buffer)
@@ -28,14 +72,14 @@ void BufferedSink::operator()(std::string_view data)
     while (!data.empty()) {
         /* Optimisation: bypass the buffer if the data exceeds the
            buffer size. */
-        if (bufPos + data.size() >= bufSize) {
+        if (data.size() >= bufSize - bufPos) {
             flush();
             writeUnbuffered(data);
             break;
         }
         /* Otherwise, copy the bytes to the buffer.  Flush the buffer
            when it's full. */
-        size_t n = bufPos + data.size() > bufSize ? bufSize - bufPos : data.size();
+        size_t n = data.size() > bufSize - bufPos ? bufSize - bufPos : data.size();
         memcpy(buffer.get() + bufPos, data.data(), n);
         data.remove_prefix(n);
         bufPos += n;
@@ -102,6 +146,20 @@ void Source::drainInto(Sink & sink)
         } catch (EndOfFile &) {
             break;
         }
+    }
+}
+
+void Source::drainInto(Sink & sink, uint64_t len)
+{
+    std::array<char, 65536> buf;
+    while (len) {
+        checkInterrupt();
+        // Until std::saturate_cast is available (C++26)
+        auto lenTrunc = static_cast<size_t>(std::min<uint64_t>(len, std::numeric_limits<size_t>::max()));
+        auto n = read(buf.data(), std::min(lenTrunc, buf.size()));
+        sink({buf.data(), n});
+        assert(n <= len);
+        len -= n;
     }
 }
 
@@ -273,6 +331,8 @@ void FdSource::skip(size_t len)
 #ifndef _WIN32
     /* If we can, seek forward in the file to skip the rest. */
     if (isSeekable && len) {
+        if (len > static_cast<size_t>(std::numeric_limits<off_t>::max()))
+            throw Error("cannot skip %d bytes: exceeds maximum file offset", len);
         if (lseek(fd, len, SEEK_CUR) == -1) {
             if (errno == ESPIPE)
                 isSeekable = false;
@@ -307,19 +367,6 @@ void StringSource::skip(size_t len)
         throw EndOfFile("end of string reached");
     }
     pos += len;
-}
-
-CompressedSource::CompressedSource(RestartableSource & source, CompressionAlgo compressionMethod)
-    : compressedData([&]() {
-        StringSink sink;
-        auto compressionSink = makeCompressionSink(compressionMethod, sink);
-        source.drainInto(*compressionSink);
-        compressionSink->finish();
-        return std::move(sink.s);
-    }())
-    , compressionMethod(compressionMethod)
-    , stringSource(compressedData)
-{
 }
 
 /* 512KiB is a conservative estimate for deeply nested NARs, which are limited
@@ -414,12 +461,28 @@ std::unique_ptr<Source> sinkToSource(fun<void(Sink &)> writer, fun<void()> eof)
                 coro = coro_t::pull_type(
                     boost::coroutines2::protected_fixedsize_stack(defaultCoroutineStackSize),
                     [&](coro_t::push_type & yield) {
-                        LambdaSink sink([&](std::string_view data) {
-                            if (!data.empty()) {
+                        /* Feed the consumer in chunks, instead of on each write
+                           to avoid excessive context switching. parseDump does
+                           lots of small writes to the sink, which we should
+                           accumulate. */
+                        struct CoroBufferedSink : BufferedSink
+                        {
+                            coro_t::push_type & yield;
+
+                            void writeUnbuffered(std::string_view data) override
+                            {
                                 yield(data);
                             }
-                        });
+
+                            CoroBufferedSink(coro_t::push_type & yield)
+                                : yield(yield)
+                            {
+                            }
+                        };
+
+                        CoroBufferedSink sink(yield);
                         writer(sink);
+                        sink.flush();
                     });
             }
 
@@ -514,12 +577,11 @@ Sink & operator<<(Sink & sink, const Error & ex)
 void readPadding(size_t len, Source & source)
 {
     if (len % 8) {
-        char zero[8];
+        uint64_t zero = 0;
         size_t n = 8 - (len % 8);
-        source(zero, n);
-        for (unsigned int i = 0; i < n; i++)
-            if (zero[i])
-                throw SerialisationError("non-zero padding");
+        source(reinterpret_cast<char *>(&zero), n);
+        if (zero)
+            throw SerialisationError("non-zero padding");
     }
 }
 
@@ -566,7 +628,8 @@ template StringSet readStrings(Source & source);
 Error readError(Source & source)
 {
     auto type = readString(source);
-    assert(type == "Error");
+    if (type != "Error")
+        throw SerialisationError("unexpected error type '%s'", type);
     auto level = (Verbosity) readInt(source);
     [[maybe_unused]] auto name = readString(source); // removed
     auto msg = readString(source);
@@ -575,11 +638,13 @@ Error readError(Source & source)
         .msg = HintFmt(msg),
     };
     auto havePos = readNum<size_t>(source);
-    assert(havePos == 0);
+    if (havePos != 0)
+        throw SerialisationError("deserializing error positions is not supported");
     auto nrTraces = readNum<size_t>(source);
     for (size_t i = 0; i < nrTraces; ++i) {
         havePos = readNum<size_t>(source);
-        assert(havePos == 0);
+        if (havePos != 0)
+            throw SerialisationError("deserializing error positions is not supported");
         info.traces.push_back(Trace{.hint = HintFmt(readString(source))});
     }
     return Error(std::move(info));

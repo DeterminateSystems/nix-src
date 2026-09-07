@@ -6,6 +6,8 @@ namespace nix {
 
 struct AsyncPathWriter
 {
+    virtual void anchor();
+
     virtual ~AsyncPathWriter() = default;
 
     virtual StorePath addPath(

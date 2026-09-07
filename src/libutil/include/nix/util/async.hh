@@ -88,21 +88,25 @@ asio::awaitable<T> callbackToAwaitable(F && initiate)
 }
 
 template<typename Range, typename F>
-asio::awaitable<void> forEachAsync(Range && range, F && f)
+asio::awaitable<void> forEachAsync(Range && range, const F & f)
 {
     /* This code only runs on a strand - we don't do multithreaded executors, so
        no need for synchronisation. */
     auto pending = std::ranges::size(range);
     if (pending == 0)
         co_return;
+    else if (pending == 1)
+        co_return co_await f(*range.begin());
 
     auto executor = co_await asio::this_coro::executor;
     std::exception_ptr err;
 
+    /* TODO: Handle cancellation on first error. Not very useful for now since we
+       do all-or-nothing cancellation typically. */
     co_await asio::async_initiate<decltype(asio::use_awaitable), void(std::exception_ptr)>(
         [&](auto handler) {
             auto h = std::make_shared<decltype(handler)>(std::move(handler));
-            for (auto && elt : range) {
+            for (auto && elt : std::forward<Range>(range)) {
                 asio::co_spawn(executor, f(elt), [executor, h, &err, &pending](std::exception_ptr ex) {
                     if (ex && !err)
                         err = ex;

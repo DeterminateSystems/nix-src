@@ -1,12 +1,17 @@
 #include "nix/util/nar-accessor.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/error.hh"
-#include "nix/util/signals.hh"
 
 namespace nix {
 
+namespace {
+
 struct NarAccessorImpl : NarAccessor
 {
+private:
+    void anchor() override {};
+
+public:
     NarListing root;
 
     std::function<void(uint64_t, uint64_t, Sink &)> getNarBytes;
@@ -136,6 +141,10 @@ struct NarAccessorImpl : NarAccessor
     }
 };
 
+} // namespace
+
+NarAccessor::~NarAccessor() {}
+
 ref<NarAccessor> makeNarAccessor(std::string && nar)
 {
     return make_ref<NarAccessorImpl>(std::move(nar));
@@ -157,7 +166,8 @@ GetNarBytes seekableGetNarBytes(const std::filesystem::path & path)
     if (!fd)
         throw NativeSysError("opening NAR cache file %s", PathFmt(path));
 
-    return [inner = seekableGetNarBytes(fd.get()), fd = make_ref<AutoCloseFD>(std::move(fd))](
+    auto inner = seekableGetNarBytes(fd.get());
+    return [inner = std::move(inner), fd = make_ref<AutoCloseFD>(std::move(fd))](
                uint64_t offset, uint64_t length, Sink & sink) { return inner(offset, length, sink); };
 }
 

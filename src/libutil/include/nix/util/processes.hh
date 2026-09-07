@@ -23,6 +23,7 @@
 #include <map>
 #include <sstream>
 #include <optional>
+#include <thread>
 
 namespace nix {
 
@@ -35,6 +36,8 @@ class Pid
     pid_t pid = -1;
     bool separatePG = false;
     int killSignal = SIGKILL;
+    std::chrono::milliseconds killTimeout;
+    std::thread killThread;
 #else
     AutoCloseFD pid = INVALID_DESCRIPTOR;
 #endif
@@ -58,8 +61,16 @@ public:
 
     // TODO: Implement for Windows
 #ifndef _WIN32
+    /**
+     * Check whether the child process is still running, without
+     * blocking. If it has exited (or was reaped elsewhere), the child
+     * is reaped if necessary and this object is reset so that the
+     * destructor won't kill()/wait() an already-dead process.
+     */
+    bool isAlive();
     void setSeparatePG(bool separatePG);
     void setKillSignal(int signal);
+    void setKillTimeout(std::chrono::milliseconds duration);
     pid_t release();
 #endif
 
@@ -112,7 +123,6 @@ std::string runProgram(
     std::filesystem::path program,
     bool lookupPath = false,
     const OsStrings & args = OsStrings(),
-    const std::optional<std::string> & input = {},
     bool isInteractive = false);
 
 struct RunOptions
@@ -126,19 +136,20 @@ struct RunOptions
 #endif
     std::optional<std::filesystem::path> chdir;
     std::optional<OsStringMap> environment;
-    std::optional<std::string> input;
-    Source * standardIn = nullptr;
     Sink * standardOut = nullptr;
     bool mergeStderrToStdout = false;
     bool isInteractive = false;
 };
 
+// Output = error code + "standard out" output stream
 std::pair<int, std::string> runProgram(RunOptions && options);
 
 void runProgram2(const RunOptions & options);
 
 class ExecError final : public CloneableError<ExecError, Error>
 {
+    void anchor() override;
+
 public:
     int status;
 

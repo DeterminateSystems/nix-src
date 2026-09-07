@@ -15,18 +15,63 @@
  */
 
 #include "nix/util/file-descriptor.hh"
+#include "nix/util/file-system.hh"
 
 #include <optional>
 
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+#elif defined(__FreeBSD__)
+// FreeBSD openat(..., AT_NOFOLLOW) on a symlink returns
+// `EMLINK`, not the posix-specified `ELOOP`.
+#  define NIX_ERR_OPEN_SYMLINK EMLINK
+#else
+#  define NIX_ERR_OPEN_SYMLINK ELOOP
 #endif
 
 namespace nix {
 
 /**
+ * Get status of an open file/directory handle.
+ *
+ * @param fd File descriptor/handle
+ * @throws SystemError on I/O errors.
+ */
+PosixStat fstat(Descriptor fd);
+
+#ifndef _WIN32
+
+/**
+ * Get status of a file relative to a directory file descriptor.
+ *
+ * @param dirFd Directory file descriptor
+ * @param path Relative path to stat
+ *
+ * @return nullopt if the path does not exist.
+ * @throws SystemError on other I/O errors.
+ *
+ * @pre `path` must be relative (not absolute) and non-empty.
+ */
+std::optional<PosixStat> maybeFstatat(Descriptor dirFd, const std::filesystem::path & path);
+
+/**
+ * Get status of a file relative to a directory file descriptor.
+ *
+ * @param dirFd Directory file descriptor
+ * @param path Relative path to stat
+ *
+ * @throws SystemError if the path does not exist or on other I/O errors.
+ *
+ * @pre `path` must be relative (not absolute) and non-empty.
+ */
+PosixStat fstatat(Descriptor dirFd, const std::filesystem::path & path);
+
+#endif
+
+/**
  * Read a symlink relative to a directory file descriptor.
+ * On Linux, this also supports reading from O_PATH descriptors with CanonPath::root.
  *
  * @throws SystemError on any I/O errors.
  * @throws Interrupted if interrupted.
@@ -34,25 +79,47 @@ namespace nix {
 OsString readLinkAt(Descriptor dirFd, const CanonPath & path);
 
 /**
- * Safe(r) function to open a file relative to dirFd, while
- * disallowing escaping from a directory and any symlinks in the process.
+ * Open a file relative to @p dirFd, ensuring the path stays beneath
+ * @p dirFd and that no path component is a symlink (with the
+ * exception that `O_PATH` (without `O_DIRECTORY`) on Unix permits a
+ * trailing symlink).
  *
- * @note On Windows, implemented via NtCreateFile single path component traversal
- * with FILE_OPEN_REPARSE_POINT. On Unix, uses RESOLVE_BENEATH with openat2 when
- * available, or falls back to openat single path component traversal.
+ * Callers must not pass `O_NOFOLLOW` on Unix (enforced by assert);
+ * this function owns symlink policy and handles the flag internally.
  *
  * @param dirFd Directory handle to open relative to
- * @param path Relative path (no .. or . components)
- * @param desiredAccess (Windows) Windows ACCESS_MASK (e.g., GENERIC_READ, FILE_WRITE_DATA)
- * @param createOptions (Windows) Windows create options (e.g., FILE_NON_DIRECTORY_FILE)
- * @param createDisposition (Windows) FILE_OPEN, FILE_CREATE, etc.
- * @param flags (Unix) O_* flags
- * @param mode (Unix) Mode for O_{CREAT,TMPFILE}
+ * @param path Relative path (with no `..` or `.` components)
  *
- * @pre path.isRoot() is false
+ * @param desiredAccess (Windows) Windows `ACCESS_MASK`
+ * @param createOptions (Windows) Windows create options
+ * @param createDisposition (Windows) `FILE_OPEN`, `FILE_CREATE`, etc.
  *
- * @throws SymlinkNotAllowed if any path components are symlinks
- * @throws SystemError on other errors
+ * @param flags (Unix) `O_*` flags (must not include `O_NOFOLLOW`)
+ * @param mode (Unix) Mode for `O_{CREAT,TMPFILE}`
+ *
+ * @param dirFdCallback Callback invoked that gets the ownership of an intermediate directory fd.
+ *
+ * @pre `path.isRoot()` is false
+ *
+ * @throws SymlinkNotAllowed if an interior path component is a
+ *     symlink, or if the final component is a symlink and `O_PATH`
+ *     (without `O_DIRECTORY`) was *not* passed. With `O_PATH`
+ *     (without `O_DIRECTORY`) on Unix, a trailing symlink is
+ *     permitted and the caller receives a "path fd" to the symlink
+ *     itself.
+ *
+ * @note With `O_CREAT | O_EXCL`, a pre-existing symlink at the
+ *     final component causes the OS to return `EEXIST` rather
+ *     than `ELOOP`, so `SymlinkNotAllowed` is *not* thrown — the
+ *     caller sees a failed descriptor with `errno == EEXIST`.
+ *
+ * @return A valid descriptor on success, or an invalid descriptor
+ *     on non-symlink errors (Unix: `errno` set, e.g. `ENOENT`,
+ *     `ENOTDIR`, `EACCES`; Windows: last error set). The caller is
+ *     responsible for checking the return value.
+ *
+ *     `errno` will never be `ELOOP` because that case is translated
+ *     to a `SymlinkNotAllowed` throw instead.
  */
 AutoCloseFD openFileEnsureBeneathNoSymlinks(
     Descriptor dirFd,
@@ -60,12 +127,12 @@ AutoCloseFD openFileEnsureBeneathNoSymlinks(
 #ifdef _WIN32
     ACCESS_MASK desiredAccess,
     ULONG createOptions,
-    ULONG createDisposition = FILE_OPEN
+    ULONG createDisposition = FILE_OPEN,
 #else
     int flags,
-    mode_t mode = 0
+    mode_t mode = 0,
 #endif
-);
+    std::function<void(AutoCloseFD dirFd, CanonPath relPath)> dirFdCallback = nullptr);
 
 #ifdef __linux__
 namespace linux {
@@ -82,7 +149,8 @@ namespace linux {
  *
  * @return nullopt if openat2 is not supported by the kernel.
  */
-std::optional<Descriptor> openat2(Descriptor dirFd, const char * path, uint64_t flags, uint64_t mode, uint64_t resolve);
+std::optional<AutoCloseFD>
+openat2(Descriptor dirFd, const char * path, uint64_t flags, uint64_t mode, uint64_t resolve);
 
 } // namespace linux
 #endif

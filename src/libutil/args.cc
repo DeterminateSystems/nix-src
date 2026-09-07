@@ -2,7 +2,6 @@
 #include "nix/util/args/root.hh"
 #include "nix/util/hash.hh"
 #include "nix/util/environment-variables.hh"
-#include "nix/util/signals.hh"
 #include "nix/util/users.hh"
 #include "nix/util/json-utils.hh"
 
@@ -14,6 +13,8 @@
 #endif
 
 namespace nix {
+
+void AddCompletions::anchor() {}
 
 void Args::addFlag(Flag && flag_)
 {
@@ -273,7 +274,8 @@ void RootArgs::parseCmdline(const Strings & _cmdline, bool allowShebang)
 
     if (auto s = getEnv("NIX_GET_COMPLETIONS")) {
         size_t n = std::stoi(*s);
-        assert(n > 0 && n <= cmdline.size());
+        if (n < 1 || n > cmdline.size())
+            throw UsageError("NIX_GET_COMPLETIONS must be between 1 and the number of arguments");
         *std::next(cmdline.begin(), n - 1) += completionMarker;
         completions = std::make_shared<Completions>();
         verbosity = lvlError;

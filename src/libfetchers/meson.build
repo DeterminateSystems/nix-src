@@ -7,10 +7,8 @@ project(
     # TODO(Qyriad): increase the warning level
     'warning_level=1',
     'errorlogs=true', # Please print logs for tests that fail
-    'unity=on',
-    'unity_size=1024',
   ],
-  meson_version : '>= 1.1',
+  meson_version : '>= 1.8',
   license : 'LGPL-2.1-or-later',
 )
 
@@ -71,7 +69,6 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixfetchers',
   sources,
-  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,

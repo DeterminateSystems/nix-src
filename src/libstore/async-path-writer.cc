@@ -170,7 +170,13 @@ struct AsyncPathWriterImpl : AsyncPathWriter
             assert(storePath == item.storePath);
         }
     }
+
+    void anchor() override;
 };
+
+void AsyncPathWriter::anchor() {}
+
+void AsyncPathWriterImpl::anchor() {}
 
 ref<AsyncPathWriter> AsyncPathWriter::make(ref<Store> store)
 {

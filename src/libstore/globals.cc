@@ -4,12 +4,10 @@
 #include "nix/util/config-global.hh"
 #include "nix/util/current-process.hh"
 #include "nix/util/executable-path.hh"
-#include "nix/util/archive.hh"
 #include "nix/util/args.hh"
 #include "nix/util/abstract-setting-to-json.hh"
 #include "nix/util/compute-levels.hh"
 #include "nix/util/executable-path.hh"
-#include "nix/util/signals.hh"
 #include "nix/store/filetransfer.hh"
 
 #include <algorithm>
@@ -36,8 +34,6 @@
 #  include "nix/util/processes.hh"
 #endif
 
-#include "nix/util/config-impl.hh"
-
 #ifdef __APPLE__
 #  include <sys/sysctl.h>
 #endif
@@ -50,46 +46,33 @@
 
 namespace nix {
 
-/* The default location of the daemon socket, relative to nixStateDir.
-   The socket is in a directory to allow you to control access to the
-   Nix daemon by setting the mode/ownership of the directory
-   appropriately.  (This wouldn't work on the socket itself since it
-   must be deleted and recreated on startup.) */
-#define DEFAULT_SOCKET_PATH "daemon-socket/socket"
+void Settings::anchor() {}
 
-/**
- * Helper to resolve the NIX_CONF_DIR at runtime on Windows.
- * On Windows, NIX_CONF_DIR is not defined at compile time, so we determine
- * the path at runtime using the Windows known folders API (FOLDERID_ProgramData).
- * This allows Nix to work correctly regardless of which drive Windows is installed on.
- */
-static std::filesystem::path resolveNixConfDir()
-{
-#ifdef _WIN32
-#  ifdef NIX_CONF_DIR
-    // On Windows, NIX_CONF_DIR should not be defined at compile time
-#    error "NIX_CONF_DIR should not be defined on Windows"
-#  endif
-    return windows::known_folders::getProgramData() / "nix";
-#else
-    return NIX_CONF_DIR;
-#endif
-}
+void NarInfoDiskCacheSettings::anchor() {}
 
-LogFileSettings::LogFileSettings()
-    : nixLogDir(canonPath(getEnvNonEmpty("NIX_LOG_DIR").value_or(NIX_LOG_DIR)))
-{
-}
+void LogFileSettings::anchor() {}
+
+void AutoAllocateUidSettings::anchor() {}
 
 Settings settings;
 
 static GlobalConfig::Register rSettings(&settings);
 
 Settings::Settings()
-    : nixStateDir(canonPath(getEnvNonEmpty("NIX_STATE_DIR").value_or(NIX_STATE_DIR)))
-    , nixDaemonSocketFile(canonPath(getEnvOsNonEmpty(OS_STR("NIX_DAEMON_SOCKET_PATH"))
-                                        .transform([](auto && s) { return std::filesystem::path(s); })
-                                        .value_or(nixStateDir / DEFAULT_SOCKET_PATH)))
+    : nixStateDir(getEnvOsNonEmpty(OS_STR("NIX_STATE_DIR"))
+                      .transform([](auto && s) { return std::filesystem::path(s); })
+                      .or_else([]() -> std::optional<std::filesystem::path> {
+#ifdef _WIN32
+#  ifdef NIX_STATE_DIR
+#    error "NIX_STATE_DIR should not be defined on Windows"
+#  endif
+                          return windows::known_folders::getProgramData() / "nix" / "state";
+#else
+                          return NIX_STATE_DIR;
+#endif
+                      })
+                      .transform([](auto && s) { return canonPath(s); })
+                      .value())
 {
 #ifndef _WIN32
     buildUsersGroup = isRootUser() ? "nixbld" : "";
@@ -153,12 +136,28 @@ void loadConfFile(AbstractConfig & config)
     }
 }
 
+/**
+ * On Windows, NIX_CONF_DIR (and other directories like NIX_STATE_DIR, NIX_LOG_DIR)
+ * are not defined at compile time, so we determine paths at runtime using the
+ * Windows known folders API (FOLDERID_ProgramData). This allows Nix to work
+ * correctly regardless of which drive Windows is installed on.
+ */
 const std::filesystem::path & nixConfDir()
 {
-    static const std::filesystem::path dir =
-        canonPath(getEnvOsNonEmpty(OS_STR("NIX_CONF_DIR"))
-                      .transform([](auto && s) { return std::filesystem::path(s); })
-                      .value_or(resolveNixConfDir()));
+    static const std::filesystem::path dir = getEnvOsNonEmpty(OS_STR("NIX_CONF_DIR"))
+                                                 .transform([](auto && s) { return std::filesystem::path(s); })
+                                                 .or_else([]() -> std::optional<std::filesystem::path> {
+#ifdef _WIN32
+#  ifdef NIX_CONF_DIR
+#    error "NIX_CONF_DIR should not be defined on Windows"
+#  endif
+                                                     return windows::known_folders::getProgramData() / "nix" / "conf";
+#else
+                                                     return NIX_CONF_DIR;
+#endif
+                                                 })
+                                                 .transform([](auto && s) { return canonPath(s); })
+                                                 .value();
     return dir;
 }
 

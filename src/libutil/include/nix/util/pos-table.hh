@@ -49,29 +49,24 @@ private:
      */
     using LinesCache = LRUCache<uint32_t, Lines>;
 
-    mutable Sync<LinesCache> linesCache;
-
     // FIXME: this could be made lock-free (at least for access) if we
     // have a data structure where pointers to existing positions are
     // never invalidated.
-    struct State
-    {
-        std::map<uint32_t, Origin> origins;
-    };
+    Sync<std::map<uint32_t, Origin>> origins_;
 
-    SharedSync<State> state_;
+    mutable Sync<LinesCache> linesCache;
 
     const Origin * resolve(PosIdx p) const
     {
         if (p.id == 0)
             return nullptr;
 
-        auto state(state_.readLock());
         const auto idx = p.id - 1;
-        /* We want the last key <= idx, so we'll take prev(first key >
-           idx). This is guaranteed to never rewind origin.begin
-           because the first key is always 0. */
-        const auto pastOrigin = state->origins.upper_bound(idx);
+        /* we want the last key <= idx, so we'll take prev(first key > idx).
+            this is guaranteed to never rewind origin.begin because the first
+            key is always 0. */
+        auto origins(origins_.readLock());
+        const auto pastOrigin = origins->upper_bound(idx);
         return &std::prev(pastOrigin)->second;
     }
 
@@ -83,16 +78,16 @@ public:
 
     Origin addOrigin(Pos::Origin origin, size_t size)
     {
-        auto state(state_.lock());
+        auto origins(origins_.lock());
         uint32_t offset = 0;
-        if (auto it = state->origins.rbegin(); it != state->origins.rend())
+        if (auto it = origins->rbegin(); it != origins->rend())
             offset = it->first + it->second.size;
         // +1 because all PosIdx are offset by 1 to begin with, and
         // another +1 to ensure that all origins can point to EOF, eg
         // on (invalid) empty inputs.
         if (2 + offset + size < offset)
             return Origin{origin, offset, 0};
-        return state->origins.emplace(offset, Origin{origin, offset, size}).first->second;
+        return origins->emplace(offset, Origin{origin, offset, size}).first->second;
     }
 
     PosIdx add(const Origin & origin, size_t offset)
@@ -127,9 +122,8 @@ public:
      */
     void clear()
     {
-        auto lines = linesCache.lock();
-        lines->clear();
-        state_.lock()->origins.clear();
+        linesCache.lock()->clear();
+        origins_.lock()->clear();
     }
 };
 

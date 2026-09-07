@@ -9,6 +9,8 @@
 #include "nix/util/unix-domain-socket.hh"
 #include "nix/util/util.hh"
 
+#include <ranges>
+
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <poll.h>
@@ -18,6 +20,8 @@
 #endif
 
 namespace nix::unix {
+
+void AbortServeSocket::anchor() {}
 
 PeerInfo getPeerInfo(Descriptor remote)
 {
@@ -64,9 +68,16 @@ PeerInfo getPeerInfo(Descriptor remote)
     if (listenFds) {
         if (getEnv("LISTEN_PID") != std::to_string(getpid()))
             throw Error("unexpected systemd environment variables");
+
+        auto fdNames = tokenizeString<std::vector<std::string>>(getEnv("LISTEN_FDNAMES").value_or(""), ":");
         auto count = string2Int<unsigned int>(*listenFds);
         assert(count);
         for (unsigned int i = 0; i < count; ++i) {
+            // Not all implementations of LISTEN_FDS will implement names,
+            // listen anyway if we do not have enough names
+            if (i < fdNames.size() && options.activationName != "" && fdNames[i] != options.activationName)
+                continue;
+
             AutoCloseFD fdSocket(SD_LISTEN_FDS_START + i);
             closeOnExec(fdSocket.get());
             listeningSockets.push_back(std::move(fdSocket));
@@ -83,6 +94,9 @@ PeerInfo getPeerInfo(Descriptor remote)
     for (auto & i : listeningSockets)
         fds.push_back({.fd = i.get(), .events = POLLIN});
 
+    if (options.auxiliaryFd != INVALID_DESCRIPTOR)
+        fds.push_back({.fd = options.auxiliaryFd, .events = POLLIN});
+
     //  Loop accepting connections.
     while (1) {
         try {
@@ -95,7 +109,11 @@ PeerInfo getPeerInfo(Descriptor remote)
                 throw SysError("polling for incoming connections");
             }
 
-            for (auto & fd : fds) {
+            if (options.auxiliaryFd != INVALID_DESCRIPTOR && options.onAuxiliaryFdPollin && fds.back().revents & POLLIN)
+                /* Useful for reaping children. */
+                options.onAuxiliaryFdPollin();
+
+            for (auto & fd : std::views::take(fds, listeningSockets.size())) {
                 if (!fd.revents)
                     continue;
 

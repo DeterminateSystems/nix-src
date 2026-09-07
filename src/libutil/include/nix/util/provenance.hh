@@ -11,6 +11,8 @@ namespace nix {
 
 struct Provenance
 {
+    virtual void anchor();
+
     virtual ~Provenance() = default;
 
     static ref<const Provenance> from_json_str(std::string_view);

@@ -43,6 +43,19 @@ struct GCOptions
     using GCAction = nix::GCAction;
     using enum GCAction;
 
+    struct WholeStore
+    {};
+
+    struct SpecificPaths
+    {
+        StorePathSet paths;
+
+        /**
+         * Allow dead referrers of candidate paths to also be deleted.
+         */
+        bool deleteReferrers = false;
+    };
+
     GCAction action{gcDeleteDead};
 
     /**
@@ -54,9 +67,10 @@ struct GCOptions
     bool ignoreLiveness{false};
 
     /**
-     * For `gcDeleteSpecific`, the paths to delete.
+     * The paths from which to delete.
      */
-    StorePathSet pathsToDelete;
+    using GCPaths = std::variant<WholeStore, SpecificPaths>;
+    GCPaths pathsToDelete;
 
     /**
      * Stop after at least `maxFreed` bytes have been freed.
@@ -93,7 +107,7 @@ struct GCResults
  *
  * The notion of GC roots actually not part of this class.
  *
- *  - The base `Store` class has `Store::addTempRoot()` because for a store
+ *  - The base `Store` class has `Store::addTempRoots()` because for a store
  *    that doesn't support garbage collection at all, a temporary GC root is
  *    safely implementable as no-op.
  *
@@ -112,6 +126,10 @@ struct GCResults
  */
 struct GcStore : public virtual Store
 {
+private:
+    void anchor() override;
+
+public:
     inline static std::string operationName = "Garbage collection";
 
     /**

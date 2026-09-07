@@ -262,6 +262,7 @@ public:
     AutoCloseFD(AutoCloseFD && fd) noexcept;
     ~AutoCloseFD();
     AutoCloseFD & operator=(const AutoCloseFD & fd) = delete;
+    // NOLINTNEXTLINE(performance-noexcept-move-constructor) - technically can throw because of close()
     AutoCloseFD & operator=(AutoCloseFD && fd);
     Descriptor get() const;
     explicit operator bool() const;
@@ -285,11 +286,25 @@ public:
     void startFsync() const;
 };
 
+/**
+ * Duplicate a file descriptor.
+ *
+ * Returns a new file descriptor that refers to the same open file
+ * description as the original.
+ */
+AutoCloseFD dupDescriptor(Descriptor fd);
+
 class Pipe
 {
 public:
     AutoCloseFD readSide, writeSide;
-    void create();
+
+    void create(
+#ifndef _WIN32
+        bool nonBlocking = false
+#endif
+    );
+
     void close();
 };
 
@@ -306,6 +321,27 @@ void closeExtraFDs();
  * Set the close-on-exec flag for the given file descriptor.
  */
 void closeOnExec(Descriptor fd);
+
+/**
+ * A useful primitive for asynchronous poll() loops to notify about some work
+ * completing that gets polled alongside other file descriptors.
+ */
+struct SelfPipe
+{
+    Pipe pipe;
+
+    void create();
+
+    /**
+     * Write some data to the pipe in a non-blocking manner.
+     */
+    void notify();
+
+    /**
+     * Drain all data from the pipe.
+     */
+    void drain();
+};
 
 } // namespace unix
 #endif

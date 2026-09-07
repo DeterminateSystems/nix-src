@@ -1,7 +1,6 @@
 #include "nix/cmd/command.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
-#include "nix/main/common-args.hh"
 #include "nix/store/names.hh"
 
 #include <regex>
@@ -118,10 +117,6 @@ void printClosureDiff(
     }
 }
 
-} // namespace nix
-
-using namespace nix;
-
 struct CmdDiffClosures : SourceExprCommand, MixOperateOnOptions
 {
     std::string _before, _after;
@@ -155,3 +150,5 @@ struct CmdDiffClosures : SourceExprCommand, MixOperateOnOptions
 };
 
 static auto rCmdDiffClosures = registerCommand2<CmdDiffClosures>({"store", "diff-closures"});
+
+} // namespace nix

@@ -1,7 +1,7 @@
 project(
   'nix-manual',
   version : files('.version'),
-  meson_version : '>= 1.1',
+  meson_version : '>= 1.8',
   license : 'LGPL-2.1-or-later',
 )
 
@@ -231,7 +231,9 @@ foreach command : nix_nested_manpages
         meson.current_source_dir() / 'source',
         meson.current_build_dir() / 'source',
         doc_url,
-        meson.current_source_dir() / 'source/command-ref' / command[0] / (page + '.md'),
+        meson.current_source_dir() / 'source/command-ref' / command[0] / (
+          page + '.md'
+        ),
         '@OUTPUT0@',
       ],
       input : [
@@ -320,8 +322,6 @@ nix3_manpages = [
   'nix3-provenance-show',
   'nix3-provenance-verify',
   'nix3-ps',
-  'nix3-realisation',
-  'nix3-realisation-info',
   'nix3-registry',
   'nix3-registry-add',
   'nix3-registry-list',
@@ -336,6 +336,8 @@ nix3_manpages = [
   'nix3-store-add',
   'nix3-store-add-file',
   'nix3-store-add-path',
+  'nix3-store-build-trace-info',
+  'nix3-store-build-trace',
   'nix3-store-cat',
   'nix3-store-copy-log',
   'nix3-store-copy-sigs',

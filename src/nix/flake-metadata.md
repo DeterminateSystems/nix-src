@@ -69,7 +69,7 @@ data. This includes:
 * `Description`: A one-line description of the flake, taken from the
   `description` field in `flake.nix`.
 
-* `Path`: The store path containing the source code of the flake.
+* `Path`: The store path containing the source code of the flake. This field is absent if the [`lazy-trees`](@docroot@/command-ref/conf-file.md#conf-lazy-trees) setting is enabled, since then the flake is not required to reside in the Nix store.
 
 * `Revision`: The Git or Mercurial commit hash of the locked flake.
 
@@ -97,7 +97,7 @@ With `--json`, the output is a JSON object with the following fields:
 
 * `description`: See `Description` above.
 
-* `path`: See `Path` above.
+* `path`: See `Path` above. This field is absent if the [`lazy-trees`](@docroot@/command-ref/conf-file.md#conf-lazy-trees) setting is enabled.
 
 * `revision`: See `Revision` above.
 

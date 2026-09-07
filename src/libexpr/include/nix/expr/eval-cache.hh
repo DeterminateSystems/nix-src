@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <variant>
+#include "nix/expr/root-value.hh"
 
 namespace nix::eval_cache {
 
@@ -16,6 +17,9 @@ class AttrCursor;
 
 struct CachedEvalError : CloneableError<CachedEvalError, EvalError>
 {
+private:
+    void anchor() override;
+public:
     const ref<AttrCursor> cursor;
     const Symbol attr;
 
@@ -44,7 +48,7 @@ public:
 private:
     typedef fun<Value *()> RootLoader;
     RootLoader rootLoader;
-    RootValue value;
+    Sync<RootValue> value;
 
     Value * getRootValue();
 
@@ -111,7 +115,7 @@ public:
 private:
     using Parent = std::optional<std::pair<ref<AttrCursor>, Symbol>>;
     const Parent parent;
-    RootValue _value;
+    Sync<RootValue> _value;
     std::optional<std::pair<AttrId, AttrValue>> cachedValue;
 
     AttrKey getKey();

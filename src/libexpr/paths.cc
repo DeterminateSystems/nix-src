@@ -12,6 +12,8 @@ SourcePath EvalState::rootPath(CanonPath path)
 
 SourcePath EvalState::rootPath(std::string_view path)
 {
+    /* FIXME: Move this out of EvalState, since it's using native
+       std::filesystem::path and current working directory. */
     return {rootFS, CanonPath(absPath(path).string())};
 }
 
@@ -27,7 +29,7 @@ StorePath EvalState::devirtualize(const StorePath & path, StringMap * rewrites)
             fetchSettings,
             *store,
             SourcePath{ref(mount)},
-            settings.readOnlyMode ? FetchMode::DryRun : FetchMode::Copy,
+            settings.isReadOnly() ? FetchMode::DryRun : FetchMode::Copy,
             path.name());
         assert(storePath.name() == path.name());
         if (rewrites)

@@ -1,7 +1,6 @@
 #include "nix/store/builtins.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/store/store-api.hh"
-#include "nix/store/globals.hh"
 #include "nix/util/archive.hh"
 #include "nix/util/compression.hh"
 #include "nix/util/file-system.hh"
@@ -14,12 +13,13 @@ static void builtinFetchurl(const BuiltinBuilderContext & ctx)
        this to be stored in a file. It would be nice if we could just
        pass a pointer to the data. */
     if (ctx.netrcData != "") {
-        fileTransferSettings.netrcFile = "netrc";
+        fileTransferSettings.netrcFile = ctx.tmpDirInSandbox / "netrc";
         writeFile(fileTransferSettings.netrcFile.get(), ctx.netrcData, 0600);
     }
 
-    fileTransferSettings.caFile = "ca-certificates.crt";
-    writeFile(*fileTransferSettings.caFile.get(), ctx.caFileData, 0600);
+    auto caFilePath = ctx.tmpDirInSandbox / "ca-certificates.crt";
+    fileTransferSettings.caFile = std::optional<AbsolutePath>{caFilePath};
+    writeFile(caFilePath, ctx.caFileData, 0600);
 
     auto out = get(ctx.drv.outputs, "out");
     if (!out)
@@ -54,7 +54,8 @@ static void builtinFetchurl(const BuiltinBuilderContext & ctx)
             }
 #endif
 
-            auto decompressor = makeDecompressionSink(unpack && hasSuffix(mainUrl, ".xz") ? "xz" : "none", sink);
+            auto decompressor = makeDecompressionSink(
+                unpack && hasSuffix(mainUrl, ".xz") ? CompressionAlgo::xz : CompressionAlgo::none, sink);
             fileTransfer->download(std::move(request), *decompressor);
             decompressor->finish();
         });

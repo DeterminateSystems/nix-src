@@ -257,7 +257,11 @@ struct Ed25519PublicKey : PublicKey
                    (unsigned char *) key.data())
                == 0;
     }
+
+    virtual void anchor();
 };
+
+void Ed25519PublicKey::anchor() {}
 
 struct Ed25519SecretKey : SecretKey
 {
@@ -294,7 +298,11 @@ struct Ed25519SecretKey : SecretKey
         crypto_sign_ed25519_sk_to_pk(pk, (unsigned char *) key.data());
         return std::make_unique<Ed25519PublicKey>(name, std::string((char *) pk, crypto_sign_PUBLICKEYBYTES));
     }
+
+    virtual void anchor();
 };
+
+void Ed25519SecretKey::anchor() {}
 
 struct OpenSSLPublicKey : PublicKey
 {
@@ -346,7 +354,11 @@ struct OpenSSLPublicKey : PublicKey
         long len = BIO_get_mem_data(bio.get(), &data);
         return std::string(data, len);
     }
+
+    virtual void anchor();
 };
+
+void OpenSSLPublicKey::anchor() {}
 
 struct OpenSSLSecretKey : SecretKey
 {
@@ -475,7 +487,11 @@ struct OpenSSLSecretKey : SecretKey
         long len = BIO_get_mem_data(bio.get(), &data);
         return std::string(data, len);
     }
+
+    virtual void anchor();
 };
+
+void OpenSSLSecretKey::anchor() {}
 
 std::unique_ptr<SecretKey> SecretKey::parse(std::string_view s)
 {
@@ -569,12 +585,21 @@ bool verifyDetached(std::string_view data, const Signature & sig, const PublicKe
 namespace nlohmann {
 void adl_serializer<Signature>::to_json(json & j, const Signature & s)
 {
-    j = s.to_string();
+    j = {
+        {"keyName", s.keyName},
+        {"sig", base64::encode(std::as_bytes(std::span<const char>{s.sig}))},
+    };
 }
 
 Signature adl_serializer<Signature>::from_json(const json & j)
 {
-    return Signature::parse(getString(j));
+    if (j.is_string())
+        return Signature::parse(getString(j));
+    auto obj = getObject(j);
+    return Signature{
+        .keyName = getString(valueAt(obj, "keyName")),
+        .sig = base64::decode(getString(valueAt(obj, "sig"))),
+    };
 }
 
 } // namespace nlohmann

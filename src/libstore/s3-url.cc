@@ -4,7 +4,6 @@
 #include "nix/util/error.hh"
 #include "nix/util/logging.hh"
 #include "nix/util/json-impls.hh"
-#include "nix/util/split.hh"
 #include "nix/util/strings-inline.hh"
 
 #include <atomic>
@@ -15,6 +14,8 @@
 using namespace std::string_view_literals;
 
 namespace nix {
+
+void InvalidS3AddressingStyle::anchor() {}
 
 S3AddressingStyle parseS3AddressingStyle(std::string_view style)
 {

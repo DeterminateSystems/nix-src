@@ -1,12 +1,8 @@
 #include <stdint.h>
-#include <functional>
 #include <map>
 #include <optional>
-#include <set>
 #include <string>
-#include <utility>
 #include <variant>
-#include <vector>
 
 #include "nix/flake/flake-primops.hh"
 #include "nix/store/store-api.hh"
@@ -22,12 +18,10 @@
 #include "nix/expr/value.hh"
 #include "nix/fetchers/attrs.hh"
 #include "nix/fetchers/fetchers.hh"
-#include "nix/util/configuration.hh"
 #include "nix/util/error.hh"
 #include "nix/util/experimental-features.hh"
 #include "nix/util/pos-idx.hh"
 #include "nix/util/pos-table.hh"
-#include "nix/util/source-path.hh"
 #include "nix/util/types.hh"
 #include "nix/util/util.hh"
 #include "nix/util/mounted-source-accessor.hh"
@@ -92,7 +86,7 @@ PrimOp getFlake(const Settings & settings)
         .name = "__getFlake",
         .args = {"args"},
         .doc = R"(
-          Fetch a flake from a flake reference, and return its output attributes and some metadata. For example:
+          Fetch a flake from a flake reference or a path, and return its output attributes and some metadata. For example:
 
           ```nix
           (builtins.getFlake "nix/55bc52401966fbffa525c574c14f67b00bc4fb3a").packages.x86_64-linux.nix
@@ -119,12 +113,13 @@ static void prim_parseFlakeRef(EvalState & state, const PosIdx pos, Value ** arg
     for (const auto & [key, value] : attrs) {
         auto s = state.symbols.create(key);
         auto & vv = binds.alloc(s);
+        auto resolved = forceAttr(value);
         std::visit(
             overloaded{
                 [&vv, &state](const std::string & value) { vv.mkString(value, state.mem); },
                 [&vv](const uint64_t & value) { vv.mkInt(value); },
                 [&vv](const Explicit<bool> & value) { vv.mkBool(value.t); }},
-            value);
+            resolved);
     }
     v.mkAttrs(binds);
 }

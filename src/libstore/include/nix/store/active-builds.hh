@@ -93,6 +93,8 @@ struct TrackActiveBuildsStore
     virtual BuildHandle buildStarted(const ActiveBuild & build) = 0;
 
     virtual void buildFinished(const BuildHandle & handle) = 0;
+
+    virtual void anchor();
 };
 
 struct QueryActiveBuildsStore
@@ -102,6 +104,8 @@ struct QueryActiveBuildsStore
     virtual ~QueryActiveBuildsStore() = default;
 
     virtual std::vector<ActiveBuildInfo> queryActiveBuilds() = 0;
+
+    virtual void anchor();
 };
 
 } // namespace nix
