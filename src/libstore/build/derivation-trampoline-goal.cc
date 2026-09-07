@@ -4,6 +4,7 @@
 
 #include <ranges>
 #include <algorithm>
+#include <chrono>
 
 namespace nix {
 
@@ -166,6 +167,19 @@ Goal::Co DerivationTrampolineGoal::haveDerivation(StorePath drvPath, Derivation 
     co_await await(concreteDrvGoals);
 
     trace("outer build done");
+
+    for (const auto & goal : concreteDrvGoals) {
+        const auto & inner = goal->buildResult;
+        buildResult.timesBuilt += inner.timesBuilt;
+        if (inner.startTime != 0 && (buildResult.startTime == 0 || inner.startTime < buildResult.startTime))
+            buildResult.startTime = inner.startTime;
+        buildResult.stopTime = std::max(buildResult.stopTime, inner.stopTime);
+        if (inner.cpuUser)
+            buildResult.cpuUser = buildResult.cpuUser.value_or(std::chrono::microseconds::zero()) + *inner.cpuUser;
+        if (inner.cpuSystem)
+            buildResult.cpuSystem =
+                buildResult.cpuSystem.value_or(std::chrono::microseconds::zero()) + *inner.cpuSystem;
+    }
 
     if (nrFailed != 0) {
         auto gi = std::ranges::find_if(concreteDrvGoals, [](const GoalPtr & goal) -> bool {
