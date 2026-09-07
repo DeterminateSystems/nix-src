@@ -559,8 +559,25 @@ void mainWrapped(int argc, char ** argv)
     initOtel(programName);
 
     {
-        if (auto legacy = get(RegisterLegacyCommand::commands(), programName))
-            return (*legacy)(argc, argv);
+        if (auto legacy = get(RegisterLegacyCommand::commands(), programName)) {
+            /* Legacy commands don't have subcommands, so we can set up
+               the root span right away. */
+            OpenTelemetryLogger * otelLogger = nullptr;
+            if (auto l = makeOpenTelemetryLogger(programName)) {
+                otelLogger = l.get();
+                applyExtraLogger(std::move(l));
+            }
+            try {
+                return (*legacy)(argc, argv);
+            } catch (Exit &) {
+                throw;
+            } catch (std::exception & e) {
+                if (otelLogger)
+                    // FIXME: privacy
+                    otelLogger->setRootError(e.what());
+                throw;
+            }
+        }
     }
 
     evalSettings.pureEval = true;
