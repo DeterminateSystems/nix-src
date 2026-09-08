@@ -4,6 +4,7 @@
 #include "nix/util/config-global.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/callback.hh"
+#include "nix/util/processes.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/util.hh"
 
@@ -1372,14 +1373,16 @@ ref<FileTransfer> getFileTransfer()
     return ref<FileTransfer>(*fileTransfer);
 }
 
-void resetFileTransfer()
-{
+/* The curl worker thread doesn't exist in a forked child, so discard
+   the singleton there. Note that it looks healthy otherwise, so
+   `getFileTransfer()` wouldn't replace it by itself. */
+static RegisterForkCallback resetFileTransfer([]() {
     auto fileTransfer(_fileTransfer->lock());
     /* Deliberately leak the previous object: destroying it would join
        its worker thread, which doesn't exist in this process. */
     new std::shared_ptr(std::move(*fileTransfer));
     fileTransfer->reset();
-}
+});
 
 ref<FileTransfer> makeFileTransfer(const FileTransferSettings & settings)
 {

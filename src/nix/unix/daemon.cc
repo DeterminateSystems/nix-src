@@ -15,7 +15,6 @@
 #include "nix/cmd/legacy.hh"
 #include "nix/cmd/unix-socket-server.hh"
 #include "nix/store/daemon.hh"
-#include "nix/store/filetransfer.hh"
 #include "man-pages.hh"
 #include "otel-logger.hh"
 #include "nix/util/socket.hh"
@@ -380,15 +379,9 @@ static void daemonLoop(
                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
                         setInterrupted(false);
 
-                        /* Don't use the `FileTransfer` object of the
-                           parent, since it's in a broken state after
-                           the fork. */
-                        resetFileTransfer();
-
-                        /* The OpenTelemetry exporter's worker thread
-                           does not survive the fork, so set up tracing
-                           afresh. (`initOtel()` discards any state
-                           inherited from the parent.) */
+                        /* Set up tracing afresh; `startProcess()` has
+                           discarded the state inherited from the
+                           parent. */
                         initOtel("nix-daemon");
 
                         closeListeners();

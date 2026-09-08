@@ -8,6 +8,7 @@
 #  include "nix/util/compression.hh"
 #  include "nix/util/environment-variables.hh"
 #  include "nix/util/exit.hh"
+#  include "nix/util/processes.hh"
 #  include "nix/util/serialise.hh"
 #  include "nix/util/sync.hh"
 #  include "nix/util/terminal.hh"
@@ -73,6 +74,12 @@ struct OtelState
    not even exist). So it's never destroyed; pending spans are
    exported by `OpenTelemetryLogger::flush()` instead. */
 std::atomic<OtelState *> otelState{nullptr};
+
+/* The exporter's worker thread doesn't exist in a forked child, so
+   don't trace there unless the child sets up tracing itself (i.e. by
+   calling `initOtel()`). The old state is deliberately leaked, since
+   it can be neither flushed nor destroyed safely. */
+static RegisterForkCallback resetOtel([]() { otelState.exchange(nullptr); });
 
 inline opentelemetry::nostd::string_view toNostd(std::string_view sv) noexcept
 {
