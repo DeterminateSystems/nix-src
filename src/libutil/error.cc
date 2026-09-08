@@ -498,8 +498,12 @@ int handleExceptions(const std::string & programName, fun<void()> body)
 
     /* Note: this must happen after `printException()` below, so that
        loggers that record the exception (like the OpenTelemetry
-       logger) can still do so. */
-    Finally stopLogger([]() { logger->stop(); });
+       logger) can still do so. `flush()` must come after `stop()`,
+       which ends any open spans. */
+    Finally stopLogger([]() {
+        logger->stop();
+        logger->flush();
+    });
 
     try {
         body();

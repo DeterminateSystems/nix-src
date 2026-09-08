@@ -70,8 +70,8 @@ struct OtelState
    the batch exporter's worker thread, which must never happen from
    static destructors at exit() time (cf. the OPENSSL_INIT_NO_ATEXIT
    note in util.cc; in the daemon's forked children that thread does
-   not even exist). Teardown happens only via an explicit
-   flushOtelAndShutdown(). */
+   not even exist). So it's never destroyed; pending spans are
+   exported by `OpenTelemetryLogger::flush()` instead. */
 std::atomic<OtelState *> otelState{nullptr};
 
 inline opentelemetry::nostd::string_view toNostd(std::string_view sv) noexcept
@@ -243,8 +243,8 @@ public:
         if (getEnv("NIX_OTEL_DEBUG")) {
             char buf[2 * opentelemetry::trace::TraceId::kSize];
             rootSpan->GetContext().trace_id().ToLowerBase16(buf);
-            /* Printed by flushOtelAndShutdown() once the trace has
-               been uploaded. */
+            /* Printed by `flush()` once the trace has been
+               uploaded. */
             state.debugTraceId = std::string(buf, sizeof(buf));
         }
     }
@@ -477,6 +477,20 @@ public:
             rootSpan->End();
         } catch (...) {
         }
+    }
+
+    void flush() override
+    {
+        auto * state = otelState.load(std::memory_order_acquire);
+        if (!state)
+            return;
+
+        /* Bound the timeout: the SDK default is microseconds::max(),
+           and a hung collector must not hang process exit. */
+        state->provider->ForceFlush(std::chrono::microseconds(std::chrono::seconds(5)));
+
+        if (!state->debugTraceId.empty())
+            writeToStderr(fmt("OpenTelemetry trace ID: %s\n", state->debugTraceId));
     }
 };
 
@@ -792,25 +806,6 @@ void initOtel(std::string_view serviceName)
         state.release();
 }
 
-void flushOtelAndShutdown()
-{
-    auto * state = otelState.exchange(nullptr);
-    if (!state)
-        return;
-    /* Bound the timeouts: the SDK defaults are microseconds::max(),
-       and a hung collector must not hang process exit. */
-    auto timeout = std::chrono::microseconds(std::chrono::seconds(5));
-    state->provider->ForceFlush(timeout);
-    state->provider->Shutdown(timeout);
-
-    if (!state->debugTraceId.empty())
-        writeToStderr(fmt("OpenTelemetry trace ID: %s\n", state->debugTraceId));
-
-    /* Deliberately leak `state`: outstanding span handles may still
-       reference the tracer; after Shutdown() their spans are simply
-       dropped. */
-}
-
 void resetOtelAfterFork()
 {
     /* Deliberately leak the old state: it references a worker thread
@@ -831,8 +826,6 @@ makeOpenTelemetryLogger(std::string_view rootSpanName, std::string_view remotePa
 #else
 
 void initOtel(std::string_view) {}
-
-void flushOtelAndShutdown() {}
 
 void resetOtelAfterFork() {}
 

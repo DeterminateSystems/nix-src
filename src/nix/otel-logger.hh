@@ -16,6 +16,11 @@ namespace nix {
  * Activities replayed from another process (cf. `RemoteLogSource`)
  * are ignored, since the originating process is responsible for
  * exporting them.
+ *
+ * `flush()` exports all pending spans and shuts down the exporter,
+ * with bounded timeouts. Since loggers are generally not destroyed,
+ * it has to be called explicitly before the process exits;
+ * `handleExceptions()` does so.
  */
 class OpenTelemetryLogger : public Logger
 {};
@@ -45,16 +50,6 @@ makeOpenTelemetryLogger(std::string_view rootSpanName, std::string_view remotePa
  * initialized.
  */
 void initOtel(std::string_view serviceName);
-
-/**
- * Flush all pending spans and shut down the exporter, with bounded
- * timeouts. Safe to call if tracing was never initialized, and safe
- * to call more than once. Must be called explicitly before process
- * exit: nothing is flushed from static destructors (cf. the
- * OPENSSL_INIT_NO_ATEXIT note in util.cc). Spans that should be
- * included must be ended first (e.g. via `logger->stop()`).
- */
-void flushOtelAndShutdown();
 
 /**
  * Discard all tracing state inherited from the parent process after a

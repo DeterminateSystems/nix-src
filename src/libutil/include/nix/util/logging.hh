@@ -140,6 +140,13 @@ public:
     virtual void stop() {};
 
     /**
+     * Flush any buffered state to its final destination. Loggers that
+     * upload to a remote service (such as the OpenTelemetry logger) use
+     * this to perform the upload on exit.
+     */
+    virtual void flush() {};
+
+    /**
      * Guard object to resume the logger when done.
      */
     struct Suspension

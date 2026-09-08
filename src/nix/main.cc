@@ -739,9 +739,5 @@ int main(int argc, char ** argv)
     // The CLI has a more detailed version than the libraries; see nixVersion.
     nix::nixVersion = NIX_CLI_VERSION;
 
-    /* Note: this must happen after `handleExceptions()`, which stops
-       the logger, ending any open spans. */
-    Finally flushOtel([] { flushOtelAndShutdown(); });
-
     return nix::handleExceptions(argv[0], [&]() { nix::mainWrapped(argc, argv); });
 }

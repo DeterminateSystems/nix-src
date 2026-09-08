@@ -415,7 +415,7 @@ static void daemonLoop(
                            telemetry. This has to be done explicitly,
                            since exit() does not unwind the stack. */
                         logger->stop();
-                        flushOtelAndShutdown();
+                        logger->flush();
 
                         exit(0);
                     },
