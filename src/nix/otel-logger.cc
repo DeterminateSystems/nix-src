@@ -495,11 +495,9 @@ public:
 
     void resetAfterFork() override
     {
-        /* Deliberately leak the old state: it references a worker
+        /* Deliberately leak the old state: it may reference a worker
            thread that does not exist in this process, so it can be
-           neither flushed nor destroyed safely. Afterwards
-           `initOtel()` can be called again to start fresh tracing in
-           the child. */
+           neither flushed nor destroyed safely. */
         otelState.exchange(nullptr);
     }
 };
@@ -743,9 +741,6 @@ Headers parseOtlpHeaders(std::string_view s)
 
 void initOtel(std::string_view serviceName)
 {
-    if (otelState.load(std::memory_order_acquire))
-        return;
-
     /* Without an explicitly configured endpoint, stay off; we don't
        want to export to some default endpoint behind the user's
        back. */
@@ -811,9 +806,10 @@ void initOtel(std::string_view serviceName)
     state->provider = sdktrace::TracerProviderFactory::Create(std::move(processor), resource, std::move(sampler));
     state->tracer = state->provider->GetTracer("nix");
 
-    OtelState * expected = nullptr;
-    if (otelState.compare_exchange_strong(expected, state.get()))
-        state.release();
+    /* Any previously initialized state is deliberately leaked rather
+       than destroyed, since we may be in a child process where its
+       worker thread doesn't exist. */
+    otelState.exchange(state.release(), std::memory_order_release);
 }
 
 std::unique_ptr<OpenTelemetryLogger>

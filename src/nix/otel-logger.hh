@@ -22,10 +22,10 @@ namespace nix {
  * it has to be called explicitly before the process exits;
  * `handleExceptions()` does so.
  *
- * `resetAfterFork()` discards the tracing state inherited from the
- * parent process, since the exporter's worker thread does not exist
- * in the child. Afterwards `initOtel()` can be called again to start
- * fresh tracing in the child.
+ * `resetAfterFork()` discards the tracing state without exporting
+ * anything, turning tracing off in this process. Note that a process
+ * that wants to trace after a `fork()` doesn't need this: `initOtel()`
+ * discards the inherited state by itself.
  */
 class OpenTelemetryLogger : public Logger
 {};
@@ -51,8 +51,11 @@ makeOpenTelemetryLogger(std::string_view rootSpanName, std::string_view remotePa
  * Initialize OpenTelemetry tracing for this process. Does nothing
  * (and is cheap) if `OTEL_EXPORTER_OTLP_ENDPOINT` /
  * `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is not set in the environment,
- * if tracing support is not compiled in, or if tracing is already
- * initialized.
+ * or if tracing support is not compiled in.
+ *
+ * Any previously initialized tracing state is discarded rather than
+ * reused, so this can be called in a child process after a `fork()`,
+ * where the exporter's worker thread no longer exists.
  */
 void initOtel(std::string_view serviceName);
 

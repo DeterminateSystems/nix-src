@@ -15,6 +15,7 @@
 #include "nix/cmd/legacy.hh"
 #include "nix/cmd/unix-socket-server.hh"
 #include "nix/store/daemon.hh"
+#include "nix/store/filetransfer.hh"
 #include "man-pages.hh"
 #include "otel-logger.hh"
 #include "nix/util/socket.hh"
@@ -379,10 +380,19 @@ static void daemonLoop(
                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
                         setInterrupted(false);
 
+                        /* Don't use the inherited `FileTransfer`: its
+                           curl worker thread does not exist in this
+                           process, so using it would hang. (It looks
+                           healthy otherwise, so `getFileTransfer()`
+                           won't replace it by itself.) We must not
+                           destroy it either, since that would join a
+                           thread that doesn't exist, so leak it. */
+                        static auto prevFileTransfer = resetFileTransfer();
+
                         /* The OpenTelemetry exporter's worker thread
-                           does not survive the fork, so set up
-                           tracing afresh. */
-                        logger->resetAfterFork();
+                           does not survive the fork, so set up tracing
+                           afresh. (`initOtel()` discards any state
+                           inherited from the parent.) */
                         initOtel("nix-daemon");
 
                         closeListeners();
