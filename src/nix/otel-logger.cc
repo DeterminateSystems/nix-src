@@ -7,6 +7,7 @@
 #  include "nix/util/base-n.hh"
 #  include "nix/util/compression.hh"
 #  include "nix/util/environment-variables.hh"
+#  include "nix/util/exit.hh"
 #  include "nix/util/serialise.hh"
 #  include "nix/util/sync.hh"
 #  include "nix/util/terminal.hh"
@@ -187,15 +188,6 @@ std::string_view getS(const Logger::Fields & fields, size_t n)
     return {};
 }
 
-uint64_t getI(const Logger::Fields & fields, size_t n)
-{
-    if (n < fields.size()) {
-        if (auto p = std::get_if<uint64_t>(&fields[n].raw))
-            return *p;
-    }
-    return 0;
-}
-
 class OpenTelemetryLoggerImpl : public OpenTelemetryLogger
 {
     using SpanPtr = opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span>;
@@ -260,6 +252,21 @@ public:
     void log(Verbosity lvl, std::string_view s) noexcept override {}
 
     void logEI(const ErrorInfo & ei) noexcept override {}
+
+    void printException(const std::exception_ptr & ex, std::string_view programName) noexcept override
+    {
+        try {
+            std::rethrow_exception(ex);
+        } catch (Exit &) {
+            /* Not a failure: this is how commands like `--version`
+               return. */
+        } catch (std::exception & e) {
+            // FIXME: privacy
+            rootSpan->SetStatus(opentelemetry::trace::StatusCode::kError, toNostd(filterANSIEscapes(e.what(), true)));
+        } catch (...) {
+            rootSpan->SetStatus(opentelemetry::trace::StatusCode::kError, "unknown exception");
+        }
+    }
 
     void startActivity(
         ActivityId act,
@@ -457,15 +464,6 @@ public:
             return injectContext(rootSpan);
         } catch (...) {
             return {};
-        }
-    }
-
-    void setRootError(std::string_view description) noexcept override
-    {
-        try {
-            rootSpan->SetStatus(
-                opentelemetry::trace::StatusCode::kError, toNostd(filterANSIEscapes(description, true)));
-        } catch (...) {
         }
     }
 

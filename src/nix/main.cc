@@ -535,13 +535,6 @@ void mainWrapped(int argc, char ** argv)
         tryEnterPrivateMountNamespace();
 #endif
 
-    /* Note: registered before the logger->stop() Finally below, so
-       that at exit, the loggers are stopped (ending any open spans)
-       before the spans are exported. */
-    Finally flushOtel([] { flushOtelAndShutdown(); });
-
-    Finally f([] { logger->stop(); });
-
     programPath = argv[0];
     auto programName = std::string(baseNameOf(programPath));
     auto extensionPos = programName.find_last_of(".");
@@ -562,21 +555,9 @@ void mainWrapped(int argc, char ** argv)
         if (auto legacy = get(RegisterLegacyCommand::commands(), programName)) {
             /* Legacy commands don't have subcommands, so we can set up
                the root span right away. */
-            OpenTelemetryLogger * otelLogger = nullptr;
-            if (auto l = makeOpenTelemetryLogger(programName)) {
-                otelLogger = l.get();
+            if (auto l = makeOpenTelemetryLogger(programName))
                 applyExtraLogger(std::move(l));
-            }
-            try {
-                return (*legacy)(argc, argv);
-            } catch (Exit &) {
-                throw;
-            } catch (std::exception & e) {
-                if (otelLogger)
-                    // FIXME: privacy
-                    otelLogger->setRootError(e.what());
-                throw;
-            }
+            return (*legacy)(argc, argv);
         }
     }
 
@@ -736,11 +717,8 @@ void mainWrapped(int argc, char ** argv)
 
     /* Map activities to OpenTelemetry spans, under a root span named
        after the subcommand. */
-    OpenTelemetryLogger * otelLogger = nullptr;
-    if (auto l = makeOpenTelemetryLogger("nix " + concatStringsSep(" ", subcommand))) {
-        otelLogger = l.get();
+    if (auto l = makeOpenTelemetryLogger("nix " + concatStringsSep(" ", subcommand)))
         applyExtraLogger(std::move(l));
-    }
 
     try {
         args.command->second->run();
@@ -749,13 +727,6 @@ void mainWrapped(int argc, char ** argv)
            cached error so that we can show the original error to the
            user. */
         e.force();
-    } catch (Exit &) {
-        throw;
-    } catch (std::exception & e) {
-        if (otelLogger)
-            // FIXME: privacy
-            otelLogger->setRootError(e.what());
-        throw;
     }
 }
 
@@ -767,5 +738,10 @@ int main(int argc, char ** argv)
 
     // The CLI has a more detailed version than the libraries; see nixVersion.
     nix::nixVersion = NIX_CLI_VERSION;
+
+    /* Note: this must happen after `handleExceptions()`, which stops
+       the logger, ending any open spans. */
+    Finally flushOtel([] { flushOtelAndShutdown(); });
+
     return nix::handleExceptions(argv[0], [&]() { nix::mainWrapped(argc, argv); });
 }

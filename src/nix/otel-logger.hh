@@ -18,13 +18,7 @@ namespace nix {
  * exporting them.
  */
 class OpenTelemetryLogger : public Logger
-{
-public:
-    /**
-     * Record an error on the root span.
-     */
-    virtual void setRootError(std::string_view description) noexcept = 0;
-};
+{};
 
 /**
  * Create an `OpenTelemetryLogger` whose root span is named

@@ -174,6 +174,14 @@ public:
 
     virtual void logEI(const ErrorInfo & ei) noexcept = 0;
 
+    /**
+     * Report the exception that terminated the program (see
+     * `handleExceptions()`). The default implementation prints it;
+     * loggers that report to a monitoring system can override this to
+     * record it there as well (or instead).
+     */
+    virtual void printException(const std::exception_ptr & ex, std::string_view programName) noexcept;
+
     void logEI(Verbosity lvl, ErrorInfo ei) noexcept
     {
         ei.level = lvl;

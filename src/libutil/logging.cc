@@ -7,6 +7,7 @@
 #include "nix/util/position.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/unix-domain-socket.hh"
+#include "nix/util/exit.hh"
 
 #include <atomic>
 #include <sstream>
@@ -64,6 +65,38 @@ Logger::~Logger() {}
 void Logger::warn(const std::string & msg) noexcept
 {
     log(lvlWarn, ANSI_WARNING "warning:" ANSI_NORMAL " " + msg);
+}
+
+void Logger::printException(const std::exception_ptr & ex, std::string_view programName) noexcept
+{
+    /* Note: we log to `this` rather than to the global `logger`, so
+       that a `TeeLogger` can forward this to each of its loggers
+       without the message being printed once per logger. */
+    auto doLog = [&](const BaseError & e) {
+        try {
+            logEI(e.info());
+        } catch (...) {
+            log(lvlError, ANSI_RED "error:" ANSI_NORMAL " Exception while printing an exception.");
+        }
+    };
+
+    constexpr std::string_view error = ANSI_RED "error:" ANSI_NORMAL " ";
+
+    try {
+        std::rethrow_exception(ex);
+    } catch (Exit &) {
+    } catch (UsageError & e) {
+        doLog(e);
+        log(lvlError, fmt("\nTry '%1% --help' for more information.", programName));
+    } catch (BaseError & e) {
+        doLog(e);
+    } catch (std::bad_alloc & e) {
+        log(lvlError, std::string(error) + "out of memory");
+    } catch (std::exception & e) {
+        log(lvlError, std::string(error) + e.what());
+    } catch (...) {
+        log(lvlError, std::string(error) + "unknown exception");
+    }
 }
 
 void Logger::writeToStdout(std::string_view s)

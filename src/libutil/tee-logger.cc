@@ -44,6 +44,12 @@ public:
             logger->logEI(ei);
     }
 
+    void printException(const std::exception_ptr & ex, std::string_view programName) noexcept override
+    {
+        for (auto & logger : loggers)
+            logger->printException(ex, programName);
+    }
+
     void startActivity(
         ActivityId act,
         Verbosity lvl,
