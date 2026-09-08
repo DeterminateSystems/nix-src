@@ -382,7 +382,7 @@ static void daemonLoop(
                         /* The OpenTelemetry exporter's worker thread
                            does not survive the fork, so set up
                            tracing afresh. */
-                        resetOtelAfterFork();
+                        logger->resetAfterFork();
                         initOtel("nix-daemon");
 
                         closeListeners();
@@ -533,7 +533,7 @@ static void runDaemon(
             [&](StdIO) {
                 /* FIXME: we don't currently trace connections served
                    over stdio. */
-                resetOtelAfterFork();
+                logger->resetAfterFork();
 
                 auto store = storeConfig->openStore();
                 store->init();
@@ -560,7 +560,7 @@ static void runDaemon(
                    themselves. (This discards any tracing state set up
                    by `main()`, without touching the exporter, which
                    is what we want.) */
-                resetOtelAfterFork();
+                logger->resetAfterFork();
 
                 auto socketPath = std::move(socketPathOverride)
                                       .or_else([&]() -> std::optional<std::filesystem::path> {

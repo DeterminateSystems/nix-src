@@ -26,6 +26,12 @@ public:
             logger->flush();
     };
 
+    void resetAfterFork() override
+    {
+        for (auto & logger : loggers)
+            logger->resetAfterFork();
+    };
+
     void pause() override
     {
         for (auto & logger : loggers)

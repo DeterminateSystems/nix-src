@@ -492,6 +492,16 @@ public:
         if (!state->debugTraceId.empty())
             writeToStderr(fmt("OpenTelemetry trace ID: %s\n", state->debugTraceId));
     }
+
+    void resetAfterFork() override
+    {
+        /* Deliberately leak the old state: it references a worker
+           thread that does not exist in this process, so it can be
+           neither flushed nor destroyed safely. Afterwards
+           `initOtel()` can be called again to start fresh tracing in
+           the child. */
+        otelState.exchange(nullptr);
+    }
 };
 
 /**
@@ -806,14 +816,6 @@ void initOtel(std::string_view serviceName)
         state.release();
 }
 
-void resetOtelAfterFork()
-{
-    /* Deliberately leak the old state: it references a worker thread
-       that does not exist in this process, so it can be neither
-       flushed nor destroyed safely. */
-    otelState.exchange(nullptr);
-}
-
 std::unique_ptr<OpenTelemetryLogger>
 makeOpenTelemetryLogger(std::string_view rootSpanName, std::string_view remoteParentTraceparent)
 {
@@ -826,8 +828,6 @@ makeOpenTelemetryLogger(std::string_view rootSpanName, std::string_view remotePa
 #else
 
 void initOtel(std::string_view) {}
-
-void resetOtelAfterFork() {}
 
 std::unique_ptr<OpenTelemetryLogger> makeOpenTelemetryLogger(std::string_view, std::string_view)
 {

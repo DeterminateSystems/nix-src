@@ -147,6 +147,14 @@ public:
     virtual void flush() {};
 
     /**
+     * Discard any state inherited from the parent process after a
+     * `fork()`, such as worker threads, which do not exist in the
+     * child. Note that this discards rather than flushes, since the
+     * parent remains responsible for its own state.
+     */
+    virtual void resetAfterFork() {};
+
+    /**
      * Guard object to resume the logger when done.
      */
     struct Suspension

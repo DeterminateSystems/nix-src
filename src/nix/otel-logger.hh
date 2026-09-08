@@ -21,6 +21,11 @@ namespace nix {
  * with bounded timeouts. Since loggers are generally not destroyed,
  * it has to be called explicitly before the process exits;
  * `handleExceptions()` does so.
+ *
+ * `resetAfterFork()` discards the tracing state inherited from the
+ * parent process, since the exporter's worker thread does not exist
+ * in the child. Afterwards `initOtel()` can be called again to start
+ * fresh tracing in the child.
  */
 class OpenTelemetryLogger : public Logger
 {};
@@ -50,14 +55,5 @@ makeOpenTelemetryLogger(std::string_view rootSpanName, std::string_view remotePa
  * initialized.
  */
 void initOtel(std::string_view serviceName);
-
-/**
- * Discard all tracing state inherited from the parent process after a
- * fork(): the exporter's worker thread does not exist in the child,
- * so the inherited state can be neither used nor destroyed safely.
- * Afterwards `initOtel()` can be called again to start fresh tracing
- * in the child.
- */
-void resetOtelAfterFork();
 
 } // namespace nix
