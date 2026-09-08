@@ -488,7 +488,15 @@ ref<FileTransfer> getFileTransfer();
  */
 ref<FileTransfer> makeFileTransfer(const FileTransferSettings & settings = fileTransferSettings);
 
-std::shared_ptr<FileTransfer> resetFileTransfer();
+/**
+ * Clear the `FileTransfer` singleton, so that the next
+ * `getFileTransfer()` creates a fresh one. Used after a `fork()`,
+ * since the inherited object's curl worker thread doesn't exist in
+ * the child, yet it looks healthy enough that `getFileTransfer()`
+ * won't replace it by itself. The previous object is deliberately
+ * leaked, since destroying it would join that thread.
+ */
+void resetFileTransfer();
 
 class FileTransferError final : public CloneableError<FileTransferError, Error>
 {

@@ -380,14 +380,10 @@ static void daemonLoop(
                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
                         setInterrupted(false);
 
-                        /* Don't use the inherited `FileTransfer`: its
-                           curl worker thread does not exist in this
-                           process, so using it would hang. (It looks
-                           healthy otherwise, so `getFileTransfer()`
-                           won't replace it by itself.) We must not
-                           destroy it either, since that would join a
-                           thread that doesn't exist, so leak it. */
-                        static auto prevFileTransfer = resetFileTransfer();
+                        /* Don't use the `FileTransfer` object of the
+                           parent, since it's in a broken state after
+                           the fork. */
+                        resetFileTransfer();
 
                         /* The OpenTelemetry exporter's worker thread
                            does not survive the fork, so set up tracing

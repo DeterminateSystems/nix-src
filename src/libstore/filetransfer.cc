@@ -1372,12 +1372,13 @@ ref<FileTransfer> getFileTransfer()
     return ref<FileTransfer>(*fileTransfer);
 }
 
-std::shared_ptr<FileTransfer> resetFileTransfer()
+void resetFileTransfer()
 {
     auto fileTransfer(_fileTransfer->lock());
-    std::shared_ptr<curlFileTransfer> prev;
-    fileTransfer->swap(prev);
-    return prev;
+    /* Deliberately leak the previous object: destroying it would join
+       its worker thread, which doesn't exist in this process. */
+    new std::shared_ptr(std::move(*fileTransfer));
+    fileTransfer->reset();
 }
 
 ref<FileTransfer> makeFileTransfer(const FileTransferSettings & settings)
