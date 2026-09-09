@@ -130,7 +130,7 @@ struct OtelState
 
     /**
      * The root span's trace ID, to be printed on shutdown if
-     * NIX_OTEL_DEBUG is set.
+     * NIX_DEBUG_OTEL is set.
      */
     std::string debugTraceId;
 };
@@ -316,7 +316,7 @@ public:
         }
         rootSpan = tracer->StartSpan(toNostd(rootSpanName), options);
 
-        if (getEnv("NIX_OTEL_DEBUG")) {
+        if (getEnv("NIX_DEBUG_OTEL")) {
             char buf[2 * opentelemetry::trace::TraceId::kSize];
             rootSpan->GetContext().trace_id().ToLowerBase16(buf);
             /* Printed by `flush()` once the trace has been
