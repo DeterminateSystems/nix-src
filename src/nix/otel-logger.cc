@@ -6,6 +6,7 @@
 #  include "nix/store/filetransfer.hh"
 #  include "nix/util/base-n.hh"
 #  include "nix/util/compression.hh"
+#  include "nix/util/config-global.hh"
 #  include "nix/util/environment-variables.hh"
 #  include "nix/util/exit.hh"
 #  include "nix/util/processes.hh"
@@ -51,6 +52,68 @@
 namespace nix {
 
 #if HAVE_OTEL
+
+struct OtelSettings : Config
+{
+    Setting<bool> enable{
+        this,
+        false,
+        "otlp",
+        R"(
+          Whether to export [OpenTelemetry](https://opentelemetry.io/) traces of
+          Nix's activities (such as evaluation, builds, substitutions and HTTP
+          requests). Requires `otlp-endpoint` to be set as well.
+
+          Setting the `OTEL_EXPORTER_OTLP_ENDPOINT` or
+          `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` environment variable enables
+          tracing regardless of this setting.
+        )"};
+
+    Setting<std::string> endpoint{
+        this,
+        "",
+        "otlp-endpoint",
+        R"(
+          The base URL of the OpenTelemetry collector to which traces are sent,
+          e.g. `https://otel.example.org`. The path `/v1/traces` is appended
+          automatically.
+
+          Only used if `otlp` is enabled. Overridden by the
+          `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable.
+        )"};
+
+    Setting<StringMap> headers{
+        this,
+        {},
+        "otlp-headers",
+        R"(
+          Extra HTTP headers to send to the collector, specified as a string
+          made up of whitespace-separated `name=value` pairs (e.g. to pass an
+          authorization token).
+
+          Overridden by the `OTEL_EXPORTER_OTLP_HEADERS` environment variable.
+          Note that the environment variable uses the OpenTelemetry syntax
+          instead, i.e. comma-separated and percent-encoded.
+        )"};
+
+    Setting<std::string> compression{
+        this,
+        "gzip",
+        "otlp-compression",
+        R"(
+          The compression to apply to exported traces: `gzip` (the default) or
+          `none`.
+
+          Overridden by the `OTEL_EXPORTER_OTLP_COMPRESSION` environment
+          variable.
+        )"};
+};
+
+/* Note: deliberately not applied from the client's `setOptions` in the
+   daemon, so that a client can't redirect the daemon's telemetry. */
+static OtelSettings otelSettings;
+
+static GlobalConfig::Register rOtelSettings(&otelSettings);
 
 namespace {
 
@@ -748,25 +811,48 @@ Headers parseOtlpHeaders(std::string_view s)
 
 void initOtel(std::string_view serviceName)
 {
-    /* Without an explicitly configured endpoint, stay off; we don't
-       want to export to some default endpoint behind the user's
-       back. */
+    /* An endpoint in the environment enables tracing by itself, and
+       takes precedence over the settings. */
     auto endpoint = [&]() -> std::string {
         if (auto s = getEnv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
             return *s;
         if (auto s = getEnv("OTEL_EXPORTER_OTLP_ENDPOINT"))
             return *s + "/v1/traces";
+        /* Unlike the environment variables, the setting is subject to
+           `otlp`, so that tracing can be turned off without removing
+           the endpoint from the configuration. */
+        if (otelSettings.enable && !otelSettings.endpoint.get().empty())
+            return otelSettings.endpoint.get() + "/v1/traces";
         return "";
     }();
-    if (endpoint.empty())
+
+    /* Without an explicitly configured endpoint, stay off; we don't
+       want to export to some default endpoint behind the user's
+       back. */
+    if (endpoint.empty()) {
+        if (otelSettings.enable)
+            warn("OpenTelemetry tracing is enabled but no endpoint is configured; see the 'otlp-endpoint' setting");
         return;
+    }
 
     namespace sdktrace = opentelemetry::sdk::trace;
 
+    /* Note that the environment variable uses the OpenTelemetry
+       syntax, while the setting uses Nix's usual `name=value`
+       syntax. */
+    auto headers = [&]() -> Headers {
+        if (auto s = getEnv("OTEL_EXPORTER_OTLP_HEADERS"))
+            return parseOtlpHeaders(*s);
+        Headers res;
+        for (auto & [name, value] : otelSettings.headers.get())
+            res.emplace_back(name, value);
+        return res;
+    }();
+
     auto exporter = std::make_unique<OtlpJsonSpanExporter>(
         endpoint,
-        parseOtlpHeaders(getEnv("OTEL_EXPORTER_OTLP_HEADERS").value_or("")),
-        getEnv("OTEL_EXPORTER_OTLP_COMPRESSION").value_or("gzip") == "gzip");
+        std::move(headers),
+        getEnv("OTEL_EXPORTER_OTLP_COMPRESSION").value_or(otelSettings.compression) == "gzip");
     auto processor =
         sdktrace::BatchSpanProcessorFactory::Create(std::move(exporter), sdktrace::BatchSpanProcessorOptions{});
     auto resource = opentelemetry::sdk::resource::Resource::Create({

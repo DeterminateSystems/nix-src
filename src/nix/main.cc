@@ -547,14 +547,13 @@ void mainWrapped(int argc, char ** argv)
         argc--;
     }
 
-    /* No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set in the
-       environment. */
-    initOtel(programName);
-
     {
         if (auto legacy = get(RegisterLegacyCommand::commands(), programName)) {
             /* Legacy commands don't have subcommands, so we can set up
-               the root span right away. */
+               the root span right away. Note that they parse their
+               arguments themselves, so unlike for the commands below,
+               `--option` cannot configure tracing here. */
+            initOtel(programName);
             if (auto l = makeOpenTelemetryLogger(programName))
                 applyExtraLogger(std::move(l));
             return (*legacy)(argc, argv);
@@ -716,7 +715,9 @@ void mainWrapped(int argc, char ** argv)
     setSentryTag("nix_subcommand", concatStringsSep(" ", subcommand).c_str());
 
     /* Map activities to OpenTelemetry spans, under a root span named
-       after the subcommand. */
+       after the subcommand. Note: this must happen after
+       `parseCmdline()`, so that `--option` can configure tracing. */
+    initOtel(programName);
     if (auto l = makeOpenTelemetryLogger("nix " + concatStringsSep(" ", subcommand)))
         applyExtraLogger(std::move(l));
 

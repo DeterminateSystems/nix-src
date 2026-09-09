@@ -170,7 +170,8 @@ Likewise for the state and cache directories.
 ## OpenTelemetry tracing environment variables
 
 Nix can emit [OpenTelemetry](https://opentelemetry.io/) traces of its activities (such as evaluation, builds, substitutions and HTTP requests), exported using the OTLP/HTTP protocol.
-Tracing is a no-op unless one of the endpoint variables below is set.
+Tracing is a no-op unless one of the endpoint variables below is set, or the [`otlp`](@docroot@/command-ref/conf-file.md#conf-otlp) and [`otlp-endpoint`](@docroot@/command-ref/conf-file.md#conf-otlp-endpoint) settings are configured.
+The variables below take precedence over the corresponding settings; in particular, setting an endpoint variable enables tracing even if `otlp` is disabled.
 When talking to the Nix daemon or to a binary cache server, Nix propagates the [W3C trace context](https://www.w3.org/TR/trace-context/), so that work done on your behalf by other processes or servers shows up in the same trace.
 
 - <span id="env-OTEL_EXPORTER_OTLP_ENDPOINT">[`OTEL_EXPORTER_OTLP_ENDPOINT`](#env-OTEL_EXPORTER_OTLP_ENDPOINT)</span>
@@ -178,6 +179,7 @@ When talking to the Nix daemon or to a binary cache server, Nix propagates the [
   The base URL of the OpenTelemetry collector to which traces are sent, e.g. `https://otel.example.org`.
   The path `/v1/traces` is appended automatically.
   Note: the URL should *not* have a trailing slash, since the resulting double slash confuses some collectors.
+  Overrides the [`otlp-endpoint`](@docroot@/command-ref/conf-file.md#conf-otlp-endpoint) setting.
 
 - <span id="env-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT">[`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`](#env-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT)</span>
 
@@ -185,6 +187,8 @@ When talking to the Nix daemon or to a binary cache server, Nix propagates the [
   Takes precedence over `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 - Other standard [OTLP exporter variables](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/) are also honored, such as `OTEL_EXPORTER_OTLP_HEADERS` (e.g. to pass an authorization header) and `OTEL_EXPORTER_OTLP_COMPRESSION` (set to `gzip` to compress uploads).
+  These override the [`otlp-headers`](@docroot@/command-ref/conf-file.md#conf-otlp-headers) and [`otlp-compression`](@docroot@/command-ref/conf-file.md#conf-otlp-compression) settings respectively.
+  Note that `OTEL_EXPORTER_OTLP_HEADERS` uses the OpenTelemetry syntax (comma-separated and percent-encoded), whereas `otlp-headers` uses Nix's usual whitespace-separated `name=value` syntax.
 
 - <span id="env-OTEL_TRACES_SAMPLER">[`OTEL_TRACES_SAMPLER`](#env-OTEL_TRACES_SAMPLER)</span>
 
