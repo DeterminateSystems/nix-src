@@ -10,6 +10,7 @@
   jq,
   git,
   mercurial,
+  python3,
   unixtools,
   util-linux,
 
@@ -57,6 +58,8 @@ mkMesonDerivation (
       jq
       git
       mercurial
+      # For the OpenTelemetry collector in `otel.sh`.
+      python3
       unixtools.script
 
       # Explicitly splice the hostHost variant to fix LLVM tests. The nix-cli
