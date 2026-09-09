@@ -533,6 +533,11 @@ public:
     {
         try {
             if (act) {
+                /* Don't propagate any context from an ignored
+                   activity: the telemetry upload must not be part of
+                   the trace it's carrying. */
+                if (ignoredActs.contains(act))
+                    return {};
                 auto spans(spans_.lock());
                 if (auto i = spans->find(act); i != spans->end())
                     return injectContext(i->second);
