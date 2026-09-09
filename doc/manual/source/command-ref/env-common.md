@@ -187,8 +187,7 @@ When talking to the Nix daemon or to a binary cache server, Nix propagates the [
   Takes precedence over `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 - Other standard [OTLP exporter variables](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/) are also honored, such as `OTEL_EXPORTER_OTLP_HEADERS` (e.g. to pass an authorization header) and `OTEL_EXPORTER_OTLP_COMPRESSION` (set to `gzip` to compress uploads).
-  These override the [`otlp-headers`](@docroot@/command-ref/conf-file.md#conf-otlp-headers) and [`otlp-compression`](@docroot@/command-ref/conf-file.md#conf-otlp-compression) settings respectively.
-  Note that `OTEL_EXPORTER_OTLP_HEADERS` uses the OpenTelemetry syntax (comma-separated and percent-encoded), whereas `otlp-headers` uses Nix's usual whitespace-separated `name=value` syntax.
+  These override the [`otlp-headers`](@docroot@/command-ref/conf-file.md#conf-otlp-headers) and [`otlp-compression`](@docroot@/command-ref/conf-file.md#conf-otlp-compression) settings respectively, and use the same syntax.
 
 - <span id="env-OTEL_TRACES_SAMPLER">[`OTEL_TRACES_SAMPLER`](#env-OTEL_TRACES_SAMPLER)</span>
 

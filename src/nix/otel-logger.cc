@@ -82,18 +82,24 @@ struct OtelSettings : Config
           `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable.
         )"};
 
-    Setting<StringMap> headers{
+    Setting<std::string> headers{
         this,
-        {},
+        "",
         "otlp-headers",
         R"(
-          Extra HTTP headers to send to the collector, specified as a string
-          made up of whitespace-separated `name=value` pairs (e.g. to pass an
-          authorization token).
+          Extra HTTP headers to send to the collector, e.g. to pass an
+          authorization token.
 
-          Overridden by the `OTEL_EXPORTER_OTLP_HEADERS` environment variable.
-          Note that the environment variable uses the OpenTelemetry syntax
-          instead, i.e. comma-separated and percent-encoded.
+          This uses the same syntax as the `OTEL_EXPORTER_OTLP_HEADERS`
+          environment variable (which overrides it): a comma-separated list of
+          `name=value` pairs, where the values are percent-encoded. For
+          instance,
+
+          ```
+          otlp-headers = authorization=Bearer%20secret123
+          ```
+
+          sends the header `authorization: Bearer secret123`.
         )"};
 
     Setting<std::string> compression{
@@ -837,21 +843,9 @@ void initOtel(std::string_view serviceName)
 
     namespace sdktrace = opentelemetry::sdk::trace;
 
-    /* Note that the environment variable uses the OpenTelemetry
-       syntax, while the setting uses Nix's usual `name=value`
-       syntax. */
-    auto headers = [&]() -> Headers {
-        if (auto s = getEnv("OTEL_EXPORTER_OTLP_HEADERS"))
-            return parseOtlpHeaders(*s);
-        Headers res;
-        for (auto & [name, value] : otelSettings.headers.get())
-            res.emplace_back(name, value);
-        return res;
-    }();
-
     auto exporter = std::make_unique<OtlpJsonSpanExporter>(
         endpoint,
-        std::move(headers),
+        parseOtlpHeaders(getEnv("OTEL_EXPORTER_OTLP_HEADERS").value_or(otelSettings.headers)),
         getEnv("OTEL_EXPORTER_OTLP_COMPRESSION").value_or(otelSettings.compression) == "gzip");
     auto processor =
         sdktrace::BatchSpanProcessorFactory::Create(std::move(exporter), sdktrace::BatchSpanProcessorOptions{});
