@@ -13,6 +13,7 @@
 #  include "nix/util/exit.hh"
 #  include "nix/util/processes.hh"
 #  include "nix/util/serialise.hh"
+#  include "nix/util/signals.hh"
 #  include "nix/util/sync.hh"
 #  include "nix/util/terminal.hh"
 #  include "nix/util/url.hh"
@@ -683,6 +684,9 @@ class OtlpJsonSpanExporter final : public opentelemetry::sdk::trace::SpanExporte
 
     std::atomic<bool> isShutdown{false};
 
+    /* Only ever touched from the batch processor's worker thread. */
+    bool warned = false;
+
 public:
 
     OtlpJsonSpanExporter(std::string endpoint, Headers headers, bool compress)
@@ -763,13 +767,19 @@ public:
             upload(doc.dump());
 
             return ExportResult::kSuccess;
-        } catch (...) {
+        } catch (Interrupted & e) {
+            /* Not a problem with the collector, so not worth a
+               warning. */
+            printMsg(lvlDebug, "OpenTelemetry export interrupted: %s", e.what());
+            return ExportResult::kFailure;
+        } catch (std::exception & e) {
             /* Note that nothing retries a failed export, so all we can
                do is drop the spans. Don't let the exception escape,
-               since this method is noexcept. Also don't bother the
-               user about it: failing to export telemetry should not
-               be noise on top of whatever they're actually doing. */
-            ignoreExceptionInDestructor(lvlDebug);
+               since this method is noexcept. Only warn about the first
+               failure: the batch processor exports every few seconds,
+               so an unreachable collector would otherwise flood the
+               output with the same warning. */
+            warnOnce(warned, "unable to export OpenTelemetry traces: %s", e.what());
             return ExportResult::kFailure;
         }
     }
