@@ -3,7 +3,9 @@
 #include "cli-config-private.hh"
 
 #if HAVE_OTEL
+#  include "nix/store/derivations.hh"
 #  include "nix/store/filetransfer.hh"
+#  include "nix/store/names.hh"
 #  include "nix/util/base-n.hh"
 #  include "nix/util/compression.hh"
 #  include "nix/util/config-global.hh"
@@ -264,6 +266,30 @@ std::string_view getS(const Logger::Fields & fields, size_t n)
     return {};
 }
 
+/**
+ * Set the `<prefix>.path` attribute to a store path, along with
+ * `<prefix>.name` and `<prefix>.version` giving its name and version
+ * separately, e.g. `patchelf` and `0.18.0` for
+ * `/nix/store/…-patchelf-0.18.0` or `…-patchelf-0.18.0.drv`. Those are
+ * much easier to filter on than the path itself. A path that cannot
+ * be parsed just doesn't get these extra attributes.
+ */
+void setPathAttributes(opentelemetry::trace::Span & span, std::string_view prefix, std::string_view path)
+{
+    auto key = [&](std::string_view suffix) { return std::string(prefix) + "." + std::string(suffix); };
+
+    span.SetAttribute(toNostd(key("path")), toNostd(path));
+
+    try {
+        StorePath storePath(baseNameOf(path));
+        DrvName drvName(storePath.isDerivation() ? BasicDerivation::nameFromPath(storePath) : storePath.name());
+        span.SetAttribute(toNostd(key("name")), toNostd(drvName.name));
+        if (!drvName.version.empty())
+            span.SetAttribute(toNostd(key("version")), toNostd(drvName.version));
+    } catch (...) {
+    }
+}
+
 class OpenTelemetryLoggerImpl : public OpenTelemetryLogger
 {
     using SpanPtr = opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span>;
@@ -387,17 +413,17 @@ public:
                 break;
             case actBuild:
             case actPostBuildHook:
-                span->SetAttribute("nix.drv.path", toNostd(getS(fields, 0)));
+                setPathAttributes(*span, "nix.drv", getS(fields, 0));
                 if (auto machine = getS(fields, 1); !machine.empty())
                     span->SetAttribute("nix.machine", toNostd(machine));
                 break;
             case actSubstitute:
             case actQueryPathInfo:
-                span->SetAttribute("nix.store.path", toNostd(getS(fields, 0)));
+                setPathAttributes(*span, "nix.store", getS(fields, 0));
                 span->SetAttribute("nix.substituter", toNostd(getS(fields, 1)));
                 break;
             case actCopyPath:
-                span->SetAttribute("nix.store.path", toNostd(getS(fields, 0)));
+                setPathAttributes(*span, "nix.store", getS(fields, 0));
                 span->SetAttribute("nix.src.store", toNostd(getS(fields, 1)));
                 span->SetAttribute("nix.dst.store", toNostd(getS(fields, 2)));
                 break;

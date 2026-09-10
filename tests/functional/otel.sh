@@ -42,6 +42,12 @@ span() {
     body "$1" | jq -r ".resourceSpans[0].scopeSpans[0].spans[0]$2"
 }
 
+# Return the value of a string attribute of the span with the given
+# name in the n-th upload.
+attr() {
+    body "$1" | jq -r ".resourceSpans[0].scopeSpans[0].spans[] | select(.name == \"$2\") | .attributes[] | select(.key == \"$3\") | .value.stringValue"
+}
+
 # A successful command produces a root span named after it, with no
 # status.
 [[ $(nix eval --expr '1 + 2') = 3 ]]
@@ -72,3 +78,12 @@ span 1 .status.message | grepQuiet "cannot add a string to an integer"
 [[ ! -e $sinkDir/3.body ]]
 [[ $(OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$(cat "$sinkDir/port")" NIX_CONFIG="otlp = false" nix eval --expr '1 + 2') = 3 ]]
 [[ $(span 3 .name) = "nix eval" ]]
+
+# A build produces a `Build` span carrying the derivation's path, name
+# and version as separate attributes.
+# shellcheck disable=SC2016 # `$out` is for the Nix builder, not the shell.
+drvPath=$(nix-instantiate --expr 'with import ./config.nix; mkDerivation { name = "foo-1.2"; buildCommand = "echo > $out"; }')
+nix build --no-link "$drvPath^*"
+[[ $(attr 5 Build nix.drv.path) = "$drvPath" ]]
+[[ $(attr 5 Build nix.drv.name) = foo ]]
+[[ $(attr 5 Build nix.drv.version) = 1.2 ]]
