@@ -212,6 +212,12 @@ scope: {
         installPhase = lib.replaceStrings [ "--without-python" ] [ "" ] old.installPhase;
       });
 
+  # Build opentelemetry-cpp against the standard library, so that its
+  # API uses `std::string_view`, `std::shared_ptr` etc. instead of its
+  # own `nostd::` back-ports. This is an ABI switch, so it has to be
+  # done when building the library, not just on our side.
+  opentelemetry-cpp = pkgs.opentelemetry-cpp.override { cxxStandard = "20"; };
+
   wasmtime = pkgs.callPackage ./wasmtime.nix { };
 
   sentry-native = (pkgs.callPackage ./sentry-native.nix { }).override {

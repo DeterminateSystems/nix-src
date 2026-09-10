@@ -27,8 +27,6 @@
 
 #  include <opentelemetry/context/context.h>
 #  include <opentelemetry/context/propagation/text_map_propagator.h>
-#  include <opentelemetry/nostd/shared_ptr.h>
-#  include <opentelemetry/nostd/variant.h>
 #  include <opentelemetry/sdk/common/exporter_utils.h>
 #  include <opentelemetry/sdk/trace/exporter.h>
 #  include <opentelemetry/sdk/trace/span_data.h>
@@ -128,7 +126,7 @@ namespace {
 struct OtelState
 {
     std::unique_ptr<opentelemetry::sdk::trace::TracerProvider> provider;
-    opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> tracer;
+    std::shared_ptr<opentelemetry::trace::Tracer> tracer;
 
     /**
      * The root span's trace ID, to be printed on shutdown if
@@ -152,11 +150,6 @@ std::atomic<OtelState *> otelState{nullptr};
    it can be neither flushed nor destroyed safely. */
 static RegisterForkCallback resetOtel([]() { otelState.exchange(nullptr); });
 
-inline opentelemetry::nostd::string_view toNostd(std::string_view sv) noexcept
-{
-    return {sv.data(), sv.size()};
-}
-
 /**
  * The name of the activity under which we upload spans. Since the
  * upload itself creates activities (namely the file transfer), we
@@ -167,9 +160,9 @@ constexpr std::string_view uploadActivityName = "UploadOpenTelemetry";
 
 struct ExtractCarrier : opentelemetry::context::propagation::TextMapCarrier
 {
-    opentelemetry::nostd::string_view traceparent, tracestate;
+    std::string_view traceparent, tracestate;
 
-    opentelemetry::nostd::string_view Get(opentelemetry::nostd::string_view key) const noexcept override
+    std::string_view Get(std::string_view key) const noexcept override
     {
         if (key == "traceparent")
             return traceparent;
@@ -178,7 +171,7 @@ struct ExtractCarrier : opentelemetry::context::propagation::TextMapCarrier
         return {};
     }
 
-    void Set(opentelemetry::nostd::string_view, opentelemetry::nostd::string_view) noexcept override {}
+    void Set(std::string_view, std::string_view) noexcept override {}
 };
 
 /**
@@ -192,7 +185,7 @@ std::optional<opentelemetry::trace::SpanContext> parseTraceparent(std::string_vi
     if (traceparent.empty())
         return std::nullopt;
     ExtractCarrier carrier;
-    carrier.traceparent = toNostd(traceparent);
+    carrier.traceparent = traceparent;
     opentelemetry::context::Context emptyCtx;
     auto ctx = opentelemetry::trace::propagation::HttpTraceContext{}.Extract(carrier, emptyCtx);
     auto spanContext = opentelemetry::trace::GetSpan(ctx)->GetContext();
@@ -205,16 +198,16 @@ struct InjectCarrier : opentelemetry::context::propagation::TextMapCarrier
 {
     Headers headers;
 
-    opentelemetry::nostd::string_view Get(opentelemetry::nostd::string_view) const noexcept override
+    std::string_view Get(std::string_view) const noexcept override
     {
         return {};
     }
 
-    void Set(opentelemetry::nostd::string_view key, opentelemetry::nostd::string_view value) noexcept override
+    void Set(std::string_view key, std::string_view value) noexcept override
     {
         /* Copy immediately: `value` may point into a stack buffer of
            the propagator. */
-        headers.emplace_back(std::string(key.data(), key.size()), std::string(value.data(), value.size()));
+        headers.emplace_back(std::string(key), std::string(value));
     }
 };
 
@@ -278,23 +271,23 @@ void setPathAttributes(opentelemetry::trace::Span & span, std::string_view prefi
 {
     auto key = [&](std::string_view suffix) { return std::string(prefix) + "." + std::string(suffix); };
 
-    span.SetAttribute(toNostd(key("path")), toNostd(path));
+    span.SetAttribute(key("path"), path);
 
     try {
         StorePath storePath(baseNameOf(path));
         DrvName drvName(storePath.isDerivation() ? BasicDerivation::nameFromPath(storePath) : storePath.name());
-        span.SetAttribute(toNostd(key("name")), toNostd(drvName.name));
+        span.SetAttribute(key("name"), drvName.name);
         if (!drvName.version.empty())
-            span.SetAttribute(toNostd(key("version")), toNostd(drvName.version));
+            span.SetAttribute(key("version"), drvName.version);
     } catch (...) {
     }
 }
 
 class OpenTelemetryLoggerImpl : public OpenTelemetryLogger
 {
-    using SpanPtr = opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span>;
+    using SpanPtr = std::shared_ptr<opentelemetry::trace::Span>;
 
-    opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> tracer;
+    std::shared_ptr<opentelemetry::trace::Tracer> tracer;
 
     SpanPtr rootSpan;
 
@@ -340,7 +333,7 @@ public:
             if (auto spanContext = parseTraceparent(remoteParentTraceparent))
                 options.parent = *spanContext;
         }
-        rootSpan = tracer->StartSpan(toNostd(rootSpanName), options);
+        rootSpan = tracer->StartSpan(rootSpanName, options);
 
         if (getEnv("NIX_DEBUG_OTEL")) {
             char buf[2 * opentelemetry::trace::TraceId::kSize];
@@ -364,7 +357,7 @@ public:
                return. */
         } catch (std::exception & e) {
             // FIXME: privacy
-            rootSpan->SetStatus(opentelemetry::trace::StatusCode::kError, toNostd(filterANSIEscapes(e.what(), true)));
+            rootSpan->SetStatus(opentelemetry::trace::StatusCode::kError, filterANSIEscapes(e.what(), true));
         } catch (...) {
             rootSpan->SetStatus(opentelemetry::trace::StatusCode::kError, "unknown exception");
         }
@@ -399,33 +392,33 @@ public:
             else
                 options.parent = rootSpan->GetContext();
 
-            auto span = tracer->StartSpan(toNostd(name), options);
+            auto span = tracer->StartSpan(name, options);
 
             if (!s.empty() && !textIsName)
-                span->SetAttribute("nix.activity.text", toNostd(filterANSIEscapes(s, true)));
+                span->SetAttribute("nix.activity.text", filterANSIEscapes(s, true));
 
 // Allow handling a subset of enum values
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wswitch-enum"
             switch (type) {
             case actFileTransfer:
-                span->SetAttribute("url.full", toNostd(getS(fields, 0)));
+                span->SetAttribute("url.full", getS(fields, 0));
                 break;
             case actBuild:
             case actPostBuildHook:
                 setPathAttributes(*span, "nix.drv", getS(fields, 0));
                 if (auto machine = getS(fields, 1); !machine.empty())
-                    span->SetAttribute("nix.machine", toNostd(machine));
+                    span->SetAttribute("nix.machine", machine);
                 break;
             case actSubstitute:
             case actQueryPathInfo:
                 setPathAttributes(*span, "nix.store", getS(fields, 0));
-                span->SetAttribute("nix.substituter", toNostd(getS(fields, 1)));
+                span->SetAttribute("nix.substituter", getS(fields, 1));
                 break;
             case actCopyPath:
                 setPathAttributes(*span, "nix.store", getS(fields, 0));
-                span->SetAttribute("nix.src.store", toNostd(getS(fields, 1)));
-                span->SetAttribute("nix.dst.store", toNostd(getS(fields, 2)));
+                span->SetAttribute("nix.src.store", getS(fields, 1));
+                span->SetAttribute("nix.dst.store", getS(fields, 2));
                 break;
             default:
                 break;
@@ -497,16 +490,16 @@ public:
             else
                 options.parent = rootSpan->GetContext();
 
-            auto span = tracer->StartSpan(toNostd(spanName), options);
+            auto span = tracer->StartSpan(spanName, options);
 
             if (!s.empty())
-                span->SetAttribute("nix.activity.text", toNostd(filterANSIEscapes(s, true)));
+                span->SetAttribute("nix.activity.text", filterANSIEscapes(s, true));
 
             for (auto & [key, value] : metadata) {
                 if (auto str = std::get_if<std::string>(&value.raw))
-                    span->SetAttribute(toNostd(key), toNostd(*str));
+                    span->SetAttribute(key, *str);
                 else if (auto n = std::get_if<uint64_t>(&value.raw))
-                    span->SetAttribute(toNostd(key), (int64_t) *n);
+                    span->SetAttribute(key, (int64_t) *n);
             }
 
             spans->emplace(act, std::move(span));
@@ -616,7 +609,7 @@ public:
  */
 nlohmann::json toAnyValue(const opentelemetry::sdk::common::OwnedAttributeValue & value)
 {
-    return opentelemetry::nostd::visit(
+    return std::visit(
         [](const auto & v) -> nlohmann::json {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, bool>)
@@ -704,9 +697,8 @@ public:
         return std::make_unique<opentelemetry::sdk::trace::SpanData>();
     }
 
-    opentelemetry::sdk::common::ExportResult Export(
-        const opentelemetry::nostd::span<std::unique_ptr<opentelemetry::sdk::trace::Recordable>> & recordables) noexcept
-        override
+    opentelemetry::sdk::common::ExportResult
+    Export(const std::span<std::unique_ptr<opentelemetry::sdk::trace::Recordable>> & recordables) noexcept override
     {
         using opentelemetry::sdk::common::ExportResult;
 
@@ -733,7 +725,7 @@ public:
                 nlohmann::json json{
                     {"traceId", toHex(span.GetTraceId())},
                     {"spanId", toHex(span.GetSpanId())},
-                    {"name", std::string(span.GetName().data(), span.GetName().size())},
+                    {"name", std::string(span.GetName())},
                     /* `SpanKind` is declared in the same order as in
                        OTLP, which starts counting at `unspecified`. */
                     {"kind", (int) span.GetSpanKind() + 1},
@@ -747,10 +739,9 @@ public:
                     json["parentSpanId"] = toHex(span.GetParentSpanId());
 
                 if (span.GetStatus() != opentelemetry::trace::StatusCode::kUnset) {
-                    auto description = span.GetDescription();
                     json["status"] = {
                         {"code", (int) span.GetStatus()},
-                        {"message", std::string(description.data(), description.size())},
+                        {"message", std::string(span.GetDescription())},
                     };
                 }
 
