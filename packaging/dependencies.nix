@@ -185,6 +185,12 @@ scope: {
         ./patches/libgit2-packbuilder-dont-fail-on-thread-create-error.patch
       ];
       separateDebugInfo = true;
+      # Nixpkgs derives `meta.changelog` from `src.tag`, which is null
+      # here since we fetch an untagged commit. This would be harmless
+      # except that nixpkgs variants with provenance support
+      # (`derivationWithMeta`) force `meta.changelog` at derivation
+      # instantiation time, causing an eval error.
+      meta = builtins.removeAttrs prevAttrs.meta [ "changelog" ];
     }
   );
 
