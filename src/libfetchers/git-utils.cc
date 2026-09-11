@@ -16,11 +16,13 @@
 #include "nix/util/executable-path.hh"
 #include "nix/util/deleter.hh"
 
+#include <git2/version.h>
 #include <git2/attr.h>
 #include <git2/blob.h>
 #include <git2/branch.h>
 #include <git2/commit.h>
 #include <git2/config.h>
+#include <git2/sys/config.h>
 #include <git2/describe.h>
 #include <git2/errors.h>
 #include <git2/global.h>
@@ -115,6 +117,11 @@ typedef std::unique_ptr<git_describe_result, Deleter<git_describe_result_free>> 
 typedef std::unique_ptr<git_status_list, Deleter<git_status_list_free>> StatusList;
 typedef std::unique_ptr<git_remote, Deleter<git_remote_free>> Remote;
 typedef std::unique_ptr<git_config, Deleter<git_config_free>> GitConfig;
+typedef std::unique_ptr<git_config_backend, decltype([](git_config_backend * backend) {
+                            if (backend)
+                                backend->free(backend);
+                        })>
+    GitConfigBackend;
 typedef std::unique_ptr<git_config_iterator, Deleter<git_config_iterator_free>> ConfigIterator;
 typedef std::unique_ptr<git_odb, Deleter<git_odb_free>> ObjectDb;
 typedef std::unique_ptr<git_packbuilder, Deleter<git_packbuilder_free>> PackBuilder;
@@ -123,10 +130,22 @@ typedef std::unique_ptr<git_index, Deleter<git_index_free>> Index;
 
 static Hash toHash(const git_oid & oid)
 {
-#ifdef GIT_EXPERIMENTAL_SHA256
-    assert(oid.type == GIT_OID_SHA1);
+    HashAlgorithm algo;
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+    switch (oid.type) {
+    case GIT_OID_SHA1:
+        algo = HashAlgorithm::SHA1;
+        break;
+    case GIT_OID_SHA256:
+        algo = HashAlgorithm::SHA256;
+        break;
+    default:
+        unreachable();
+    }
+#else
+    algo = HashAlgorithm::SHA1;
 #endif
-    Hash hash(HashAlgorithm::SHA1);
+    Hash hash(algo);
     memcpy(hash.hash, oid.id, hash.hashSize);
     return hash;
 }
@@ -137,14 +156,41 @@ static void initLibGit2()
     std::call_once(initialized, []() {
         if (git_libgit2_init() < 0)
             throw GitError("initialising libgit2");
+
+        /* Nuke the "hashing on all reads" behavior, since that can lead to bad
+           performance https://github.com/libgit2/libgit2/issues/4951. It's a
+           compromise of course, but one that is mostly in line with git cli and
+           like how we don't recalculate narHash when reading from a store. */
+        git_libgit2_opts(GIT_OPT_ENABLE_STRICT_HASH_VERIFICATION, 0);
     });
 }
 
 static git_oid hashToOID(const Hash & hash)
 {
     git_oid oid;
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+    git_oid_t t;
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wswitch-enum"
+    switch (hash.algo) {
+    case HashAlgorithm::SHA1:
+        t = GIT_OID_SHA1;
+        break;
+    case HashAlgorithm::SHA256:
+        t = GIT_OID_SHA256;
+        break;
+    default:
+        throw Error("unsupported hash algorithm for Git: %s", printHashAlgo(hash.algo));
+    }
+#  pragma GCC diagnostic pop
+    if (git_oid_from_raw(&oid, hash.hash, t))
+        /* This can really never happen, since libgit2 just reads out our raw bytes.
+           The only failure mode is us specifying an invalid `type` parameter. */
+        unreachable();
+#else
     if (git_oid_fromstr(&oid, hash.gitRev().c_str()))
         throw GitError("cannot convert '%s' to a Git OID", hash.gitRev());
+#endif
     return oid;
 }
 
@@ -297,6 +343,28 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
         if (git_repository_open(Setter(repo), path.string().c_str()))
             throw GitError("opening Git repository %s", PathFmt(path));
 
+        GitConfig config;
+        if (git_repository_config(Setter(config), *this))
+            throw GitError("getting Git repository config");
+
+        /* Create an in-memory configuration so that we can set config options without modifying the
+           config file on-disk. */
+        git_config_backend_memory_options configOpts = GIT_CONFIG_BACKEND_MEMORY_OPTIONS_INIT;
+        configOpts.backend_type = "nix";
+
+        std::vector<const char *> configValues;
+        if (options.dontFindDeltas)
+            configValues.push_back("pack.window=0");
+
+        GitConfigBackend memBackend;
+        if (git_config_backend_from_values(Setter(memBackend), configValues.data(), configValues.size(), &configOpts))
+            throw GitError("creating an in-memory Git config");
+
+        if (git_config_add_backend(config.get(), memBackend.get(), GIT_CONFIG_LEVEL_APP, *this, /*force=*/false))
+            throw GitError("adding the in-memory Git configuration backend");
+
+        memBackend.release();
+
         ObjectDb odb;
         if (options.packfilesOnly) {
             /* Create a fresh object database because by default the repo also
@@ -310,7 +378,16 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
             if (git_odb_new(Setter(odb)))
                 throw GitError("creating Git object database");
 
-            if (git_odb_backend_pack(&packBackend, (path / "objects").string().c_str()))
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+            git_odb_backend_pack_options packOpts = GIT_ODB_OPTIONS_INIT;
+#endif
+            if (git_odb_backend_pack(
+                    &packBackend,
+                    (path / "objects").string().c_str()
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+                        , &packOpts // NOFORMAT
+#endif
+                    ))
                 throw GitError("creating pack backend");
 
             if (git_odb_add_backend(odb.get(), packBackend, 1))
@@ -368,7 +445,20 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
         //                     (synchronously on the git_packbuilder_write_buf thread)
         Indexer indexer;
         git_indexer_progress stats;
-        if (git_indexer_new(Setter(indexer), pack_dir_path.c_str(), 0, nullptr, nullptr))
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+        git_indexer_options indexerOpts = GIT_INDEXER_OPTIONS_INIT;
+#endif
+        if (git_indexer_new(
+                Setter(indexer),
+                pack_dir_path.c_str(),
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+                &indexerOpts
+#else
+                0,
+                nullptr,
+                nullptr
+#endif
+                ))
             throw GitError("creating git packfile indexer");
 
         // TODO: provide index callback for checkInterrupt() termination
@@ -1553,7 +1643,16 @@ ref<GitRepo> Settings::getTarballCache() const
     static auto repoDir = std::filesystem::path(getCacheDir()) / "tarball-cache-v2";
     auto tarballCache(_tarballCache.lock());
     if (!*tarballCache)
-        *tarballCache = GitRepo::openRepo(repoDir, {.create = true, .bare = true, .packfilesOnly = true});
+        *tarballCache = GitRepo::openRepo(
+            repoDir,
+            {
+                .create = true,
+                .bare = true,
+                .packfilesOnly = true,
+                /* Tarball unpacking is not expected to benefit from deltas much,
+                   compared to how much CPU times it takes to find. */
+                .dontFindDeltas = true,
+            });
     return ref<GitRepo>(*tarballCache);
 }
 
