@@ -21,11 +21,6 @@ namespace nix {
  * with bounded timeouts. Since loggers are generally not destroyed,
  * it has to be called explicitly before the process exits;
  * `handleExceptions()` does so.
- *
- * `resetAfterFork()` discards the tracing state without exporting
- * anything, turning tracing off in this process. Note that a process
- * that wants to trace after a `fork()` doesn't need this: `initOtel()`
- * discards the inherited state by itself.
  */
 class OpenTelemetryLogger : public Logger
 {};

@@ -611,14 +611,6 @@ public:
         if (!state->debugTraceId.empty())
             writeToStderr(fmt("OpenTelemetry trace ID: %s\n", state->debugTraceId));
     }
-
-    void resetAfterFork() override
-    {
-        /* Deliberately leak the old state: it may reference a worker
-           thread that does not exist in this process, so it can be
-           neither flushed nor destroyed safely. */
-        otelState.exchange(nullptr);
-    }
 };
 
 /**
