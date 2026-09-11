@@ -33,7 +33,6 @@ let
   forAllPackages = forAllPackages' { };
   forAllPackages' =
     {
-      enableBindings ? false,
       enableDocs ? false, # already have separate attrs for these
     }:
     lib.genAttrs (
@@ -64,9 +63,7 @@ let
         "nix-cli"
         "nix-functional-tests"
         "nix-json-schema-checks"
-      ]
-      ++ lib.optionals enableBindings [
-        "nix-perl-bindings"
+        "nix-clang-tidy-plugin"
       ]
       ++ lib.optionals enableDocs [
         "nix-manual"
@@ -84,7 +81,6 @@ rec {
     let
       arbitrarySystem = "x86_64-linux";
       listedPkgs = forAllPackages' {
-        enableBindings = true;
         enableDocs = true;
       } (_: null);
       actualPkgs = lib.concatMapAttrs (
@@ -126,95 +122,25 @@ rec {
     system: self.devShells.${system}.default.inputDerivation
   )) [ "i686-linux" ];
 
-  buildStatic = forAllPackages (
-    pkgName:
-    lib.genAttrs linux64BitSystems (
-      system: nixpkgsFor.${system}.native.pkgsStatic.nixComponents2.${pkgName}
-    )
-  );
-
-  buildCross = forAllPackages (
-    pkgName:
-    # Hack to avoid non-evaling package
-    (
-      if pkgName == "nix-functional-tests" then
-        lib.flip builtins.removeAttrs [ "x86_64-w64-mingw32" ]
-      else if pkgName == "nix-nswrapper" then
-        lib.filterAttrs (
-          crossSystem: _do_not_touch: nixpkgsFor.x86_64-linux.cross.${crossSystem}.stdenv.hostPlatform.isLinux
-        )
-      else
-        lib.id
-    )
-      (
-        forAllCrossSystems (
-          crossSystem:
-          lib.genAttrs [ "x86_64-linux" ] (
-            system: nixpkgsFor.${system}.cross.${crossSystem}.nixComponents2.${pkgName}
-          )
-        )
-      )
-  );
-
-  # Builds with sanitizers already have GC disabled, so this buildNoGc can just
-  # point to buildWithSanitizers in order to reduce the load on hydra.
-  buildNoGc = buildWithSanitizers;
-
-  buildWithSanitizers =
+  # Static analysis with clang-tidy
+  clangTidy = lib.genAttrs linux64BitSystems (
+    system:
     let
-      components = forAllSystems (
-        system:
-        let
-          pkgs = nixpkgsFor.${system}.native;
-        in
-        pkgs.nixComponents2.overrideScope (
-          self: super: {
-            # Boost coroutines fail with ASAN on darwin.
-            withASan = !pkgs.stdenv.buildPlatform.isDarwin;
-            withUBSan = true;
-            nix-expr = super.nix-expr.override { enableGC = false; };
-            # Unclear how to make Perl bindings work with a dynamically linked ASAN.
-            nix-perl-bindings = null;
-          }
-        )
+      pkgs = nixpkgsFor.${system}.nativeForStdenv.clangStdenv;
+      tidyScope = pkgs.nixComponents2.overrideScope (
+        self: super: {
+          withClangTidy = true;
+          # clang-tidy doesn't seem to like unity builds.
+          withUnityBuild = false;
+          # nix-everything is built via callPackage (not the layer system), so
+          # enableClangTidyLayer's doCheck=false doesn't reach it. Set it here
+          # so checkInputs (the *-tests.tests.run derivations) aren't pulled in.
+          nix-everything = super.nix-everything.overrideAttrs { doCheck = false; };
+        }
       );
     in
-    forAllPackages (
-      pkgName:
-      lib.filterAttrs (
-        system: _do_not_touch:
-        pkgName == "nix-nswrapper" -> nixpkgsFor.${system}.native.stdenv.hostPlatform.isLinux
-      ) (forAllSystems (system: components.${system}.${pkgName}))
-    );
-
-  buildNoTests = forAllSystems (system: nixpkgsFor.${system}.native.nixComponents2.nix-cli);
-
-  # Toggles some settings for better coverage. Windows needs these
-  # library combinations, and Debian build Nix with GNU readline too.
-  buildReadlineNoMarkdown =
-    let
-      components = forAllSystems (
-        system:
-        nixpkgsFor.${system}.native.nixComponents2.overrideScope (
-          self: super: {
-            nix-cmd = super.nix-cmd.override {
-              enableMarkdown = false;
-              readlineFlavor = "readline";
-            };
-          }
-        )
-      );
-    in
-    forAllPackages (
-      pkgName:
-      lib.filterAttrs (
-        system: _do_not_touch:
-        pkgName == "nix-nswrapper" -> nixpkgsFor.${system}.native.stdenv.hostPlatform.isLinux
-      ) (forAllSystems (system: components.${system}.${pkgName}))
-    );
-
-  # Perl bindings for various platforms.
-  perlBindings = forAllSystems (system: nixpkgsFor.${system}.native.nixComponents2.nix-perl-bindings);
+    tidyScope.nix-everything
+  );
 
   # Binary tarball for various platforms, containing a Nix store
   # with the closure of 'nix' package, and the second half of
@@ -223,36 +149,37 @@ rec {
     system: nixpkgsFor.${system}.native.callPackage ./binary-tarball.nix { }
   );
 
-  binaryTarballCross = lib.genAttrs [ "x86_64-linux" ] (
-    system:
-    forAllCrossSystems (
-      crossSystem: nixpkgsFor.${system}.cross.${crossSystem}.callPackage ./binary-tarball.nix { }
-    )
-  );
-
-  # The first half of the installation script. This is uploaded
-  # to https://nixos.org/nix/install. It downloads the binary
-  # tarball for the user's system and calls the second half of the
-  # installation script.
-  installerScript = installScriptFor [
-    # Native
-    self.hydraJobs.binaryTarball."x86_64-linux"
-    self.hydraJobs.binaryTarball."i686-linux"
-    self.hydraJobs.binaryTarball."aarch64-linux"
-    self.hydraJobs.binaryTarball."x86_64-darwin"
-    self.hydraJobs.binaryTarball."aarch64-darwin"
-    # Cross
-    self.hydraJobs.binaryTarballCross."x86_64-linux"."armv6l-unknown-linux-gnueabihf"
-    self.hydraJobs.binaryTarballCross."x86_64-linux"."armv7l-unknown-linux-gnueabihf"
-    self.hydraJobs.binaryTarballCross."x86_64-linux"."riscv64-unknown-linux-gnu"
-  ];
-
   installerScriptForGHA = forAllSystems (
     system:
     nixpkgsFor.${system}.native.callPackage ./installer {
       tarballs = [ self.hydraJobs.binaryTarball.${system} ];
     }
   );
+
+  # `NixOS/nix-installer` with this revision's Nix closure embedded.
+  rustInstaller =
+    lib.genAttrs
+      (
+        linux64BitSystems
+        ++ [
+          "aarch64-darwin"
+        ]
+      )
+      (
+        system:
+        let
+          pkgs = nixpkgsFor.${system}.native;
+          # Embed the native (glibc) Nix even though the Linux installer
+          # binary is static/musl.
+          tarball = pkgs.callPackage ./rust-installer/tarball.nix {
+            nix = pkgs.nixComponents2.nix-everything;
+          };
+          builder = if pkgs.stdenv.hostPlatform.isLinux then pkgs.pkgsStatic else pkgs;
+        in
+        builder.callPackage ./rust-installer {
+          inherit tarball;
+        }
+      );
 
   # docker image with Nix inside
   dockerImage = lib.genAttrs linux64BitSystems (system: self.packages.${system}.dockerImage);
@@ -314,6 +241,26 @@ rec {
           pkgs = nixpkgsFor.${system}.native;
         }
       );
+
+      nixpkgsLibTestsLazy = forAllSystems (
+        system:
+        lib.overrideDerivation
+          (import (nixpkgs + "/lib/tests/test-with-nix.nix") {
+            lib = nixpkgsFor.${system}.native.lib;
+            nix = self.packages.${system}.nix-cli;
+            pkgs = nixpkgsFor.${system}.native;
+          })
+          (_: {
+            "NIX_CONFIG" = "lazy-trees = true";
+          })
+      );
+
+      filetransfer-retry-backoff = forAllSystems (
+        system:
+        nixpkgsFor.${system}.native.callPackage ../tests/filetransfer-retry-backoff {
+          nix = nixpkgsFor.${system}.native.nixComponents2.nix-cli;
+        }
+      );
     };
 
   metrics.nixpkgs = import "${nixpkgs-regression}/pkgs/top-level/metrics.nix" {
@@ -328,17 +275,12 @@ rec {
     in
     pkgs.runCommand "install-tests" {
       againstSelf = testNixVersions pkgs pkgs.nix;
-      againstCurrentLatest =
-        # FIXME: temporarily disable this on macOS because of #3605.
-        if system == "x86_64-linux" then testNixVersions pkgs pkgs.nixVersions.latest else null;
+      #againstCurrentLatest =
+      #  # FIXME: temporarily disable this on macOS because of #3605.
+      #  if system == "x86_64-linux" then testNixVersions pkgs pkgs.nixVersions.latest else null;
       # Disabled because the latest stable version doesn't handle
       # `NIX_DAEMON_SOCKET_PATH` which is required for the tests to work
       # againstLatestStable = testNixVersions pkgs pkgs.nixStable;
     } "touch $out"
   );
-
-  installerTests = import ../tests/installer {
-    binaryTarballs = self.hydraJobs.binaryTarball;
-    inherit nixpkgsFor;
-  };
 }

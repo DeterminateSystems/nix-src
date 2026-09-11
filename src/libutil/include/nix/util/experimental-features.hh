@@ -19,9 +19,7 @@ namespace nix {
 enum struct ExperimentalFeature {
     CaDerivations,
     ImpureDerivations,
-    Flakes,
     FetchTree,
-    NixCommand,
     GitHashing,
     RecursiveNix,
     FetchClosure,
@@ -38,7 +36,15 @@ enum struct ExperimentalFeature {
     PipeOperators,
     ExternalBuilders,
     BLAKE3Hashes,
+    BuildTimeFetchTree,
+    ParallelEval,
+    WasmBuiltin,
+    WasmDerivations,
+    Provenance,
+    CNSA,
 };
+
+extern std::set<std::string> stabilizedFeatures;
 
 /**
  * Just because writing `ExperimentalFeature::CaDerivations` is way too long
@@ -81,6 +87,8 @@ std::set<ExperimentalFeature> parseFeatures(const StringSet &);
  */
 class MissingExperimentalFeature final : public CloneableError<MissingExperimentalFeature, Error>
 {
+    void anchor() override;
+
 public:
     /**
      * The experimental feature that was required but not enabled.

@@ -13,6 +13,7 @@ namespace nix {
 
 class Store;
 struct StoreDirConfig;
+struct Provenance;
 
 /**
  * JSON format version for path info output.
@@ -22,6 +23,8 @@ enum class PathInfoJsonFormat {
     V1 = 1,
     /// New format with structured hashes and store path base names
     V2 = 2,
+    /// New format with structured signatures
+    V3 = 3,
 };
 
 /**
@@ -89,14 +92,6 @@ struct UnkeyedValidPathInfo
     uint64_t narSize = 0;
 
     /**
-     * internal use only: SQL primary key for on-disk store objects with
-     * `LocalStore`.
-     *
-     * @todo Remove, layer violation
-     */
-    uint64_t id = 0;
-
-    /**
      * Whether the path is ultimately trusted, that is, it's a
      * derivation output that was built locally.
      */
@@ -122,6 +117,12 @@ struct UnkeyedValidPathInfo
      * and 'references'. However, we support many types of content addresses.
      */
     std::optional<ContentAddress> ca;
+
+    /**
+     * The provenance of this store path, i.e. a link back to the Nix
+     * expression used to create it.
+     */
+    std::shared_ptr<const Provenance> provenance;
 
     UnkeyedValidPathInfo(const UnkeyedValidPathInfo & other) = default;
 
@@ -154,6 +155,11 @@ struct UnkeyedValidPathInfo
     virtual nlohmann::json
     toJSON(const StoreDirConfig * store, bool includeImpureInfo, PathInfoJsonFormat format) const;
     static UnkeyedValidPathInfo fromJSON(const StoreDirConfig * store, const nlohmann::json & json);
+
+private:
+    /* VTable anchor to avoid weak linkage of the vtable - it breaks
+       dynamic_cast across shared libraries on Darwin. */
+    virtual void anchor();
 };
 
 struct ValidPathInfo : virtual UnkeyedValidPathInfo
@@ -220,6 +226,9 @@ struct ValidPathInfo : virtual UnkeyedValidPathInfo
 
     static ValidPathInfo
     makeFromCA(const StoreDirConfig & store, std::string_view name, ContentAddressWithReferences && ca, Hash narHash);
+
+private:
+    void anchor() override;
 };
 
 static_assert(std::is_move_assignable_v<ValidPathInfo>);

@@ -5,6 +5,7 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/tarfile.hh"
 #include "nix/util/file-system.hh"
+#include "nix/util/os-string.hh"
 
 namespace nix {
 
@@ -35,36 +36,17 @@ int callback_close(struct archive *, void * self)
     return ARCHIVE_OK;
 }
 
-void checkLibArchive(archive * archive, int err, const std::string & reason)
-{
-    if (err == ARCHIVE_EOF)
-        throw EndOfFile("reached end of archive");
-    else if (err != ARCHIVE_OK)
-        throw Error(reason, archive_error_string(archive));
-}
-
 constexpr auto defaultBufferSize = std::size_t{65536};
 } // namespace
 
-void TarArchive::check(int err, const std::string & reason)
+void TarArchive::check(int err, const std::string & reason, bool warningsAreFatal)
 {
-    checkLibArchive(archive, err, reason);
-}
-
-/// @brief Get filter_code from its name.
-///
-/// libarchive does not provide a convenience function like archive_write_add_filter_by_name but for reading.
-/// Instead it's necessary to use this kludge to convert method -> code and
-/// then use archive_read_support_filter_by_code. Arguably this is better than
-/// hand-rolling the equivalent function that is better implemented in libarchive.
-int getArchiveFilterCodeByName(const std::string & method)
-{
-    auto * ar = archive_write_new();
-    auto cleanup = Finally{[&ar]() { checkLibArchive(ar, archive_write_close(ar), "failed to close archive: %s"); }};
-    auto err = archive_write_add_filter_by_name(ar, method.c_str());
-    checkLibArchive(ar, err, "failed to get libarchive filter by name: %s");
-    auto code = archive_filter_code(ar, 0);
-    return code;
+    if (err == ARCHIVE_EOF)
+        throw EndOfFile("reached end of archive");
+    else if (err == ARCHIVE_WARN && !warningsAreFatal)
+        warn(reason, archive_error_string(archive));
+    else if (err != ARCHIVE_OK)
+        throw Error(reason, archive_error_string(archive));
 }
 
 static void enableSupportedFormats(struct archive * archive)
@@ -78,15 +60,56 @@ static void enableSupportedFormats(struct archive * archive)
     archive_read_support_format_empty(archive);
 }
 
-TarArchive::TarArchive(Source & source, bool raw, std::optional<std::string> compression_method)
+static int compressionAlgoToFilterCode(CompressionAlgo algo)
+{
+    switch (algo) {
+    case CompressionAlgo::none:
+        return ARCHIVE_FILTER_NONE;
+    case CompressionAlgo::bzip2:
+        return ARCHIVE_FILTER_BZIP2;
+    case CompressionAlgo::compress:
+        return ARCHIVE_FILTER_COMPRESS;
+    case CompressionAlgo::grzip:
+        return ARCHIVE_FILTER_GRZIP;
+    case CompressionAlgo::gzip:
+        return ARCHIVE_FILTER_GZIP;
+    case CompressionAlgo::lrzip:
+        return ARCHIVE_FILTER_LRZIP;
+    case CompressionAlgo::lz4:
+        return ARCHIVE_FILTER_LZ4;
+    case CompressionAlgo::lzip:
+        return ARCHIVE_FILTER_LZIP;
+    case CompressionAlgo::lzma:
+        return ARCHIVE_FILTER_LZMA;
+    case CompressionAlgo::lzop:
+        return ARCHIVE_FILTER_LZOP;
+    case CompressionAlgo::xz:
+        return ARCHIVE_FILTER_XZ;
+    case CompressionAlgo::zstd:
+        return ARCHIVE_FILTER_ZSTD;
+    /* Brotli is handled separately and it shouldn't end up in this code. */
+    case CompressionAlgo::brotli:
+    default:
+        unreachable();
+    }
+}
+
+TarArchive::TarArchive(Source & source, bool raw, std::optional<CompressionAlgo> compressionMethod)
     : archive{archive_read_new()}
     , source{&source}
     , buffer(defaultBufferSize)
 {
-    if (!compression_method) {
+    if (!compressionMethod) {
+        /* Can't fail and always returns ARCHIVE_OK. Doesn't warn if some filters
+           would require calling an external program. */
         archive_read_support_filter_all(archive);
     } else {
-        archive_read_support_filter_by_code(archive, getArchiveFilterCodeByName(*compression_method));
+        int compressionCode = compressionAlgoToFilterCode(*compressionMethod);
+        /* Will warn if enabling some algorithm requires calling an external program. */
+        check(
+            archive_read_support_filter_by_code(archive, compressionCode),
+            "enabling libarchive decompression filter (%s)",
+            /*warningsAreFatal=*/false);
     }
 
     if (!raw)
@@ -123,6 +146,12 @@ TarArchive::~TarArchive()
         archive_read_free(this->archive);
 }
 
+#ifndef _WIN32
+#  define NIX_LIBARCHIVE_NATIVE_PATH_FUNC(func) func
+#else
+#  define NIX_LIBARCHIVE_NATIVE_PATH_FUNC(func) func##_w
+#endif
+
 static void extract_archive(TarArchive & archive, const std::filesystem::path & destDir)
 {
     int flags = ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_SECURE_SYMLINKS | ARCHIVE_EXTRACT_SECURE_NODOTDOT;
@@ -132,30 +161,50 @@ static void extract_archive(TarArchive & archive, const std::filesystem::path & 
         int r = archive_read_next_header(archive.archive, &entry);
         if (r == ARCHIVE_EOF)
             break;
-        auto name = archive_entry_pathname(entry);
-        if (!name)
-            throw Error("cannot get archive member name: %s", archive_error_string(archive.archive));
-        if (r == ARCHIVE_WARN)
-            warn("getting archive member '%1%': %2%", name, archive_error_string(archive.archive));
-        else
-            archive.check(r);
 
-        archive_entry_copy_pathname(entry, (destDir / name).string().c_str());
+        const auto relPath = [&]() -> std::filesystem::path {
+            /* Some archives might lack a pathname https://github.com/libarchive/libarchive/issues/2089. */
+            auto * name = NIX_LIBARCHIVE_NATIVE_PATH_FUNC(archive_entry_pathname)(entry);
+            if (!name)
+                throw Error("cannot get archive member name: %s", archive_error_string(archive.archive));
+            if (r == ARCHIVE_WARN)
+                warn(
+                    "getting archive member '%1%': %2%",
+                    os_string_to_string(OsStringView(name)),
+                    archive_error_string(archive.archive));
+            else
+                archive.check(r);
+
+            return std::filesystem::path(name).relative_path();
+        }();
+
+        NIX_LIBARCHIVE_NATIVE_PATH_FUNC(archive_entry_copy_pathname)(entry, (destDir / relPath).c_str());
 
         // sources can and do contain dirs with no rx bits
         if (archive_entry_filetype(entry) == AE_IFDIR && (archive_entry_mode(entry) & 0500) != 0500)
             archive_entry_set_mode(entry, archive_entry_mode(entry) | 0500);
 
         // Patch hardlink path
-        const char * original_hardlink = archive_entry_hardlink(entry);
-        if (original_hardlink) {
-            archive_entry_copy_hardlink(entry, (destDir / original_hardlink).string().c_str());
+        const auto * originalHardlink = NIX_LIBARCHIVE_NATIVE_PATH_FUNC(archive_entry_hardlink)(entry);
+        if (originalHardlink) {
+            auto hardlinkPath = std::filesystem::path(originalHardlink).relative_path();
+            NIX_LIBARCHIVE_NATIVE_PATH_FUNC(archive_entry_copy_hardlink)(entry, (destDir / hardlinkPath).c_str());
         }
 
         archive.check(archive_read_extract(archive.archive, entry, flags));
     }
 
     archive.close();
+}
+
+#undef NIX_LIBARCHIVE_NATIVE_PATH_FUNC
+
+void unpackTarfile(Source & source, const std::filesystem::path & destDir)
+{
+    auto archive = TarArchive(source);
+
+    createDirs(destDir);
+    extract_archive(archive, destDir);
 }
 
 void unpackTarfile(const std::filesystem::path & tarFile, const std::filesystem::path & destDir)
@@ -210,7 +259,7 @@ time_t unpackTarfileToSink(TarArchive & archive, ExtendedFileSystemObjectSink & 
                 while (true) {
                     auto n = archive_read_data(archive.archive, buf.data(), buf.size());
                     if (n < 0)
-                        checkLibArchive(archive.archive, n, "cannot read file from tarball: %s");
+                        archive.check(n, "cannot read file from tarball: %s");
                     if (n == 0)
                         break;
                     crf(std::string_view{

@@ -194,14 +194,14 @@ TEST_F(ValuePrintingTests, vFailed)
     try {
         throw Error("nope");
     } catch (...) {
-        v.mkFailed(std::current_exception(), nullptr);
+        v.mkFailed();
     }
 
     // Historically, a tried and then ignored value (e.g. through tryEval) was
     // reverted to the original thunk.
 
-    test(v, "«thunk»");
-    test(v, ANSI_MAGENTA "«thunk»" ANSI_NORMAL, PrintOptions{.ansiColors = true});
+    test(v, "«failed»");
+    test(v, ANSI_MAGENTA "«failed»" ANSI_NORMAL, PrintOptions{.ansiColors = true});
 }
 
 TEST_F(ValuePrintingTests, depthAttrs)

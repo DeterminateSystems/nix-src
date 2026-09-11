@@ -2,7 +2,6 @@
 #include "nix/util/args/root.hh"
 #include "nix/util/hash.hh"
 #include "nix/util/environment-variables.hh"
-#include "nix/util/signals.hh"
 #include "nix/util/users.hh"
 #include "nix/util/json-utils.hh"
 
@@ -14,6 +13,8 @@
 #endif
 
 namespace nix {
+
+void AddCompletions::anchor() {}
 
 void Args::addFlag(Flag && flag_)
 {
@@ -273,7 +274,8 @@ void RootArgs::parseCmdline(const Strings & _cmdline, bool allowShebang)
 
     if (auto s = getEnv("NIX_GET_COMPLETIONS")) {
         size_t n = std::stoi(*s);
-        assert(n > 0 && n <= cmdline.size());
+        if (n < 1 || n > cmdline.size())
+            throw UsageError("NIX_GET_COMPLETIONS must be between 1 and the number of arguments");
         *std::next(cmdline.begin(), n - 1) += completionMarker;
         completions = std::make_shared<Completions>();
         verbosity = lvlError;
@@ -513,7 +515,7 @@ void Args::checkArgs()
 {
     for (auto & [name, flag] : longFlags) {
         if (flag->required && flag->timesUsed == 0)
-            throw UsageError("required argument '--%s' is missing", name);
+            throw UsageError("required argument '%s' is missing", "--" + name);
     }
 }
 
@@ -607,7 +609,7 @@ Strings argvToStrings(int argc, char ** argv)
 
 std::optional<ExperimentalFeature> Command::experimentalFeature()
 {
-    return {Xp::NixCommand};
+    return {};
 }
 
 MultiCommand::MultiCommand(std::string_view commandName, const Commands & commands_)
@@ -632,7 +634,7 @@ MultiCommand::MultiCommand(std::string_view commandName, const Commands & comman
          }},
          .completer = {[&](AddCompletions & completions, size_t, std::string_view prefix) {
              for (auto & [name, command] : commands)
-                 if (hasPrefix(name, prefix))
+                 if (hasPrefix(name, prefix) && !hasPrefix(name, "__"))
                      completions.add(name);
          }}});
 
@@ -671,6 +673,8 @@ nlohmann::json MultiCommand::toJSON()
         auto command = commandFun();
         auto j = command->toJSON();
         auto cat = nlohmann::json::object();
+        if (command->category() == Command::catUndocumented)
+            continue;
         cat["id"] = command->category();
         cat["description"] = trim(categories[command->category()]);
         cat["experimental-feature"] = command->experimentalFeature();

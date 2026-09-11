@@ -13,7 +13,7 @@ barBase=$(basename "$bar")
 echo baz > "$TEST_ROOT"/baz
 baz=$(nix store add-file "$TEST_ROOT"/baz)
 bazBase=$(basename "$baz")
-nix-store --delete "$baz"
+nix-store --delete --ignore-liveness "$baz"
 
 diff --unified --color=always \
     <(nix path-info --json --json-format 2 "$foo" "$bar" "$baz" |

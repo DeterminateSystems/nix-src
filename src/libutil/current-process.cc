@@ -3,19 +3,17 @@
 
 #include "nix/util/current-process.hh"
 #include "nix/util/util.hh"
-#include "nix/util/finally.hh"
 #include "nix/util/file-system.hh"
-#include "nix/util/processes.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/environment-variables.hh"
 #include <math.h>
 
 #ifdef __APPLE__
 #  include <mach-o/dyld.h>
+#  include <mach/mach.h>
 #endif
 
 #ifdef __linux__
-#  include <mutex>
 #  include "nix/util/cgroup.hh"
 #  include "nix/util/linux-namespaces.hh"
 #endif
@@ -31,11 +29,11 @@ unsigned int getMaxCPU()
 {
 #ifdef __linux__
     try {
-        auto cgroupFS = getCgroupFS();
+        auto cgroupFS = linux::getCgroupFS();
         if (!cgroupFS)
             return 0;
 
-        auto cpuFile = *cgroupFS / getCurrentCgroup().rel() / "cpu.max";
+        auto cpuFile = *cgroupFS / linux::getCurrentCgroup().rel() / "cpu.max";
 
         auto cpuMax = readFile(cpuFile);
         auto cpuMaxParts = tokenizeString<std::vector<std::string>>(cpuMax, " \n");
@@ -61,7 +59,7 @@ unsigned int getMaxCPU()
 #ifndef _WIN32
 size_t savedStackSize = 0;
 
-void setStackSize(size_t stackSize)
+void ensureStackSizeAtLeast(size_t stackSize)
 {
     struct rlimit limit;
     if (getrlimit(RLIMIT_STACK, &limit) == 0 && static_cast<size_t>(limit.rlim_cur) < stackSize) {
@@ -115,6 +113,15 @@ void restoreProcessContext(bool restoreMounts)
             setrlimit(RLIMIT_STACK, &limit);
         }
     }
+#endif
+
+#ifdef __APPLE__
+    /* Reset the Mach exception ports. Otherwise, if a crashpad_handler is attached to this process, it will be
+       inherited across execve() and receive spurious crash reports from unrelated programs (e.g. in `nix run`).
+       FIXME: it would be better to have Sentry tell crashpad_handler to quit, but it doesn't appear to have an API for
+       that. */
+    task_set_exception_ports(
+        mach_task_self(), EXC_MASK_ALL | EXC_MASK_CRASH, MACH_PORT_NULL, EXCEPTION_DEFAULT, THREAD_STATE_NONE);
 #endif
 }
 

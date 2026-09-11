@@ -171,6 +171,7 @@ private:
     EvalState & state;
     std::chrono::nanoseconds sampleInterval;
     AutoCloseFD profileFd;
+    // FIXME: this needs to become per-thread to support multi-threaded evaluation.
     FrameStack stack;
     std::map<FrameStack, uint32_t> callCount;
     std::chrono::time_point<std::chrono::high_resolution_clock> lastStackSample =

@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <variant>
+#include "nix/expr/root-value.hh"
 
 namespace nix::eval_cache {
 
@@ -16,6 +17,9 @@ class AttrCursor;
 
 struct CachedEvalError : CloneableError<CachedEvalError, EvalError>
 {
+private:
+    void anchor() override;
+public:
     const ref<AttrCursor> cursor;
     const Symbol attr;
 
@@ -35,10 +39,16 @@ class EvalCache : public std::enable_shared_from_this<EvalCache>
     friend struct CachedEvalError;
 
     std::shared_ptr<AttrDb> db;
+
+public:
     EvalState & state;
+
+    std::function<AttrPath(AttrPath &&)> cleanupAttrPath = [](AttrPath && attrPath) { return std::move(attrPath); };
+
+private:
     typedef fun<Value *()> RootLoader;
     RootLoader rootLoader;
-    RootValue value;
+    Sync<RootValue> value;
 
     Value * getRootValue();
 
@@ -99,10 +109,13 @@ class AttrCursor : public std::enable_shared_from_this<AttrCursor>
     friend class EvalCache;
     friend struct CachedEvalError;
 
-    ref<EvalCache> root;
+public:
+    const ref<EvalCache> root;
+
+private:
     using Parent = std::optional<std::pair<ref<AttrCursor>, Symbol>>;
-    Parent parent;
-    RootValue _value;
+    const Parent parent;
+    Sync<RootValue> _value;
     std::optional<std::pair<AttrId, AttrValue>> cachedValue;
 
     AttrKey getKey();
@@ -127,7 +140,11 @@ public:
 
     AttrPath getAttrPath() const;
 
+    AttrPath getAttrPathRaw() const;
+
     AttrPath getAttrPath(Symbol name) const;
+
+    AttrPath getAttrPathRaw(Symbol name) const;
 
     std::string getAttrPathStr() const;
 

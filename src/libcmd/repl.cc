@@ -17,6 +17,7 @@
 #include "nix/cmd/get-build-log.hh"
 #include "nix/expr/get-drvs.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/outputs-query.hh"
 #include "nix/store/globals.hh"
 #include "nix/flake/flake.hh"
 #include "nix/flake/lockfile.hh"
@@ -74,7 +75,7 @@ struct NixRepl : AbstractNixRepl, detail::ReplCompleterMixin, gc
 
     RunNix * runNixPtr;
 
-    void runNix(const std::string & program, OsStrings args, const std::optional<std::string> & input = {});
+    void runNix(const std::string & program, OsStrings args);
 
     std::unique_ptr<ReplInteracter> interacter;
 
@@ -160,7 +161,24 @@ static std::ostream & showDebugTrace(std::ostream & out, const PosTable & positi
     return out;
 }
 
-MakeError(IncompleteReplExpr, ParseError);
+/**
+ * Thrown when the REPL's own input is incomplete (e.g. unclosed multi-line
+ * string or open parenthesis). The mainLoop catches this to prompt for
+ * continuation lines instead of showing an error.
+ *
+ * Only parseString and parseReplBindings may throw this. Evaluation can also
+ * produce "unexpected end of file" ParseErrors (e.g. `import ./broken.nix`),
+ * but those must be reported as errors, not trigger continuation. The
+ * exception subtype is what distinguishes the two cases.
+ */
+MakeError(IncompleteReplExpr, Error);
+
+static bool isIncompleteInput(const ParseError & e)
+{
+    return e.msg().find("unexpected end of file") != std::string::npos;
+}
+
+void IncompleteReplExpr::anchor() {}
 
 static bool isFirstRepl = true;
 
@@ -171,7 +189,7 @@ ReplExitStatus NixRepl::mainLoop()
         if (state->debugRepl) {
             debuggerNotice = " debugger";
         }
-        notice("Nix %1%%2%\nType :? for help.", nixVersion, debuggerNotice);
+        notice("Nix %1%%2%\nType :? for help.", version(), debuggerNotice);
     }
 
     isFirstRepl = false;
@@ -311,6 +329,7 @@ StorePath NixRepl::getDerivationPath(Value & v)
     auto drvPath = packageInfo->queryDrvPath();
     if (!drvPath)
         throw Error("expression did not evaluate to a valid derivation (no 'drvPath' attribute)");
+    state->waitForPath(*drvPath);
     if (!state->store->isValidPath(*drvPath))
         throw Error("expression evaluated to invalid derivation '%s'", state->store->printStorePath(*drvPath));
     return *drvPath;
@@ -326,7 +345,7 @@ void NixRepl::loadDebugTraceEnv(DebugTrace & dt)
 
         // add staticenv vars.
         for (auto & [name, value] : *(vm.get()))
-            addVarToScope(state->symbols.create(name), *value);
+            addVarToScope(state->symbols.create(name), **value);
     }
 }
 
@@ -483,8 +502,8 @@ ProcessLineResult NixRepl::processLine(std::string line)
             }
         }();
 
-        // Open in EDITOR
-        auto args = editorFor(path, line);
+        /* Open file in EDITOR, or edit a read-only copy if the file doesn't have a physical path. */
+        auto [args, fd, autoDel] = editorFor(path, line, /*readOnly=*/true);
         auto editor = args.front();
         args.pop_front();
 
@@ -493,13 +512,16 @@ ProcessLineResult NixRepl::processLine(std::string line)
         runProgram2({
             .program = editor,
             .lookupPath = true,
-            .args = toOsStrings(std::move(args)),
+            .args = std::move(args),
             .isInteractive = true,
         });
 
-        // Reload right after exiting the editor
-        state->resetFileCache();
-        reloadFilesAndFlakes();
+        /* If we had to open a temporary read-only file, there's no need to
+           reload (no files could have changed anyway). */
+        if (!fd) {
+            state->resetFileCache();
+            reloadFilesAndFlakes();
+        }
     }
 
     else if (command == ":t") {
@@ -535,7 +557,7 @@ ProcessLineResult NixRepl::processLine(std::string line)
             });
             auto drv = state->store->readDerivation(drvPath);
             logger->cout("\nThis derivation produced the following outputs:");
-            for (auto & [outputName, outputPath] : state->store->queryDerivationOutputMap(drvPath)) {
+            for (auto & [outputName, outputPath] : deepQueryDerivationOutputMap(*state->store, drvPath)) {
                 auto localStore = state->store.dynamic_pointer_cast<LocalFSStore>();
                 if (localStore && command == ":bl") {
                     std::string symlink = "repl-result-" + outputName;
@@ -656,11 +678,7 @@ ProcessLineResult NixRepl::processLine(std::string line)
 
     else {
         // Try parsing as bindings first (handles `x = 1`, `inherit ...`, etc.)
-        ExprAttrs * bindings = nullptr;
-        try {
-            bindings = parseReplBindings(line);
-        } catch (ParseError &) {
-        }
+        ExprAttrs * bindings = parseReplBindings(line);
 
         if (bindings) {
             Env * inheritEnv = bindings->inheritFromExprs ? bindings->buildInheritFromEnv(*state, *env) : nullptr;
@@ -684,21 +702,19 @@ ProcessLineResult NixRepl::processLine(std::string line)
 
 void NixRepl::loadFile(const std::filesystem::path & path)
 {
-    loadedFiles.remove(path);
-    loadedFiles.push_back(path);
     Value v, v2;
     state->evalFile(lookupFileArg(*state, path.string()), v);
     state->autoCallFunction(*autoArgs, v, v2);
     addAttrsToScope(v2);
+    // Remember for :reload only on success.
+    loadedFiles.remove(path);
+    loadedFiles.push_back(path);
 }
 
 void NixRepl::loadFlake(const std::string & flakeRefS)
 {
     if (flakeRefS.empty())
         throw Error("cannot use ':load-flake' without a path specified. (Use '.' for the current working directory.)");
-
-    loadedFlakes.remove(flakeRefS);
-    loadedFlakes.push_back(flakeRefS);
 
     std::filesystem::path cwd;
     try {
@@ -726,6 +742,10 @@ void NixRepl::loadFlake(const std::string & flakeRefS)
             }),
         v);
     addAttrsToScope(v);
+
+    // Remember for :reload only on success.
+    loadedFlakes.remove(flakeRefS);
+    loadedFlakes.push_back(flakeRefS);
 }
 
 void NixRepl::initEnv()
@@ -768,28 +788,44 @@ void NixRepl::reloadFilesAndFlakes()
 
 void NixRepl::loadFiles()
 {
-    decltype(loadedFiles) old = loadedFiles;
-    loadedFiles.clear();
+    // loadFile() rebuilds loadedFiles; keep failed entries and continue.
+    decltype(loadedFiles) old;
+    std::swap(old, loadedFiles);
 
     for (auto & i : old) {
         notice("Loading %1%...", PathFmt(i));
-        loadFile(i);
+        try {
+            loadFile(i);
+        } catch (Error & e) {
+            loadedFiles.push_back(i);
+            printMsg(lvlError, e.msg());
+        }
     }
 
     for (auto & [i, what] : getValues()) {
         notice("Loading installable '%1%'...", what);
-        addAttrsToScope(*i);
+        try {
+            addAttrsToScope(*i);
+        } catch (Error & e) {
+            printMsg(lvlError, e.msg());
+        }
     }
 }
 
 void NixRepl::loadFlakes()
 {
-    Strings old = loadedFlakes;
-    loadedFlakes.clear();
+    // See loadFiles().
+    Strings old;
+    std::swap(old, loadedFlakes);
 
     for (auto & i : old) {
         notice("Loading flake '%1%'...", i);
-        loadFlake(i);
+        try {
+            loadFlake(i);
+        } catch (Error & e) {
+            loadedFlakes.push_back(i);
+            printMsg(lvlError, e.msg());
+        }
     }
 }
 
@@ -850,12 +886,9 @@ Expr * NixRepl::parseString(std::string s)
     try {
         return state->parseExprFromString(std::move(s), state->rootPath("."), staticEnv);
     } catch (ParseError & e) {
-        if (e.msg().find("unexpected end of file") != std::string::npos)
-            // For parse errors on incomplete input, we continue waiting for the next line of
-            // input without clearing the input so far.
+        if (isIncompleteInput(e))
             throw IncompleteReplExpr(e.msg());
-        else
-            throw;
+        throw;
     }
 }
 
@@ -864,20 +897,20 @@ ExprAttrs * NixRepl::parseReplBindings(std::string s)
     auto basePath = state->rootPath(".");
 
     // Try parsing as bindings
-    std::exception_ptr bindingsError;
     try {
         return state->parseReplBindings(s, basePath, staticEnv);
     } catch (ParseError &) {
-        bindingsError = std::current_exception();
     }
 
     // Try with semicolon appended (for `inherit foo` shorthand)
     // Use original source (s) for error messages, not s + ";"
     try {
         return state->parseReplBindings(s + ";", s, basePath, staticEnv);
-    } catch (ParseError &) {
-        // Semicolon retry failed; rethrow the original bindings error
-        std::rethrow_exception(bindingsError);
+    } catch (ParseError & e) {
+        if (isIncompleteInput(e))
+            throw IncompleteReplExpr(e.msg());
+        // Semicolon retry also failed; not valid binding syntax.
+        return nullptr;
     }
 }
 
@@ -888,10 +921,10 @@ void NixRepl::evalString(std::string s, Value & v)
     state->forceValue(v, v.determinePos(noPos));
 }
 
-void NixRepl::runNix(const std::string & program, OsStrings args, const std::optional<std::string> & input)
+void NixRepl::runNix(const std::string & program, OsStrings args)
 {
     if (runNixPtr)
-        (*runNixPtr)(program, std::move(args), input);
+        (*runNixPtr)(program, std::move(args));
     else
         throw Error(
             "Cannot run '%s' because no method of calling the Nix CLI was provided. This is a configuration problem pertaining to how this program was built. See Nix 2.25 release notes",
@@ -922,7 +955,7 @@ ReplExitStatus AbstractNixRepl::runSimple(ref<EvalState> evalState, const ValMap
 
     // add 'extra' vars.
     for (auto & [name, value] : extraEnv)
-        repl->addVarToScope(repl->state->symbols.create(name), *value);
+        repl->addVarToScope(repl->state->symbols.create(name), **value);
 
     return repl->mainLoop();
 }

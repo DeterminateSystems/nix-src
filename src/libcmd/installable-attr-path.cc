@@ -1,24 +1,13 @@
-#include "nix/store/globals.hh"
 #include "nix/cmd/installable-attr-path.hh"
 #include "nix/store/outputs-spec.hh"
 #include "nix/util/util.hh"
 #include "nix/cmd/command.hh"
 #include "nix/expr/attr-path.hh"
 #include "nix/cmd/common-eval-args.hh"
-#include "nix/store/derivations.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/expr/eval.hh"
 #include "nix/expr/get-drvs.hh"
-#include "nix/store/store-api.hh"
-#include "nix/main/shared.hh"
 #include "nix/flake/flake.hh"
-#include "nix/expr/eval-cache.hh"
-#include "nix/util/url.hh"
-#include "nix/fetchers/registry.hh"
-#include "nix/store/build-result.hh"
-
-#include <regex>
-#include <queue>
 
 #include <nlohmann/json.hpp>
 
@@ -32,7 +21,7 @@ InstallableAttrPath::InstallableAttrPath(
     ExtendedOutputsSpec extendedOutputsSpec)
     : InstallableValue(state)
     , cmd(cmd)
-    , v(allocRootValue(v))
+    , v(RootValue(v))
     , attrPath(attrPath)
     , extendedOutputsSpec(std::move(extendedOutputsSpec))
 {
@@ -89,7 +78,8 @@ DerivedPathsWithInfo InstallableAttrPath::toDerivedPaths()
     }
 
     DerivedPathsWithInfo res;
-    for (auto & [drvPath, outputs] : byDrvPath)
+    for (auto & [drvPath, outputs] : byDrvPath) {
+        state->waitForPath(drvPath);
         res.push_back({
             .path =
                 DerivedPath::Built{
@@ -102,6 +92,7 @@ DerivedPathsWithInfo InstallableAttrPath::toDerivedPaths()
                    so we can fill in this info. */
             }),
         });
+    }
 
     return res;
 }

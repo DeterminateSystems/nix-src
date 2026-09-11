@@ -1,4 +1,19 @@
-# Introduction
+# Determinate Nix
+
+**Determinate Nix** is a downstream distribution of [Nix], a purely functional language, CLI tool, and package management system.
+It's available on Linux, macOS, and Windows Subsystem for Linux (WSL).
+
+## Installing
+
+We recommend that macOS users install Determinate Nix using our graphical installer, [Determinate.pkg][pkg].
+For Linux and Windows Subsystem for Linux (WSL) users:
+
+```console
+curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | \
+  sh -s -- install
+```
+
+## How Nix works
 
 Nix is a _purely functional package manager_.  This means that it
 treats packages like values in a purely functional programming language
@@ -10,7 +25,7 @@ as
 
     /nix/store/q06x3jll2yfzckz2bzqak089p43ixkkq-firefox-33.1/
 
-where `b6gvzjyb2pg0…` is a unique identifier for the package that
+where `q06x3jll2yfz…` is a unique identifier for the package that
 captures all its dependencies (it’s a cryptographic hash of the
 package’s build dependency graph).  This enables many powerful
 features.
@@ -49,7 +64,7 @@ builds correctly on your system, this is because you specified the
 dependency explicitly. This takes care of the build-time dependencies.
 
 Once a package is built, runtime dependencies are found by scanning
-binaries for the hash parts of Nix store paths (such as `r8vvq9kq…`).
+binaries for the [hash parts](@docroot@/store/store-path.md#digest) of Nix store paths (such as `r8vvq9kq…`).
 This sounds risky, but it works extremely well.
 
 ## Multi-user support
@@ -174,7 +189,7 @@ the package:
 
 ## Portability
 
-Nix runs on Linux and macOS.
+Nix runs on Linux, macOS and FreeBSD.
 
 ## NixOS
 
@@ -184,10 +199,14 @@ to build configuration files in `/etc`).  This means, among other
 things, that it is easy to roll back the entire configuration of the
 system to an earlier state.  Also, users can install software without
 root privileges.  For more information and downloads, see the [NixOS
-homepage](https://nixos.org/).
+homepage][nix].
 
 ## License
 
 Nix is released under the terms of the [GNU LGPLv2.1 or (at your
 option) any later
-version](http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html).
+version][license].
+
+[license]: http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+[pkg]: https://install.determinate.systems/determinate-pkg/stable/Universal
+[site]: https://nixos.org

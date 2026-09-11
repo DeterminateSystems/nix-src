@@ -1,9 +1,7 @@
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/expr/eval-settings.hh"
-#include "nix/store/store-api.hh"
 #include "nix/fetchers/fetchers.hh"
-#include "nix/util/url.hh"
 #include "nix/util/url-parts.hh"
 
 namespace nix {
@@ -81,7 +79,7 @@ static void prim_fetchMercurial(EvalState & state, const PosIdx pos, Value ** ar
         attrs.insert_or_assign("rev", rev->gitRev());
     auto input = fetchers::Input::fromAttrs(state.fetchSettings, std::move(attrs));
 
-    auto [storePath, input2] = input.fetchToStore(state.fetchSettings, *state.store);
+    auto [storePath, accessor, input2] = input.fetchToStore(state.fetchSettings, *state.store);
 
     auto attrs2 = state.buildBindings(8);
     state.mkStorePathString(storePath, attrs2.alloc(state.s.outPath));

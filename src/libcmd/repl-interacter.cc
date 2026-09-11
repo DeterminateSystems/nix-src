@@ -18,11 +18,10 @@ extern "C" {
 }
 #endif
 
-#include "nix/util/signals.hh"
 #include "nix/util/finally.hh"
 #include "nix/cmd/repl-interacter.hh"
 #include "nix/util/file-system.hh"
-#include "nix/cmd/repl.hh"
+#include "nix/util/serialise.hh"
 #include "nix/util/environment-variables.hh"
 
 namespace nix {
@@ -123,9 +122,38 @@ ReadlineLikeInteracter::Guard ReadlineLikeInteracter::init(detail::ReplCompleter
         logWarning(e.info());
     }
 #if !USE_READLINE
-    el_hist_size = 1000;
-#endif
+    /* editline's read_history uses a fixed 256-byte buffer (SCREEN_INC),
+       which silently splits lines longer than 255 characters into separate
+       history entries. Read the file ourselves to avoid the length limit. See:
+       https://github.com/troglobit/editline/blob/2e0504d31e6878208036a4dd91f44841dabb1ee7/src/editline.c#L1617-L1635
+
+       ::rl_initialize must be called before the subsequent calls to
+       ::add_history to ensure that the buffer has actually been allocated
+       (but before setting ::el_hist_size).
+       Best I can tell it's supposed to idempotent, e.g. ::readline calls it
+       unconditionally anyway. */
+
+    ::el_hist_size = 1000; /* FIXME: Why the arbitrary limit? */
+    ::rl_initialize();
+
+    auto fd = openFileReadonly(historyFile);
+    if (!fd) {
+        NativeSysError err("opening file %s", PathFmt(historyFile));
+        if (!err.is(std::errc::no_such_file_or_directory) && !err.is(std::errc::not_a_directory))
+            logWarning(err.info());
+    } else {
+        try {
+            FdSource source(fd.get());
+            while (true)
+                add_history(source.readLine().c_str());
+        } catch (EndOfFile &) {
+        } catch (SystemError & e) {
+            logWarning(e.info());
+        }
+    }
+#else
     read_history(historyFile.string().c_str());
+#endif
     auto oldRepl = curRepl;
     curRepl = repl;
     Guard restoreRepl([oldRepl] { curRepl = oldRepl; });
@@ -175,8 +203,25 @@ bool ReadlineLikeInteracter::getLine(std::string & input, ReplPromptType promptT
 
     setupSignals();
 #endif
-    char * s = readline(promptForType(promptType));
-    Finally doFree([&]() { free(s); });
+
+    /* Buffer for the non-interactive input. */
+    std::string buffer;
+    const char * s = nullptr;
+    char * rl = nullptr;
+
+    /* Use plain std::getline for non-interactive mode, which we also use for
+       testing purposes. readline/editline seem to disagree too much about how
+       to handle final prompts etc., so it's easier to bypass those. The tests
+       are mostly about testing the core repl logic, not input handling. */
+    if (isInteractive) {
+        rl = ::readline(promptForType(promptType));
+        s = rl;
+    } else {
+        s = std::getline(std::cin, buffer) ? buffer.c_str() : nullptr;
+    }
+
+    Finally doFree([&]() { ::free(rl); });
+
 #ifndef _WIN32 // TODO use more signals.hh for this
     restoreSignals();
 #endif
@@ -187,15 +232,12 @@ bool ReadlineLikeInteracter::getLine(std::string & input, ReplPromptType promptT
         return true;
     }
 
-    // editline doesn't echo the input to the output when non-interactive, unlike readline
-    // this results in a different behavior when running tests. The echoing is
-    // quite useful for reading the test output, so we add it here.
+    /* Echo the prompt into the output if run in non-interactive mode, somewhat
+       for the purposes of characterisation tests. */
     if (auto e = getEnv("_NIX_TEST_REPL_ECHO"); s && e && *e == "1") {
-#if !USE_READLINE
         // This is probably not right for multi-line input, but we don't use that
         // in the characterisation tests, so it's fine.
         std::cout << promptForType(promptType) << s << std::endl;
-#endif
     }
 
     if (!s)

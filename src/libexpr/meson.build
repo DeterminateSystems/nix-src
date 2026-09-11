@@ -8,7 +8,7 @@ project(
     'warning_level=1',
     'errorlogs=true', # Please print logs for tests that fail
   ],
-  meson_version : '>= 1.1',
+  meson_version : '>= 1.8',
   license : 'LGPL-2.1-or-later',
 )
 
@@ -43,6 +43,7 @@ boost = dependency(
   modules : [
     'container',
     'context',
+    'thread',
   ],
   include_type : 'system',
 )
@@ -53,6 +54,10 @@ deps_other += boost
 nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
 
+# eval-cache uses `INSERT ... RETURNING` which requires >= 3.35
+sqlite = dependency('sqlite3', 'sqlite', version : '>= 3.35')
+deps_private += sqlite
+
 bdw_gc_required = get_option('gc').disable_if(
   'address' in get_option('b_sanitize'),
   error_message : 'Building with Boehm GC and ASAN is not supported',
@@ -62,7 +67,6 @@ bdw_gc = dependency('bdw-gc', required : bdw_gc_required)
 if bdw_gc.found()
   deps_public += bdw_gc
   foreach funcspec : [
-    'pthread_attr_get_np',
     'pthread_getattr_np',
   ]
     define_name = 'HAVE_' + funcspec.underscorify().to_upper()
@@ -76,6 +80,17 @@ if bdw_gc.found()
 endif
 # Used in public header. Affects ABI!
 configdata_pub.set('NIX_USE_BOEHMGC', bdw_gc.found().to_int())
+
+link_args = []
+
+wasmtime_required = get_option('wasm').disable_if(
+  get_option('default_library') == 'static',
+  error_message : 'Building with wasmtime and static linking is not supported',
+)
+
+if wasmtime_required.enabled()
+  link_args += '-lwasmtime'
+endif
 
 toml11 = dependency(
   'toml11',
@@ -164,13 +179,16 @@ sources = files(
   'function-trace.cc',
   'get-drvs.cc',
   'json-to-value.cc',
-  'lexer-helpers.cc',
   'nixexpr.cc',
+  'parallel-eval.cc',
   'paths.cc',
   'primops.cc',
   'print-ambiguous.cc',
   'print.cc',
+  'provenance.cc',
+  'root-value.cc',
   'search-path.cc',
+  'symbol-table.cc',
   'value-to-json.cc',
   'value-to-xml.cc',
   'value.cc',
@@ -215,6 +233,7 @@ parser_library = static_library(
   'nixexpr-parser',
   parser_tab,
   lexer_tab,
+  'lexer-helpers.cc',
   cpp_args : parser_library_cpp_args,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
@@ -225,6 +244,8 @@ parser_library = static_library(
   override_options : [
     'b_ndebug=@0@'.format(not get_option('debug')),
     'b_lto=@0@'.format(get_option('b_lto') and cxx.get_id() != 'gcc'),
+    # Unity builds mess up the recursive header dependency between flex and bison generated code.
+    'unity=off',
   ],
 )
 
@@ -235,12 +256,11 @@ this_library = library(
   parser_tab[1],
   lexer_tab[1],
   generated_headers,
-  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
-  link_args : linker_export_flags,
+  link_args : linker_export_flags + link_args,
   link_whole : [ parser_library ],
-  prelink : true, # For C++ static initializers
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )

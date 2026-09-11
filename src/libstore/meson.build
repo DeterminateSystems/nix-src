@@ -9,9 +9,11 @@ project(
     'errorlogs=true', # Please print logs for tests that fail
     'localstatedir=/nix/var',
   ],
-  meson_version : '>= 1.1',
+  meson_version : '>= 1.8',
   license : 'LGPL-2.1-or-later',
 )
+
+fs = import('fs')
 
 cxx = meson.get_compiler('cpp')
 
@@ -22,6 +24,12 @@ configdata_priv = configuration_data()
 
 # TODO rename, because it will conflict with downstream projects
 configdata_priv.set_quoted('PACKAGE_VERSION', meson.project_version())
+configdata_priv.set('IS_STATIC', get_option('default_library') == 'static')
+
+configdata_priv.set_quoted(
+  'DETERMINATE_NIX_VERSION',
+  fs.read('../../.version-determinate').strip(),
+)
 
 subdir('nix-meson-build-support/default-system-cpu')
 
@@ -29,8 +37,7 @@ subdir('nix-meson-build-support/default-system-cpu')
 configdata_pub.set_quoted(
   'NIX_LOCAL_SYSTEM',
   nix_system_cpu + '-' + host_machine.system(),
-  description : 'This is the system name Nix expects for local running instance of Nix.\n\n'
-    + 'See the "system" setting for additional details',
+  description : 'This is the system name Nix expects for local running instance of Nix.\n\n' + 'See the "system" setting for additional details',
 )
 
 deps_private_maybe_subproject = []
@@ -72,6 +79,8 @@ configdata_priv.set('CAN_LINK_SYMLINK', can_link_symlink.to_int())
 check_funcs = [
   'posix_fallocate',
   'statvfs',
+  'open_tree',
+  'move_mount',
 ]
 foreach funcspec : check_funcs
   define_name = 'HAVE_' + funcspec.underscorify().to_upper()
@@ -84,9 +93,11 @@ if host_machine.system() == 'linux'
   configdata_priv.set('HAVE_LANDLOCK', has_landlock.to_int())
 endif
 
-has_acl_support = cxx.has_header('sys/xattr.h') \
-  and cxx.has_function('llistxattr') \
-  and cxx.has_function('lremovexattr')
+has_acl_support = cxx.has_header('sys/xattr.h') and cxx.has_function(
+  'llistxattr',
+) and cxx.has_function(
+  'lremovexattr',
+)
 # Used in public header. Affects ABI!
 configdata_pub.set(
   'NIX_SUPPORT_ACL',
@@ -147,6 +158,12 @@ endif
 configdata_priv.set('HAVE_SECCOMP', seccomp.found().to_int())
 deps_private += seccomp
 
+if host_machine.system() == 'freebsd'
+  # libjail is not in freebsd.libc, but there's no discovery mechanism
+  libjail = declare_dependency(link_args : [ '-ljail' ])
+  deps_other += libjail
+endif
+
 nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
 
@@ -203,8 +220,6 @@ if get_option('embedded-sandbox-shell')
   generated_headers += embedded_sandbox_shell_gen
 endif
 
-fs = import('fs')
-
 prefix = get_option('prefix')
 # For each of these paths, assume that it is relative to the prefix unless
 # it is already an absolute path (which is the default for store-dir, localstatedir, and log-dir).
@@ -214,15 +229,14 @@ path_opts = [
   'libdir',
   'includedir',
   'libexecdir',
+  'localstatedir',
   # Homecooked Nix directories.
   'store-dir',
-  'localstatedir',
   'log-dir',
 ]
 # For your grepping pleasure, this loop sets the following variables that aren't mentioned
 # literally above:
 # store_dir
-# localstatedir
 # log_dir
 # profile_dir
 foreach optname : path_opts
@@ -248,14 +262,14 @@ endif
 # by joining it with prefix, unless it was already an absolute path
 # (which is the default for store-dir, localstatedir, and log-dir).
 configdata_priv.set_quoted('NIX_STORE_DIR', store_dir)
-configdata_priv.set_quoted('NIX_STATE_DIR', localstatedir / 'nix')
-configdata_priv.set_quoted('NIX_LOG_DIR', log_dir)
-# On Windows, NIX_CONF_DIR is determined at runtime using the Windows known
-# folders API (FOLDERID_ProgramData), so we don't define it at compile time.
+# On Windows, NIX_STATE_DIR, NIX_LOG_DIR, and NIX_CONF_DIR are determined at
+# runtime using the Windows known folders API (FOLDERID_ProgramData), so we
+# don't define them at compile time.
 if host_machine.system() != 'windows'
+  configdata_priv.set_quoted('NIX_STATE_DIR', localstatedir / 'nix')
+  configdata_priv.set_quoted('NIX_LOG_DIR', log_dir)
   configdata_priv.set_quoted('NIX_CONF_DIR', sysconfdir / 'nix')
 endif
-configdata_priv.set_quoted('NIX_MAN_DIR', mandir)
 
 lsof = find_program('lsof', required : false)
 configdata_priv.set_quoted(
@@ -265,6 +279,19 @@ configdata_priv.set_quoted(
 : 'lsof',
 )
 
+link_args = []
+
+wasmtime_required = get_option('wasm').disable_if(
+  get_option('default_library') == 'static',
+  error_message : 'Building with wasmtime and static linking is not supported',
+)
+
+if wasmtime_required.enabled()
+  link_args += '-lwasmtime'
+endif
+
+configdata_priv.set('NIX_USE_WASMTIME', wasmtime_required.enabled().to_int())
+
 config_priv_h = configure_file(
   configuration : configdata_priv,
   output : 'store-config-private.hh',
@@ -273,6 +300,8 @@ config_priv_h = configure_file(
 subdir('nix-meson-build-support/common')
 
 sources = files(
+  'active-builds.cc',
+  'async-path-writer.cc',
   'binary-cache-store.cc',
   'build-result.cc',
   'build/build-log.cc',
@@ -313,6 +342,7 @@ sources = files(
   'local-fs-store.cc',
   'local-gc.cc',
   'local-overlay-store.cc',
+  'local-store-active-builds.cc',
   'local-store.cc',
   'log-store.cc',
   'machines.cc',
@@ -322,6 +352,7 @@ sources = files(
   'nar-info-disk-cache.cc',
   'nar-info.cc',
   'optimise-store.cc',
+  'outputs-query.cc',
   'outputs-spec.cc',
   'parsed-derivations.cc',
   'path-info.cc',
@@ -331,6 +362,7 @@ sources = files(
   'pathlocks.cc',
   'posix-fs-canonicalise.cc',
   'profiles.cc',
+  'provenance.cc',
   'realisation.cc',
   'references.cc',
   'remote-fs-accessor.cc',
@@ -363,6 +395,14 @@ if host_machine.system() == 'linux'
   subdir('linux')
 endif
 
+if host_machine.system() == 'freebsd'
+  subdir('freebsd')
+endif
+
+if host_machine.system() == 'darwin'
+  subdir('darwin')
+endif
+
 if host_machine.system() == 'windows'
   subdir('windows')
 else
@@ -377,11 +417,10 @@ this_library = library(
   generated_headers,
   sources,
   config_priv_h,
-  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
-  link_args : linker_export_flags,
-  prelink : true, # For C++ static initializers
+  link_args : linker_export_flags + link_args,
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )
@@ -392,13 +431,7 @@ libraries_private = []
 
 extra_pkg_config_variables = {
   'storedir' : get_option('store-dir'),
+  'localstatedir' : get_option('localstatedir'),
 }
-
-# Working around https://github.com/mesonbuild/meson/issues/13584
-if host_machine.system() != 'darwin'
-  extra_pkg_config_variables += {
-    'localstatedir' : get_option('localstatedir'),
-  }
-endif
 
 subdir('nix-meson-build-support/export')

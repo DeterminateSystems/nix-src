@@ -11,6 +11,7 @@
   libsodium,
   nlohmann_json,
   openssl,
+  zstd,
 
   # Configuration Options
 
@@ -22,7 +23,7 @@ let
 in
 
 mkMesonLibrary (finalAttrs: {
-  pname = "nix-util";
+  pname = "determinate-nix-util";
   inherit version;
 
   workDir = ./.;
@@ -52,6 +53,7 @@ mkMesonLibrary (finalAttrs: {
     libblake3
     libsodium
     openssl
+    zstd
   ]
   ++ lib.optional stdenv.hostPlatform.isx86_64 libcpuid;
 

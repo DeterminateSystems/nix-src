@@ -20,6 +20,7 @@ with import ./config.nix;
 
         cat > $out/program << 'EOF'
         #! ${shell}
+        echo x > "$2"
         sleep 10000 < "$1"
         EOF
 

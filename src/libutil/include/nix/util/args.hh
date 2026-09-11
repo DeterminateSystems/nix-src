@@ -84,7 +84,7 @@ protected:
     struct Handler
     {
         std::function<void(std::vector<std::string>)> fun;
-        size_t arity;
+        size_t arity = 0;
 
         Handler() = default;
 
@@ -377,6 +377,7 @@ struct Command : virtual public Args
     using Category = int;
 
     static constexpr Category catDefault = 0;
+    static constexpr Category catUndocumented = 1;
 
     virtual std::optional<ExperimentalFeature> experimentalFeature();
 
@@ -462,6 +463,9 @@ struct Completion
  */
 class AddCompletions
 {
+    /* VTable anchor to avoid weak linkage of the vtable - it breaks
+       dynamic_cast across shared libraries on Darwin. */
+    virtual void anchor();
 public:
 
     /**

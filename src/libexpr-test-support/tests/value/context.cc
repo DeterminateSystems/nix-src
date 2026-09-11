@@ -1,7 +1,6 @@
-#include <exception> // Needed by rapidcheck on Darwin
+#include <exception> // IWYU pragma: keep (Needed by rapidcheck on Darwin and FreeBSD)
 #include <rapidcheck.h>
 
-#include "nix/store/tests/path.hh"
 #include "nix/expr/tests/value/context.hh"
 
 namespace rc {
@@ -12,6 +11,15 @@ Gen<NixStringContextElem::DrvDeep> Arbitrary<NixStringContextElem::DrvDeep>::arb
     return gen::map(gen::arbitrary<StorePath>(), [](StorePath drvPath) {
         return NixStringContextElem::DrvDeep{
             .drvPath = drvPath,
+        };
+    });
+}
+
+Gen<NixStringContextElem::Path> Arbitrary<NixStringContextElem::Path>::arbitrary()
+{
+    return gen::map(gen::arbitrary<StorePath>(), [](StorePath storePath) {
+        return NixStringContextElem::Path{
+            .storePath = storePath,
         };
     });
 }
@@ -31,6 +39,8 @@ Gen<NixStringContextElem> Arbitrary<NixStringContextElem>::arbitrary()
             case 2:
                 return gen::map(
                     gen::arbitrary<NixStringContextElem::Built>(), [](NixStringContextElem a) { return a; });
+            case 3:
+                return gen::map(gen::arbitrary<NixStringContextElem::Path>(), [](NixStringContextElem a) { return a; });
             default:
                 assert(false);
             }

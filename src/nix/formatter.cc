@@ -2,14 +2,12 @@
 #include "nix/cmd/installable-flake.hh"
 #include "nix/cmd/installable-value.hh"
 #include "nix/expr/eval.hh"
-#include "nix/store/local-fs-store.hh"
-#include "nix/cmd/installable-derived-path.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/store/globals.hh"
 
 #include "run.hh"
 
-using namespace nix;
+namespace nix {
 
 struct CmdFormatter : NixMultiCommand
 {
@@ -34,14 +32,9 @@ static auto rCmdFormatter = registerCommand<CmdFormatter>("formatter");
 /** Common implementation bits for the `nix formatter` subcommands. */
 struct MixFormatter : SourceExprCommand
 {
-    Strings getDefaultFlakeAttrPaths() override
+    StringSet getRoles() override
     {
-        return Strings{"formatter." + settings.thisSystem.get()};
-    }
-
-    Strings getDefaultFlakeAttrPathPrefixes() override
-    {
-        return Strings{};
+        return {"nix-fmt"};
     }
 };
 
@@ -160,3 +153,5 @@ struct CmdFmt : CmdFormatterRun
 };
 
 static auto rFmt = registerCommand<CmdFmt>("fmt");
+
+} // namespace nix

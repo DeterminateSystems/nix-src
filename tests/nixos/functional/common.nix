@@ -15,6 +15,7 @@
       ];
 
       nix.settings.substituters = lib.mkForce [ ];
+      systemd.services.nix-daemon.environment._NIX_IN_TEST = "1";
 
       environment.systemPackages =
         let
@@ -55,7 +56,9 @@
 
               meson setup nix/tests/functional build
               cd build
-              meson test -j1 --print-errorlogs
+              # Meson uses tqdm progress bar when stdout is a tty, which ends
+              # up being garbled in the nixos test logs.
+              meson test -j1 --print-errorlogs | cat
             '';
           };
         in

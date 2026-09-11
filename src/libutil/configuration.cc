@@ -14,6 +14,12 @@
 
 namespace nix {
 
+void Config::anchor() {}
+
+void AbstractConfig::anchor() {}
+
+Setting<AbsolutePath>::~Setting() {}
+
 Config::Config(StringMap initials)
     : AbstractConfig(std::move(initials))
 {
@@ -421,11 +427,11 @@ std::set<ExperimentalFeature> BaseSetting<std::set<ExperimentalFeature>>::parse(
 {
     std::set<ExperimentalFeature> res;
     for (auto & s : tokenizeString<StringSet>(str)) {
-        if (auto thisXpFeature = parseExperimentalFeature(s); thisXpFeature) {
+        if (auto thisXpFeature = parseExperimentalFeature(s))
             res.insert(thisXpFeature.value());
-            if (thisXpFeature.value() == Xp::Flakes)
-                res.insert(Xp::FetchTree);
-        } else if (s == "no-url-literals")
+        else if (stabilizedFeatures.count(s))
+            debug("experimental feature '%s' is now stable", s);
+        else if (s == "no-url-literals")
             warn(
                 "experimental feature '%s' has been stabilized and renamed; use 'lint-url-literals = fatal' setting instead",
                 s);
@@ -549,6 +555,8 @@ template class BaseSetting<std::filesystem::path>;
 template class BaseSetting<AbsolutePath>;
 template class BaseSetting<std::optional<AbsolutePath>>;
 template class BaseSetting<std::optional<std::string>>;
+
+void ExperimentalFeatureSettings::anchor() {}
 
 bool ExperimentalFeatureSettings::isEnabled(const ExperimentalFeature & feature) const
 {

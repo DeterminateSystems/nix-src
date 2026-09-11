@@ -7,7 +7,6 @@ project(
     # TODO(Qyriad): increase the warning level
     'warning_level=1',
     'errorlogs=true', # Please print logs for tests that fail
-    'localstatedir=/nix/var',
   ],
   meson_version : '>= 1.4',
   license : 'LGPL-2.1-or-later',
@@ -31,8 +30,28 @@ deps_private_maybe_subproject = [
 deps_public_maybe_subproject = []
 subdir('nix-meson-build-support/subprojects')
 
+deps_plugin_c_apis = []
+if get_option('plugin-c-api')
+  deps_plugin_c_apis = [
+    dependency('nix-util-c-whole-archive'),
+    dependency('nix-store-c-whole-archive'),
+    dependency('nix-fetchers-c-whole-archive'),
+    dependency('nix-expr-c-whole-archive'),
+    dependency('nix-flake-c-whole-archive'),
+    dependency('nix-main-c-whole-archive'),
+  ]
+endif
+
+mimalloc = dependency('mimalloc', required : get_option('mimalloc'))
+if mimalloc.found()
+  deps_private += mimalloc
+endif
+
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
+
+libmicrohttpd = dependency('libmicrohttpd')
+deps_private += libmicrohttpd
 
 configdata = configuration_data()
 
@@ -50,6 +69,19 @@ mandir = get_option('mandir')
 mandir = fs.is_absolute(mandir) ? mandir : prefix / mandir
 configdata.set_quoted('NIX_MAN_DIR', mandir)
 
+configdata.set('HAVE_MIMALLOC', mimalloc.found().to_int())
+
+sentry_required = get_option('sentry')
+configdata.set('HAVE_SENTRY', sentry_required.enabled().to_int())
+if sentry_required.enabled()
+  crashpad_handler_path = get_option('crashpad-handler')
+  assert(
+    crashpad_handler_path != '',
+    'crashpad-handler path must be set when sentry is enabled',
+  )
+  configdata.set_quoted('CRASHPAD_HANDLER_PATH', crashpad_handler_path)
+endif
+
 config_priv_h = configure_file(
   configuration : configdata,
   output : 'cli-config-private.hh',
@@ -61,6 +93,7 @@ subdir('nix-meson-build-support/generate-header')
 nix_sources = [ config_priv_h ] + files(
   'add-to-store.cc',
   'app.cc',
+  'build-trace.cc',
   'build.cc',
   'bundle.cc',
   'cat.cc',
@@ -68,6 +101,7 @@ nix_sources = [ config_priv_h ] + files(
   'config.cc',
   'copy.cc',
   'crash-handler.cc',
+  'crash.cc',
   'derivation-add.cc',
   'derivation-show.cc',
   'derivation.cc',
@@ -78,6 +112,7 @@ nix_sources = [ config_priv_h ] + files(
   'env.cc',
   'eval.cc',
   'flake-prefetch-inputs.cc',
+  'flake-prefetch-inputs.cc',
   'flake.cc',
   'formatter.cc',
   'hash.cc',
@@ -87,17 +122,20 @@ nix_sources = [ config_priv_h ] + files(
   'make-content-addressed.cc',
   'man-pages.cc',
   'nar.cc',
+  'nario.cc',
   'optimise-store.cc',
   'path-from-hash-part.cc',
   'path-info.cc',
   'prefetch.cc',
   'profile.cc',
-  'realisation.cc',
+  'provenance.cc',
+  'ps.cc',
   'registry.cc',
   'repl.cc',
   'run.cc',
   'search.cc',
   'self-exe.cc',
+  'serve.cc',
   'sigs.cc',
   'store-copy-log.cc',
   'store-delete.cc',
@@ -185,9 +223,12 @@ include_dirs = [ include_directories('.') ]
 this_exe = executable(
   meson.project_name(),
   sources,
-  dependencies : deps_private_subproject + deps_private + deps_other,
+  dependencies : deps_private_subproject + deps_private + deps_other + deps_plugin_c_apis,
   include_directories : include_dirs,
-  link_args : linker_export_flags,
+  link_args : linker_export_flags + (
+    sentry_required.enabled() ? [ '-lsentry' ] : []
+  ),
+  export_dynamic : get_option('plugin-c-api'),
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )
@@ -257,11 +298,7 @@ custom_target(
 # TODO(Ericson3214): Doesn't yet work
 #meson.override_find_program(linkname, t)
 
-localstatedir = nix_store.get_variable(
-  'localstatedir',
-  default_value : get_option('localstatedir'),
-)
-assert(localstatedir == get_option('localstatedir'))
+localstatedir = nix_store.get_variable('localstatedir')
 store_dir = nix_store.get_variable('storedir')
 subdir('scripts')
 subdir('misc')

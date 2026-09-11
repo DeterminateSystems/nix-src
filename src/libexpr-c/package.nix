@@ -8,6 +8,7 @@
   # Configuration Options
 
   version,
+  withPluginCAPI,
 }:
 
 let
@@ -15,7 +16,7 @@ let
 in
 
 mkMesonLibrary (finalAttrs: {
-  pname = "nix-expr-c";
+  pname = "determinate-nix-expr-c";
   inherit version;
 
   workDir = ./.;
@@ -25,7 +26,7 @@ mkMesonLibrary (finalAttrs: {
     ../../.version
     ./.version
     ./meson.build
-    # ./meson.options
+    ./meson.options
     (fileset.fileFilter (file: file.hasExt "cc") ./.)
     (fileset.fileFilter (file: file.hasExt "hh") ./.)
     (fileset.fileFilter (file: file.hasExt "h") ./.)
@@ -37,6 +38,7 @@ mkMesonLibrary (finalAttrs: {
   ];
 
   mesonFlags = [
+    (lib.mesonBool "plugin-c-api" withPluginCAPI)
   ];
 
   meta = {

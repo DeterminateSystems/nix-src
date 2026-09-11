@@ -114,9 +114,9 @@ struct SourcePath
         return {accessor, accessor->resolveSymlinks(path, mode)};
     }
 
-    void invalidateCache() const
+    std::shared_ptr<const Provenance> getProvenance() const
     {
-        accessor->invalidateCache(path);
+        return accessor->getProvenance(path);
     }
 
     friend class std::hash<nix::SourcePath>;

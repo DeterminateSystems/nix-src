@@ -7,8 +7,6 @@
 #include "nix/util/environment-variables.hh"
 #include "nix/util/users.hh"
 #include "nix/fetchers/cache.hh"
-#include "nix/store/globals.hh"
-#include "nix/util/tarfile.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/url-parts.hh"
 #include "nix/fetchers/fetch-settings.hh"
@@ -30,10 +28,9 @@ static RunOptions hgOptions(OsStrings args)
 }
 
 // runProgram wrapper that uses hgOptions instead of stock RunOptions.
-static std::string runHg(OsStrings args, const std::optional<std::string> & input = {})
+static std::string runHg(OsStrings args)
 {
     RunOptions opts = hgOptions(std::move(args));
-    opts.input = input;
 
     auto res = runProgram(std::move(opts));
 
@@ -125,7 +122,7 @@ struct MercurialInputScheme : InputScheme
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         auto url = parseURL(getStrAttr(input.attrs, "url"));
         url.scheme = "hg+" + url.scheme;
@@ -243,26 +240,25 @@ struct MercurialInputScheme : InputScheme
                     }),
                     "\0"s);
 
-                auto actualPath = absPath(localPath);
+                /* FIXME: Check that the access to this path is allowed. */
+                auto accessor = makeFSSourceAccessor(absPath(localPath));
 
                 PathFilter filter = [&](const std::string & p) -> bool {
-                    assert(hasPrefix(p, actualPath.string()));
-                    std::string file(p, actualPath.string().size() + 1);
+                    auto cp = CanonPath(p);
+                    auto st = accessor->lstat(cp);
 
-                    auto st = lstat(p);
-
-                    if (S_ISDIR(st.st_mode)) {
-                        auto prefix = file + "/";
+                    if (st.type == SourceAccessor::tDirectory) {
+                        auto prefix = cp.rel() + "/";
                         auto i = files.lower_bound(prefix);
                         return i != files.end() && hasPrefix(*i, prefix);
                     }
 
-                    return files.count(file);
+                    return files.count(cp.rel());
                 };
 
                 return store.addToStore(
                     input.getName(),
-                    {getFSSourceAccessor(), CanonPath(actualPath.string())},
+                    {accessor, CanonPath::root},
                     ContentAddressMethod::Raw::NixArchive,
                     HashAlgorithm::SHA256,
                     {},
@@ -282,9 +278,7 @@ struct MercurialInputScheme : InputScheme
 
         auto revInfoKey = [&](const Hash & rev) {
             if (rev.algo != HashAlgorithm::SHA1)
-                throw Error(
-                    "Hash '%s' is not supported by Mercurial. Only sha1 is supported.",
-                    rev.to_string(HashFormat::Base16, true));
+                throw Error("Hash '%s' is not supported by Mercurial. Only sha1 is supported.", rev.gitRev());
 
             return Cache::Key{"hgRev", {{"store", store.storeDir}, {"name", name}, {"rev", input.getRev()->gitRev()}}};
         };
@@ -384,7 +378,7 @@ struct MercurialInputScheme : InputScheme
 
         deletePath(tmpDir / ".hg_archival.txt");
 
-        auto storePath = store.addToStore(name, {getFSSourceAccessor(), CanonPath(tmpDir.string())});
+        auto storePath = store.addToStore(name, {makeFSSourceAccessor(tmpDir), CanonPath::root});
 
         Attrs infoAttrs({
             {"revCount", (uint64_t) revCount},
@@ -406,7 +400,7 @@ struct MercurialInputScheme : InputScheme
         auto storePath = fetchToStore(settings, store, input);
         auto accessor = store.requireStoreObjectAccessor(storePath);
 
-        accessor->setPathDisplay("«" + input.to_string() + "»");
+        accessor->setPathDisplay("«" + input.to_string(true) + "»");
 
         return {accessor, input};
     }
@@ -419,7 +413,7 @@ struct MercurialInputScheme : InputScheme
     std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
     {
         if (auto rev = input.getRev())
-            return rev->gitRev();
+            return "hg:" + rev->gitRev();
         else
             return std::nullopt;
     }

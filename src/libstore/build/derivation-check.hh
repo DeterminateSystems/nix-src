@@ -8,6 +8,18 @@
 namespace nix {
 
 /**
+ * If outputSpec is a CAFixed output, check that the actual output described in
+ * info meets the requirements for a CAFixed output. Do nothing if outputSpec is
+ * not a CAFixed output.
+ */
+void checkCAFixedOutput(
+    StoreDirConfig & store,
+    const StorePath & drvPath,
+    const DerivationOutput & outputSpec,
+    const ValidPathInfo & info,
+    Activity & act);
+
+/**
  * Check that outputs meets the requirements specified by the
  * 'outputChecks' attribute (or the legacy
  * '{allowed,disallowed}{References,Requisites}' attributes).
@@ -22,6 +34,7 @@ void checkOutputs(
     const StorePath & drvPath,
     const decltype(Derivation::outputs) & drvOutputs,
     const decltype(DerivationOptions<StorePath>::outputChecks) & drvOptions,
-    const std::map<std::string, ValidPathInfo> & outputs);
+    const std::map<std::string, ValidPathInfo> & outputs,
+    Activity & act);
 
 } // namespace nix

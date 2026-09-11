@@ -16,7 +16,14 @@ class RemoteFSAccessor;
 
 struct BinaryCacheStoreConfig : virtual StoreConfig
 {
-    using StoreConfig::StoreConfig;
+private:
+    void anchor() override;
+
+public:
+    BinaryCacheStoreConfig(const Params & params)
+        : StoreConfig(params, FilePathType::Unix)
+    {
+    }
 
     Setting<CompressionAlgo> compression{
         this,
@@ -39,8 +46,8 @@ struct BinaryCacheStoreConfig : virtual StoreConfig
           fetch debug info on demand
         )"};
 
-    Setting<AbsolutePath> secretKeyFile{
-        this, "", "secret-key", "Path to the secret key used to sign the binary cache."};
+    Setting<std::optional<AbsolutePath>> secretKeyFile{
+        this, std::nullopt, "secret-key", "Path to the secret key used to sign the binary cache."};
 
     Setting<std::string> secretKeyFiles{
         this, "", "secret-keys", "List of comma-separated paths to the secret keys used to sign the binary cache."};
@@ -55,7 +62,11 @@ struct BinaryCacheStoreConfig : virtual StoreConfig
         this,
         false,
         "parallel-compression",
-        "Enable multi-threaded compression of NARs. This is currently only available for `xz` and `zstd`."};
+        R"(
+          Enable multi-threaded compression of NARs. This is currently only available for `xz` and `zstd`.
+
+          If not set explicitly, defaults to `true` when `compression` is `zstd` and `false` otherwise.
+        )"};
 
     Setting<int> compressionLevel{
         this,
@@ -85,27 +96,54 @@ struct alignas(8) /* Work around ASAN failures on i686-linux. */
     Config & config;
 
 private:
+    void anchor() override;
+
     std::vector<std::unique_ptr<Signer>> signers;
 
 protected:
 
     /**
      * The prefix under which realisation infos will be stored
+     *
+     * @note The previous (still experimental, though) hash-keyed
+     * realisations were under "realisations". "build trace" is a better
+     * name anyways (issue #11895). This is call "v2" accordingly.
+     *
+     * While we're experimenting, we'll freely increase this version
+     * number. Old build traces will just be "abandoned" at the old URL.
+     * When we are done experimenting, we'll try lean more on versioning
+     * the build trace entries themselves than the entire directory, for
+     * a smoother migration path.
      */
-    constexpr const static std::string realisationsPrefix = "realisations";
+    constexpr const static std::string realisationsPrefix = "build-trace-v2";
 
     constexpr const static std::string cacheInfoFile = "nix-cache-info";
 
     BinaryCacheStore(Config &);
 
     /**
+     * Fetch and parse `nix-cache-info`.
+     */
+    std::map<std::string, std::string> parseNixCacheInfo();
+
+    /**
+     * Apply the known `nix-cache-info` fields from `fields` to this store.
+     */
+    void applyCacheInfoFields(const std::map<std::string, std::string> & fields);
+
+    /**
      * Compute the path to the given realisation
      *
-     * It's `${realisationsPrefix}/${drvOutput}.doi`.
+     * It's `${realisationsPrefix}/${drvPath}/${outputName}`.
      */
     std::string makeRealisationPath(const DrvOutput & id);
 
 public:
+
+    bool includeInProvenance() override
+    {
+        return true;
+    }
 
     virtual bool fileExists(const std::string & path) = 0;
 
@@ -160,6 +198,23 @@ private:
 
     void writeNarInfo(ref<NarInfo> narInfo);
 
+    /**
+     * Upload the NAR for a path and everything else *except* the
+     * `.narinfo` file (i.e. the compressed NAR, an optional NAR
+     * listing, and optional debuginfo links), and construct the
+     * corresponding `NarInfo`. The returned `NarInfo` is neither signed
+     * nor published yet; call `uploadNarInfo()` to do that.
+     */
+    ref<NarInfo> uploadData(Source & narSource, RepairFlag repair, fun<ValidPathInfo(HashResult)> mkInfo);
+
+    /**
+     * Sign and publish the `.narinfo` file for a path whose NAR has
+     * already been uploaded by `uploadData()`. This is what establishes
+     * the closure invariant, so all of the path's references must
+     * already be valid in the store.
+     */
+    void uploadNarInfo(ref<NarInfo> narInfo);
+
     ref<const ValidPathInfo> addToStoreCommon(
         Source & narSource, RepairFlag repair, CheckSigsFlag checkSigs, fun<ValidPathInfo(HashResult)> mkInfo);
 
@@ -180,6 +235,9 @@ public:
     void
     addToStore(const ValidPathInfo & info, Source & narSource, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
+    void
+    addMultipleToStore(PathsSource && pathsToCopy, Activity & act, RepairFlag repair, CheckSigsFlag checkSigs) override;
+
     StorePath addToStoreFromDump(
         Source & dump,
         std::string_view name,
@@ -187,7 +245,8 @@ public:
         ContentAddressMethod hashMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override;
 
     StorePath addToStore(
         std::string_view name,

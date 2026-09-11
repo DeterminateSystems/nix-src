@@ -12,6 +12,11 @@ namespace nix::fetchers {
  */
 struct Cache
 {
+private:
+    /* VTable anchor to avoid weak linkage of the vtable - it breaks
+       dynamic_cast across shared libraries on Darwin. */
+    virtual void anchor();
+public:
     virtual ~Cache() {}
 
     /**
@@ -67,9 +72,9 @@ struct Cache
 
     /**
      * Look up a store path in the cache. The returned store path will
-     * be valid, but it may be expired.
+     * be valid (unless `allowInvalid` is true), but it may be expired.
      */
-    virtual std::optional<ResultWithStorePath> lookupStorePath(Key key, Store & store) = 0;
+    virtual std::optional<ResultWithStorePath> lookupStorePath(Key key, Store & store, bool allowInvalid = false) = 0;
 
     /**
      * Look up a store path in the cache. Return nothing if its TTL
