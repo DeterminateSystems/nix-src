@@ -488,8 +488,6 @@ ref<FileTransfer> getFileTransfer();
  */
 ref<FileTransfer> makeFileTransfer(const FileTransferSettings & settings = fileTransferSettings);
 
-std::shared_ptr<FileTransfer> resetFileTransfer();
-
 class FileTransferError final : public CloneableError<FileTransferError, Error>
 {
 private:

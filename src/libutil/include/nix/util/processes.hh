@@ -111,6 +111,31 @@ struct ProcessOptions
     int cloneFlags = 0;
 };
 
+/**
+ * Register a callback to be run by `startProcess()` in the forked
+ * child, before the child's main function. This is for state that
+ * doesn't survive a `fork()`, in particular objects owning a thread:
+ * the thread doesn't exist in the child, so such objects can be
+ * neither used nor destroyed there. Typical usage:
+ *
+ *     static RegisterForkCallback resetFoo([]() { ... });
+ *
+ * Note that callbacks are not run for `vfork()`ed children, since
+ * those share the parent's memory. Exceptions thrown by a callback
+ * are ignored, since there's not much the child can do about them.
+ */
+struct RegisterForkCallback
+{
+    typedef std::vector<fun<void()>> Callbacks;
+
+    static Callbacks & callbacks();
+
+    RegisterForkCallback(fun<void()> callback)
+    {
+        callbacks().push_back(std::move(callback));
+    }
+};
+
 #ifndef _WIN32
 pid_t startProcess(fun<void()> processMain, const ProcessOptions & options = ProcessOptions());
 #endif

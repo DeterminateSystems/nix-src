@@ -556,6 +556,9 @@ std::vector<InstallableWithBuildResult> Installable::build2(
         }
     }
 
+    Activity act(*logger, lvlTalkative, "BuildInstallables", {});
+    PushActivity pact(act.id);
+
     std::vector<InstallableWithBuildResult> res;
 
     switch (mode) {

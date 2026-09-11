@@ -30,6 +30,12 @@ option(
 )
 
 option(
+  'otel',
+  type : 'feature',
+  description : 'distributed tracing via OpenTelemetry (OTLP/HTTP exporter)',
+)
+
+option(
   'crashpad-handler',
   type : 'string',
   value : '',

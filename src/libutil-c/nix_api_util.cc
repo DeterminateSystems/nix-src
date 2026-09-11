@@ -75,9 +75,10 @@ public:
     {
         if (!vtable.result_string)
             return;
-        if (fields.empty() || fields[0].type != nix::Logger::Field::tString)
+        if (fields.empty() || !std::get_if<std::string>(&fields[0].raw))
             return;
-        vtable.result_string(userdata, act, static_cast<nix_result_type>(type), fields[0].s.c_str());
+        vtable.result_string(
+            userdata, act, static_cast<nix_result_type>(type), std::get<std::string>(fields[0].raw).c_str());
     }
 
     virtual void anchor();

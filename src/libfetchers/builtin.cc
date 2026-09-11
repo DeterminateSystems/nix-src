@@ -3,7 +3,6 @@
 #include "nix/fetchers/fetchers.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/util/archive.hh"
-#include "nix/store/filetransfer.hh"
 #include "nix/store/store-open.hh"
 
 #include <nlohmann/json.hpp>
@@ -30,12 +29,6 @@ static void builtinFetchTree(const BuiltinBuilderContext & ctx)
 
     fetchers::Settings myFetchSettings;
     myFetchSettings.accessTokens = fetchSettings.accessTokens.get();
-
-    // Make sure we don't use the FileTransfer object of the parent
-    // since it's in a broken state after the fork. We also must not
-    // delete it, so hang on to the shared_ptr.
-    // FIXME: move FileTransfer into fetchers::Settings.
-    static auto prevFileTransfer = resetFileTransfer();
 
     // FIXME: disable use of the git/tarball cache
 

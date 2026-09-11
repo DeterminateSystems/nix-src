@@ -496,32 +496,37 @@ int handleExceptions(const std::string & programName, fun<void()> body)
 
     ErrorInfo::programName = baseNameOf(programName);
 
-    auto doLog = [&](BaseError & e) {
-        try {
-            logError(e.info());
-        } catch (...) {
-            printError(ANSI_RED "error:" ANSI_NORMAL " Exception while printing an exception.");
-        }
-    };
+    /* Note: this must happen after `printException()` below, so that
+       loggers that record the exception (like the OpenTelemetry
+       logger) can still do so. `flush()` must come after `stop()`,
+       which ends any open spans. */
+    Finally stopLogger([]() {
+        logger->stop();
+        logger->flush();
+    });
 
-    std::string error = ANSI_RED "error:" ANSI_NORMAL " ";
     try {
         body();
-    } catch (Exit & e) {
-        return e.status;
-    } catch (UsageError & e) {
-        doLog(e);
-        printError("\nTry '%1% --help' for more information.", programName);
-        return 1;
-    } catch (BaseError & e) {
-        doLog(e);
-        return e.info().status;
-    } catch (std::bad_alloc & e) {
-        printError(error + "out of memory");
-        return 1;
-    } catch (std::exception & e) {
-        printError(error + e.what());
-        return 1;
+    } catch (...) {
+        auto ex = std::current_exception();
+
+        /* Report the exception to the logger, which prints it and, in
+           the case of the OpenTelemetry logger, records it on the
+           root span. */
+        logger->printException(ex, programName);
+
+        /* Determine the exit status. */
+        try {
+            std::rethrow_exception(ex);
+        } catch (Exit & e) {
+            return e.status;
+        } catch (UsageError & e) {
+            return 1;
+        } catch (BaseError & e) {
+            return e.info().status;
+        } catch (...) {
+            return 1;
+        }
     }
 
     return 0;
