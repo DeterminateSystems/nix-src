@@ -75,7 +75,7 @@ public:
         return JobCategory::Substitution;
     };
 
-    Done doneFailure(ExitCode result, BuildResult::Failure failure);
+    Done doneFailure(ExitCode result, BuildResult::Failure failure, ActivityId act = 0);
 };
 
 } // namespace nix

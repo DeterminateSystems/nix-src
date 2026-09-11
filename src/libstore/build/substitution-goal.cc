@@ -33,14 +33,11 @@ PathSubstitutionGoal::~PathSubstitutionGoal()
     cleanup();
 }
 
-Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failure failure)
+Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failure failure, ActivityId act)
 {
     auto res = Goal::doneFailure(result, std::move(failure));
 
-    logger->result(
-        getCurActivity(),
-        resBuildResult,
-        nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+    logger->result(act, resBuildResult, nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
 
     return res;
 }
@@ -199,7 +196,8 @@ Goal::Co PathSubstitutionGoal::init()
             .msg = HintFmt(
                 "path '%s' is required, but there is no substituter that can build it",
                 worker.store.printStorePath(storePath)),
-        }});
+        }},
+        act.id);
 }
 
 Goal::Co PathSubstitutionGoal::tryToRun(
@@ -218,7 +216,8 @@ Goal::Co PathSubstitutionGoal::tryToRun(
                 .status = BuildResult::Failure::DependencyFailed,
                 .msg = HintFmt(
                     "some references of path '%s' could not be realised", worker.store.printStorePath(storePath)),
-            }});
+            }},
+            parentAct);
     }
 
     for (auto & i : info->references)
@@ -350,7 +349,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
     auto success = BuildResult::Success{.status = BuildResult::Success::Substituted, .provenance = provenance};
 
     logger->result(
-        getCurActivity(), resBuildResult, nlohmann::json(KeyedBuildResult({success}, DerivedPath::Opaque{storePath})));
+        parentAct, resBuildResult, nlohmann::json(KeyedBuildResult({success}, DerivedPath::Opaque{storePath})));
 
     co_return doneSuccess(std::move(success));
 }

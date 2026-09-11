@@ -771,7 +771,7 @@ Goal::Co DerivationBuildingGoal::buildWithHook(
             break;
         } else if (auto * timeout = std::get_if<std::unique_ptr<TimedOut>>(&event)) {
             hook.reset();
-            co_return doneFailure(std::move(**timeout));
+            co_return doneFailure(std::move(**timeout), buildLog->act->id);
         }
     }
 
@@ -806,7 +806,7 @@ Goal::Co DerivationBuildingGoal::buildWithHook(
 
         /* TODO (once again) support fine-grained error codes, see issue #12641. */
 
-        co_return doneFailure(std::move(e));
+        co_return doneFailure(std::move(e), buildLog->act->id);
     }
 
     /* Compute the FS closure of the outputs and register them as
@@ -855,7 +855,7 @@ Goal::Co DerivationBuildingGoal::buildWithHook(
     outputLocks.setDeletion(true);
     outputLocks.unlock();
 
-    co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs));
+    co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs), buildLog->act->id);
 #endif
 }
 
@@ -979,7 +979,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
                 desugaredEnv = DesugaredEnv::create(worker.store, *drv, drvOptions, inputPaths);
             } catch (BuildError & e) {
                 outputLocks.unlock();
-                co_return doneFailure(std::move(e));
+                co_return doneFailure(std::move(e), act->id);
             }
 
             DerivationBuilderParams params{
@@ -1053,7 +1053,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
             break;
         } else if (auto * timeout = std::get_if<std::unique_ptr<TimedOut>>(&event)) {
             builder->killChild();
-            co_return doneFailure(std::move(**timeout));
+            co_return doneFailure(std::move(**timeout), act->id);
         }
     }
 
@@ -1065,11 +1065,11 @@ Goal::Co DerivationBuildingGoal::buildLocally(
     } catch (BuilderFailureError & e) {
         builder.reset();
         outputLocks.unlock();
-        co_return doneFailure(fixupBuilderFailureErrorMessage(std::move(e), *buildLog));
+        co_return doneFailure(fixupBuilderFailureErrorMessage(std::move(e), *buildLog), act->id);
     } catch (BuildError & e) {
         builder.reset();
         outputLocks.unlock();
-        co_return doneFailure(std::move(e));
+        co_return doneFailure(std::move(e), act->id);
     }
     {
         builder.reset();
@@ -1109,7 +1109,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
            (unlinked) lock files. */
         outputLocks.setDeletion(true);
         outputLocks.unlock();
-        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs), provenance);
+        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs), act->id, provenance);
     }
 #endif
 }
@@ -1314,11 +1314,13 @@ LogFile::~LogFile()
 
 Goal::Done DerivationBuildingGoal::doneFailureLogTooLong(BuildLog & buildLog)
 {
-    return doneFailure(BuildError(
-        BuildResult::Failure::LogLimitExceeded,
-        "%s killed after writing more than %d bytes of log output",
-        getName(),
-        worker.settings.maxLogSize));
+    return doneFailure(
+        BuildError(
+            BuildResult::Failure::LogLimitExceeded,
+            "%s killed after writing more than %d bytes of log output",
+            getName(),
+            worker.settings.maxLogSize),
+        buildLog.act->id);
 }
 
 std::map<std::string, std::optional<StorePath>> DerivationBuildingGoal::queryPartialDerivationOutputMap()
@@ -1405,7 +1407,10 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
 }
 
 Goal::Done DerivationBuildingGoal::doneSuccess(
-    BuildResult::Success::Status status, SingleDrvOutputs builtOutputs, std::shared_ptr<const Provenance> provenance)
+    BuildResult::Success::Status status,
+    SingleDrvOutputs builtOutputs,
+    ActivityId act,
+    std::shared_ptr<const Provenance> provenance)
 {
     mcRunningBuilds.reset();
 
@@ -1422,7 +1427,7 @@ Goal::Done DerivationBuildingGoal::doneSuccess(
         });
 
     logger->result(
-        getCurActivity(),
+        act,
         resBuildResult,
         nlohmann::json(KeyedBuildResult(
             buildResult,
@@ -1431,7 +1436,7 @@ Goal::Done DerivationBuildingGoal::doneSuccess(
     return res;
 }
 
-Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
+Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex, ActivityId act)
 {
     mcRunningBuilds.reset();
 
@@ -1444,7 +1449,7 @@ Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
     auto res = Goal::doneFailure(ecFailed, std::move(ex));
 
     logger->result(
-        getCurActivity(),
+        act,
         resBuildResult,
         nlohmann::json(KeyedBuildResult(
             buildResult,

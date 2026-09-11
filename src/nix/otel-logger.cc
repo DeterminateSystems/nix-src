@@ -544,6 +544,24 @@ public:
                     if (auto bodySize = json.find("bodySize"); bodySize != json.end() && bodySize->is_number())
                         i->second->SetAttribute("http.response.body.size", bodySize->get<int64_t>());
                 }
+            } else if (type == resBuildResult) {
+                /* A failed build or substitution doesn't throw, so
+                   `stopActivity()` can't tell; the result tells us. */
+                auto spans(spans_.lock());
+                if (auto i = spans->find(act); i != spans->end()) {
+                    auto status = json.value("status", "");
+                    if (!status.empty())
+                        i->second->SetAttribute("nix.build.status", status);
+                    /* Note: a substitution goal "failing" because there
+                       is no substituter for the path is the normal
+                       prelude to building it, so don't call that an
+                       error. */
+                    if (!json.value("success", true) && status != "NoSubstituters") {
+                        // FIXME: privacy (the message can include the build log tail)
+                        auto msg = json.value("errorMsg", "build failed");
+                        i->second->SetStatus(opentelemetry::trace::StatusCode::kError, filterANSIEscapes(msg, true));
+                    }
+                }
             }
         } catch (...) {
         }

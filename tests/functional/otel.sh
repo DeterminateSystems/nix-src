@@ -48,6 +48,12 @@ attr() {
     body "$1" | jq -r ".resourceSpans[0].scopeSpans[0].spans[] | select(.name == \"$2\") | .attributes[] | select(.key == \"$3\") | .value.stringValue"
 }
 
+# Return a field of the status of the span with the given name in the
+# n-th upload, e.g. `.code`.
+spanStatus() {
+    body "$1" | jq -r ".resourceSpans[0].scopeSpans[0].spans[] | select(.name == \"$2\") | .status$3"
+}
+
 # A successful command produces a root span named after it, with no
 # status.
 [[ $(nix eval --expr '1 + 2') = 3 ]]
@@ -87,3 +93,19 @@ nix build --no-link "$drvPath^*"
 [[ $(attr 5 Build nix.drv.path) = "$drvPath" ]]
 [[ $(attr 5 Build nix.drv.name) = foo ]]
 [[ $(attr 5 Build nix.drv.version) = 1.2 ]]
+[[ $(attr 5 Build nix.build.status) = Built ]]
+[[ $(spanStatus 5 Build .code) = null ]]
+# Not being able to substitute the path is the normal prelude to
+# building it, not an error.
+[[ $(attr 5 SubstitutionGoal nix.build.status) = NoSubstituters ]]
+[[ $(spanStatus 5 SubstitutionGoal .code) = null ]]
+
+# A failed build marks its `Build` span as failed, with the build's
+# status and error message. Note that the failure doesn't throw, so
+# this relies on the build result rather than on stack unwinding.
+# shellcheck disable=SC2016 # `$out` is for the Nix builder, not the shell.
+drvPath=$(nix-instantiate --expr 'with import ./config.nix; mkDerivation { name = "bar-1.2"; buildCommand = "echo something went wrong >&2; exit 1"; }')
+expect 1 nix build --no-link "$drvPath^*"
+[[ $(attr 7 Build nix.build.status) = PermanentFailure ]]
+[[ $(spanStatus 7 Build .code) = 2 ]]
+spanStatus 7 Build .message | grepQuiet "builder failed with exit code 1"

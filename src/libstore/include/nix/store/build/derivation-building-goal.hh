@@ -118,9 +118,10 @@ private:
     Done doneSuccess(
         BuildResult::Success::Status status,
         SingleDrvOutputs builtOutputs,
+        ActivityId act = 0,
         std::shared_ptr<const Provenance> provenance = nullptr);
 
-    Done doneFailure(BuildError ex);
+    Done doneFailure(BuildError ex, ActivityId act = 0);
 
     BuildError fixupBuilderFailureErrorMessage(BuilderFailureError msg, BuildLog & buildLog);
 
