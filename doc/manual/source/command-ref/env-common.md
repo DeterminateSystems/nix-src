@@ -172,7 +172,8 @@ Likewise for the state and cache directories.
 Nix can emit [OpenTelemetry](https://opentelemetry.io/) traces of its activities (such as evaluation, builds, substitutions and HTTP requests), exported using the OTLP/HTTP protocol.
 Tracing is a no-op unless one of the endpoint variables below is set, or the [`otlp`](@docroot@/command-ref/conf-file.md#conf-otlp) and [`otlp-endpoint`](@docroot@/command-ref/conf-file.md#conf-otlp-endpoint) settings are configured.
 The variables below take precedence over the corresponding settings; in particular, setting an endpoint variable enables tracing even if `otlp` is disabled.
-When talking to the Nix daemon or to a binary cache server, Nix propagates the [W3C trace context](https://www.w3.org/TR/trace-context/), so that work done on your behalf by other processes or servers shows up in the same trace.
+When talking to the Nix daemon (including a remote one via `ssh-ng://`) or to a binary cache server, Nix propagates the [W3C trace context](https://www.w3.org/TR/trace-context/), so that work done on your behalf by other processes or servers shows up in the same trace.
+Note that a daemon exports its own spans, so it needs its own OTLP configuration; in particular, environment variables aren't inherited over SSH, so a remote daemon has to be configured through the remote machine's `nix.conf`.
 
 - <span id="env-OTEL_EXPORTER_OTLP_ENDPOINT">[`OTEL_EXPORTER_OTLP_ENDPOINT`](#env-OTEL_EXPORTER_OTLP_ENDPOINT)</span>
 

@@ -109,3 +109,25 @@ expect 1 nix build --no-link "$drvPath^*"
 [[ $(attr 7 Build nix.build.status) = PermanentFailure ]]
 [[ $(spanStatus 7 Build .code) = 2 ]]
 spanStatus 7 Build .message | grepQuiet "builder failed with exit code 1"
+
+# A daemon reached via `ssh-ng://` (here without real SSH, since the
+# host is `localhost`) exports its own spans, in the client's trace.
+# The client and the daemon upload independently, in no particular
+# order, so wait for both and tell them apart by service name.
+service() {
+    body "$1" | jq -r '.resourceSpans[0].resource.attributes[] | select(.key == "service.name") | .value.stringValue'
+}
+nix store info --store "ssh-ng://localhost?remote-store=$TEST_ROOT/other-store" > /dev/null
+for ((i = 0; i < 100; i++)); do
+    [[ -e $sinkDir/9.body ]] && break
+    sleep 0.1
+done
+[[ -e $sinkDir/9.body ]]
+if [[ $(service 8) = nix ]]; then client=8; daemon=9; else client=9; daemon=8; fi
+[[ $(service $client) = nix ]]
+[[ $(service $daemon) = nix-daemon ]]
+[[ $(span $client .name) = "nix store info" ]]
+[[ $(span $daemon .name) = "daemon connection" ]]
+[[ $(span $daemon .kind) = 2 ]] # SERVER
+[[ $(span $daemon .traceId) = $(span $client .traceId) ]]
+[[ $(span $daemon .parentSpanId) = $(span $client .spanId) ]]
