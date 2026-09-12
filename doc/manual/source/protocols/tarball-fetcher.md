@@ -1,33 +1,27 @@
-# Lockable HTTP Tarball Protocol
+# Lockable HTTP Protocol
 
-Tarball flakes can be served as regular tarballs via HTTP or the file
-system (for `file://` URLs). Unless the server implements the Lockable
-HTTP Tarball protocol, it is the responsibility of the user to make sure that
-the URL always produces the same tarball contents.
+Nix can fetch a flake input over HTTP, or from the file system for `file://` URLs.
+If the server does not support the Lockable HTTP Protocol, the user must make sure that the URL always gives the same contents.
 
-An HTTP server can return an "immutable" HTTP URL appropriate for lock
-files. This allows users to specify a tarball flake input in
-`flake.nix` that requests the latest version of a flake
-(e.g. `https://example.org/hello/latest.tar.gz`), while `flake.lock`
-will record a URL whose contents will not change
-(e.g. `https://example.org/hello/<revision>.tar.gz`). To do so, the
-server must return an [HTTP `Link` header](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Link) with the `rel` attribute set to
-`immutable`, as follows:
+An HTTP server can return an "immutable" URL for the lock file.
+Then the user can put an input in `flake.nix` that asks for the most recent version of a resource (for example, `https://example.org/hello/latest.tar.gz`), while `flake.lock` records a URL whose contents do not change (for example, `https://example.org/hello/<revision>.tar.gz`).
+To do this, the server must send an [HTTP `Link` header](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Link) with the `rel` attribute set to `immutable`, as follows:
 
 ```
 Link: <flakeref>; rel="immutable"
 ```
 
-(Note the required `<` and `>` characters around *flakeref*.)
+(The `<` and `>` characters around *flakeref* are necessary.)
 
-*flakeref* must be a tarball flakeref. It can contain the tarball flake attributes
-`narHash`, `rev`, `revCount` and `lastModified`. If `narHash` is included, its
-value must be the [NAR hash][Nix Archive] of the unpacked tarball (as computed via
-`nix hash path`). Nix checks the contents of the returned tarball
-against the `narHash` attribute. The `rev` and `revCount` attributes
-are useful when the tarball flake is a mirror of a fetcher type that
-has those attributes, such as Git or GitHub. They are not checked by
-Nix.
+*flakeref* must have the same input type as the input that Nix fetched.
+Nix gives an error if the two types are different.
+For the two input types that this protocol applies to, refer to [Tarball inputs](#tarball-inputs) and [File inputs](#file-inputs).
+
+*flakeref* can contain the flake attributes `narHash`, `rev`, `revCount` and `lastModified`.
+If *flakeref* contains `narHash`, its value must be the [NAR hash][Nix Archive] of the contents, as computed by `nix hash path`.
+Nix compares the contents that it downloaded against `narHash`, and gives an error if the two values are different.
+Nix does not check `rev` and `revCount`.
+These two attributes are useful when the input is a mirror of a fetcher type that has them, such as Git or GitHub.
 
 ```
 Link: <https://example.org/hello/442793d9ec0584f6a6e82fa253850c8085bb150a.tar.gz
@@ -36,10 +30,43 @@ Link: <https://example.org/hello/442793d9ec0584f6a6e82fa253850c8085bb150a.tar.gz
   &narHash=sha256-GUm8Uh/U74zFCwkvt9Mri4DSM%2BmHj3tYhXUkYpiv31M%3D>; rel="immutable"
 ```
 
-(The linebreaks in this example are for clarity and must not be included in the actual response.)
+(The line breaks in this example make it easy to read. Do not put them in the actual response.)
 
-For tarball flakes, the value of the `lastModified` flake attribute is
-defined as the timestamp of the newest file inside the tarball.
+## Tarball inputs
+
+Nix unpacks a tarball input into a tree.
+Nix uses this input type when the URL has a tarball extension, such as `.tar.gz` or `.zip`, or when the input is a flake.
+
+For a tarball input, *flakeref* must be a tarball flakeref.
+
+The value of the `lastModified` flake attribute is the timestamp of the most recent file in the tarball.
+
+## File inputs
+
+Nix puts a file input into the store as a single file.
+Nix uses this input type when the URL has no tarball extension and the input has `flake = false`.
+The URL does not have to look like a file, and it can contain query parameters.
+
+> **Example**
+>
+> ```nix
+> # flake.nix
+> {
+>   inputs.determinate-pkg = {
+>     url = "https://install.determinate.systems/determinate-pkg/stable/Universal";
+>     flake = false;
+>   };
+>   outputs = { foo }: { /* ... */ };
+> }
+> ```
+
+For a file input, *flakeref* must be a file flakeref.
+
+```
+Link: <https://install.determinate.systems/determinate-pkg/tag/v3.22.0/Universal>; rel="immutable"
+```
+
+The `lastModified` attribute does not apply to file inputs.
 
 ## Gitea and Forgejo support
 
