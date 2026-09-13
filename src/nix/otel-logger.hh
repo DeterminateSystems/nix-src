@@ -30,17 +30,18 @@ class OpenTelemetryLogger : public Logger
  * `rootSpanName`. Activities without a known parent become children
  * of the root span.
  *
- * If `remoteParentTraceparent` is non-empty, the root span is created
- * as a server span whose parent is the given W3C trace context (used
- * for daemon connections, where the client sends its trace context
- * during the handshake). An invalid value yields an unparented root
- * span.
+ * If `remoteParentTraceparent` is non-empty, the root span's parent is
+ * the given W3C trace context, e.g. received from the client during
+ * the daemon handshake, or from a parent process via the `TRACEPARENT`
+ * environment variable. An invalid value yields an unparented root
+ * span. If `isServer` is set, the root span is a server span (i.e. it
+ * handles a request from another process, as in the daemon).
  *
  * Returns null if tracing support is not compiled in or `initOtel()`
  * did not enable tracing; the caller should then not attach a logger.
  */
-std::unique_ptr<OpenTelemetryLogger>
-makeOpenTelemetryLogger(std::string_view rootSpanName, std::string_view remoteParentTraceparent = {});
+std::unique_ptr<OpenTelemetryLogger> makeOpenTelemetryLogger(
+    std::string_view rootSpanName, std::string_view remoteParentTraceparent = {}, bool isServer = false);
 
 /**
  * Initialize OpenTelemetry tracing for this process. Does nothing

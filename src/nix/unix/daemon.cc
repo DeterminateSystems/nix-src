@@ -49,7 +49,7 @@ namespace nix {
  */
 static void setupConnectionTelemetry(std::string_view traceparent)
 {
-    if (auto otelLogger = makeOpenTelemetryLogger("daemon connection", traceparent))
+    if (auto otelLogger = makeOpenTelemetryLogger("daemon connection", traceparent, /*isServer=*/true))
         applyExtraLogger(std::move(otelLogger));
 }
 

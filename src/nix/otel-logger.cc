@@ -325,15 +325,15 @@ class OpenTelemetryLoggerImpl : public OpenTelemetryLogger
     }
 
 public:
-    OpenTelemetryLoggerImpl(OtelState & state, std::string_view rootSpanName, std::string_view remoteParentTraceparent)
+    OpenTelemetryLoggerImpl(
+        OtelState & state, std::string_view rootSpanName, std::string_view remoteParentTraceparent, bool isServer)
         : tracer(state.tracer)
     {
         opentelemetry::trace::StartSpanOptions options;
-        if (!remoteParentTraceparent.empty()) {
+        if (isServer)
             options.kind = opentelemetry::trace::SpanKind::kServer;
-            if (auto spanContext = parseTraceparent(remoteParentTraceparent))
-                options.parent = *spanContext;
-        }
+        if (auto spanContext = parseTraceparent(remoteParentTraceparent))
+            options.parent = *spanContext;
         rootSpan = tracer->StartSpan(rootSpanName, options);
 
         if (getEnv("NIX_DEBUG_OTEL")) {
@@ -942,19 +942,19 @@ void initOtel(std::string_view serviceName)
 }
 
 std::unique_ptr<OpenTelemetryLogger>
-makeOpenTelemetryLogger(std::string_view rootSpanName, std::string_view remoteParentTraceparent)
+makeOpenTelemetryLogger(std::string_view rootSpanName, std::string_view remoteParentTraceparent, bool isServer)
 {
     auto * state = otelState.load(std::memory_order_acquire);
     if (!state)
         return nullptr;
-    return std::make_unique<OpenTelemetryLoggerImpl>(*state, rootSpanName, remoteParentTraceparent);
+    return std::make_unique<OpenTelemetryLoggerImpl>(*state, rootSpanName, remoteParentTraceparent, isServer);
 }
 
 #else
 
 void initOtel(std::string_view) {}
 
-std::unique_ptr<OpenTelemetryLogger> makeOpenTelemetryLogger(std::string_view, std::string_view)
+std::unique_ptr<OpenTelemetryLogger> makeOpenTelemetryLogger(std::string_view, std::string_view, bool)
 {
     return nullptr;
 }

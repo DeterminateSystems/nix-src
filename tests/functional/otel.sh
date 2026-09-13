@@ -30,6 +30,9 @@ otlp = true
 otlp-endpoint = http://127.0.0.1:$(cat "$sinkDir/port")
 otlp-compression = none
 otlp-headers = authorization=Bearer%20secret
+# The build hook is traced too, so it would add uploads of its own to
+# the ones counted below.
+build-hook =
 EOF
 
 # Return the body of the n-th upload, as JSON.
@@ -131,3 +134,12 @@ if [[ $(service 8) = nix ]]; then client=8; daemon=9; else client=9; daemon=8; f
 [[ $(span $daemon .kind) = 2 ]] # SERVER
 [[ $(span $daemon .traceId) = $(span $client .traceId) ]]
 [[ $(span $daemon .parentSpanId) = $(span $client .spanId) ]]
+
+# The root span is parented to the trace context in `TRACEPARENT`,
+# which is how remote builds via `build-remote` are linked to the
+# trace of the `nix` process that runs it.
+[[ $(TRACEPARENT=00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01 nix eval --expr '1 + 2') = 3 ]]
+[[ $(span 10 .name) = "nix eval" ]]
+[[ $(span 10 .traceId) = 0af7651916cd43dd8448eb211c80319c ]]
+[[ $(span 10 .parentSpanId) = b7ad6b7169203331 ]]
+[[ $(span 10 .kind) = 1 ]] # INTERNAL, not SERVER

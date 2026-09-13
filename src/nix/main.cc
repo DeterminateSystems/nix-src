@@ -552,12 +552,12 @@ void mainWrapped(int argc, char ** argv)
             /* Legacy commands don't have subcommands, so we can set up
                the root span right away. Note that they parse their
                arguments themselves, so unlike for the commands below,
-               `--option` cannot configure tracing here. The daemon is
-               the exception: it sets up tracing itself, per
-               connection, parented to the client's trace. */
-            if (programName != "nix-daemon") {
+               `--option` cannot configure tracing here. The daemon and
+               the build hook are the exceptions: they install their
+               own logger, so they set up tracing themselves. */
+            if (programName != "nix-daemon" && programName != "build-remote") {
                 initOtel(programName);
-                if (auto l = makeOpenTelemetryLogger(programName))
+                if (auto l = makeOpenTelemetryLogger(programName, getEnv("TRACEPARENT").value_or("")))
                     applyExtraLogger(std::move(l));
             }
             return (*legacy)(argc, argv);
@@ -722,10 +722,15 @@ void mainWrapped(int argc, char ** argv)
        after the subcommand. Note: this must happen after
        `parseCmdline()`, so that `--option` can configure tracing. The
        daemon is the exception: it sets up tracing itself, per
-       connection, parented to the client's trace. */
+       connection, parented to the client's trace.
+
+       The root span is parented to the trace context in `TRACEPARENT`,
+       if any, so that a parent process (such as `nix` running
+       `build-remote`) can include us in its trace. */
     if (subcommand != std::vector<std::string>{"daemon"}) {
         initOtel(programName);
-        if (auto l = makeOpenTelemetryLogger("nix " + concatStringsSep(" ", subcommand)))
+        if (auto l =
+                makeOpenTelemetryLogger("nix " + concatStringsSep(" ", subcommand), getEnv("TRACEPARENT").value_or("")))
             applyExtraLogger(std::move(l));
     }
 

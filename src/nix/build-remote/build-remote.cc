@@ -18,6 +18,9 @@
 #include "nix/util/serialise.hh"
 #include "nix/store/build-result.hh"
 #include "nix/store/store-open.hh"
+#include "nix/util/environment-variables.hh"
+
+#include "otel-logger.hh"
 #include "nix/util/strings.hh"
 #include "nix/store/derivations.hh"
 #include "nix/store/local-store.hh"
@@ -71,6 +74,13 @@ static int main_build_remote(int argc, char ** argv)
             throw SysError("unblocking SIGTERM");
 
         logger = makeJSONLogger(getStandardError()).release();
+
+        /* Set up tracing now that we have our logger. Our root span
+           is parented to the trace of the `nix` process that runs us,
+           which it passes in `TRACEPARENT`. */
+        initOtel("nix-build-remote");
+        if (auto l = makeOpenTelemetryLogger("build-remote", getEnv("TRACEPARENT").value_or("")))
+            applyExtraLogger(std::move(l));
 
         /* Ensure we don't get any SSH passphrase or host key popups. */
         unsetenv("DISPLAY");
