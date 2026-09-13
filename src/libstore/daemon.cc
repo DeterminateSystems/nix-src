@@ -1094,6 +1094,15 @@ void processConnection(
     std::function<void(std::string_view traceparent)> setupTelemetry)
 {
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
+    /* The client hanging up triggers an interrupt (via `MonitorFdHup`
+       below), which is how we abort whatever we were doing for it.
+       Once the connection is over, that interrupt has served its
+       purpose, so clear it, e.g. so that we can still export our
+       telemetry. Note: this has to run *after* the monitor has been
+       destroyed, i.e. its thread joined, since it might otherwise
+       still trigger the interrupt after we've cleared it. */
+    Finally clearInterrupt([]() { setInterrupted(false); });
+
     auto monitor = !recursive ? std::make_unique<MonitorFdHup>(from.fd) : nullptr;
     (void) monitor; // suppress warning
     ReceiveInterrupts receiveInterrupts;
@@ -1142,10 +1151,7 @@ void processConnection(
 
     unsigned int opCount = 0;
 
-    Finally finally([&]() {
-        setInterrupted(false);
-        printMsgUsing(prevLogger, lvlDebug, "%d operations", opCount);
-    });
+    Finally finally([&]() { printMsgUsing(prevLogger, lvlDebug, "%d operations", opCount); });
 
     conn.postHandshake(
         *store,
