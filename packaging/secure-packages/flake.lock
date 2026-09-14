@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "bdwgc": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1789388623,
+        "narHash": "sha256-qk2ONj1UU3zRzyJMtVns5ZDH0uCWpvTtqW2b/lZmotU=",
+        "owner": "edolstra",
+        "repo": "bdwgc",
+        "rev": "c6afef5518ef71d446339a5aa4c1b97fc6392534",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "ref": "user-defined-stacks",
+        "repo": "bdwgc",
+        "type": "github"
+      }
+    },
     "flake-compat": {
       "flake": false,
       "locked": {
@@ -59,6 +76,7 @@
     },
     "nix": {
       "inputs": {
+        "bdwgc": "bdwgc",
         "flake-parts": "flake-parts",
         "git-hooks-nix": "git-hooks-nix",
         "nixpkgs": "nixpkgs",
