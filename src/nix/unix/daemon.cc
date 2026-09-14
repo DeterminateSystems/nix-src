@@ -54,9 +54,7 @@ namespace nix {
  */
 static void setupConnectionTelemetry(std::string_view traceparent)
 {
-    initOtel("nix-daemon");
-    if (auto otelLogger = makeOpenTelemetryLogger("daemon connection", traceparent, /*isServer=*/true))
-        applyExtraLogger(std::move(otelLogger));
+    initOtel("nix-daemon", "daemon connection", traceparent, /*isServer=*/true);
 }
 
 /**

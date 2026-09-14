@@ -556,9 +556,7 @@ void mainWrapped(int argc, char ** argv)
                the build hook are the exceptions: they install their
                own logger, so they set up tracing themselves. */
             if (programName != "nix-daemon" && programName != "build-remote") {
-                initOtel(programName);
-                if (auto l = makeOpenTelemetryLogger(programName, getEnv("TRACEPARENT").value_or("")))
-                    applyExtraLogger(std::move(l));
+                initOtel(programName, programName, getEnv("TRACEPARENT").value_or(""));
             }
             return (*legacy)(argc, argv);
         }
@@ -728,10 +726,7 @@ void mainWrapped(int argc, char ** argv)
        if any, so that a parent process (such as `nix` running
        `build-remote`) can include us in its trace. */
     if (subcommand != std::vector<std::string>{"daemon"}) {
-        initOtel(programName);
-        if (auto l =
-                makeOpenTelemetryLogger("nix " + concatStringsSep(" ", subcommand), getEnv("TRACEPARENT").value_or("")))
-            applyExtraLogger(std::move(l));
+        initOtel(programName, "nix " + concatStringsSep(" ", subcommand), getEnv("TRACEPARENT").value_or(""));
     }
 
     try {
