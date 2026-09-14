@@ -46,9 +46,15 @@ namespace nix {
  * covering the connection's lifetime, parented under the trace
  * context received from the client, if any. No-op unless
  * OpenTelemetry export is configured.
+ *
+ * Note that `main()` deliberately doesn't set up tracing for the
+ * daemon, so this is where it happens, once per connection (which is
+ * once per process, since connections are served by forked children
+ * or over stdio).
  */
 static void setupConnectionTelemetry(std::string_view traceparent)
 {
+    initOtel("nix-daemon");
     if (auto otelLogger = makeOpenTelemetryLogger("daemon connection", traceparent, /*isServer=*/true))
         applyExtraLogger(std::move(otelLogger));
 }
@@ -379,11 +385,6 @@ static void daemonLoop(
                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
                         setInterrupted(false);
 
-                        /* Set up tracing afresh; `startProcess()` has
-                           discarded the state inherited from the
-                           parent. */
-                        initOtel("nix-daemon");
-
                         closeListeners();
 
                         // Background the daemon.
@@ -530,12 +531,6 @@ static void runDaemon(
     std::visit(
         overloaded{
             [&](StdIO) {
-                /* Set up tracing; `processStdioConnection()` attaches
-                   a logger parented to the client's trace. Note that
-                   `main()` deliberately doesn't do this for the
-                   daemon. */
-                initOtel("nix-daemon");
-
                 auto store = storeConfig->openStore();
                 store->init();
 
