@@ -8,20 +8,10 @@
 
 #if NIX_USE_BOEHMGC
 
-#  include <pthread.h>
-#  ifdef __FreeBSD__
-#    include <pthread_np.h>
-#  endif
-
 #  include <gc/gc_allocator.h>
-#  include <gc/gc_mark.h>    // For GC_push_all and GC_set_push_other_roots
 #  include <gc/gc_tiny_fl.h> // For GC_GRANULE_BYTES
 
-#  include "nix/expr/parallel-eval.hh"
-
-#  include <boost/coroutine2/coroutine.hpp>
-#  include <boost/coroutine2/protected_fixedsize_stack.hpp>
-#  include <boost/context/stack_context.hpp>
+#  include "nix/util/coroutine-gc.hh"
 
 #endif
 
@@ -81,89 +71,60 @@ static size_t getFreeMem()
 }
 
 /**
- * When a thread goes into a fiber (of the parallel evaluator) or a
- * coroutine, we lose its original sp until control flow returns to
- * the thread. This causes Boehm GC to crash since it will scan memory
- * between the fiber's or coroutine's sp and the original stack base
- * of the thread. Therefore, we detect when the current sp is outside
- * of the original thread stack, and:
- *
- * - If the sp is inside a fiber stack, we push the used portion of
- *   the fiber stack (`[sp, base)` — never the untouched pages below)
- *   directly onto the mark stack. This is a slightly off-label use of
- *   the sp corrector, but it runs in the same phase as
- *   `GC_push_other_roots` (during root pushing, with the GC lock
- *   held), so pushing here is mechanically equivalent while sparing
- *   us any assumptions about the order in which bdwgc pushes thread
- *   stacks vs. other roots.
- *
- * - We then point the sp back into the original thread stack: for
- *   evaluator worker threads, at the hi end (their scheduler stacks
- *   hold no GC roots, and scanning them in full would fault in
- *   otherwise untouched pages); for other threads (e.g. the main
- *   thread running a coroutine), at the lo end, so that the entire
- *   thread stack is scanned as an approximation, since the frames
- *   below the coroutine may hold GC roots.
- *
- * Note that we don't scan coroutine stacks. It's currently assumed
- * that we don't have GC roots in coroutines. Also, if a *fiber*
- * enters a coroutine, the fiber frames below the coroutine are
- * currently not scanned (the sp is then in the coroutine stack, so we
- * can't tell how much of the fiber stack is in use).
+ * Implementations of the libutil coroutine GC hooks (see
+ * `coroutine-gc.hh`) in terms of bdwgc's registered stacks. Together
+ * with the fiber stack registration in `parallel-eval.cc`, this makes
+ * every stack that can hold GC roots — thread stacks (registered
+ * automatically), fiber stacks and coroutine stacks — scannable by
+ * the collector, including the frames of a fiber that has switched
+ * onto a coroutine stack.
  */
-void fixupBoehmStackPointer(void ** sp_ptr, void * _pthread_id)
+
+static void * coroStackRegisterImpl(void * base, size_t size)
 {
-    void *& sp = *sp_ptr;
-    auto pthread_id = reinterpret_cast<pthread_t>(_pthread_id);
-    size_t osStackSize;
-    char * osStackHi;
-    char * osStackLo;
-
-#  ifdef __APPLE__
-    osStackSize = pthread_get_stacksize_np(pthread_id);
-    osStackHi = (char *) pthread_get_stackaddr_np(pthread_id);
-    osStackLo = osStackHi - osStackSize;
-#  else
-    pthread_attr_t pattr;
-    if (pthread_attr_init(&pattr))
-        throw Error("fixupBoehmStackPointer: pthread_attr_init failed");
-#    ifdef HAVE_PTHREAD_GETATTR_NP
-    if (pthread_getattr_np(pthread_id, &pattr))
-        throw Error("fixupBoehmStackPointer: pthread_getattr_np failed");
-#    else
-#      error "Need  `pthread_attr_get_np`"
-#    endif
-    if (pthread_attr_getstack(&pattr, (void **) &osStackLo, &osStackSize))
-        throw Error("fixupBoehmStackPointer: pthread_attr_getstack failed");
-    if (pthread_attr_destroy(&pattr))
-        throw Error("fixupBoehmStackPointer: pthread_attr_destroy failed");
-    osStackHi = osStackLo + osStackSize;
-#  endif
-
-    if (sp >= osStackHi || sp < osStackLo) { // sp is outside the os stack
-        if (auto base = fiberStackContaining(sp)) {
-            /* Running fiber: push its used range directly, and don't
-               scan the worker's (root-free) scheduler stack. */
-            GC_push_all(sp, base);
-            sp = isEvalWorkerThread(_pthread_id) ? osStackHi : osStackLo;
-        } else
-            /* Coroutine: scan the entire thread stack, since the
-               frames below the coroutine may hold GC roots. */
-            sp = osStackLo;
-    }
+    auto stk = new GC_stack{};
+    stk->base = base;
+    stk->limit = (char *) base - size;
+    GC_register_stack(stk);
+    return stk;
 }
 
-static GC_push_other_roots_proc prevPushOtherRoots;
-
-/**
- * Push the stacks of suspended fibers of the parallel evaluator.
- * Called by the GC during root pushing, with the world stopped.
- */
-static void GC_CALLBACK pushOtherRoots()
+static void coroStackUnregisterImpl(void * cookie)
 {
-    if (prevPushOtherRoots)
-        prevPushOtherRoots();
-    pushSuspendedFiberStacks();
+    auto stk = (struct GC_stack *) cookie;
+    GC_unregister_stack(stk);
+    delete stk;
+}
+
+static void * coroSwitchToImpl(void * cookie, void * callerSp)
+{
+    auto prev = GC_current_stack;
+    /* `prev` is null on threads not registered with the GC; such
+       threads hold no GC roots and need no scanning. */
+    if (prev)
+        prev->saved_sp = callerSp;
+    GC_current_stack = (struct GC_stack *) cookie;
+    return prev;
+}
+
+static void coroSwitchBackImpl(void * prevHandle)
+{
+    auto prev = (struct GC_stack *) prevHandle;
+    GC_current_stack = prev;
+    if (prev)
+        prev->saved_sp = nullptr;
+}
+
+static void coroMarkSuspendedImpl(void * cookie, void * sp)
+{
+    if (cookie)
+        ((struct GC_stack *) cookie)->saved_sp = sp;
+}
+
+static void coroMarkActiveImpl(void * cookie)
+{
+    if (cookie)
+        ((struct GC_stack *) cookie)->saved_sp = nullptr;
 }
 
 static inline void initGCReal()
@@ -196,14 +157,15 @@ static inline void initGCReal()
 
     GC_set_oom_fn(oomHandler);
 
-    GC_set_sp_corrector(&fixupBoehmStackPointer);
-    assert(GC_get_sp_corrector());
-
-    /* Also scan the stacks of suspended fibers of the parallel
-       evaluator. (Running fibers are handled by the sp corrector
-       above.) */
-    prevPushOtherRoots = GC_get_push_other_roots();
-    GC_set_push_other_roots(&pushOtherRoots);
+    /* Make the coroutine stacks of libutil scannable by the GC (fiber
+       stacks are registered in `parallel-eval.cc`; thread stacks are
+       registered automatically by bdwgc). */
+    coroStackRegister = coroStackRegisterImpl;
+    coroStackUnregister = coroStackUnregisterImpl;
+    coroSwitchTo = coroSwitchToImpl;
+    coroSwitchBack = coroSwitchBackImpl;
+    coroMarkSuspended = coroMarkSuspendedImpl;
+    coroMarkActive = coroMarkActiveImpl;
 
     /* Funnel boehm warnings into debug logs. */
     GC_set_warn_proc([](const char * msg, GC_word word) noexcept {
