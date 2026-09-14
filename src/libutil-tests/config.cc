@@ -1,7 +1,5 @@
 #include "nix/util/configuration.hh"
-#include "nix/util/args.hh"
 
-#include <sstream>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
@@ -218,7 +216,7 @@ TEST(Config, toJSONOnNonEmptyConfigWithExperimentalSetting)
         "description",
         {},
         true,
-        Xp::Flakes,
+        Xp::CaDerivations,
     };
     setting.assign("value");
 
@@ -231,7 +229,7 @@ TEST(Config, toJSONOnNonEmptyConfigWithExperimentalSetting)
               "description": "description\n",
               "documentDefault": true,
               "value": "value",
-              "experimentalFeature": "flakes"
+              "experimentalFeature": "ca-derivations"
             }
           })#"_json);
 }

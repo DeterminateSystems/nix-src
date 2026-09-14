@@ -2,6 +2,7 @@
 #include "nix/expr/attr-path.hh"
 #include "nix/cmd/common-eval-args.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/outputs-query.hh"
 #include "nix/expr/eval.hh"
 #include "nix/expr/get-drvs.hh"
 #include "nix/store/globals.hh"
@@ -32,8 +33,7 @@
 #include <unistd.h>
 #include <nlohmann/json.hpp>
 
-using namespace nix;
-using std::cout;
+namespace nix {
 
 /**
  * Settings related to Nix user environments.
@@ -66,7 +66,7 @@ struct EnvSettings : Config
 
 EnvSettings envSettings;
 
-static GlobalConfig::Register rSettings(&envSettings);
+static GlobalConfig::Register rEnvSettings(&envSettings);
 
 typedef enum { srcNixExprDrvs, srcNixExprs, srcStorePaths, srcProfile, srcAttrPath, srcUnknown } InstallSourceType;
 
@@ -457,7 +457,7 @@ static void queryInstSources(
 
             if (path.isDerivation()) {
                 elem.setDrvPath(path);
-                auto outputs = state.store->queryDerivationOutputMap(path);
+                auto outputs = deepQueryDerivationOutputMap(*state.store, path);
                 elem.setOutPath(outputs.at("out"));
                 if (name.size() >= drvExtension.size()
                     && std::string(name, name.size() - drvExtension.size()) == drvExtension)
@@ -496,6 +496,7 @@ static void printMissing(EvalState & state, PackageInfos & elems)
     std::vector<DerivedPath> targets;
     for (auto & i : elems)
         if (auto drvPath = i.queryDrvPath()) {
+            state.waitForPath(*drvPath);
             auto path = DerivedPath::Built{
                 .drvPath = makeConstantStorePathRef(*drvPath),
                 .outputs = OutputsSpec::All{},
@@ -1072,7 +1073,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
     /* Print the desired columns, or XML output. */
     if (jsonOutput) {
         queryJSON(globals, elems, printOutPath, printDrvPath, printMeta);
-        cout << '\n';
+        std::cout << '\n';
         return;
     }
 
@@ -1081,7 +1082,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
 
     Table table;
     std::ostringstream dummy;
-    XMLWriter xml(true, *(xmlOutput ? &cout : &dummy));
+    XMLWriter xml(true, *(xmlOutput ? &std::cout : &dummy));
     XMLOpenElement xmlRoot(xml, "items");
 
     for (auto & i : elems) {
@@ -1096,7 +1097,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
                 continue;
 
             /* For table output. */
-            std::vector<std::string> columns;
+            TableRow columns;
 
             /* For XML output. */
             XMLAttrs attrs;
@@ -1273,7 +1274,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
             } else
                 table.push_back(columns);
 
-            cout.flush();
+            std::cout.flush();
 
         } catch (AssertionError & e) {
             printMsg(lvlTalkative, "skipping derivation named '%1%' which gives an assertion failure", i.queryName());
@@ -1391,7 +1392,7 @@ static void opDeleteGenerations(Globals & globals, Strings opFlags, Strings opAr
     }
 }
 
-static void opVersion(Globals & globals, Strings opFlags, Strings opArgs)
+[[noreturn]] static void opVersion(Globals & globals, Strings opFlags, Strings opArgs)
 {
     printVersion("nix-env");
 }
@@ -1508,23 +1509,25 @@ static int main_nix_env(int argc, char ** argv)
         if (!op)
             throw UsageError("no operation specified");
 
-        auto store = openStore();
+        if (op != opVersion) {
+            auto store = openStore();
 
-        globals.state =
-            std::shared_ptr<EvalState>(new EvalState(myArgs.lookupPath, store, fetchSettings, evalSettings));
-        globals.state->repair = myArgs.repair;
+            globals.state =
+                std::shared_ptr<EvalState>(new EvalState(myArgs.lookupPath, store, fetchSettings, evalSettings));
+            globals.state->repair = myArgs.repair;
 
-        globals.instSource.nixExprPath = std::make_shared<SourcePath>(
-            file != "" ? lookupFileArg(*globals.state, file)
-                       : globals.state->rootPath(CanonPath(nixExprPath.string())));
+            globals.instSource.nixExprPath = std::make_shared<SourcePath>(
+                file != "" ? lookupFileArg(*globals.state, file)
+                           : globals.state->rootPath(CanonPath(nixExprPath.string())));
 
-        globals.instSource.autoArgs = myArgs.getAutoArgs(*globals.state);
+            globals.instSource.autoArgs = myArgs.getAutoArgs(*globals.state);
 
-        if (globals.profile == "")
-            globals.profile = getEnv("NIX_PROFILE").value_or("");
+            if (globals.profile == "")
+                globals.profile = getEnv("NIX_PROFILE").value_or("");
 
-        if (globals.profile == "")
-            globals.profile = getDefaultProfile(settings.getProfileDirsOptions()).string();
+            if (globals.profile == "")
+                globals.profile = getDefaultProfile(settings.getProfileDirsOptions()).string();
+        }
 
         op(globals, std::move(opFlags), std::move(opArgs));
 
@@ -1535,3 +1538,5 @@ static int main_nix_env(int argc, char ** argv)
 }
 
 static RegisterLegacyCommand r_nix_env("nix-env", main_nix_env);
+
+} // namespace nix

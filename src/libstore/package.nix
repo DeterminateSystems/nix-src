@@ -4,7 +4,8 @@
   mkMesonLibrary,
 
   unixtools,
-  darwin,
+  apple-sdk,
+  freebsd,
 
   nix-util,
   boost,
@@ -15,18 +16,31 @@
   nlohmann_json,
   sqlite,
   cmake, # for resolving aws-crt-cpp dep
+  wasmtime,
 
   busybox-sandbox-shell ? null,
+  pkgsStatic,
 
   # Configuration Options
 
   version,
 
-  embeddedSandboxShell ? stdenv.hostPlatform.isStatic,
+  embeddedSandboxShell ? stdenv.hostPlatform.isStatic && !stdenv.hostPlatform.isDarwin,
+
+  withSandboxShell ? stdenv.hostPlatform.isLinux || stdenv.hostPlatform.isFreeBSD,
+  sandboxShell ?
+    if stdenv.hostPlatform.isLinux then
+      "${busybox-sandbox-shell}/bin/busybox"
+    else if stdenv.hostPlatform.isFreeBSD then
+      "${pkgsStatic.bash}/bin/bash"
+    else
+      null,
 
   withAWS ?
     # Default is this way because there have been issues building this dependency
-    (lib.meta.availableOn stdenv.hostPlatform aws-c-common),
+    (lib.meta.availableOn stdenv.hostPlatform aws-c-common) && !stdenv.hostPlatform.isStatic,
+
+  enableWasm ? !stdenv.hostPlatform.isStatic,
 }:
 
 let
@@ -34,20 +48,24 @@ let
 in
 
 mkMesonLibrary (finalAttrs: {
-  pname = "nix-store";
+  pname = "determinate-nix-store";
   inherit version;
 
   workDir = ./.;
   fileset = fileset.unions [
     ../../nix-meson-build-support
     ./nix-meson-build-support
+    # FIXME: get rid of these symlinks.
     ../../.version
     ./.version
+    ../../.version-determinate
     ./meson.build
     ./meson.options
     ./include/nix/store/meson.build
     ./linux/meson.build
     ./linux/include/nix/store/meson.build
+    ./darwin/meson.build
+    ./freebsd/meson.build
     ./unix/meson.build
     ./unix/include/nix/store/meson.build
     ./windows/meson.build
@@ -67,7 +85,9 @@ mkMesonLibrary (finalAttrs: {
     sqlite
   ]
   ++ lib.optional stdenv.hostPlatform.isLinux libseccomp
-  ++ lib.optional withAWS aws-crt-cpp;
+  ++ lib.optional stdenv.hostPlatform.isFreeBSD freebsd.libjail
+  ++ lib.optional withAWS aws-crt-cpp
+  ++ lib.optional enableWasm wasmtime;
 
   propagatedBuildInputs = [
     nix-util
@@ -78,9 +98,10 @@ mkMesonLibrary (finalAttrs: {
     (lib.mesonEnable "seccomp-sandboxing" stdenv.hostPlatform.isLinux)
     (lib.mesonBool "embedded-sandbox-shell" embeddedSandboxShell)
     (lib.mesonEnable "s3-aws-auth" withAWS)
+    (lib.mesonEnable "wasm" enableWasm)
   ]
-  ++ lib.optionals stdenv.hostPlatform.isLinux [
-    (lib.mesonOption "sandbox-shell" "${busybox-sandbox-shell}/bin/busybox")
+  ++ lib.optionals withSandboxShell [
+    (lib.mesonOption "sandbox-shell" sandboxShell)
   ];
 
   meta = {

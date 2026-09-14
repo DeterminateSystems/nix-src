@@ -9,7 +9,7 @@
       {
         virtualisation.additionalPaths = [ pkgs.stdenvNoCC ];
         nix.extraOptions = ''
-          extra-experimental-features = nix-command auto-allocate-uids cgroups
+          extra-experimental-features = auto-allocate-uids cgroups
           extra-system-features = uid-range
         '';
         nix.settings.use-cgroups = true;

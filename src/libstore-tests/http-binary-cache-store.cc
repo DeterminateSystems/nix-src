@@ -3,11 +3,21 @@
 
 #include "nix/store/http-binary-cache-store.hh"
 #include "nix/store/tests/https-store.hh"
-#include "nix/util/fs-sink.hh"
 
 namespace nix {
 
 using Authority = ParsedURL::Authority;
+
+TEST(HttpBinaryCacheStore, storeDir_absolutePath)
+{
+    HttpBinaryCacheStoreConfig config{parseURL("https://example.com"), {{"store", "/my/store"}}};
+    EXPECT_EQ(config.storeDir, "/my/store");
+}
+
+TEST(HttpBinaryCacheStore, storeDir_relativePath_rejected)
+{
+    EXPECT_THROW(HttpBinaryCacheStoreConfig(parseURL("https://example.com"), {{"store", "my/store"}}), UsageError);
+}
 
 TEST(HttpBinaryCacheStore, constructConfig)
 {

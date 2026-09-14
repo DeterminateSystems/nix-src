@@ -7,6 +7,8 @@
 
 namespace nix {
 
+void EvalSettings::anchor() {}
+
 void DeprecatedWarnSetting::assign(const bool & v)
 {
     value = v;
@@ -70,7 +72,7 @@ Strings EvalSettings::parseNixPath(const std::string & s)
 }
 
 EvalSettings::EvalSettings(bool & readOnlyMode, EvalSettings::LookupPathHooks lookupPathHooks)
-    : readOnlyMode{readOnlyMode}
+    : readOnlyMode{&readOnlyMode}
     , lookupPathHooks{lookupPathHooks}
 {
     auto var = getEnv("NIX_ABORT_ON_WARN");
@@ -113,9 +115,19 @@ bool EvalSettings::isPseudoUrl(std::string_view s)
 
 std::string EvalSettings::resolvePseudoUrl(std::string_view url)
 {
-    if (hasPrefix(url, "channel:"))
-        return "https://channels.nixos.org/" + std::string(url.substr(8)) + "/nixexprs.tar.xz";
-    else
+    if (hasPrefix(url, "channel:")) {
+        auto realUrl = "https://channels.nixos.org/" + std::string(url.substr(8)) + "/nixexprs.tar.xz";
+        static bool haveWarned = false;
+        warnOnce(
+            haveWarned,
+            "Channels are deprecated in favor of flakes in Determinate Nix. "
+            "Instead of '%s', use '%s'. "
+            "See https://zero-to-nix.com for a guide to Nix flakes. "
+            "For details and to offer feedback on the deprecation process, see: https://github.com/DeterminateSystems/nix-src/issues/34.",
+            url,
+            realUrl);
+        return realUrl;
+    } else
         return std::string(url);
 }
 

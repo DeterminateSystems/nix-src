@@ -249,7 +249,11 @@ private:
 
     void printString(Value & v)
     {
-        printLiteralString(output, v.string_view(), options.maxStringLength, options.ansiColors);
+        NixStringContext context;
+        copyContext(v, context);
+        std::ostringstream s;
+        printLiteralString(s, v.string_view(), options.maxStringLength, options.ansiColors);
+        output << state.devirtualize(s.str(), context);
     }
 
     void printPath(Value & v)
@@ -498,7 +502,7 @@ private:
             output << "«potential infinite recursion»";
             if (options.ansiColors)
                 output << ANSI_NORMAL;
-        } else if (v.isThunk() || v.isApp()) {
+        } else if (!v.isFinished()) {
             if (options.ansiColors)
                 output << ANSI_MAGENTA;
             output << "«thunk»";
@@ -515,7 +519,7 @@ private:
             output << ANSI_MAGENTA;
         // Historically, a tried and then ignored value (e.g. through tryEval) was
         // reverted to the original thunk.
-        output << "«thunk»";
+        output << "«failed»";
         if (options.ansiColors)
             output << ANSI_NORMAL;
     }

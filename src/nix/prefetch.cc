@@ -3,24 +3,24 @@
 #include "nix/main/shared.hh"
 #include "nix/store/store-open.hh"
 #include "nix/store/filetransfer.hh"
-#include "nix/util/finally.hh"
 #include "nix/main/loggers.hh"
 #include "nix/util/tarfile.hh"
 #include "nix/expr/attr-path.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/cmd/legacy.hh"
-#include "nix/util/posix-source-accessor.hh"
+#include "nix/util/source-accessor.hh"
 #include "nix/cmd/misc-store-flags.hh"
-#include "nix/util/terminal.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/url.hh"
 #include "nix/store/path.hh"
+#include "nix/util/override-provenance-source-accessor.hh"
+#include "nix/fetchers/provenance.hh"
 
 #include "man-pages.hh"
 
 #include <nlohmann/json.hpp>
 
-using namespace nix;
+namespace nix {
 
 /* If ‘url’ starts with ‘mirror://’, then resolve it using the list of
    mirrors defined in Nixpkgs. */
@@ -145,7 +145,15 @@ std::tuple<StorePath, Hash> prefetchFile(
 
         Activity act(*logger, lvlChatty, actUnknown, fmt("adding '%s' to the store", url.to_string()));
 
-        auto info = store->addToStoreSlow(name, makeFSSourceAccessor(tmpFile), method, hashAlgo, {}, expectedHash);
+        auto info = store->addToStoreSlow(
+            name,
+            {make_ref<OverrideProvenanceSourceAccessor>(
+                makeFSSourceAccessor(tmpFile),
+                unpack ? nullptr : std::make_shared<FetchurlProvenance>(url.to_string()))},
+            method,
+            hashAlgo,
+            {},
+            expectedHash);
         storePath = info.path;
         assert(info.ca);
         hash = info.ca->hash;
@@ -351,3 +359,5 @@ struct CmdStorePrefetchFile : StoreCommand, MixJSON
 };
 
 static auto rCmdStorePrefetchFile = registerCommand2<CmdStorePrefetchFile>({"store", "prefetch-file"});
+
+} // namespace nix

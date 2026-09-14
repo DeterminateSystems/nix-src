@@ -10,6 +10,8 @@ config_pub_h = configure_file(
 )
 
 headers = [ config_pub_h ] + files(
+  'active-builds.hh',
+  'async-path-writer.hh',
   'aws-creds.hh',
   'binary-cache-store.hh',
   'build-result.hh',
@@ -40,6 +42,7 @@ headers = [ config_pub_h ] + files(
   'dummy-store-impl.hh',
   'dummy-store.hh',
   'export-import.hh',
+  'filetransfer-impl.hh',
   'filetransfer.hh',
   'gc-store.hh',
   'global-paths.hh',
@@ -61,6 +64,7 @@ headers = [ config_pub_h ] + files(
   'names.hh',
   'nar-info-disk-cache.hh',
   'nar-info.hh',
+  'outputs-query.hh',
   'outputs-spec.hh',
   'parsed-derivations.hh',
   'path-info.hh',
@@ -71,6 +75,7 @@ headers = [ config_pub_h ] + files(
   'pathlocks.hh',
   'posix-fs-canonicalise.hh',
   'profiles.hh',
+  'provenance.hh',
   'realisation.hh',
   'references.hh',
   'remote-fs-accessor.hh',

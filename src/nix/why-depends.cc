@@ -7,7 +7,7 @@
 
 #include <queue>
 
-using namespace nix;
+namespace nix {
 
 static std::string hilite(const std::string & s, size_t pos, size_t len, const std::string & colour = ANSI_RED)
 {
@@ -256,10 +256,10 @@ struct CmdWhyDepends : SourceExprCommand, MixOperateOnOptions
                 });
             }
 
-            for (auto & ref : refs) {
+            for (const auto & [isLast, ref] : markLast(refs)) {
                 std::string hash(ref.second->path.hashPart());
 
-                bool last = all ? ref == *refs.rbegin() : true;
+                bool last = all ? isLast : true;
 
                 for (auto & hit : hits[hash]) {
                     bool first = hit == *hits[hash].begin();
@@ -295,3 +295,5 @@ struct CmdWhyDepends : SourceExprCommand, MixOperateOnOptions
 };
 
 static auto rCmdWhyDepends = registerCommand<CmdWhyDepends>("why-depends");
+
+} // namespace nix

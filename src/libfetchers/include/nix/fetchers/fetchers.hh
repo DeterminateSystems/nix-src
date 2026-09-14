@@ -61,11 +61,11 @@ public:
      */
     static Input fromAttrs(const Settings & settings, Attrs && attrs);
 
-    ParsedURL toURL() const;
+    ParsedURL toURL(bool abbreviate = false) const;
 
-    std::string toURLString(const StringMap & extraQuery = {}) const;
+    std::string toURLString(const StringMap & extraQuery = {}, bool abbreviate = false) const;
 
-    std::string to_string() const;
+    std::string to_string(bool abbreviate = false) const;
 
     Attrs toAttrs() const;
 
@@ -113,7 +113,7 @@ public:
      * Fetch the entire input into the Nix store, returning the
      * location in the Nix store and the locked input.
      */
-    std::pair<StorePath, Input> fetchToStore(const Settings & settings, Store & store) const;
+    std::tuple<StorePath, ref<SourceAccessor>, Input> fetchToStore(const Settings & settings, Store & store) const;
 
     /**
      * Check the locking attributes in `result` against
@@ -225,7 +225,7 @@ struct InputScheme
      */
     virtual const std::map<std::string, AttributeInfo> & allowedAttrs() const = 0;
 
-    virtual ParsedURL toURL(const Input & input) const;
+    virtual ParsedURL toURL(const Input & input, bool abbreviate = false) const;
 
     virtual Input applyOverrides(const Input & input, std::optional<std::string> ref, std::optional<Hash> rev) const;
 
@@ -240,8 +240,19 @@ struct InputScheme
         std::string_view contents,
         std::optional<std::string> commitMsg) const;
 
+    virtual std::optional<std::pair<ref<SourceAccessor>, Input>>
+    getAccessor(const Settings & settings, Store & store, const Input & input, bool fastOnly) const
+    {
+        if (fastOnly)
+            return std::nullopt;
+        return getAccessor(settings, store, input);
+    }
+
     virtual std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, Store & store, const Input & input) const = 0;
+    getAccessor(const Settings & settings, Store & store, const Input & input) const
+    {
+        return getAccessor(settings, store, input, false).value();
+    }
 
     /**
      * Is this `InputScheme` part of an experimental feature?

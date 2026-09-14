@@ -1,8 +1,6 @@
 #include "nix/util/environment-variables.hh"
 
-#ifdef _WIN32
-#  include <processenv.h>
-#  include <shlwapi.h>
+#include <processenv.h>
 
 namespace nix {
 
@@ -40,12 +38,12 @@ OsStringMap getEnvOs()
     auto s = envStrings.get();
 
     while (true) {
-        auto eq = StrChrW(s, L'=');
+        auto eq = wcschr(s, L'=');
         // Object ends with an empty string, which naturally won't have an =
         if (eq == nullptr)
             break;
 
-        auto value_len = lstrlenW(eq + 1);
+        auto value_len = wcslen(eq + 1);
 
         env[OsString(s, eq - s)] = OsString(eq + 1, value_len);
 
@@ -86,4 +84,3 @@ int setEnvOs(const OsString & name, const OsString & value)
 }
 
 } // namespace nix
-#endif

@@ -13,6 +13,8 @@
 
 namespace nix {
 
+struct Provenance;
+
 /**
  * Names must be disjoint with `BuildResultFailureStatus`.
  *
@@ -50,6 +52,7 @@ enum struct BuildResultFailureStatus : uint8_t {
     /// know about this one, so change it back to `OutputRejected`
     /// before serialization.
     HashMismatch,
+    Cancelled,
 };
 
 /**
@@ -58,8 +61,11 @@ enum struct BuildResultFailureStatus : uint8_t {
  * This is both an exception type (inherits from Error) and serves as
  * the failure variant in BuildResult::inner.
  */
-struct BuildError : public CloneableError<BuildError, Error>
+class BuildError : public CloneableError<BuildError, Error>
 {
+    void anchor() override;
+
+public:
     using Status = BuildResultFailureStatus;
     using enum Status;
 
@@ -72,6 +78,11 @@ struct BuildError : public CloneableError<BuildError, Error>
      * non-determinism.)
      */
     bool isNonDeterministic = false;
+
+    /**
+     * The provenance of the derivation, if any.
+     */
+    std::shared_ptr<const Provenance> provenance;
 
 public:
     /**
@@ -90,6 +101,7 @@ public:
         Status status;
         HintFmt msg;
         bool isNonDeterministic = false;
+        std::shared_ptr<const Provenance> provenance;
     };
 
     /**
@@ -100,7 +112,7 @@ public:
         : CloneableError(std::move(args.msg))
         , status{args.status}
         , isNonDeterministic{args.isNonDeterministic}
-
+        , provenance{args.provenance}
     {
     }
 
@@ -129,6 +141,12 @@ struct BuildResult
          * to actual paths.
          */
         SingleDrvOutputs builtOutputs;
+
+        /**
+         * The provenance of the derivation, if any. Note that this is the provenance of the current build, not
+         * necessarily of previously existing outputs.
+         */
+        std::shared_ptr<const Provenance> provenance;
 
         bool operator==(const BuildResult::Success &) const noexcept;
         std::strong_ordering operator<=>(const BuildResult::Success &) const noexcept;
@@ -192,6 +210,13 @@ struct BuildResult
 
     bool operator==(const BuildResult &) const noexcept;
     std::strong_ordering operator<=>(const BuildResult &) const noexcept;
+
+    bool isCancelled() const
+    {
+        auto failure = tryGetFailure();
+        // FIXME: remove MiscFailure eventually.
+        return failure && (failure->status == Failure::Cancelled || failure->status == Failure::MiscFailure);
+    }
 };
 
 /**

@@ -6,9 +6,6 @@ TODO_NixOS
 
 requireGit
 
-clearStore
-rm -rf "$TEST_HOME"/.cache "$TEST_HOME"/.config
-
 createFlake1
 createFlake2
 
@@ -69,7 +66,9 @@ nix flake metadata "$flake1Dir" | grepQuiet 'URL:.*flake1.*'
 # Test 'nix flake metadata --json'.
 json=$(nix flake metadata flake1 --json | jq .)
 [[ $(echo "$json" | jq -r .description) = 'Bla bla' ]]
-[[ -d $(echo "$json" | jq -r .path) ]]
+if [[ $(nix config show lazy-trees) = false ]]; then
+    [[ -d $(echo "$json" | jq -r .path) ]]
+fi
 [[ $(echo "$json" | jq -r .lastModified) = $(git -C "$flake1Dir" log -n1 --format=%ct) ]]
 hash1=$(echo "$json" | jq -r .revision)
 [[ -n $(echo "$json" | jq -r .fingerprint) ]]
@@ -77,6 +76,7 @@ hash1=$(echo "$json" | jq -r .revision)
 echo foo > "$flake1Dir/foo"
 git -C "$flake1Dir" add "$flake1Dir"/foo
 [[ $(nix flake metadata flake1 --json --refresh | jq -r .dirtyRevision) == "$hash1-dirty" ]]
+[[ $(_NIX_TEST_FAIL_ON_LARGE_PATH=1 nix flake metadata flake1 --json --refresh --warn-large-path-threshold 1 --lazy-trees | jq -r .dirtyRevision) == "$hash1-dirty" ]]
 [[ "$(nix flake metadata flake1 --json | jq -r .fingerprint)" != null ]]
 
 echo -n '# foo' >> "$flake1Dir/flake.nix"
@@ -102,6 +102,16 @@ nix build -o "$TEST_ROOT/result" "git+file://$flake1Dir"
 (cd "$flake1Dir" && nix build -o "$TEST_ROOT/result" "path:.")
 (cd "$flake1Dir" && nix build -o "$TEST_ROOT/result" "git+file:.")
 
+# Test 'nix eval --drv-link'.
+drvPath=$(nix eval --raw --drv-link "$TEST_ROOT/drv" flake1#foo.drvPath)
+[[ $(readlink "$TEST_ROOT/drv") = "$drvPath" ]]
+[[ $(nix path-info "$TEST_ROOT/drv") = "$drvPath" ]]
+rm "$TEST_ROOT/drv"
+
+# '--drv-link' requires '--raw' or '--json'.
+expectStderr 1 nix eval --drv-link "$TEST_ROOT/drv" flake1#foo.drvPath | grepQuiet -- "--drv-link requires --raw or --json"
+[[ ! -e "$TEST_ROOT/drv" ]]
+
 # Test explicit packages.default.
 nix build -o "$TEST_ROOT/result" "$flake1Dir#default"
 nix build -o "$TEST_ROOT/result" "git+file://$flake1Dir#default"
@@ -109,6 +119,11 @@ nix build -o "$TEST_ROOT/result" "git+file://$flake1Dir#default"
 # Test explicit packages.default with query.
 nix build -o "$TEST_ROOT/result" "$flake1Dir?ref=HEAD#default"
 nix build -o "$TEST_ROOT/result" "git+file://$flake1Dir?ref=HEAD#default"
+
+# Check that the fetcher cache works.
+if [[ $(nix config show lazy-trees) = false ]]; then
+    nix build -o "$TEST_ROOT/result" "git+file://$flake1Dir?ref=HEAD#default" -vvvvv 2>&1 | grepQuiet "source path.*cache hit"
+fi
 
 # Check that relative paths are allowed for git flakes.
 # This may change in the future once git submodule support is refined.
@@ -161,7 +176,12 @@ expect 1 nix build -o "$TEST_ROOT/result" "$flake2Dir#bar" --no-update-lock-file
 nix build -o "$TEST_ROOT/result" "$flake2Dir#bar" --commit-lock-file
 [[ -e "$flake2Dir/flake.lock" ]]
 [[ -z $(git -C "$flake2Dir" diff main || echo failed) ]]
-[[ $(jq --indent 0 --compact-output . < "$flake2Dir/flake.lock") =~ ^'{"nodes":{"flake1":{"locked":{"lastModified":'.*',"narHash":"sha256-'.*'","ref":"refs/heads/master","rev":"'.*'","revCount":2,"type":"git","url":"file:///'.*'"},"original":{"id":"flake1","type":"indirect"}},"root":{"inputs":{"flake1":"flake1"}}},"root":"root","version":7}'$ ]]
+[[ $(jq --indent 0 --compact-output . < "$flake2Dir/flake.lock") =~ ^'{"nodes":{"flake1":{"locked":{"lastModified":'[0-9]*',"narHash":"sha256-'.*'","ref":"refs/heads/master","rev":"'.*'","revCount":2,"type":"git","url":"file:///'.*'"},"original":{"id":"flake1","type":"indirect"}},"root":{"inputs":{"flake1":"flake1"}}},"root":"root","version":7}'$ ]]
+if [[ $(nix config show lazy-trees) = true ]]; then
+    # Test that `lazy-locks` causes NAR hashes to be omitted from the lock file.
+    nix flake update --flake "$flake2Dir" --commit-lock-file --lazy-locks
+    [[ $(jq --indent 0 --compact-output . < "$flake2Dir/flake.lock") =~ ^'{"nodes":{"flake1":{"locked":{"lastModified":'[0-9]*',"ref":"refs/heads/master","rev":"'.*'","revCount":2,"type":"git","url":"file:///'.*'"},"original":{"id":"flake1","type":"indirect"}},"root":{"inputs":{"flake1":"flake1"}}},"root":"root","version":7}'$ ]]
+fi
 
 # Rerunning the build should not change the lockfile.
 nix build -o "$TEST_ROOT/result" "$flake2Dir#bar"
@@ -269,6 +289,9 @@ nix registry pin flake1 flake3
 nix registry remove flake1
 [[ $(nix registry list | wc -l) == 4 ]]
 [[ $(nix registry resolve flake1) = "git+file://$flake1Dir" ]]
+
+# Test the builtin fallback registry.
+[[ $(nix registry resolve nixpkgs --flake-registry http://fail.invalid.org/sdklsdklsd --download-attempts 1) = https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0.1 ]]
 
 # Test 'nix registry list' with a disabled global registry.
 nix registry add user-flake1 git+file://"$flake1Dir"
@@ -435,7 +458,7 @@ nix flake metadata "$flake3Dir" --json --eval-store "dummy://?read-only=false" |
 rm -rf "$badFlakeDir"
 mkdir "$badFlakeDir"
 echo INVALID > "$badFlakeDir"/flake.nix
-nix store delete "$(nix store add-path "$badFlakeDir")"
+nix store delete --ignore-liveness "$(nix store add-path "$badFlakeDir")"
 
 [[ $(nix path-info      "$(nix store add-path "$flake1Dir")") =~ flake1 ]]
 [[ $(nix path-info path:"$(nix store add-path "$flake1Dir")") =~ simple ]]
