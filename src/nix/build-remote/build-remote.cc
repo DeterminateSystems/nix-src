@@ -259,7 +259,7 @@ static int main_build_remote(int argc, char ** argv)
                 if (!tracing) {
                     tracing = true;
                     initOtel("nix-build-remote");
-                    if (auto l = makeOpenTelemetryLogger("build-remote", getEnv("TRACEPARENT").value_or("")))
+                    if (auto l = makeOpenTelemetryLogger("nix-build-remote", getEnv("TRACEPARENT").value_or("")))
                         applyExtraLogger(std::move(l));
                 }
 
