@@ -18,6 +18,7 @@
 #include "nix/util/serialise.hh"
 #include "nix/store/build-result.hh"
 #include "nix/store/store-open.hh"
+#include "nix/util/config-global.hh"
 #include "nix/util/environment-variables.hh"
 
 #include "otel-logger.hh"
@@ -89,11 +90,21 @@ static int main_build_remote(int argc, char ** argv)
 
         FdSource source(STDIN_FILENO);
 
-        /* Read the parent's settings. */
+        /* Read the parent's settings. The parent sends the settings of
+           all `Config`s, not just `Settings`, so apply them
+           accordingly. Only apply those that differ from ours, though:
+           we've read the same configuration files, so the rest are
+           defaults, and setting a deprecated setting warns even if
+           it's to its default. (Note that we can't just have the
+           parent send its overridden settings: things like `--store`
+           set the setting without marking it as overridden.) */
+        std::map<std::string, Config::SettingInfo> ourSettings;
+        globalConfig.getSettings(ourSettings);
         while (readInt(source)) {
             auto name = readString(source);
             auto value = readString(source);
-            settings.set(name, value);
+            if (auto i = ourSettings.find(name); i == ourSettings.end() || i->second.value != value)
+                globalConfig.set(name, value);
         }
 
         auto maxBuildJobs = settings.getWorkerSettings().maxBuildJobs;
