@@ -30,9 +30,6 @@ otlp = true
 otlp-endpoint = http://127.0.0.1:$(cat "$sinkDir/port")
 otlp-compression = none
 otlp-headers = authorization=Bearer%20secret
-# The build hook is traced too, so it would add uploads of its own to
-# the ones counted below.
-build-hook =
 EOF
 
 # Return the body of the n-th upload, as JSON.

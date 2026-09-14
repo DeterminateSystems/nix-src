@@ -75,13 +75,6 @@ static int main_build_remote(int argc, char ** argv)
 
         logger = makeJSONLogger(getStandardError()).release();
 
-        /* Set up tracing now that we have our logger. Our root span
-           is parented to the trace of the `nix` process that runs us,
-           which it passes in `TRACEPARENT`. */
-        initOtel("nix-build-remote");
-        if (auto l = makeOpenTelemetryLogger("build-remote", getEnv("TRACEPARENT").value_or("")))
-            applyExtraLogger(std::move(l));
-
         /* Ensure we don't get any SSH passphrase or host key popups. */
         unsetenv("DISPLAY");
         unsetenv("SSH_ASKPASS");
@@ -119,6 +112,7 @@ static int main_build_remote(int argc, char ** argv)
 
         std::shared_ptr<Store> sshStore;
         AutoCloseFD bestSlotLock;
+        bool tracing = false;
 
         auto machines = Machine::parseConfig({settings.thisSystem}, settings.getWorkerSettings().builders);
         debug("got %d remote builders", machines.size());
@@ -254,6 +248,20 @@ static int main_build_remote(int argc, char ** argv)
 #endif
 
                 lock = -1;
+
+                /* Set up tracing only now that we're actually going to
+                   use a remote builder, so that a build hook that
+                   turns out to be unused (which is the common case,
+                   since we're started for every build) doesn't upload
+                   a trace. Our root span is parented to the trace of
+                   the `nix` process that runs us, which it passes in
+                   `TRACEPARENT`. */
+                if (!tracing) {
+                    tracing = true;
+                    initOtel("nix-build-remote");
+                    if (auto l = makeOpenTelemetryLogger("build-remote", getEnv("TRACEPARENT").value_or("")))
+                        applyExtraLogger(std::move(l));
+                }
 
                 try {
                     storeUri = bestMachine->storeUri.render();
