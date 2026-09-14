@@ -35,6 +35,7 @@ const WorkerProto::Version WorkerProto::latest = {
             std::string{WorkerProto::featureVersionedAddToStoreMultiple},
             std::string{WorkerProto::featureAddTempRoots},
             std::string{WorkerProto::featureQueryPathInfos},
+            std::string{WorkerProto::featureOpenTelemetry},
         },
 };
 

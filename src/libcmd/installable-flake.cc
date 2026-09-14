@@ -54,7 +54,15 @@ InstallableFlake::InstallableFlake(
 
 DerivedPathsWithInfo InstallableFlake::toDerivedPaths()
 {
-    Activity act(*logger, lvlTalkative, actUnknown, fmt("evaluating derivation '%s'", what()));
+    Activity act(
+        *logger,
+        lvlTalkative,
+        "EvaluateFlakeDerivationOutput",
+        std::to_array<std::pair<std::string_view, Logger::Field>>({
+            {"nix.installable", what()},
+        }),
+        fmt("evaluating derivation '%s'", what()));
+    PushActivity pact(act.id);
 
     auto attr = getCursor(*state);
 

@@ -143,6 +143,13 @@ struct WorkerProto
     static constexpr std::string_view featureDisableSetOptions = "disable-set-options";
 
     /**
+     * Feature for propagating OpenTelemetry trace context from the
+     * client to the daemon: after the handshake, the client sends a
+     * W3C `traceparent` string (empty if the client is not tracing).
+     */
+    static constexpr std::string_view featureOpenTelemetry = "open-telemetry";
+
+    /**
      * A unidirectional read connection, to be used by the read half of the
      * canonical serializers below.
      */

@@ -678,7 +678,9 @@ static void main_nix_build(int argc, char ** argv)
 
         restoreProcessContext();
 
+        /* We're about to exec, so end and export any telemetry. */
         logger->stop();
+        logger->flush();
 
         execvp(shell->c_str(), argPtrs.data());
 

@@ -35,12 +35,13 @@ Sink & operator<<(Sink & sink, const Logger::Fields & fields)
 {
     sink << fields.size();
     for (auto & f : fields) {
-        sink << f.type;
-        if (f.type == Logger::Field::tInt)
-            sink << f.i;
-        else if (f.type == Logger::Field::tString)
-            sink << f.s;
-        else
+        if (auto p = std::get_if<uint64_t>(&f.raw)) {
+            sink << 0;
+            sink << *p;
+        } else if (auto p = std::get_if<std::string>(&f.raw)) {
+            sink << 1;
+            sink << *p;
+        } else
             unreachable();
     }
     return sink;
@@ -1084,9 +1085,24 @@ static void performOp(
     }
 }
 
-void processConnection(ref<Store> store, FdSource && from, FdSink && to, TrustedFlag trusted, RecursiveFlag recursive)
+void processConnection(
+    ref<Store> store,
+    FdSource && from,
+    FdSink && to,
+    TrustedFlag trusted,
+    RecursiveFlag recursive,
+    std::function<void(std::string_view traceparent)> setupTelemetry)
 {
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
+    /* The client hanging up triggers an interrupt (via `MonitorFdHup`
+       below), which is how we abort whatever we were doing for it.
+       Once the connection is over, that interrupt has served its
+       purpose, so clear it, e.g. so that we can still export our
+       telemetry. Note: this has to run *after* the monitor has been
+       destroyed, i.e. its thread joined, since it might otherwise
+       still trigger the interrupt after we've cleared it. */
+    Finally clearInterrupt([]() { setInterrupted(false); });
+
     auto monitor = !recursive ? std::make_unique<MonitorFdHup>(from.fd) : nullptr;
     (void) monitor; // suppress warning
     ReceiveInterrupts receiveInterrupts;
@@ -1115,6 +1131,10 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
     if (conn.protoVersion.number < WorkerProto::minimum.number)
         throw Error("the Nix client version is too old");
 
+    std::string traceparent;
+    if (conn.protoVersion.features.contains(WorkerProto::featureOpenTelemetry))
+        traceparent = readString(from);
+
     conn.to = std::move(to);
     conn.from = std::move(from);
 
@@ -1126,12 +1146,12 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
         applyJSONLogger();
     }
 
+    if (setupTelemetry)
+        setupTelemetry(traceparent);
+
     unsigned int opCount = 0;
 
-    Finally finally([&]() {
-        setInterrupted(false);
-        printMsgUsing(prevLogger, lvlDebug, "%d operations", opCount);
-    });
+    Finally finally([&]() { printMsgUsing(prevLogger, lvlDebug, "%d operations", opCount); });
 
     conn.postHandshake(
         *store,
@@ -1161,11 +1181,31 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
                 break;
             }
 
+            std::string traceparent;
+            if (conn.protoVersion.features.contains(WorkerProto::featureOpenTelemetry))
+                traceparent = readString(conn.from);
+
             printMsgUsing(prevLogger, lvlDebug, "received daemon op %d", op);
 
             opCount++;
 
             debug("performing daemon worker op: %d", op);
+
+            /* Parent our work under the client activity that
+               initiated this operation. */
+            std::optional<Activity> act;
+            std::optional<PushActivity> pact;
+            if (!traceparent.empty()) {
+                act.emplace(
+                    *logger,
+                    lvlDebug,
+                    "daemon operation",
+                    std::to_array<std::pair<std::string_view, Logger::Field>>({
+                        {"nix.daemon.op", (uint64_t) op},
+                        {"traceparent", traceparent},
+                    }));
+                pact.emplace(act->id);
+            }
 
             try {
                 performOp(tunnelLogger, store, trusted, recursive, conn, op);
