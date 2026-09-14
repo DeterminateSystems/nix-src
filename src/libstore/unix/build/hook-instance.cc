@@ -61,8 +61,6 @@ HookInstance::HookInstance(const Strings & _buildHook)
             if (name == "traceparent")
                 setenv("TRACEPARENT", value.c_str(), 1);
 
-        // TODO: Send our settings to the hook (so that e.g. `--otlp` takes effect).
-
         if (chdir("/") == -1)
             throw SysError("changing into /");
 
