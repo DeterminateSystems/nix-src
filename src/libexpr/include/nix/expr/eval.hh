@@ -729,6 +729,28 @@ public:
     std::string devirtualize(std::string_view s, const NixStringContext & context);
 
     /**
+     * Run `consume` on the elements of list `v` on the worker pool.
+     * Returns without waiting; the caller then walks the list sequentially
+     * to build the result and to report errors.
+     *
+     * No-op unless the parallel evaluator is enabled, the caller is not
+     * already a worker thread, and at least two elements need work.
+     *
+     * `consume` may run concurrently with the caller and after this
+     * function returns. It must not capture pointers into the caller's
+     * stack. It may only force values and do other memoized, thread-safe
+     * work (for example `coerceToString` into a scratch context with
+     * `copyToStore = false`). It must not write the caller's string
+     * context.
+     *
+     * `Error` thrown by `consume` is discarded; the sequential walk
+     * rethrows it. `Interrupted` propagates and stops the worker pool.
+     *
+     * If `consume` is empty, elements are forced to weak-head normal form.
+     */
+    void preForceListElements(Value & v, const PosIdx pos, std::function<void(Value &)> consume = {});
+
+    /**
      * String coercion.
      *
      * Converts strings, paths and derivations to a

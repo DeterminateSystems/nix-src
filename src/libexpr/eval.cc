@@ -2456,6 +2456,61 @@ EvalState::tryAttrsToString(const PosIdx pos, Value & v, NixStringContext & cont
     return {};
 }
 
+void EvalState::preForceListElements(Value & v, const PosIdx pos, std::function<void(Value &)> consume)
+{
+    if (!executor->enabled || Executor::amWorkerThread || !v.isList() || v.listSize() < 2)
+        return;
+
+    std::vector<Value *> pending;
+    pending.reserve(v.listSize());
+    for (auto v2 : v.listView()) {
+        if (!v2->isFinished())
+            pending.push_back(v2);
+        else if (consume) {
+            /* Finished WHNF still has work if consume walks into it. */
+            switch (v2->type()) {
+            case nAttrs:
+            case nList:
+            case nPath:
+                pending.push_back(v2);
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    if (pending.size() < 2)
+        return;
+
+    auto sharedConsume = std::make_shared<std::function<void(Value &)>>(std::move(consume));
+    /* At most 4 work items per core so a long list of cheap elements
+       does not contend on the executor queue. */
+    size_t nChunks = std::min<size_t>(pending.size(), size_t(executor->evalCores) * 4);
+    size_t chunkSize = (pending.size() + nChunks - 1) / nChunks;
+
+    Executor::WorkItems work;
+    work.reserve(nChunks);
+    for (size_t i = 0; i < pending.size(); i += chunkSize) {
+        std::vector<RootValue> slice;
+        size_t n = std::min(chunkSize, pending.size() - i);
+        slice.reserve(n);
+        for (size_t j = 0; j < n; ++j)
+            slice.push_back(RootValue(pending[i + j]));
+        addWork(work, 0, [slice = std::move(slice), sharedConsume, this, pos]() {
+            for (auto & rv : slice) {
+                try {
+                    if (*sharedConsume)
+                        (*sharedConsume)(**rv);
+                    else
+                        forceValue(**rv, pos);
+                } catch (const Error &) {
+                }
+            }
+        });
+    }
+    executor->spawn(std::move(work));
+}
+
 BackedStringView EvalState::coerceToString(
     const PosIdx pos,
     Value & v,
@@ -2536,6 +2591,19 @@ BackedStringView EvalState::coerceToString(
         if (v.isList()) {
             std::string result;
             auto listView = v.listView();
+
+            preForceListElements(v, pos, [this, pos, coerceMore, canonicalizePath](Value & elem) {
+                NixStringContext scratch;
+                coerceToString(
+                    pos,
+                    elem,
+                    scratch,
+                    "while evaluating one element of the list",
+                    coerceMore,
+                    false,
+                    canonicalizePath);
+            });
+
             for (auto [n, v2] : enumerate(listView)) {
                 try {
                     result += *coerceToString(
