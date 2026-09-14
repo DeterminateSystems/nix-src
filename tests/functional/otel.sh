@@ -105,7 +105,10 @@ clearUploads
 # shellcheck disable=SC2016 # `$out` is for the Nix builder, not the shell.
 drvPath=$(nix-instantiate --expr 'with import ./config.nix; mkDerivation { name = "foo-1.2"; buildCommand = "echo > $out"; }')
 clearUploads
-nix build --no-link "$drvPath^*"
+# Note: without a network (e.g. in the Nix sandbox), `nix` turns off
+# substitution unless it's requested explicitly, and then there is no
+# substitution span.
+nix build --no-link --substitute "$drvPath^*"
 [[ $(attr Build nix.drv.path) = "$drvPath" ]]
 [[ $(attr Build nix.drv.name) = foo ]]
 [[ $(attr Build nix.drv.version) = 1.2 ]]
