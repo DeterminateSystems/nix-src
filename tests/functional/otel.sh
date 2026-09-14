@@ -32,111 +32,121 @@ otlp-compression = none
 otlp-headers = authorization=Bearer%20secret
 EOF
 
-# Return the body of the n-th upload, as JSON.
-body() {
-    cat "$sinkDir/$1.body"
+# The helpers below look at all the uploads received since the last
+# `clearUploads`. Note that a process may spread its spans over
+# several uploads (the exporter uploads periodically as well as on
+# exit), so spans are selected by name rather than by upload.
+
+clearUploads() {
+    rm -f "$sinkDir"/*.body "$sinkDir"/*.headers
 }
 
-# Return the value of the n-th upload's `.[0]`-th span field.
+# Return the number of uploads.
+uploads() {
+    find "$sinkDir" -name '*.body' | wc -l
+}
+
+# Apply a jq filter to every span of every upload.
+spans() {
+    jq -r ".resourceSpans[0].scopeSpans[0].spans[] | $1" "$sinkDir"/*.body
+}
+
+# Return a field of the span with the given name, e.g. `.kind`.
 span() {
-    body "$1" | jq -r ".resourceSpans[0].scopeSpans[0].spans[0]$2"
+    spans "select(.name == \"$1\") | $2"
 }
 
 # Return the value of a string attribute of the span with the given
-# name in the n-th upload.
+# name.
 attr() {
-    body "$1" | jq -r ".resourceSpans[0].scopeSpans[0].spans[] | select(.name == \"$2\") | .attributes[] | select(.key == \"$3\") | .value.stringValue"
+    span "$1" ".attributes[] | select(.key == \"$2\") | .value.stringValue"
 }
 
-# Return a field of the status of the span with the given name in the
-# n-th upload, e.g. `.code`.
-spanStatus() {
-    body "$1" | jq -r ".resourceSpans[0].scopeSpans[0].spans[] | select(.name == \"$2\") | .status$3"
+# Return the service names of the uploads, one per line.
+services() {
+    jq -r '.resourceSpans[0].resource.attributes[] | select(.key == "service.name") | .value.stringValue' "$sinkDir"/*.body | sort
 }
 
 # A successful command produces a root span named after it, with no
 # status.
+clearUploads
 [[ $(nix eval --expr '1 + 2') = 3 ]]
-[[ $(body 0 | jq -r '.resourceSpans[0].resource.attributes[] | select(.key == "service.name") | .value.stringValue') = nix ]]
-[[ $(span 0 .name) = "nix eval" ]]
-[[ $(span 0 .status) = null ]]
-[[ $(span 0 .kind) = 1 ]]
+[[ $(services) = nix ]]
+[[ $(span "nix eval" .status) = null ]]
+[[ $(span "nix eval" .kind) = 1 ]]
 
 # The headers from the configuration should arrive percent-decoded,
 # and the upload of the trace itself must not be part of the trace.
-[[ $(jq -r .authorization "$sinkDir/0.headers") = "Bearer secret" ]]
-[[ $(jq -r .traceparent "$sinkDir/0.headers") = null ]]
+[[ $(jq -r .authorization "$sinkDir"/*.headers) = "Bearer secret" ]]
+[[ $(jq -r .traceparent "$sinkDir"/*.headers) = null ]]
 
 # A failing command marks the root span as failed, with the error
 # message.
+clearUploads
 expect 1 nix eval --expr '1 + "x"'
-[[ $(span 1 .name) = "nix eval" ]]
-[[ $(span 1 .status.code) = 2 ]]
-span 1 .status.message | grepQuiet "cannot add a string to an integer"
+[[ $(span "nix eval" .status.code) = 2 ]]
+span "nix eval" .status.message | grepQuiet "cannot add a string to an integer"
 
 # Legacy commands are traced as well, under their own name.
+clearUploads
 [[ $(nix-instantiate --eval --expr '1 + 2') = 3 ]]
-[[ $(span 2 .name) = "nix-instantiate" ]]
+[[ $(span nix-instantiate .kind) = 1 ]]
 
 # Setting an endpoint in the environment enables tracing even if
 # `otlp` is disabled, and takes precedence over the configuration.
+clearUploads
 [[ $(NIX_CONFIG="otlp = false" nix eval --expr '1 + 2') = 3 ]]
-[[ ! -e $sinkDir/3.body ]]
+[[ $(uploads) = 0 ]]
 [[ $(OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$(cat "$sinkDir/port")" NIX_CONFIG="otlp = false" nix eval --expr '1 + 2') = 3 ]]
-[[ $(span 3 .name) = "nix eval" ]]
+[[ $(span "nix eval" .kind) = 1 ]]
 
 # A build produces a `Build` span carrying the derivation's path, name
 # and version as separate attributes.
 # shellcheck disable=SC2016 # `$out` is for the Nix builder, not the shell.
 drvPath=$(nix-instantiate --expr 'with import ./config.nix; mkDerivation { name = "foo-1.2"; buildCommand = "echo > $out"; }')
+clearUploads
 nix build --no-link "$drvPath^*"
-[[ $(attr 5 Build nix.drv.path) = "$drvPath" ]]
-[[ $(attr 5 Build nix.drv.name) = foo ]]
-[[ $(attr 5 Build nix.drv.version) = 1.2 ]]
-[[ $(attr 5 Build nix.build.status) = Built ]]
-[[ $(spanStatus 5 Build .code) = null ]]
+[[ $(attr Build nix.drv.path) = "$drvPath" ]]
+[[ $(attr Build nix.drv.name) = foo ]]
+[[ $(attr Build nix.drv.version) = 1.2 ]]
+[[ $(attr Build nix.build.status) = Built ]]
+[[ $(span Build .status.code) = null ]]
 # Not being able to substitute the path is the normal prelude to
 # building it, not an error.
-[[ $(attr 5 SubstitutionGoal nix.build.status) = NoSubstituters ]]
-[[ $(spanStatus 5 SubstitutionGoal .code) = null ]]
+[[ $(attr SubstitutionGoal nix.build.status) = NoSubstituters ]]
+[[ $(span SubstitutionGoal .status.code) = null ]]
 
 # A failed build marks its `Build` span as failed, with the build's
 # status and error message. Note that the failure doesn't throw, so
 # this relies on the build result rather than on stack unwinding.
 # shellcheck disable=SC2016 # `$out` is for the Nix builder, not the shell.
 drvPath=$(nix-instantiate --expr 'with import ./config.nix; mkDerivation { name = "bar-1.2"; buildCommand = "echo something went wrong >&2; exit 1"; }')
+clearUploads
 expect 1 nix build --no-link "$drvPath^*"
-[[ $(attr 7 Build nix.build.status) = PermanentFailure ]]
-[[ $(spanStatus 7 Build .code) = 2 ]]
-spanStatus 7 Build .message | grepQuiet "builder failed with exit code 1"
+[[ $(attr Build nix.build.status) = PermanentFailure ]]
+[[ $(span Build .status.code) = 2 ]]
+span Build .status.message | grepQuiet "builder failed with exit code 1"
 
 # A daemon reached via `ssh-ng://` (here without real SSH, since the
 # host is `localhost`) exports its own spans, in the client's trace.
-# The client and the daemon upload independently, in no particular
-# order, so wait for both and tell them apart by service name.
-service() {
-    body "$1" | jq -r '.resourceSpans[0].resource.attributes[] | select(.key == "service.name") | .value.stringValue'
-}
+# The client and the daemon upload independently, so wait for both.
+clearUploads
 nix store info --store "ssh-ng://localhost?remote-store=$TEST_ROOT/other-store" > /dev/null
 for ((i = 0; i < 100; i++)); do
-    [[ -e $sinkDir/9.body ]] && break
+    [[ $(uploads) -ge 2 ]] && break
     sleep 0.1
 done
-[[ -e $sinkDir/9.body ]]
-if [[ $(service 8) = nix ]]; then client=8; daemon=9; else client=9; daemon=8; fi
-[[ $(service $client) = nix ]]
-[[ $(service $daemon) = nix-daemon ]]
-[[ $(span $client .name) = "nix store info" ]]
-[[ $(span $daemon .name) = "daemon connection" ]]
-[[ $(span $daemon .kind) = 2 ]] # SERVER
-[[ $(span $daemon .traceId) = $(span $client .traceId) ]]
-[[ $(span $daemon .parentSpanId) = $(span $client .spanId) ]]
+[[ $(services) = $'nix\nnix-daemon' ]]
+[[ $(span "nix store info" .kind) = 1 ]]
+[[ $(span "daemon connection" .kind) = 2 ]] # SERVER
+[[ $(span "daemon connection" .traceId) = $(span "nix store info" .traceId) ]]
+[[ $(span "daemon connection" .parentSpanId) = $(span "nix store info" .spanId) ]]
 
 # The root span is parented to the trace context in `TRACEPARENT`,
 # which is how remote builds via `build-remote` are linked to the
 # trace of the `nix` process that runs it.
+clearUploads
 [[ $(TRACEPARENT=00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01 nix eval --expr '1 + 2') = 3 ]]
-[[ $(span 10 .name) = "nix eval" ]]
-[[ $(span 10 .traceId) = 0af7651916cd43dd8448eb211c80319c ]]
-[[ $(span 10 .parentSpanId) = b7ad6b7169203331 ]]
-[[ $(span 10 .kind) = 1 ]] # INTERNAL, not SERVER
+[[ $(span "nix eval" .traceId) = 0af7651916cd43dd8448eb211c80319c ]]
+[[ $(span "nix eval" .parentSpanId) = b7ad6b7169203331 ]]
+[[ $(span "nix eval" .kind) = 1 ]] # INTERNAL, not SERVER
