@@ -3,17 +3,16 @@
     "bdwgc": {
       "flake": false,
       "locked": {
-        "lastModified": 1787927442,
-        "narHash": "sha256-Z5fTPKJJOxlfawRm4VGG4TmLbqfl/WuGCx6bLiMVTeo=",
-        "ref": "refs/heads/nix-patches-master",
-        "rev": "4ae90901832091c29d45a6d80be18ccbc6b51e2f",
-        "revCount": 6621,
-        "type": "git",
-        "url": "file:///home/eelco/Dev/bdwgc"
+        "lastModified": 1789388623,
+        "narHash": "sha256-qk2ONj1UU3zRzyJMtVns5ZDH0uCWpvTtqW2b/lZmotU=",
+        "owner": "edolstra",
+        "repo": "bdwgc",
+        "rev": "c6afef5518ef71d446339a5aa4c1b97fc6392534",
+        "type": "github"
       },
       "original": {
         "owner": "edolstra",
-        "ref": "nix-patches-master",
+        "ref": "user-defined-stacks",
         "repo": "bdwgc",
         "type": "github"
       }

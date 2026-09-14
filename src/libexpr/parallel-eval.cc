@@ -10,131 +10,9 @@
 
 #if NIX_USE_BOEHMGC
 #  include <gc.h>
-#  include <gc/gc_mark.h>
 #endif
 
 namespace nix {
-
-#if NIX_USE_BOEHMGC
-
-/**
- * Registry of fiber stacks for the garbage collector. This is
- * append-only and grows in fixed-size blocks that never move, so the
- * GC callbacks (which run with the world stopped and therefore must
- * not take any locks that a frozen thread might hold) can safely
- * iterate it at any moment. Entries are keyed by stack, not by fiber:
- * thanks to the stack pool, only a modest number of stacks is ever
- * allocated, and pooled stacks keep their (inert) entry.
- */
-struct FiberStackInfo
-{
-    /**
-     * The hi end of the stack (i.e. `stack_context::sp`). Immutable
-     * once published.
-     */
-    char * base = nullptr;
-
-    /**
-     * The size of the stack. Immutable once published.
-     */
-    size_t size = 0;
-
-    /**
-     * If non-null, the GC must scan `[scanSp, base)`, i.e. the used
-     * portion of the stack of a suspended fiber. If null, the stack
-     * must not be scanned at all: it's either free (in the stack
-     * pool), unstarted (no GC roots yet), or running (in which case
-     * it's covered by the thread stack scan via the sp corrector, see
-     * `fixupBoehmStackPointer()`).
-     */
-    std::atomic<char *> scanSp{nullptr};
-};
-
-constexpr static size_t fiberStackBlockSize = 1024;
-using FiberStackBlock = std::array<FiberStackInfo, fiberStackBlockSize>;
-static std::array<std::atomic<FiberStackBlock *>, 1024> fiberStackBlocks;
-static std::atomic<size_t> nrFiberStacks{0};
-static std::mutex fiberStackRegistryMutex;
-
-static FiberStackInfo & getFiberStackInfo(size_t i)
-{
-    return (*fiberStackBlocks[i / fiberStackBlockSize].load(std::memory_order_acquire))[i % fiberStackBlockSize];
-}
-
-static FiberStackInfo * registerFiberStack(char * base, size_t size)
-{
-    std::unique_lock lk(fiberStackRegistryMutex);
-    auto i = nrFiberStacks.load(std::memory_order_relaxed);
-    if (i / fiberStackBlockSize >= fiberStackBlocks.size())
-        throw Error("too many fiber stacks");
-    auto & blockPtr = fiberStackBlocks[i / fiberStackBlockSize];
-    if (!blockPtr.load(std::memory_order_relaxed))
-        blockPtr.store(new FiberStackBlock(), std::memory_order_release);
-    auto & info = getFiberStackInfo(i);
-    info.base = base;
-    info.size = size;
-    /* Publish the entry only after its fields are initialized. */
-    nrFiberStacks.store(i + 1, std::memory_order_release);
-    return &info;
-}
-
-void * fiberStackContaining(void * sp)
-{
-    auto n = nrFiberStacks.load(std::memory_order_acquire);
-    for (size_t i = 0; i < n; ++i) {
-        auto & info = getFiberStackInfo(i);
-        if ((char *) sp < info.base && (char *) sp >= info.base - info.size)
-            return info.base;
-    }
-    return nullptr;
-}
-
-void pushSuspendedFiberStacks()
-{
-    auto n = nrFiberStacks.load(std::memory_order_acquire);
-    for (size_t i = 0; i < n; ++i) {
-        auto & info = getFiberStackInfo(i);
-        if (auto sp = info.scanSp.load(std::memory_order_acquire))
-            GC_push_all(sp, info.base);
-    }
-}
-
-/**
- * Registry of the worker threads' pthread ids, so that
- * `isEvalWorkerThread()` can be called from the GC's sp corrector
- * (with the world stopped, hence the lock-free fixed-size array).
- */
-static std::array<std::atomic<std::uintptr_t>, 256> workerPthreads;
-
-static void registerWorkerPthread(pthread_t p)
-{
-    for (auto & slot : workerPthreads) {
-        std::uintptr_t expected = 0;
-        if (slot.compare_exchange_strong(expected, (std::uintptr_t) p))
-            return;
-    }
-    /* Table full; harmless (the thread will merely be scanned in full
-       by the GC). */
-}
-
-static void unregisterWorkerPthread(pthread_t p)
-{
-    for (auto & slot : workerPthreads)
-        if (slot.load(std::memory_order_relaxed) == (std::uintptr_t) p) {
-            slot.store(0);
-            return;
-        }
-}
-
-bool isEvalWorkerThread(void * pthreadId)
-{
-    for (auto & slot : workerPthreads)
-        if (slot.load(std::memory_order_relaxed) == (std::uintptr_t) (pthread_t) pthreadId)
-            return true;
-    return false;
-}
-
-#endif
 
 struct WaiterDomain;
 
@@ -205,9 +83,9 @@ struct Executor::Fiber
 
 #if NIX_USE_BOEHMGC
     /**
-     * The GC registry entry for this fiber's stack.
+     * The registered GC descriptor of this fiber's stack.
      */
-    FiberStackInfo * stackInfo = nullptr;
+    struct GC_stack * gcStack = nullptr;
 #endif
 
     Fiber(Executor & executor, Item && item)
@@ -235,10 +113,12 @@ struct Executor::StackPool
         std::vector<boost::context::stack_context> stacks;
 #if NIX_USE_BOEHMGC
         /**
-         * The GC registry entry for each stack ever allocated, keyed
-         * by the stack's hi end (`stack_context::sp`).
+         * The registered GC descriptor of each stack ever allocated,
+         * keyed by the stack's hi end (`stack_context::sp`). Pooled
+         * stacks keep their registration; their descriptors have a
+         * null `saved_sp`, so the GC never scans them.
          */
-        std::unordered_map<void *, FiberStackInfo *> gcInfo;
+        std::unordered_map<void *, struct GC_stack *> gcInfo;
 #endif
     };
 
@@ -246,7 +126,14 @@ struct Executor::StackPool
 
     ~StackPool()
     {
-        for (auto & sctx : state_.lock()->stacks)
+        auto state(state_.lock());
+#if NIX_USE_BOEHMGC
+        for (auto & [_, gs] : state->gcInfo) {
+            GC_unregister_stack(gs);
+            delete gs;
+        }
+#endif
+        for (auto & sctx : state->stacks)
             boost::context::protected_fixedsize_stack(evalStackSize).deallocate(sctx);
     }
 };
@@ -255,9 +142,9 @@ struct Executor::StackPool
 /**
  * Side channel from `PooledStackAllocator::allocate()` (called from
  * inside the `boost::context::fiber` constructor) to `makeFiber()`:
- * the GC registry entry of the most recently allocated stack.
+ * the GC descriptor of the most recently allocated stack.
  */
-[[gnu::tls_model("initial-exec")]] static thread_local FiberStackInfo * lastFiberStackInfo{nullptr};
+[[gnu::tls_model("initial-exec")]] static thread_local struct GC_stack * lastFiberGCStack{nullptr};
 #endif
 
 /**
@@ -278,7 +165,7 @@ struct PooledStackAllocator
                 auto sctx = state->stacks.back();
                 state->stacks.pop_back();
 #if NIX_USE_BOEHMGC
-                lastFiberStackInfo = state->gcInfo.at(sctx.sp);
+                lastFiberGCStack = state->gcInfo.at(sctx.sp);
 #endif
                 return sctx;
             }
@@ -286,9 +173,12 @@ struct PooledStackAllocator
         executor.nrFiberStacksAllocated++;
         auto sctx = boost::context::protected_fixedsize_stack(evalStackSize).allocate();
 #if NIX_USE_BOEHMGC
-        auto info = registerFiberStack((char *) sctx.sp, sctx.size);
-        executor.stackPool->state_.lock()->gcInfo.emplace(sctx.sp, info);
-        lastFiberStackInfo = info;
+        auto gs = new GC_stack{};
+        gs->base = sctx.sp;
+        gs->limit = (char *) sctx.sp - sctx.size;
+        GC_register_stack(gs);
+        executor.stackPool->state_.lock()->gcInfo.emplace(sctx.sp, gs);
+        lastFiberGCStack = gs;
 #endif
         return sctx;
     }
@@ -424,13 +314,9 @@ void Executor::createWorker(State & state)
         GC_stack_base sb;
         GC_get_stack_base(&sb);
         GC_register_my_thread(&sb);
-        /* Let the GC's sp corrector know that this thread's own stack
-           holds no GC roots (see `fixupBoehmStackPointer()`). */
-        registerWorkerPthread(pthread_self());
 #endif
         worker();
 #if NIX_USE_BOEHMGC
-        unregisterWorkerPthread(pthread_self());
         GC_unregister_my_thread();
 #endif
     }));
@@ -466,8 +352,8 @@ Executor::FiberPtr Executor::makeFiber(Item && item)
         return nullptr;
     }
 #if NIX_USE_BOEHMGC
-    fiber->stackInfo = lastFiberStackInfo;
-    assert(fiber->stackInfo);
+    fiber->gcStack = lastFiberGCStack;
+    assert(fiber->gcStack);
 #endif
     nrFibersSpawned++;
     return fiber;
@@ -487,7 +373,25 @@ void Executor::runFiber(FiberPtr fiber)
     CallDepth::callDepth = fib->callDepth;
     EvalState::evalContext = &fib->evalContext;
 
+#if NIX_USE_BOEHMGC
+    /* Make this thread's stack scannable by the GC while the fiber
+       runs (its frames may reference GC values in non-worker callers,
+       e.g. when draining the queue from the main thread), and make the
+       fiber's stack the current one. The fiber clears its own
+       `saved_sp` after it has been resumed (see `suspendFiber()`). */
+    auto prevStack = GC_current_stack;
+    if (prevStack)
+        prevStack->saved_sp = (char *) __builtin_frame_address(0) - 512;
+    GC_current_stack = fib->gcStack;
+#endif
+
     fib->ctx = std::move(fib->ctx).resume();
+
+#if NIX_USE_BOEHMGC
+    GC_current_stack = prevStack;
+    if (prevStack)
+        prevStack->saved_sp = nullptr;
+#endif
 
     currentFiber = nullptr;
     myEvalThreadId = savedThreadId;
@@ -726,11 +630,11 @@ suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::V
        the current frame covers the register block that the context
        switch is about to push; those bytes are touched by the switch
        anyway, so this doesn't fault in any untouched stack pages.
-       Note: from this point until the resumed fiber clears `scanSp`,
-       the stack may be scanned both through this entry and through
-       the thread stack scan (see `fixupBoehmStackPointer()`); the
-       overlap is harmless. */
-    fib->stackInfo->scanSp.store((char *) __builtin_frame_address(0) - 512, std::memory_order_release);
+       Note: from this point until we clear `saved_sp` after being
+       resumed, the GC may see the stack both as some thread's active
+       stack and as a suspended one; it scans it only once (from the
+       lower stack pointer). */
+    fib->gcStack->saved_sp = (char *) __builtin_frame_address(0) - 512;
 #endif
     /* Switch back to the scheduler (`Executor::runFiber()`), which
        will register us in the domain's wait list and then release the
@@ -741,8 +645,8 @@ suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::V
     fib->schedCtx = std::move(fib->schedCtx).resume();
 #if NIX_USE_BOEHMGC
     /* We're running again (possibly on another thread), so our stack
-       is covered by the thread stack scan from here on. */
-    fib->stackInfo->scanSp.store(nullptr, std::memory_order_release);
+       is scanned as that thread's active stack from here on. */
+    fib->gcStack->saved_sp = nullptr;
 #endif
     /* We've been resumed because the value was finished (or because
        we're shutting down); the scheduler released the lock long

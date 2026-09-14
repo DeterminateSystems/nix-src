@@ -32,6 +32,7 @@ headers = [ config_pub_h ] + files(
   'config-global.hh',
   'config-impl.hh',
   'configuration.hh',
+  'coroutine-gc.hh',
   'current-process.hh',
   'deleter.hh',
   'demangle.hh',
