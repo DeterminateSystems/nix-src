@@ -318,8 +318,13 @@ class OpenTelemetryLogger : public Logger
     SpanPtr rootSpan;
 
     /**
+     * Whether `NIX_DEBUG_OTEL` is set.
+     */
+    bool debug = false;
+
+    /**
      * The root span's trace ID, to be printed by `flush()` if
-     * NIX_DEBUG_OTEL is set.
+     * `debug` is set.
      */
     std::string debugTraceId;
 
@@ -355,6 +360,20 @@ class OpenTelemetryLogger : public Logger
         return std::move(carrier.headers);
     }
 
+    /**
+     * Start a span. When debugging (`NIX_DEBUG_OTEL`), spans carry
+     * `sampling.priority = 1`, which tells a collector's probabilistic
+     * sampler to keep them, so that the trace whose ID we print can
+     * actually be found.
+     */
+    SpanPtr startSpan(std::string_view name, const opentelemetry::trace::StartSpanOptions & options)
+    {
+        auto span = tracer->StartSpan(name, options);
+        if (debug)
+            span->SetAttribute("sampling.priority", 1);
+        return span;
+    }
+
 public:
     OpenTelemetryLogger(
         std::string_view serviceName,
@@ -373,14 +392,16 @@ public:
         provider = sdktrace::TracerProviderFactory::Create(std::move(processor), resource, makeSampler());
         tracer = provider->GetTracer("nix");
 
+        debug = getEnv("NIX_DEBUG_OTEL").has_value();
+
         opentelemetry::trace::StartSpanOptions options;
         if (isServer)
             options.kind = opentelemetry::trace::SpanKind::kServer;
         if (auto spanContext = parseTraceparent(remoteParentTraceparent))
             options.parent = *spanContext;
-        rootSpan = tracer->StartSpan(rootSpanName, options);
+        rootSpan = startSpan(rootSpanName, options);
 
-        if (getEnv("NIX_DEBUG_OTEL")) {
+        if (debug) {
             char buf[2 * opentelemetry::trace::TraceId::kSize];
             rootSpan->GetContext().trace_id().ToLowerBase16(buf);
             debugTraceId = std::string(buf, sizeof(buf));
@@ -435,7 +456,7 @@ public:
             else
                 options.parent = rootSpan->GetContext();
 
-            auto span = tracer->StartSpan(name, options);
+            auto span = startSpan(name, options);
 
             if (!s.empty() && !textIsName)
                 span->SetAttribute("nix.activity.text", filterANSIEscapes(s, true));
@@ -533,7 +554,7 @@ public:
             else
                 options.parent = rootSpan->GetContext();
 
-            auto span = tracer->StartSpan(spanName, options);
+            auto span = startSpan(spanName, options);
 
             if (!s.empty())
                 span->SetAttribute("nix.activity.text", filterANSIEscapes(s, true));
