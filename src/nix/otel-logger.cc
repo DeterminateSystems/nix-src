@@ -11,7 +11,6 @@
 #  include "nix/util/config-global.hh"
 #  include "nix/util/environment-variables.hh"
 #  include "nix/util/exit.hh"
-#  include "nix/util/processes.hh"
 #  include "nix/util/serialise.hh"
 #  include "nix/util/signals.hh"
 #  include "nix/util/sync.hh"
@@ -123,33 +122,6 @@ static OtelSettings otelSettings;
 static GlobalConfig::Register rOtelSettings(&otelSettings);
 
 namespace {
-
-struct OtelState
-{
-    std::unique_ptr<opentelemetry::sdk::trace::TracerProvider> provider;
-    std::shared_ptr<opentelemetry::trace::Tracer> tracer;
-
-    /**
-     * The root span's trace ID, to be printed on shutdown if
-     * NIX_DEBUG_OTEL is set.
-     */
-    std::string debugTraceId;
-};
-
-/* Owned here rather than via opentelemetry's global Provider
-   singleton, and deliberately leaked: the provider's destructor joins
-   the batch exporter's worker thread, which must never happen from
-   static destructors at exit() time (cf. the OPENSSL_INIT_NO_ATEXIT
-   note in util.cc; in the daemon's forked children that thread does
-   not even exist). So it's never destroyed; pending spans are
-   exported by `OpenTelemetryLogger::flush()` instead. */
-std::atomic<OtelState *> otelState{nullptr};
-
-/* The exporter's worker thread doesn't exist in a forked child, so
-   don't trace there unless the child sets up tracing itself (i.e. by
-   calling `initOtel()`). The old state is deliberately leaked, since
-   it can be neither flushed nor destroyed safely. */
-static RegisterForkCallback resetOtel([]() { otelState.exchange(nullptr); });
 
 /**
  * The name of the activity under which we upload spans. Since the
@@ -285,6 +257,48 @@ void setPathAttributes(opentelemetry::trace::Span & span, std::string_view prefi
 }
 
 /**
+ * Create the sampler selected by the standard `OTEL_TRACES_SAMPLER` /
+ * `OTEL_TRACES_SAMPLER_ARG` environment variables, which the C++ SDK
+ * does not read itself. "parentbased" samplers follow the sampling
+ * decision of the parent span, which propagates in the sampled flag
+ * of the W3C trace context — so the daemon follows the client's
+ * decision.
+ */
+std::unique_ptr<opentelemetry::sdk::trace::Sampler> makeSampler()
+{
+    namespace sdktrace = opentelemetry::sdk::trace;
+
+    auto ratio = [&]() -> double {
+        auto arg = getEnv("OTEL_TRACES_SAMPLER_ARG");
+        if (!arg)
+            return 1.0;
+        try {
+            return std::stod(*arg);
+        } catch (...) {
+            warn("invalid OTEL_TRACES_SAMPLER_ARG '%s'; assuming 1.0", *arg);
+            return 1.0;
+        }
+    };
+    auto parentBased = [](std::shared_ptr<sdktrace::Sampler> delegate) -> std::unique_ptr<sdktrace::Sampler> {
+        return std::make_unique<sdktrace::ParentBasedSampler>(std::move(delegate));
+    };
+    auto name = getEnv("OTEL_TRACES_SAMPLER").value_or("parentbased_always_on");
+    if (name == "always_on")
+        return std::make_unique<sdktrace::AlwaysOnSampler>();
+    if (name == "always_off")
+        return std::make_unique<sdktrace::AlwaysOffSampler>();
+    if (name == "traceidratio")
+        return std::make_unique<sdktrace::TraceIdRatioBasedSampler>(ratio());
+    if (name == "parentbased_always_off")
+        return parentBased(std::make_shared<sdktrace::AlwaysOffSampler>());
+    if (name == "parentbased_traceidratio")
+        return parentBased(std::make_shared<sdktrace::TraceIdRatioBasedSampler>(ratio()));
+    if (name != "parentbased_always_on")
+        warn("unknown OTEL_TRACES_SAMPLER '%s'; assuming 'parentbased_always_on'", name);
+    return parentBased(std::make_shared<sdktrace::AlwaysOnSampler>());
+}
+
+/**
  * A `Logger` that maps Nix activities onto OpenTelemetry spans,
  * under a root span created in the constructor. It's added to the
  * global logger by `initOtel()`.
@@ -297,9 +311,17 @@ class OpenTelemetryLogger : public Logger
 {
     using SpanPtr = std::shared_ptr<opentelemetry::trace::Span>;
 
+    std::unique_ptr<opentelemetry::sdk::trace::TracerProvider> provider;
+
     std::shared_ptr<opentelemetry::trace::Tracer> tracer;
 
     SpanPtr rootSpan;
+
+    /**
+     * The root span's trace ID, to be printed by `flush()` if
+     * NIX_DEBUG_OTEL is set.
+     */
+    std::string debugTraceId;
 
     Sync<std::map<ActivityId, SpanPtr>> spans_;
 
@@ -335,9 +357,22 @@ class OpenTelemetryLogger : public Logger
 
 public:
     OpenTelemetryLogger(
-        OtelState & state, std::string_view rootSpanName, std::string_view remoteParentTraceparent, bool isServer)
-        : tracer(state.tracer)
+        std::string_view serviceName,
+        std::unique_ptr<opentelemetry::sdk::trace::SpanExporter> exporter,
+        std::string_view rootSpanName,
+        std::string_view remoteParentTraceparent,
+        bool isServer)
     {
+        namespace sdktrace = opentelemetry::sdk::trace;
+
+        auto processor =
+            sdktrace::BatchSpanProcessorFactory::Create(std::move(exporter), sdktrace::BatchSpanProcessorOptions{});
+        auto resource = opentelemetry::sdk::resource::Resource::Create({
+            {opentelemetry::semconv::service::kServiceName, std::string(serviceName)},
+        });
+        provider = sdktrace::TracerProviderFactory::Create(std::move(processor), resource, makeSampler());
+        tracer = provider->GetTracer("nix");
+
         opentelemetry::trace::StartSpanOptions options;
         if (isServer)
             options.kind = opentelemetry::trace::SpanKind::kServer;
@@ -348,9 +383,7 @@ public:
         if (getEnv("NIX_DEBUG_OTEL")) {
             char buf[2 * opentelemetry::trace::TraceId::kSize];
             rootSpan->GetContext().trace_id().ToLowerBase16(buf);
-            /* Printed by `flush()` once the trace has been
-               uploaded. */
-            state.debugTraceId = std::string(buf, sizeof(buf));
+            debugTraceId = std::string(buf, sizeof(buf));
         }
     }
 
@@ -609,16 +642,12 @@ public:
 
     void flush() override
     {
-        auto * state = otelState.load(std::memory_order_acquire);
-        if (!state)
-            return;
-
         /* Bound the timeout: the SDK default is microseconds::max(),
            and a hung collector must not hang process exit. */
-        state->provider->ForceFlush(std::chrono::microseconds(std::chrono::seconds(5)));
+        provider->ForceFlush(std::chrono::microseconds(std::chrono::seconds(5)));
 
-        if (!state->debugTraceId.empty())
-            writeToStderr(fmt("OpenTelemetry trace ID: %s\n", state->debugTraceId));
+        if (!debugTraceId.empty())
+            writeToStderr(fmt("OpenTelemetry trace ID: %s\n", debugTraceId));
     }
 };
 
@@ -896,65 +925,14 @@ void initOtel(
         return;
     }
 
-    namespace sdktrace = opentelemetry::sdk::trace;
-
     auto exporter = std::make_unique<OtlpJsonSpanExporter>(
         endpoint,
         parseOtlpHeaders(getEnv("OTEL_EXPORTER_OTLP_HEADERS").value_or(otelSettings.headers)),
         getEnv("OTEL_EXPORTER_OTLP_COMPRESSION").value_or(otelSettings.compression) == "gzip");
-    auto processor =
-        sdktrace::BatchSpanProcessorFactory::Create(std::move(exporter), sdktrace::BatchSpanProcessorOptions{});
-    auto resource = opentelemetry::sdk::resource::Resource::Create({
-        {opentelemetry::semconv::service::kServiceName, std::string(serviceName)},
-    });
 
-    /* Support the standard OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG
-       environment variables, which the C++ SDK does not read itself.
-       "parentbased" samplers follow the sampling decision of the
-       parent span, which propagates in the sampled flag of the W3C
-       trace context — so the daemon follows the client's decision. */
-    auto sampler = [&]() -> std::unique_ptr<sdktrace::Sampler> {
-        auto ratio = [&]() -> double {
-            auto arg = getEnv("OTEL_TRACES_SAMPLER_ARG");
-            if (!arg)
-                return 1.0;
-            try {
-                return std::stod(*arg);
-            } catch (...) {
-                warn("invalid OTEL_TRACES_SAMPLER_ARG '%s'; assuming 1.0", *arg);
-                return 1.0;
-            }
-        };
-        auto parentBased = [](std::shared_ptr<sdktrace::Sampler> delegate) -> std::unique_ptr<sdktrace::Sampler> {
-            return std::make_unique<sdktrace::ParentBasedSampler>(std::move(delegate));
-        };
-        auto name = getEnv("OTEL_TRACES_SAMPLER").value_or("parentbased_always_on");
-        if (name == "always_on")
-            return std::make_unique<sdktrace::AlwaysOnSampler>();
-        if (name == "always_off")
-            return std::make_unique<sdktrace::AlwaysOffSampler>();
-        if (name == "traceidratio")
-            return std::make_unique<sdktrace::TraceIdRatioBasedSampler>(ratio());
-        if (name == "parentbased_always_off")
-            return parentBased(std::make_shared<sdktrace::AlwaysOffSampler>());
-        if (name == "parentbased_traceidratio")
-            return parentBased(std::make_shared<sdktrace::TraceIdRatioBasedSampler>(ratio()));
-        if (name != "parentbased_always_on")
-            warn("unknown OTEL_TRACES_SAMPLER '%s'; assuming 'parentbased_always_on'", name);
-        return parentBased(std::make_shared<sdktrace::AlwaysOnSampler>());
-    }();
-
-    auto state = std::make_unique<OtelState>();
-    state->provider = sdktrace::TracerProviderFactory::Create(std::move(processor), resource, std::move(sampler));
-    state->tracer = state->provider->GetTracer("nix");
-
-    /* Any previously initialized state is deliberately leaked rather
-       than destroyed, since we may be in a child process where its
-       worker thread doesn't exist. */
-    auto * statePtr = state.release();
-    otelState.exchange(statePtr, std::memory_order_release);
-
-    applyExtraLogger(std::make_unique<OpenTelemetryLogger>(*statePtr, rootSpanName, remoteParentTraceparent, isServer));
+    applyExtraLogger(
+        std::make_unique<OpenTelemetryLogger>(
+            serviceName, std::move(exporter), rootSpanName, remoteParentTraceparent, isServer));
 }
 
 #else

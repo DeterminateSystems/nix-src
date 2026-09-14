@@ -22,9 +22,9 @@ namespace nix {
  * span. If `isServer` is set, the root span is a server span (i.e. it
  * handles a request from another process, as in the daemon).
  *
- * Any previously initialized tracing state is discarded rather than
- * reused, so this can be called in a child process after a `fork()`,
- * where the exporter's worker thread no longer exists.
+ * The logger owns the exporter and its worker thread, so a forked
+ * child (which gets a fresh global logger, cf. `startProcess()`)
+ * doesn't trace unless it calls this itself.
  *
  * The logger's `flush()` exports all pending spans, with bounded
  * timeouts. Since loggers are generally not destroyed, it has to be
