@@ -735,6 +735,8 @@ Goal::Co DerivationBuildingGoal::buildWithHook(
                     if (c == '\n') {
                         auto json = parseJSONMessage(currentHookLine, "the derivation builder");
                         if (json) {
+                            /* The hook exports its own telemetry. */
+                            RemoteLogSource remoteLogSource;
                             auto s = handleJSONLogMessage(
                                 *json, worker.act, hook->activities, "the derivation builder", true);
                             // ensure that logs from a builder using `ssh-ng://` as protocol
@@ -1232,6 +1234,8 @@ HookReply DerivationBuildingGoal::tryBuildHook(const DerivationOptions<StorePath
                     throw;
                 }
             }();
+            /* The hook exports its own telemetry. */
+            RemoteLogSource remoteLogSource;
             if (handleJSONLogMessage(s, worker.act, worker.hook->activities, "the build hook", true))
                 ;
             else if (s.substr(0, 2) == "# ") {
