@@ -12,7 +12,7 @@
           cleanup (builtins.mapAttrs (childName: child: convert child) output.children)
         else if output ? "derivation" then
           let
-            fake = builtins.fakeDerivation {
+            baked = builtins.bakedDerivation {
               name = output.derivation.name;
               outputs = builtins.mapAttrs (outputName: path: { inherit path; }) output.derivation.outputs;
             };
@@ -22,8 +22,8 @@
             name = output.derivation.name;
             system = builtins.head output.forSystems; # FIXME
             meta.description = output.shortDescription;
-            drvPath = fake.drvPath;
-            outPath = fake.out; # FIXME
+            drvPath = baked.drvPath;
+            outPath = baked.out; # FIXME
             outputName = "out"; # FIXME
           }
         else

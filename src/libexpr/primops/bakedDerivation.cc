@@ -9,23 +9,23 @@
 
 namespace nix {
 
-static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
-    state.forceAttrs(*args[0], pos, "while evaluating the argument passed to builtins.fakeDerivation");
+    state.forceAttrs(*args[0], pos, "while evaluating the argument passed to builtins.bakedDerivation");
 
     std::optional<std::string> name;
 
-    struct FakeDerivationOutput
+    struct BakedDerivationOutput
     {
         StorePath path;
         std::optional<Hash> narHash;
     };
 
-    std::map<std::string, FakeDerivationOutput> outputs;
+    std::map<std::string, BakedDerivationOutput> outputs;
 
     for (auto & attr : *args[0]->attrs()) {
         std::string_view attrName = state.symbols[attr.name];
-        auto attrHint = fmt("while evaluating the attribute '%s' passed to builtins.fakeDerivation", attrName);
+        auto attrHint = fmt("while evaluating the attribute '%s' passed to builtins.bakedDerivation", attrName);
 
         if (attrName == "name") {
             name = state.forceStringNoCtx(*attr.value, attr.pos, attrHint);
@@ -39,7 +39,7 @@ static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** ar
                 state.forceAttrs(
                     *outAttr.value,
                     outAttr.pos,
-                    fmt("while evaluating the output '%s' passed to builtins.fakeDerivation", outName));
+                    fmt("while evaluating the output '%s' passed to builtins.bakedDerivation", outName));
 
                 std::optional<StorePath> path;
                 std::optional<Hash> narHash;
@@ -47,7 +47,7 @@ static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** ar
                 for (auto & outField : *outAttr.value->attrs()) {
                     std::string_view fieldName = state.symbols[outField.name];
                     auto fieldHint =
-                        fmt("while evaluating the attribute '%s' of output '%s' passed to builtins.fakeDerivation",
+                        fmt("while evaluating the attribute '%s' of output '%s' passed to builtins.bakedDerivation",
                             fieldName,
                             outName);
 
@@ -64,7 +64,7 @@ static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** ar
                     else
                         state
                             .error<EvalError>(
-                                "attribute '%s' isn't supported in an output passed to 'builtins.fakeDerivation'",
+                                "attribute '%s' isn't supported in an output passed to 'builtins.bakedDerivation'",
                                 fieldName)
                             .atPos(outField.pos)
                             .debugThrow();
@@ -73,27 +73,27 @@ static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** ar
                 if (!path)
                     state
                         .error<EvalError>(
-                            "attribute 'path' is missing in output '%s' passed to 'builtins.fakeDerivation'", outName)
+                            "attribute 'path' is missing in output '%s' passed to 'builtins.bakedDerivation'", outName)
                         .atPos(outAttr.pos)
                         .debugThrow();
 
-                outputs.emplace(std::string(outName), FakeDerivationOutput{std::move(*path), std::move(narHash)});
+                outputs.emplace(std::string(outName), BakedDerivationOutput{std::move(*path), std::move(narHash)});
             }
         }
 
         else
-            state.error<EvalError>("attribute '%s' isn't supported in call to 'builtins.fakeDerivation'", attrName)
+            state.error<EvalError>("attribute '%s' isn't supported in call to 'builtins.bakedDerivation'", attrName)
                 .atPos(attr.pos)
                 .debugThrow();
     }
 
     if (!name)
-        state.error<EvalError>("attribute 'name' is missing in call to 'builtins.fakeDerivation'")
+        state.error<EvalError>("attribute 'name' is missing in call to 'builtins.bakedDerivation'")
             .atPos(pos)
             .debugThrow();
 
     if (outputs.empty())
-        state.error<EvalError>("attribute 'outputs' is missing or empty in call to 'builtins.fakeDerivation'")
+        state.error<EvalError>("attribute 'outputs' is missing or empty in call to 'builtins.bakedDerivation'")
             .atPos(pos)
             .debugThrow();
 
@@ -148,13 +148,13 @@ static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** ar
     v.mkAttrs(result);
 }
 
-static RegisterPrimOp primop_fakeDerivation({
-    .name = "__fakeDerivation",
+static RegisterPrimOp primop_bakedDerivation({
+    .name = "__bakedDerivation",
     .args = {"attrs"},
     .doc = R"(
         Placeholder.
     )",
-    .impl = prim_fakeDerivation,
+    .impl = prim_bakedDerivation,
 });
 
 } // namespace nix
