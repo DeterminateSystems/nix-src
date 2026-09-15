@@ -56,6 +56,7 @@ bool DerivationType::isCA() const
             [](const InputAddressed & ia) { return false; },
             [](const ContentAddressed & ca) { return true; },
             [](const Impure &) { return true; },
+            [](const Substituted &) { return false; },
         },
         raw);
 }
@@ -67,6 +68,7 @@ bool DerivationType::isFixed() const
             [](const InputAddressed & ia) { return false; },
             [](const ContentAddressed & ca) { return ca.fixed; },
             [](const Impure &) { return false; },
+            [](const Substituted &) { return false; },
         },
         raw);
 }
@@ -78,6 +80,7 @@ bool DerivationType::hasKnownOutputPaths() const
             [](const InputAddressed & ia) { return !ia.deferred; },
             [](const ContentAddressed & ca) { return ca.fixed; },
             [](const Impure &) { return false; },
+            [](const Substituted &) { return true; },
         },
         raw);
 }
@@ -89,6 +92,7 @@ bool DerivationType::isSandboxed() const
             [](const InputAddressed & ia) { return true; },
             [](const ContentAddressed & ca) { return ca.sandboxed; },
             [](const Impure &) { return false; },
+            [](const Substituted &) { return true; },
         },
         raw);
 }
@@ -100,6 +104,7 @@ bool DerivationType::isImpure() const
             [](const InputAddressed & ia) { return false; },
             [](const ContentAddressed & ca) { return false; },
             [](const Impure &) { return true; },
+            [](const Substituted &) { return false; },
         },
         raw);
 }
@@ -872,6 +877,12 @@ DerivationType BasicDerivation::type() const
     if (!ty)
         throw Error("must have at least one output");
 
+    if (builder == "builtin:substitute") {
+        if (!std::holds_alternative<DerivationType::InputAddressed>(ty.value().raw))
+            throw Error("'builtin:substitute' derivation must have input-addressed outputs");
+        return DerivationType::Substituted{};
+    }
+
     return ty.value();
 }
 
@@ -941,7 +952,8 @@ DrvHashModulo hashDerivationModulo(Store & store, const Derivation & drv, bool m
                     assert(!ca.fixed);
                     return true;
                 },
-                [](const DerivationType::Impure &) { return true; }},
+                [](const DerivationType::Impure &) { return true; },
+                [](const DerivationType::Substituted &) { return false; }},
             drv.type().raw)) {
         return DrvHashModulo::DeferredDrv{};
     }
@@ -1155,6 +1167,7 @@ bool Derivation::shouldResolve() const
                            : true;
             },
             [&](const DerivationType::Impure &) { return true; },
+            [&](const DerivationType::Substituted &) { return false; },
         },
         drvType.raw);
 
@@ -1276,6 +1289,18 @@ std::optional<BasicDerivation> Derivation::tryResolve(
 template<bool fillIn>
 static void processDerivationOutputPaths(Store & store, auto && drv, std::string_view drvName)
 {
+    if (drv.builder == "builtin:substitute") {
+        if (drv.platform != "builtin")
+            throw Error("'builtin:substitute' derivation must be a builtin");
+        if (!drv.args.empty())
+            throw Error("'builtin:substitute' derivation must have no arguments");
+        if (!drv.env.empty())
+            throw Error("'builtin:substitute' derivation must have no environment variables");
+        if (!drv.inputSrcs.empty())
+            throw Error("'builtin:substitute' derivation must have no inputs");
+        return;
+    }
+
     std::optional<DrvHashModulo> hashModulo_;
 
     auto hashModulo = [&]() -> const auto & {
