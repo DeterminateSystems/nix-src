@@ -252,7 +252,13 @@ EvalMemory::EvalMemory()
     assertGCInitialized();
 }
 
-[[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext EvalState::evalContext;
+/**
+ * The evaluation context of non-fiber execution contexts (i.e. the
+ * main thread).
+ */
+static EvalState::EvalContext globalEvalContext;
+
+[[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext * EvalState::evalContext = &globalEvalContext;
 
 EvalState::EvalState(
     const LookupPath & lookupPathFromArguments,
@@ -1581,7 +1587,7 @@ void ExprLambda::eval(EvalState & state, Env & env, Value & v)
     v.mkLambda(&env, this);
 }
 
-[[gnu::tls_model("initial-exec")]] thread_local size_t EvalState::callDepth = 0;
+[[gnu::tls_model("initial-exec")]] thread_local size_t CallDepth::callDepth = 0;
 
 void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes, const PosIdx pos)
 {
@@ -3100,6 +3106,10 @@ void EvalState::printStatistics()
     topObj["nrSpuriousWakeups"] = nrSpuriousWakeups.load();
     topObj["maxWaiting"] = maxWaiting.load();
     topObj["waitingTime"] = microsecondsWaiting / (double) 1000000;
+    topObj["nrFibersSpawned"] = executor->nrFibersSpawned.load();
+    topObj["nrFiberWakeups"] = executor->nrFiberWakeups.load();
+    topObj["maxSuspendedFibers"] = executor->maxSuspendedFibers.load();
+    topObj["nrFiberStacksAllocated"] = executor->nrFiberStacksAllocated.load();
     topObj["nrAvoided"] = nrAvoided.load();
     topObj["nrLookups"] = nrLookups.load();
     topObj["nrPrimOpCalls"] = nrPrimOpCalls.load();
