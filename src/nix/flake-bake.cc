@@ -11,6 +11,12 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas
 {
     std::filesystem::path destDir;
 
+    flake_schemas::FlakeInventoryOptions options{
+        .showLegacy = true,
+        .showOutputPaths = true,
+        .showDrvNames = true,
+    };
+
     CmdFlakeBake()
     {
         addFlag({
@@ -20,6 +26,11 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas
             .handler = {&destDir},
             .completer = completePath,
             .required = true,
+        });
+        addFlag({
+            .longName = "all-systems",
+            .description = "Bake the outputs for all systems, not just the current system.",
+            .handler = {&options.showAllSystems, true},
         });
     }
 
@@ -43,12 +54,7 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas
 
         auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas());
 
-        auto inv = flake_schemas::getFlakeInventory(
-            *state,
-            *getEvalStore(),
-            *flake,
-            cache,
-            {.showLegacy = true, .showOutputPaths = true, .showDrvNames = true});
+        auto inv = flake_schemas::getFlakeInventory(*state, *getEvalStore(), *flake, cache, options);
 
         std::filesystem::create_directories(destDir);
         writeFile(destDir / "outputs.json", inv.dump());
