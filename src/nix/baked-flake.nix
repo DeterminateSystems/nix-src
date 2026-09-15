@@ -27,5 +27,5 @@
           {
           };
     in
-    cleanup (builtins.mapAttrs (outputName: output: convert output.output) data);
+    cleanup (builtins.mapAttrs (outputName: output: convert (output.output or { })) data);
 }
