@@ -46,8 +46,9 @@ nix store delete "$fooPath"
 [[ ! -e $fooPath ]]
 
 # Now the baked derivation can be realised by substituting its output
-# from the binary cache.
-nix build --no-link --substituters "file://$cacheDir" --no-require-sigs "path:$bakedDir#foo"
+# from the binary cache. (`--substitute` is needed because substitution
+# is disabled automatically when there is no network access.)
+nix build --no-link --substitute --substituters "file://$cacheDir" --no-require-sigs "path:$bakedDir#foo"
 [[ -e $fooPath/hello ]]
 
 # Once the output is valid, building the baked derivation succeeds even without substituters.
@@ -84,7 +85,7 @@ nix store delete "$fooPath"
 expectStderr 1 nix build --no-link "$depDir" | grepQuiet "failed to substitute"
 
 # ... and succeeds if it can.
-nix build --substituters "file://$cacheDir" --no-require-sigs "$depDir" -o "$TEST_ROOT/dep-result"
+nix build --substitute --substituters "file://$cacheDir" --no-require-sigs "$depDir" -o "$TEST_ROOT/dep-result"
 [[ $(cat "$TEST_ROOT/dep-result") = "Hello World!" ]]
 
 # `legacyPackages` is baked too.
