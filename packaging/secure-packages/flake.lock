@@ -3,11 +3,11 @@
     "bdwgc": {
       "flake": false,
       "locked": {
-        "lastModified": 1789388623,
-        "narHash": "sha256-qk2ONj1UU3zRzyJMtVns5ZDH0uCWpvTtqW2b/lZmotU=",
+        "lastModified": 1789465360,
+        "narHash": "sha256-S18DMeECNCKZUhy8PspMyXSPzO7ZFsv/IQsIpYNkIls=",
         "owner": "edolstra",
         "repo": "bdwgc",
-        "rev": "c6afef5518ef71d446339a5aa4c1b97fc6392534",
+        "rev": "82eb0a94e28c38b42ab43bc32e1f3740ce6e7d6a",
         "type": "github"
       },
       "original": {
