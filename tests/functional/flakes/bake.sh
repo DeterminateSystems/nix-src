@@ -59,6 +59,34 @@ nix flake show --json --all-systems "path:$bakedDir-all" > "$TEST_ROOT/show-bake
 [[ $(jq -r ".inventory.packages.output.children.someOtherSystem.children.foo.derivation.name" < "$TEST_ROOT/show-baked-all.json") = simple ]]
 [[ $(nix eval --raw "path:$bakedDir-all#packages.someOtherSystem.foo.outPath") = $(nix eval --raw "$flakeDir#packages.someOtherSystem.foo.outPath") ]]
 
+# A derivation in another flake can depend on the outputs of a baked flake.
+depDir=$TEST_ROOT/dep
+mkdir -p "$depDir"
+cp "${config_nix}" "$depDir/"
+cat > "$depDir/flake.nix" <<EOF
+{
+  inputs.baked.url = "path:$bakedDir";
+  outputs = { self, baked }: {
+    packages.$system.default = with import ./config.nix; mkDerivation {
+      name = "dep";
+      buildCommand = "cat \${baked.packages.$system.foo}/hello > \$out";
+    };
+  };
+}
+EOF
+
+# The baked derivation is recorded as an input of the dependent derivation.
+depDrvPath=$(nix eval --raw "$depDir#packages.$system.default.drvPath")
+nix derivation show "$depDrvPath" | jq -e ".derivations[].inputs.drvs | has(\"$(basename "$drvPath")\")"
+
+# Realising the dependent derivation fails if the baked output cannot be substituted...
+nix store delete "$fooPath"
+expectStderr 1 nix build --no-link "$depDir" | grepQuiet "failed to substitute"
+
+# ... and succeeds if it can.
+nix build --substituters "file://$cacheDir" --no-require-sigs "$depDir" -o "$TEST_ROOT/dep-result"
+[[ $(cat "$TEST_ROOT/dep-result") = "Hello World!" ]]
+
 # `legacyPackages` is baked too.
 nix flake show --json --legacy "path:$bakedDir" > "$TEST_ROOT/show-baked-legacy.json"
 [[ $(jq -r ".inventory.legacyPackages.output.children.\"$system\".children.hello.derivation.name" < "$TEST_ROOT/show-baked-legacy.json") = simple ]]

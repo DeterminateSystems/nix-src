@@ -1,8 +1,11 @@
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/derived-path.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/hash.hh"
+
+#include <boost/unordered/concurrent_flat_map.hpp>
 
 namespace nix {
 
@@ -119,7 +122,30 @@ static void prim_fakeDerivation(EvalState & state, const PosIdx pos, Value ** ar
     // FIXME
     state.waitForPath(drvPath);
 
-    state.mkStorePathString(drvPath, v);
+    /* As in `derivationStrict`, cache the derivation hash so that derivations depending on this one don't need to
+       read it back from the store. */
+    drvHashes.insert_or_assign(drvPath, hashDerivationModulo(*state.store, drv, false));
+
+    /* Return an attribute set of the same shape as `derivationStrict`: the derivation path and one string per
+       output. The output strings carry string context, so that they can be used as inputs of other derivations. */
+    auto result = state.buildBindings(1 + drv.outputs.size());
+    result.alloc(state.s.drvPath)
+        .mkString(
+            state.store->printStorePath(drvPath),
+            {
+                NixStringContextElem::DrvDeep{.drvPath = drvPath},
+            },
+            state.mem);
+    for (auto & [outName, out] : outputs)
+        state.mkOutputString(
+            result.alloc(outName),
+            SingleDerivedPath::Built{
+                .drvPath = makeConstantStorePathRef(drvPath),
+                .output = outName,
+            },
+            out.path);
+
+    v.mkAttrs(result);
 }
 
 static RegisterPrimOp primop_fakeDerivation({
