@@ -91,3 +91,70 @@ nix build --substitute --substituters "file://$cacheDir" --no-require-sigs "$dep
 # `legacyPackages` is baked too.
 nix flake show --json --legacy "path:$bakedDir" > "$TEST_ROOT/show-baked-legacy.json"
 [[ $(jq -r ".inventory.legacyPackages.output.children.\"$system\".children.hello.derivation.name" < "$TEST_ROOT/show-baked-legacy.json") = simple ]]
+
+# Outputs whose derivation lives at a sub-path of the output attribute
+# (`derivationAttrPath` in the flake schema, e.g.
+# `nixosConfigurations.<name>.config.system.build.toplevel`) are baked
+# at that sub-path, not at the output attribute itself.
+configsDir=$TEST_ROOT/configs
+mkdir -p "$configsDir"
+cp ../simple.nix ../simple.builder.sh "${config_nix}" "$configsDir/"
+cat > "$configsDir/flake.nix" <<EOF
+{
+  outputs = { self }: {
+    nixosConfigurations.foo = {
+      config.system.build.toplevel = import ./simple.nix;
+      pkgs.stdenv.system = "$system";
+    };
+    homeConfigurations.bar.activationPackage = import ./simple.nix;
+  };
+}
+EOF
+
+# `nix flake show --json` reports the derivation attribute path.
+nix flake show --json "$configsDir" > "$TEST_ROOT/show-configs.json"
+[[ $(jq -r '.inventory.nixosConfigurations.output.children.foo.derivation.name' < "$TEST_ROOT/show-configs.json") = simple ]]
+[[ $(jq -c '.inventory.nixosConfigurations.output.children.foo.derivationAttrPath' < "$TEST_ROOT/show-configs.json") = '["config","system","build","toplevel"]' ]]
+[[ $(jq -r '.inventory.homeConfigurations.output.children.bar.derivation.name' < "$TEST_ROOT/show-configs.json") = simple ]]
+[[ $(jq -c '.inventory.homeConfigurations.output.children.bar.derivationAttrPath' < "$TEST_ROOT/show-configs.json") = '["activationPackage"]' ]]
+
+# Outputs that are derivations themselves don't get a `derivationAttrPath`.
+[[ $(jq -r ".inventory.packages.output.children.\"$system\".children.foo | has(\"derivationAttrPath\")" < "$TEST_ROOT/show-baked.json") = false ]]
+
+# The inventory written by `nix flake bake` records the attribute path.
+nix flake bake "$configsDir" --dest-dir "$bakedDir-configs"
+[[ $(jq -c '.nixosConfigurations.output.children.foo.derivationAttrPath' < "$bakedDir-configs/outputs.json") = '["config","system","build","toplevel"]' ]]
+[[ $(jq -c '.homeConfigurations.output.children.bar.derivationAttrPath' < "$bakedDir-configs/outputs.json") = '["activationPackage"]' ]]
+
+# The baked derivations live at the nested path and have the same
+# output paths as the originals...
+toplevelPath=$(nix eval --raw "$configsDir#nixosConfigurations.foo.config.system.build.toplevel.outPath")
+[[ $(nix eval --raw "path:$bakedDir-configs#nixosConfigurations.foo.config.system.build.toplevel.outPath") = "$toplevelPath" ]]
+[[ $(nix eval --raw "path:$bakedDir-configs#nixosConfigurations.foo.config.system.build.toplevel.system") = "$system" ]]
+activationPath=$(nix eval --raw "$configsDir#homeConfigurations.bar.activationPackage.outPath")
+[[ $(nix eval --raw "path:$bakedDir-configs#homeConfigurations.bar.activationPackage.outPath") = "$activationPath" ]]
+
+# ... and not at the output attribute itself.
+[[ $(nix eval "path:$bakedDir-configs#nixosConfigurations.foo" --apply 'x: x ? drvPath') = false ]]
+[[ $(nix eval "path:$bakedDir-configs#homeConfigurations.bar" --apply 'x: x ? drvPath') = false ]]
+
+# `nix flake show` on a baked flake evaluates the flake schemas against
+# the baked values. This works for `homeConfigurations`, whose schema
+# only needs `activationPackage.system`. It does not currently work for
+# `nixosConfigurations`, whose schema reads `pkgs.stdenv.system`, which
+# the baked flake does not provide, so we don't test that here.
+homeDir=$TEST_ROOT/home
+mkdir -p "$homeDir"
+cp ../simple.nix ../simple.builder.sh "${config_nix}" "$homeDir/"
+cat > "$homeDir/flake.nix" <<EOF
+{
+  outputs = { self }: {
+    homeConfigurations.bar.activationPackage = import ./simple.nix;
+  };
+}
+EOF
+nix flake bake "$homeDir" --dest-dir "$bakedDir-home"
+nix flake show --json "path:$bakedDir-home" > "$TEST_ROOT/show-baked-home.json"
+[[ $(jq -r '.inventory.homeConfigurations.output.children.bar.derivation.name' < "$TEST_ROOT/show-baked-home.json") = simple ]]
+[[ $(jq -c '.inventory.homeConfigurations.output.children.bar.forSystems' < "$TEST_ROOT/show-baked-home.json") = "[\"$system\"]" ]]
+[[ $(jq -c '.inventory.homeConfigurations.output.children.bar.derivationAttrPath' < "$TEST_ROOT/show-baked-home.json") = '["activationPackage"]' ]]

@@ -394,6 +394,17 @@ nlohmann::json getFlakeInventory(
                 if (auto shortDescription = leaf.shortDescription())
                     obj.emplace("shortDescription", *shortDescription);
 
+                /* Record the attribute path of the derivation relative to the output attribute (e.g.
+                   `config.system.build.toplevel` for `nixosConfigurations`), so that consumers such as `nix flake
+                   bake` can put the derivation in the right place. Omitted if the output attribute is the
+                   derivation itself. */
+                if (auto path = leaf.derivationAttrPath(); path && !path->empty()) {
+                    auto attrPath = nlohmann::json::array();
+                    for (auto & attr : *path)
+                        attrPath.push_back(std::string(state.symbols[attr]));
+                    obj.emplace("derivationAttrPath", std::move(attrPath));
+                }
+
                 if (auto drv = leaf.derivation(outputs)) {
                     auto drvObj = nlohmann::json::object();
 
