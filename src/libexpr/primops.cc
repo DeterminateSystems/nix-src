@@ -1434,7 +1434,7 @@ static void prim_derivationStrictGeneric(EvalState & state, const PosIdx pos, Va
     }
 
     try {
-        derivationStrictInternal(state, drvName, attrs, v, state.evalContext.provenance, acceptMeta);
+        derivationStrictInternal(state, drvName, attrs, v, state.evalContext->provenance, acceptMeta);
     } catch (Error & e) {
         Pos pos = state.positions[nameAttr->pos];
         /*
@@ -2823,7 +2823,7 @@ static void prim_toFile(EvalState & state, const PosIdx pos, Value ** args, Valu
                                                      HashAlgorithm::SHA256,
                                                      refs,
                                                      state.repair,
-                                                     state.evalContext.provenance);
+                                                     state.evalContext->provenance);
                                              });
 
     /* Note: we don't need to add `context' to the context of the
@@ -2975,7 +2975,7 @@ static void addPath(
             auto path3 = filter
                 ? SourcePath{
                       make_ref<OverrideProvenanceSourceAccessor>(
-                          path2.accessor, state.evalContext.provenance),
+                          path2.accessor, state.evalContext->provenance),
                       path2.path
                   }
                 : path2;

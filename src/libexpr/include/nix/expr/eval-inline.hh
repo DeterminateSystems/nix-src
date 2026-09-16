@@ -189,10 +189,10 @@ inline void EvalState::forceList(Value & v, const PosIdx pos, std::string_view e
 [[gnu::always_inline]]
 inline CallDepth EvalState::addCallDepth(const PosIdx pos)
 {
-    if (callDepth > settings.maxCallDepth)
+    if (CallDepth::callDepth > settings.maxCallDepth)
         error<StackOverflowError>().atPos(pos).debugThrow();
 
-    return CallDepth(callDepth);
+    return CallDepth();
 };
 
 } // namespace nix
