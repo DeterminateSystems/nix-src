@@ -119,9 +119,6 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
 
     auto drvPath = state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair);
 
-    // FIXME
-    state.waitForPath(drvPath);
-
     /* As in `derivationStrict`, cache the derivation hash so that derivations depending on this one don't need to
        read it back from the store. */
     drvHashes.insert_or_assign(drvPath, hashDerivationModulo(*state.store, drv, false));
