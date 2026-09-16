@@ -878,6 +878,7 @@ DerivationType BasicDerivation::type() const
         throw Error("must have at least one output");
 
     if (builder == "builtin:substitute") {
+        experimentalFeatureSettings.require(Xp::BakedDerivation, "'builtin:substitute' derivation");
         if (!std::holds_alternative<DerivationType::InputAddressed>(ty.value().raw))
             throw Error("'builtin:substitute' derivation must have input-addressed outputs");
         return DerivationType::Substituted{};

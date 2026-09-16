@@ -40,6 +40,11 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas
         return "bake a flake";
     }
 
+    std::optional<ExperimentalFeature> experimentalFeature() override
+    {
+        return Xp::BakedDerivation;
+    }
+
     std::string doc() override
     {
         return
@@ -49,6 +54,8 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas
 
     void run(nix::ref<nix::Store> store) override
     {
+        experimentalFeatureSettings.require(Xp::BakedDerivation);
+
         auto state = getEvalState();
         auto evalStore = getEvalStore();
         auto flake = make_ref<LockedFlake>(lockFlake());
