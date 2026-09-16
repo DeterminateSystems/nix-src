@@ -104,6 +104,11 @@ struct FlakeInventoryOptions
     bool showOutputPaths = false;
     bool showDrvPaths = false;
     bool showDrvNames = false;
+    /**
+     * Include additional information needed by `nix flake bake`
+     * (e.g. `derivationAttrPath` and `mainProgram`).
+     */
+    bool bake = false;
 };
 
 nlohmann::json getFlakeInventory(

@@ -96,6 +96,36 @@ nix build --substitute --substituters "file://$cacheDir" --no-require-sigs "$dep
 nix flake show --json --legacy "path:$bakedDir" > "$TEST_ROOT/show-baked-legacy.json"
 [[ $(jq -r ".inventory.legacyPackages.output.children.\"$system\".children.hello.derivation.name" < "$TEST_ROOT/show-baked-legacy.json") = simple ]]
 
+# `meta.mainProgram` is preserved, so `nix run` works on baked packages
+# whose binary isn't named after the package.
+greeterDir=$TEST_ROOT/greeter
+mkdir -p "$greeterDir"
+cp "${config_nix}" "$greeterDir/"
+cat > "$greeterDir/flake.nix" <<EOF
+{
+  outputs = { self }: {
+    packages.$system.greeter = with import ./config.nix; mkDerivation {
+      name = "greeter";
+      meta.mainProgram = "hi";
+      buildCommand = ''
+        mkdir -p \$out/bin
+        echo '#!\${shell}' > \$out/bin/hi
+        echo 'echo hello from hi' >> \$out/bin/hi
+        chmod +x \$out/bin/hi
+      '';
+    };
+  };
+}
+EOF
+
+nix flake bake "$greeterDir" --dest-dir "$bakedDir-greeter"
+[[ $(jq -r ".packages.output.children.\"$system\".children.greeter.derivation.mainProgram" < "$bakedDir-greeter/outputs.json") = hi ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#greeter.meta.mainProgram") = hi ]]
+
+# Build the original so that the baked package's output is valid, then run it.
+nix build --no-link "$greeterDir#greeter"
+[[ $(nix run "path:$bakedDir-greeter#greeter") = "hello from hi" ]]
+
 # Outputs whose derivation lives at a sub-path of the output attribute
 # (`derivationAttrPath` in the flake schema, e.g.
 # `nixosConfigurations.<name>.config.system.build.toplevel`) are baked
@@ -115,18 +145,14 @@ cat > "$configsDir/flake.nix" <<EOF
 }
 EOF
 
-# `nix flake show --json` reports the derivation attribute path.
+# The schemas recognise these outputs in the original flake.
 nix flake show --json "$configsDir" > "$TEST_ROOT/show-configs.json"
 [[ $(jq -r '.inventory.nixosConfigurations.output.children.foo.derivation.name' < "$TEST_ROOT/show-configs.json") = simple ]]
-[[ $(jq -c '.inventory.nixosConfigurations.output.children.foo.derivationAttrPath' < "$TEST_ROOT/show-configs.json") = '["config","system","build","toplevel"]' ]]
 [[ $(jq -r '.inventory.homeConfigurations.output.children.bar.derivation.name' < "$TEST_ROOT/show-configs.json") = simple ]]
-[[ $(jq -c '.inventory.homeConfigurations.output.children.bar.derivationAttrPath' < "$TEST_ROOT/show-configs.json") = '["activationPackage"]' ]]
 
-# Outputs that are derivations themselves don't get a `derivationAttrPath`.
-[[ $(jq -r ".inventory.packages.output.children.\"$system\".children.foo | has(\"derivationAttrPath\")" < "$TEST_ROOT/show-baked.json") = false ]]
-
-# The inventory written by `nix flake bake` records the attribute path.
+# The inventory written by `nix flake bake` records the derivation attribute path.
 nix flake bake "$configsDir" --dest-dir "$bakedDir-configs"
+[[ $(jq -r '.nixosConfigurations.output.children.foo.derivation.name' < "$bakedDir-configs/outputs.json") = simple ]]
 [[ $(jq -c '.nixosConfigurations.output.children.foo.derivationAttrPath' < "$bakedDir-configs/outputs.json") = '["config","system","build","toplevel"]' ]]
 [[ $(jq -c '.homeConfigurations.output.children.bar.derivationAttrPath' < "$bakedDir-configs/outputs.json") = '["activationPackage"]' ]]
 
@@ -161,4 +187,3 @@ nix flake bake "$homeDir" --dest-dir "$bakedDir-home"
 nix flake show --json "path:$bakedDir-home" > "$TEST_ROOT/show-baked-home.json"
 [[ $(jq -r '.inventory.homeConfigurations.output.children.bar.derivation.name' < "$TEST_ROOT/show-baked-home.json") = simple ]]
 [[ $(jq -c '.inventory.homeConfigurations.output.children.bar.forSystems' < "$TEST_ROOT/show-baked-home.json") = "[\"$system\"]" ]]
-[[ $(jq -c '.inventory.homeConfigurations.output.children.bar.derivationAttrPath' < "$TEST_ROOT/show-baked-home.json") = '["activationPackage"]' ]]

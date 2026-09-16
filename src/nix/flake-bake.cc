@@ -15,6 +15,7 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas
         .showLegacy = true,
         .showOutputPaths = true,
         .showDrvNames = true,
+        .bake = true,
     };
 
     CmdFlakeBake()

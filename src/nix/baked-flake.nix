@@ -28,7 +28,11 @@
               type = "derivation";
               name = output.derivation.name;
               system = builtins.head output.forSystems; # FIXME
-              meta = if output ? shortDescription then { description = output.shortDescription; } else { };
+              meta =
+                (if output ? shortDescription then { description = output.shortDescription; } else { })
+                // (
+                  if output.derivation ? mainProgram then { mainProgram = output.derivation.mainProgram; } else { }
+                );
               drvPath = baked.drvPath;
               outPath = baked.out; # FIXME
               outputName = "out"; # FIXME
