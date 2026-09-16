@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.22.3.<!-- differences -->
+This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.22.4.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -234,3 +234,18 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 * `nix eval --json` has a flag `--drv-link` to create symlinks to top-level derivations. This prevents them from being garbage-collected. [DeterminateSystems/nix-src#599](https://github.com/DeterminateSystems/nix-src/pull/599)
 
 <!-- Determinate Nix version 3.22.3 -->
+
+<!-- Determinate Nix version 3.22.4 -->
+
+* tests/functional: skip the sentry test when Yama restricts ptrace by @Reasonable-Solutions in [DeterminateSystems/nix-src#625](https://github.com/DeterminateSystems/nix-src/pull/625)
+
+* Tarball cache performance improvements by @edolstra in [DeterminateSystems/nix-src#627](https://github.com/DeterminateSystems/nix-src/pull/627)
+
+* fetchers/git: negotiate rev-pinned fetches from bucketed refs by @edolstra in [DeterminateSystems/nix-src#628](https://github.com/DeterminateSystems/nix-src/pull/628)
+
+* Fix the Nix < 2.20 NAR hash fallback for inputs with submodules by @joshuaspence in [DeterminateSystems/nix-src#624](https://github.com/DeterminateSystems/nix-src/pull/624)
+
+
+* @Reasonable-Solutions made their first contribution in [DeterminateSystems/nix-src#625](https://github.com/DeterminateSystems/nix-src/pull/625)
+
+* @joshuaspence made their first contribution in [DeterminateSystems/nix-src#624](https://github.com/DeterminateSystems/nix-src/pull/624)
