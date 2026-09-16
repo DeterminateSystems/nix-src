@@ -417,6 +417,10 @@ nlohmann::json getFlakeInventory(
                         if (auto aMeta = drv->maybeGetAttr(state.s.meta))
                             if (auto aMainProgram = aMeta->maybeGetAttr("mainProgram"))
                                 drvObj.emplace("mainProgram", aMainProgram->getString());
+
+                        /* Record which output this attribute refers to, since it's not necessarily `out`. */
+                        if (auto aOutputName = drv->maybeGetAttr(state.s.outputName))
+                            drvObj.emplace("outputName", aOutputName->getString());
                     }
 
                     if (options.showDrvPaths) {

@@ -24,7 +24,14 @@
               name = output.derivation.name;
               outputs = builtins.mapAttrs (outputName: path: { inherit path; }) output.derivation.outputs;
             };
-            drv = {
+            outputNames = builtins.attrNames output.derivation.outputs;
+
+            # The output that this attribute refers to.
+            outputName = output.derivation.outputName or (builtins.head outputNames);
+
+            # Mirror the attribute set produced by `derivation`: the common
+            # attributes, plus one attribute per output.
+            commonAttrs = {
               type = "derivation";
               name = output.derivation.name;
               system = builtins.head output.forSystems; # FIXME
@@ -34,9 +41,22 @@
                   if output.derivation ? mainProgram then { mainProgram = output.derivation.mainProgram; } else { }
                 );
               drvPath = baked.drvPath;
-              outPath = baked.out; # FIXME
-              outputName = "out"; # FIXME
-            };
+              outputs = outputNames;
+              all = map (outputName: outputAttrs.${outputName}) outputNames;
+            }
+            // outputAttrs;
+
+            outputAttrs = builtins.listToAttrs (
+              map (outputName: {
+                name = outputName;
+                value = commonAttrs // {
+                  inherit outputName;
+                  outPath = baked.${outputName};
+                };
+              }) outputNames
+            );
+
+            drv = outputAttrs.${outputName};
           in
           # The derivation may live at a sub-path of the output attribute
           # (e.g. `config.system.build.toplevel` for `nixosConfigurations`).

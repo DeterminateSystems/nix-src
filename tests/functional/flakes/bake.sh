@@ -114,6 +114,12 @@ cat > "$greeterDir/flake.nix" <<EOF
         chmod +x \$out/bin/hi
       '';
     };
+    packages.$system.multi = with import ./config.nix; mkDerivation {
+      name = "multi";
+      outputs = [ "bin" "dev" ];
+      buildCommand = "mkdir \$bin \$dev; echo bin > \$bin/what; echo dev > \$dev/what";
+    };
+    packages.$system.multiDev = self.packages.$system.multi.dev;
   };
 }
 EOF
@@ -125,6 +131,29 @@ nix flake bake "$greeterDir" --dest-dir "$bakedDir-greeter"
 # Build the original so that the baked package's output is valid, then run it.
 nix build --no-link "$greeterDir#greeter"
 [[ $(nix run "path:$bakedDir-greeter#greeter") = "hello from hi" ]]
+
+# The default output isn't necessarily `out`: multi-output derivations
+# and attributes that refer to a specific output are baked faithfully.
+[[ $(jq -r ".packages.output.children.\"$system\".children.multi.derivation.outputName" < "$bakedDir-greeter/outputs.json") = bin ]]
+[[ $(jq -r ".packages.output.children.\"$system\".children.multiDev.derivation.outputName" < "$bakedDir-greeter/outputs.json") = dev ]]
+multiBin=$(nix eval --raw "$greeterDir#multi.outPath")
+multiDev=$(nix eval --raw "$greeterDir#multi.dev.outPath")
+[[ $multiBin != "$multiDev" ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#multi.outputName") = bin ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#multi.outPath") = "$multiBin" ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#multi.bin.outPath") = "$multiBin" ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#multi.dev.outPath") = "$multiDev" ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#multi.dev.outputName") = dev ]]
+[[ $(nix eval --json "path:$bakedDir-greeter#multi.outputs") = '["bin","dev"]' ]]
+[[ $(nix eval "path:$bakedDir-greeter#multi" --apply 'x: builtins.length x.all') = 2 ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#multiDev.outputName") = dev ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#multiDev.outPath") = "$multiDev" ]]
+
+# Building a specific output of a baked derivation works.
+nix build --no-link "$greeterDir#multi^*"
+[[ $(nix build --no-link --json "path:$bakedDir-greeter#multi^dev" | jq -r '.[0].outputs | keys | join(",")') = dev ]]
+[[ $(nix build --no-link --json "path:$bakedDir-greeter#multi^dev" | jq -r '.[0].outputs.dev') = "$multiDev" ]]
+[[ $(cat "$multiDev/what") = dev ]]
 
 # Outputs whose derivation lives at a sub-path of the output attribute
 # (`derivationAttrPath` in the flake schema, e.g.
