@@ -149,7 +149,51 @@ static RegisterPrimOp primop_bakedDerivation({
     .name = "__bakedDerivation",
     .args = {"attrs"},
     .doc = R"(
-        Placeholder.
+      Create a *baked derivation*: a derivation that is never built, but
+      whose outputs are obtained by substitution from a binary cache.
+      This is what [`nix flake bake`](@docroot@/command-ref/new-cli/nix3-flake-bake.md)
+      uses to represent the pre-evaluated outputs of a flake.
+
+      The argument is an attribute set with the following attributes:
+
+      - `name`: The name of the derivation.
+
+      - `outputs`: An attribute set mapping output names to attribute
+        sets with a single attribute `path`, the store path of that
+        output.
+
+      The result has the same shape as the result of
+      `builtins.derivationStrict`: an attribute set containing `drvPath`
+      (the store path of the derivation) and one attribute per output
+      containing that output's store path. These strings carry
+      [string context](@docroot@/language/string-context.md), so the
+      outputs of a baked derivation can be used as inputs of other
+      derivations.
+
+      The resulting derivation uses the builder `builtin:substitute`
+      and has no inputs. Realising it does not run anything; instead,
+      Nix substitutes the given output paths. If they cannot be
+      substituted, the build fails.
+
+      Example:
+
+      ```nix
+      builtins.bakedDerivation {
+        name = "hello-2.12.1";
+        outputs = {
+          out.path = "/nix/store/1q8w6grhdj6pn0cvlw18cw07nvjb7pj5-hello-2.12.1";
+        };
+      }
+      ```
+
+      evaluates to
+
+      ```nix
+      {
+        drvPath = "/nix/store/1jczli5n8zgxl2vgfsc5vy3z0f5lfn3q-hello-2.12.1.drv";
+        out = "/nix/store/1q8w6grhdj6pn0cvlw18cw07nvjb7pj5-hello-2.12.1";
+      }
+      ```
     )",
     .impl = prim_bakedDerivation,
 });
