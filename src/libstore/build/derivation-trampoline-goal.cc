@@ -153,7 +153,14 @@ Goal::Co DerivationTrampolineGoal::haveDerivation(StorePath drvPath, Derivation 
     /* Short-circuit `builtin:substitute`. Since these are never actually built, just create substitution goals for the
      * outputs. */
     if (drv.type() == DerivationType::Substituted{}) {
-        std::vector<std::pair<StorePath, GoalPtr>> outputGoals;
+        struct OutputGoal
+        {
+            OutputName outputName;
+            StorePath outPath;
+            GoalPtr goal;
+        };
+
+        std::vector<OutputGoal> outputGoals;
         Goals waitees;
         for (auto & outputName : resolvedWantedOutputs) {
             auto i = drv.outputs.find(outputName);
@@ -169,7 +176,7 @@ Goal::Co DerivationTrampolineGoal::haveDerivation(StorePath drvPath, Derivation 
                     outputName,
                     worker.store.printStorePath(drvPath));
             auto g = upcast_goal(worker.makePathSubstitutionGoal(*outPath));
-            outputGoals.emplace_back(*outPath, g);
+            outputGoals.push_back({outputName, *outPath, g});
             waitees.insert(g);
         }
 
@@ -177,9 +184,9 @@ Goal::Co DerivationTrampolineGoal::haveDerivation(StorePath drvPath, Derivation 
 
         if (nrFailed != 0) {
             StringSet failedPaths;
-            for (auto & [path, g] : outputGoals)
-                if (g->exitCode != ecSuccess)
-                    failedPaths.insert(worker.store.printStorePath(path));
+            for (auto & og : outputGoals)
+                if (og.goal->exitCode != ecSuccess)
+                    failedPaths.insert(worker.store.printStorePath(og.outPath));
             co_return doneFailure(
                 ecFailed,
                 BuildResult::Failure{{
@@ -191,9 +198,14 @@ Goal::Co DerivationTrampolineGoal::haveDerivation(StorePath drvPath, Derivation 
                 }});
         }
 
+        SingleDrvOutputs builtOutputs;
+        for (auto & og : outputGoals)
+            builtOutputs.emplace(og.outputName, UnkeyedRealisation{.outPath = og.outPath});
+
         co_return doneSuccess(
             BuildResult::Success{
                 .status = BuildResult::Success::Substituted,
+                .builtOutputs = std::move(builtOutputs),
             });
     }
 
