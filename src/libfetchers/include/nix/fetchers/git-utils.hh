@@ -32,6 +32,13 @@ struct GitAccessorOptions
     bool smudgeLfs = false;
     bool submodules = false; // Currently implemented in GitInputScheme rather than GitAccessor
 
+    /**
+     * Whether to export the repository using Nix < 2.20 semantics, i.e. using `git archive` or
+     * `git checkout` (which apply Git filters, `export-ignore` and `export-subst`) rather than
+     * libgit2. Currently implemented in GitInputScheme rather than GitAccessor.
+     */
+    bool legacy = false;
+
     std::string makeFingerprint(const Hash & rev) const;
 };
 
