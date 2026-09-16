@@ -2,6 +2,10 @@
 
 source ./common.sh
 
+# Substituting from a file:// cache with --no-require-sigs requires a
+# trusted user, which the NixOS tests don't provide.
+TODO_NixOS
+
 flakeDir=$TEST_ROOT/flake
 bakedDir=$TEST_ROOT/baked
 cacheDir=$TEST_ROOT/binary-cache
