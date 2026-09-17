@@ -10,6 +10,8 @@
 
 namespace nix {
 
+static struct sigaction savedSigsegvAction;
+
 static void sigsegvHandler(int signo, siginfo_t * info, void * ctx)
 {
     /* Detect stack overflows by comparing the faulting address with
@@ -34,12 +36,8 @@ static void sigsegvHandler(int signo, siginfo_t * info, void * ctx)
         }
     }
 
-    /* Restore default behaviour (i.e. segfault and dump core). */
-    struct sigaction act;
-    sigfillset(&act.sa_mask);
-    act.sa_handler = SIG_DFL;
-    act.sa_flags = 0;
-    if (sigaction(SIGSEGV, &act, 0))
+    /* Restore the original SIGSEGV handler. */
+    if (sigaction(SIGSEGV, &savedSigsegvAction, 0))
         abort();
 }
 
@@ -63,7 +61,7 @@ void detectStackOverflow()
     sigfillset(&act.sa_mask);
     act.sa_sigaction = sigsegvHandler;
     act.sa_flags = SA_SIGINFO | SA_ONSTACK;
-    if (sigaction(SIGSEGV, &act, 0))
+    if (sigaction(SIGSEGV, &act, &savedSigsegvAction))
         throw SysError("resetting SIGSEGV");
 #endif
 }

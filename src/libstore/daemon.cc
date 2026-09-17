@@ -3,7 +3,6 @@
 #include "nix/store/worker-protocol.hh"
 #include "nix/store/worker-protocol-connection.hh"
 #include "nix/store/worker-protocol-impl.hh"
-#include "nix/store/build-result.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/store-cast.hh"
 #include "nix/store/filetransfer.hh"
@@ -16,9 +15,13 @@
 #include "nix/util/archive.hh"
 #include "nix/store/derivations.hh"
 #include "nix/util/args.hh"
-#include "nix/util/git.hh"
 #include "nix/util/logging.hh"
 #include "nix/store/globals.hh"
+#include "nix/store/active-builds.hh"
+#include "nix/util/provenance.hh"
+#include "nix/util/async.hh"
+
+#include <variant>
 
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
 #  include "nix/util/monitor-fd.hh"
@@ -32,16 +35,19 @@ Sink & operator<<(Sink & sink, const Logger::Fields & fields)
 {
     sink << fields.size();
     for (auto & f : fields) {
-        sink << f.type;
-        if (f.type == Logger::Field::tInt)
-            sink << f.i;
-        else if (f.type == Logger::Field::tString)
-            sink << f.s;
-        else
+        if (auto p = std::get_if<uint64_t>(&f.raw)) {
+            sink << 0;
+            sink << *p;
+        } else if (auto p = std::get_if<std::string>(&f.raw)) {
+            sink << 1;
+            sink << *p;
+        } else
             unreachable();
     }
     return sink;
 }
+
+namespace {
 
 /* Logger that forwards log messages to the client, *if* we're in a
    state where the protocol allows it (i.e., when canSendStderr is
@@ -66,7 +72,7 @@ struct TunnelLogger : public Logger
     {
     }
 
-    void enqueueMsg(const std::string & s)
+    void enqueueMsg(const std::string & s) noexcept
     {
         auto state(state_.lock());
 
@@ -77,15 +83,18 @@ struct TunnelLogger : public Logger
                 to.flush();
             } catch (...) {
                 /* Write failed; that means that the other side is
-                   gone. */
+                   gone, so stop sending it messages. Note that we
+                   don't propagate the error, since logging must not
+                   throw. The client's death will be detected
+                   elsewhere (e.g. by `MonitorFdHup` or by the next
+                   protocol read/write). */
                 state->canSendStderr = false;
-                throw;
             }
         } else
             state->pendingMsgs.push_back(s);
     }
 
-    void log(Verbosity lvl, std::string_view s) override
+    void log(Verbosity lvl, std::string_view s) noexcept override
     {
         if (lvl > verbosity)
             return;
@@ -95,7 +104,7 @@ struct TunnelLogger : public Logger
         enqueueMsg(buf.s);
     }
 
-    void logEI(const ErrorInfo & ei) override
+    void logEI(const ErrorInfo & ei) noexcept override
     {
         if (ei.level > verbosity)
             return;
@@ -148,7 +157,7 @@ struct TunnelLogger : public Logger
         ActivityType type,
         const std::string & s,
         const Fields & fields,
-        ActivityId parent) override
+        ActivityId parent) noexcept override
     {
         if (clientVersion.number < WorkerProto::Version::Number{1, 20}) {
             if (!s.empty())
@@ -161,7 +170,7 @@ struct TunnelLogger : public Logger
         enqueueMsg(buf.s);
     }
 
-    void stopActivity(ActivityId act) override
+    void stopActivity(ActivityId act) noexcept override
     {
         if (clientVersion.number < WorkerProto::Version::Number{1, 20})
             return;
@@ -170,29 +179,13 @@ struct TunnelLogger : public Logger
         enqueueMsg(buf.s);
     }
 
-    void result(ActivityId act, ResultType type, const Fields & fields) override
+    void result(ActivityId act, ResultType type, const Fields & fields) noexcept override
     {
         if (clientVersion.number < WorkerProto::Version::Number{1, 20})
             return;
         StringSink buf;
         buf << STDERR_RESULT << act << type << fields;
         enqueueMsg(buf.s);
-    }
-};
-
-struct TunnelSink : Sink
-{
-    Sink & to;
-
-    TunnelSink(Sink & to)
-        : to(to)
-    {
-    }
-
-    void operator()(std::string_view data) override
-    {
-        to << STDERR_WRITE;
-        writeString(data, to);
     }
 };
 
@@ -217,6 +210,8 @@ struct TunnelSource : BufferedSource
         return n;
     }
 };
+
+} // namespace
 
 struct ClientSettings
 {
@@ -297,7 +292,7 @@ struct ClientSettings
                     trusted || name == settings.getWorkerSettings().buildTimeout.name
                     || name == settings.getWorkerSettings().maxSilentTime.name
                     || name == settings.getWorkerSettings().pollInterval.name || name == "connect-timeout"
-                    || (name == "builders" && value == "")) {
+                    || name == loggerSettings.sessionId.name || (name == "builders" && value == "")) {
                     settings.set(name, value);
                     fileTransferSettings.set(name, value);
                 } else if (setSubstituters(settings.getWorkerSettings().substituters))
@@ -423,6 +418,9 @@ static void performOp(
             bool repairBool;
             conn.from >> repairBool;
             auto repair = RepairFlag{repairBool};
+            auto provenance = conn.protoVersion.features.contains(WorkerProto::featureProvenance)
+                                  ? Provenance::from_json_str_optional(readString(conn.from))
+                                  : nullptr;
 
             logger->startWork();
             auto pathInfo = [&]() {
@@ -448,8 +446,8 @@ static void performOp(
                     assert(false);
                 }
                 // TODO these two steps are essentially RemoteStore::addCAToStore. Move it up to Store.
-                auto path =
-                    store->addToStoreFromDump(source, name, dumpMethod, contentAddressMethod, hashAlgo, refs, repair);
+                auto path = store->addToStoreFromDump(
+                    source, name, dumpMethod, contentAddressMethod, hashAlgo, refs, repair, provenance);
                 return store->queryPathInfo(path);
             }();
             logger->stopWork();
@@ -510,7 +508,21 @@ static void performOp(
         logger->startWork();
         {
             FramedSource source(conn.from);
-            store->addMultipleToStore(source, RepairFlag{repair}, dontCheckSigs ? NoCheckSigs : CheckSigs);
+            auto expected = readNum<uint64_t>(source);
+            for (uint64_t i = 0; i < expected; ++i) {
+                auto info = WorkerProto::Serialise<ValidPathInfo>::read(
+                    *store,
+                    WorkerProto::ReadConn{
+                        .from = source,
+                        .version = conn.protoVersion.features.contains(WorkerProto::featureVersionedAddToStoreMultiple)
+                                       ? conn.protoVersion
+                                       : WorkerProto::Version{.number = {.major = 1, .minor = 16}},
+                    });
+                info.ultimate = false;
+                EnsureRead wrapper{source, info.narSize};
+                store->addToStore(info, wrapper, RepairFlag{repair}, dontCheckSigs ? NoCheckSigs : CheckSigs);
+                wrapper.finish();
+            }
         }
         logger->stopWork();
         break;
@@ -676,6 +688,15 @@ static void performOp(
         break;
     }
 
+    case WorkerProto::Op::AddTempRoots: {
+        auto paths = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
+        logger->startWork();
+        store->addTempRoots(paths);
+        logger->stopWork();
+        conn.to << 1;
+        break;
+    }
+
     case WorkerProto::Op::AddPermRoot: {
         if (!trusted)
             throw Error(
@@ -735,17 +756,36 @@ static void performOp(
     case WorkerProto::Op::CollectGarbage: {
         GCOptions options;
         options.action = WorkerProto::Serialise<GCOptions::GCAction>::read(*store, rconn);
-        options.pathsToDelete = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
+        if (rconn.version.features.contains(WorkerProto::featureDeleteDeadSpecificReferrers)) {
+            options.pathsToDelete = WorkerProto::Serialise<GCOptions::GCPaths>::read(*store, rconn);
+        } else {
+            auto paths = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
+            if (options.action != GCAction::gcDeleteSpecific && paths.empty())
+                options.pathsToDelete = GCOptions::WholeStore{};
+            else
+                options.pathsToDelete = GCOptions::SpecificPaths{
+                    .paths = paths,
+                    .deleteReferrers = false,
+                };
+        }
         conn.from >> options.ignoreLiveness >> options.maxFreed;
+        options.censor = !trusted;
         // obsolete fields
         readInt(conn.from);
         readInt(conn.from);
         readInt(conn.from);
 
+        if (options.action == GCAction::gcDeleteDead
+            && std::holds_alternative<GCOptions::SpecificPaths>(options.pathsToDelete)
+            && !conn.protoVersion.features.contains(WorkerProto::featureDeleteDeadSpecificReferrers)) {
+            throw Error(
+                "Garbage collecting specific paths requested but it is not supported by the negotiated protocol");
+        }
+
         GCResults results;
 
         logger->startWork();
-        if (options.ignoreLiveness)
+        if (options.ignoreLiveness && !getEnv("_NIX_IN_TEST").has_value())
             throw Error("you are not allowed to ignore liveness");
         auto & gcStore = require<GcStore>(*store);
         gcStore.collectGarbage(options, results);
@@ -857,6 +897,37 @@ static void performOp(
         break;
     }
 
+    case WorkerProto::Op::QueryPathInfos: {
+        auto paths = WorkerProto::Serialise<StorePathSet>::read(*store, rconn);
+        logger->startWork();
+        std::vector<ValidPathInfo> infos;
+        {
+            asio::io_context ctx;
+            std::exception_ptr ex;
+            asio::co_spawn(
+                ctx,
+                [&]() -> asio::awaitable<void> {
+                    co_await store->queryPathInfos(
+                        paths, [&](std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>> results) {
+                            for (auto & [path, info] : results)
+                                if (info)
+                                    infos.push_back(*info);
+                        });
+                },
+                [&](std::exception_ptr e) { ex = e; });
+            ctx.run();
+            if (ex)
+                std::rethrow_exception(ex);
+        }
+        logger->stopWork();
+        /* Write the infos for the valid paths. Paths not reported are
+           invalid. */
+        conn.to << infos.size();
+        for (auto & info : infos)
+            WorkerProto::write(*store, wconn, info);
+        break;
+    }
+
     case WorkerProto::Op::OptimiseStore:
         logger->startWork();
         store->optimiseStore();
@@ -905,6 +976,9 @@ static void performOp(
         conn.from >> info.registrationTime >> info.narSize >> info.ultimate;
         info.sigs = WorkerProto::Serialise<std::set<Signature>>::read(*store, rconn);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
+        info.provenance = conn.protoVersion.features.contains(WorkerProto::featureProvenance)
+                              ? Provenance::from_json_str_optional(readString(conn.from))
+                              : nullptr;
         conn.from >> repair >> dontCheckSigs;
         if (!trusted && dontCheckSigs)
             dontCheckSigs = false;
@@ -934,8 +1008,9 @@ static void performOp(
 
             logger->startWork();
 
-            // FIXME: race if addToStore doesn't read source?
-            store->addToStore(info, *source, (RepairFlag) repair, dontCheckSigs ? NoCheckSigs : CheckSigs);
+            EnsureRead wrapper{*source, info.narSize};
+            store->addToStore(info, wrapper, (RepairFlag) repair, dontCheckSigs ? NoCheckSigs : CheckSigs);
+            wrapper.finish();
 
             logger->stopWork();
         }
@@ -957,14 +1032,8 @@ static void performOp(
 
     case WorkerProto::Op::RegisterDrvOutput: {
         logger->startWork();
-        if (conn.protoVersion.number < WorkerProto::Version::Number{1, 31}) {
-            auto outputId = WorkerProto::Serialise<DrvOutput>::read(*store, rconn);
-            auto outputPath = StorePath(readString(conn.from));
-            store->registerDrvOutput(Realisation{{.outPath = outputPath}, outputId});
-        } else {
-            auto realisation = WorkerProto::Serialise<Realisation>::read(*store, rconn);
-            store->registerDrvOutput(realisation);
-        }
+        auto realisation = WorkerProto::Serialise<Realisation>::read(*store, rconn);
+        store->registerDrvOutput(realisation);
         logger->stopWork();
         break;
     }
@@ -972,19 +1041,16 @@ static void performOp(
     case WorkerProto::Op::QueryRealisation: {
         logger->startWork();
         auto outputId = WorkerProto::Serialise<DrvOutput>::read(*store, rconn);
-        auto info = store->queryRealisation(outputId);
+        auto ptr = store->queryRealisation(outputId);
+        std::optional<UnkeyedRealisation> info;
+        if (ptr)
+            info = *ptr;
         logger->stopWork();
-        if (conn.protoVersion.number < WorkerProto::Version::Number{1, 31}) {
-            std::set<StorePath> outPaths;
-            if (info)
-                outPaths.insert(info->outPath);
-            WorkerProto::write(*store, wconn, outPaths);
-        } else {
-            std::set<Realisation> realisations;
-            if (info)
-                realisations.insert({*info, outputId});
-            WorkerProto::write(*store, wconn, realisations);
-        }
+        /* Only return the new format because if we got past
+           `DrvOutput` serialization, we know that is what we're using.
+           */
+        assert(conn.protoVersion.features.contains(WorkerProto::featureRealisationWithPath));
+        WorkerProto::write(*store, wconn, info);
         break;
     }
 
@@ -1005,14 +1071,38 @@ static void performOp(
         break;
     }
 
+    case WorkerProto::Op::QueryActiveBuilds: {
+        logger->startWork();
+        auto & activeBuildsStore = require<QueryActiveBuildsStore>(*store);
+        auto activeBuilds = activeBuildsStore.queryActiveBuilds();
+        logger->stopWork();
+        conn.to << nlohmann::json(activeBuilds).dump();
+        break;
+    }
+
     default:
         throw Error("invalid operation %1%", op);
     }
 }
 
-void processConnection(ref<Store> store, FdSource && from, FdSink && to, TrustedFlag trusted, RecursiveFlag recursive)
+void processConnection(
+    ref<Store> store,
+    FdSource && from,
+    FdSink && to,
+    TrustedFlag trusted,
+    RecursiveFlag recursive,
+    std::function<void(std::string_view traceparent)> setupTelemetry)
 {
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
+    /* The client hanging up triggers an interrupt (via `MonitorFdHup`
+       below), which is how we abort whatever we were doing for it.
+       Once the connection is over, that interrupt has served its
+       purpose, so clear it, e.g. so that we can still export our
+       telemetry. Note: this has to run *after* the monitor has been
+       destroyed, i.e. its thread joined, since it might otherwise
+       still trigger the interrupt after we've cleared it. */
+    Finally clearInterrupt([]() { setInterrupted(false); });
+
     auto monitor = !recursive ? std::make_unique<MonitorFdHup>(from.fd) : nullptr;
     (void) monitor; // suppress warning
     ReceiveInterrupts receiveInterrupts;
@@ -1029,32 +1119,39 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
 #endif
 
     /* Exchange the greeting. */
+    auto localVersion = WorkerProto::latest;
+    if (recursive)
+        localVersion.features.insert(std::string{WorkerProto::featureDisableSetOptions});
+    if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        localVersion.features.erase(std::string(WorkerProto::featureProvenance));
+
     WorkerProto::BasicServerConnection conn;
-    conn.protoVersion = WorkerProto::BasicServerConnection::handshake(to, from, WorkerProto::latest);
+    conn.protoVersion = WorkerProto::BasicServerConnection::handshake(to, from, localVersion);
 
     if (conn.protoVersion.number < WorkerProto::minimum.number)
         throw Error("the Nix client version is too old");
 
+    std::string traceparent;
+    if (conn.protoVersion.features.contains(WorkerProto::featureOpenTelemetry))
+        traceparent = readString(from);
+
     conn.to = std::move(to);
     conn.from = std::move(from);
 
-    auto tunnelLogger_ = std::make_unique<TunnelLogger>(conn.to, conn.protoVersion);
-    auto tunnelLogger = tunnelLogger_.get();
-    std::unique_ptr<Logger> prevLogger_;
-    auto prevLogger = logger.get();
+    auto tunnelLogger = new TunnelLogger(conn.to, conn.protoVersion);
+    auto prevLogger = logger;
     // FIXME
     if (!recursive) {
-        prevLogger_ = std::move(logger);
-        logger = std::move(tunnelLogger_);
+        logger = tunnelLogger;
         applyJSONLogger();
     }
 
+    if (setupTelemetry)
+        setupTelemetry(traceparent);
+
     unsigned int opCount = 0;
 
-    Finally finally([&]() {
-        setInterrupted(false);
-        printMsgUsing(prevLogger, lvlDebug, "%d operations", opCount);
-    });
+    Finally finally([&]() { printMsgUsing(prevLogger, lvlDebug, "%d operations", opCount); });
 
     conn.postHandshake(
         *store,
@@ -1084,11 +1181,31 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
                 break;
             }
 
+            std::string traceparent;
+            if (conn.protoVersion.features.contains(WorkerProto::featureOpenTelemetry))
+                traceparent = readString(conn.from);
+
             printMsgUsing(prevLogger, lvlDebug, "received daemon op %d", op);
 
             opCount++;
 
             debug("performing daemon worker op: %d", op);
+
+            /* Parent our work under the client activity that
+               initiated this operation. */
+            std::optional<Activity> act;
+            std::optional<PushActivity> pact;
+            if (!traceparent.empty()) {
+                act.emplace(
+                    *logger,
+                    lvlDebug,
+                    "daemon operation",
+                    std::to_array<std::pair<std::string_view, Logger::Field>>({
+                        {"nix.daemon.op", (uint64_t) op},
+                        {"traceparent", traceparent},
+                    }));
+                pact.emplace(act->id);
+            }
 
             try {
                 performOp(tunnelLogger, store, trusted, recursive, conn, op);
@@ -1102,10 +1219,6 @@ void processConnection(ref<Store> store, FdSource && from, FdSink && to, Trusted
                 tunnelLogger->stopWork(&e);
                 if (!errorAllowed)
                     throw;
-            } catch (std::bad_alloc & e) {
-                auto ex = Error("Nix daemon out of memory");
-                tunnelLogger->stopWork(&ex);
-                throw;
             }
 
             conn.to.flush();

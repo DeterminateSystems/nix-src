@@ -2,10 +2,13 @@
 
 namespace nix {
 
-struct TeeLogger : Logger
+namespace {
+
+class TeeLogger final : public Logger
 {
     std::vector<std::unique_ptr<Logger>> loggers;
 
+public:
     TeeLogger(std::vector<std::unique_ptr<Logger>> && loggers)
         : loggers(std::move(loggers))
     {
@@ -15,6 +18,12 @@ struct TeeLogger : Logger
     {
         for (auto & logger : loggers)
             logger->stop();
+    };
+
+    void flush() override
+    {
+        for (auto & logger : loggers)
+            logger->flush();
     };
 
     void pause() override
@@ -29,16 +38,22 @@ struct TeeLogger : Logger
             logger->resume();
     };
 
-    void log(Verbosity lvl, std::string_view s) override
+    void log(Verbosity lvl, std::string_view s) noexcept override
     {
         for (auto & logger : loggers)
             logger->log(lvl, s);
     }
 
-    void logEI(const ErrorInfo & ei) override
+    void logEI(const ErrorInfo & ei) noexcept override
     {
         for (auto & logger : loggers)
             logger->logEI(ei);
+    }
+
+    void printException(const std::exception_ptr & ex, std::string_view programName) noexcept override
+    {
+        for (auto & logger : loggers)
+            logger->printException(ex, programName);
     }
 
     void startActivity(
@@ -47,22 +62,55 @@ struct TeeLogger : Logger
         ActivityType type,
         const std::string & s,
         const Fields & fields,
-        ActivityId parent) override
+        ActivityId parent) noexcept override
     {
         for (auto & logger : loggers)
             logger->startActivity(act, lvl, type, s, fields, parent);
     }
 
-    void stopActivity(ActivityId act) override
+    void startActivity(
+        ActivityId act,
+        Verbosity lvl,
+        std::string_view name,
+        ActivityMetadata metadata,
+        std::string_view s,
+        ActivityId parent) noexcept override
+    {
+        for (auto & logger : loggers)
+            logger->startActivity(act, lvl, name, metadata, s, parent);
+    }
+
+    void stopActivity(ActivityId act) noexcept override
     {
         for (auto & logger : loggers)
             logger->stopActivity(act);
     }
 
-    void result(ActivityId act, ResultType type, const Fields & fields) override
+    void result(ActivityId act, ResultType type, const Fields & fields) noexcept override
     {
         for (auto & logger : loggers)
             logger->result(act, type, fields);
+    }
+
+    void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept override
+    {
+        for (auto & logger : loggers)
+            logger->result(act, type, json);
+    }
+
+    Headers getTraceContext(ActivityId act) override
+    {
+        for (auto & logger : loggers) {
+            auto headers = logger->getTraceContext(act);
+            if (!headers.empty())
+                return headers;
+        }
+        return {};
+    }
+
+    void addLogger(std::unique_ptr<Logger> logger)
+    {
+        loggers.push_back(std::move(logger));
     }
 
     void writeToStdout(std::string_view s) override
@@ -94,14 +142,23 @@ struct TeeLogger : Logger
     }
 };
 
-std::unique_ptr<Logger>
-makeTeeLogger(std::unique_ptr<Logger> mainLogger, std::vector<std::unique_ptr<Logger>> && extraLoggers)
+} // namespace
+
+void applyExtraLogger(std::unique_ptr<Logger> extraLogger)
 {
-    std::vector<std::unique_ptr<Logger>> allLoggers;
-    allLoggers.push_back(std::move(mainLogger));
-    for (auto & l : extraLoggers)
-        allLoggers.push_back(std::move(l));
-    return std::make_unique<TeeLogger>(std::move(allLoggers));
+    auto teeLogger = dynamic_cast<TeeLogger *>(logger);
+    if (!teeLogger) {
+        try {
+            std::vector<std::unique_ptr<Logger>> loggers;
+            loggers.push_back(std::unique_ptr<Logger>(logger));
+            teeLogger = new TeeLogger(std::move(loggers));
+        } catch (...) {
+            // `logger` is now gone so give up.
+            abort();
+        }
+        logger = teeLogger;
+    }
+    teeLogger->addLogger(std::move(extraLogger));
 }
 
 } // namespace nix

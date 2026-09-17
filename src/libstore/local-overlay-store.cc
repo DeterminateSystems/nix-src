@@ -5,11 +5,14 @@
 #include "nix/util/os-string.hh"
 #include "nix/store/realisation.hh"
 #include "nix/util/processes.hh"
-#include "nix/util/url.hh"
 #include "nix/store/store-open.hh"
 #include "nix/store/store-registration.hh"
 
 namespace nix {
+
+void LocalOverlayStoreConfig::anchor() {}
+
+void LocalOverlayStore::anchor() {}
 
 std::string LocalOverlayStoreConfig::doc()
 {
@@ -46,6 +49,9 @@ LocalOverlayStore::LocalOverlayStore(ref<const Config> config)
     , config{config}
     , lowerStore(openStore(config->lowerStoreUri.get()).dynamic_pointer_cast<LocalFSStore>())
 {
+    if (!config->upperLayer.isOverridden())
+        throw Error("overlay store at %s requires the 'upper-layer' setting", PathFmt(config->realStoreDir.get()));
+
     if (config->checkMount.get()) {
         std::smatch match;
         std::string mountInfo;
@@ -260,7 +266,7 @@ LocalStore::VerificationResult LocalOverlayStore::verifyAllValidPaths(RepairFlag
     StorePathSet done;
 
     auto existsInStoreDir = [&](const StorePath & storePath) {
-        return pathExists((config->realStoreDir.get() / storePath.to_string()).string());
+        return pathExists(config->realStoreDir.get() / storePath.to_string());
     };
 
     bool errors = false;
@@ -280,10 +286,10 @@ void LocalOverlayStore::remountIfNecessary()
     if (!_remountRequired)
         return;
 
-    if (config->remountHook.get().empty()) {
-        warn("%s needs remounting, set remount-hook to do this automatically", PathFmt(config->realStoreDir.get()));
+    if (auto & hook = config->remountHook.get()) {
+        runProgram(*hook, false, {config->realStoreDir.get().native()});
     } else {
-        runProgram(config->remountHook.get(), false, {config->realStoreDir.get().native()});
+        warn("%s needs remounting, set remount-hook to do this automatically", PathFmt(config->realStoreDir.get()));
     }
 
     _remountRequired = false;

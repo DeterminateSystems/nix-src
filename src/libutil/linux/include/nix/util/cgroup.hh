@@ -8,7 +8,7 @@
 #include "nix/util/types.hh"
 #include "nix/util/canon-path.hh"
 
-namespace nix {
+namespace nix::linux {
 
 std::optional<std::filesystem::path> getCgroupFS();
 
@@ -41,4 +41,9 @@ CanonPath getCurrentCgroup();
  */
 CanonPath getRootCgroup();
 
-} // namespace nix
+/**
+ * Get the PIDs of all processes in the given cgroup.
+ */
+std::set<pid_t> getPidsInCgroup(const std::filesystem::path & cgroup);
+
+} // namespace nix::linux

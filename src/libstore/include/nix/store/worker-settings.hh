@@ -7,6 +7,11 @@
 
 namespace nix {
 
+template<>
+std::vector<StoreReference> BaseSetting<std::vector<StoreReference>>::parse(const std::string & str) const;
+template<>
+std::string BaseSetting<std::vector<StoreReference>>::to_string() const;
+
 struct MaxBuildJobsSetting : public BaseSetting<unsigned int>
 {
     MaxBuildJobsSetting(
@@ -25,6 +30,9 @@ struct MaxBuildJobsSetting : public BaseSetting<unsigned int>
 
 struct WorkerSettings : public virtual Config
 {
+private:
+    void anchor() override;
+
 protected:
     WorkerSettings() = default;
 
@@ -182,7 +190,7 @@ public:
           4. The maximum number of builds that Nix executes in parallel on the machine.
              Typically this should be equal to the number of CPU cores.
 
-          5. The “speed factor”, indicating the relative speed of the machine as a positive integer.
+          5. The “speed factor”, indicating the relative speed of the machine as a positive integer or decimal number.
              If there are multiple machines of the right type, Nix prefers the fastest, taking load into account.
 
           6. A comma-separated list of supported [system features](#conf-system-features).
@@ -360,6 +368,25 @@ public:
               /nix/store/c5cxjywi66iwn9dcx5yvwjkvl559ay6p-bash-4.4-p23-info
               /nix/store/scz72lskj03ihkcn42ias5mlp4i4gr1k-bash-4.4-p23-man
               /nix/store/a724znygmd1cac856j3gfsyvih3lw07j-bash-4.4-p23`.
+        )"};
+
+    Setting<std::string> hostName{
+        this,
+        "",
+        "host-name",
+        R"(
+          The name of this host for recording build provenance. If unset, the Unix host name is used.
+        )"};
+
+    std::optional<std::string> getHostName();
+
+    JSONSetting<StringMap> buildProvenanceTags{
+        this,
+        {},
+        "build-provenance-tags",
+        R"(
+          Arbitrary name/value pairs that are recorded in the build provenance of store paths built by this machine.
+          This can be used to tag builds with metadata such as the CI job URL, build cluster name, etc.
         )"};
 };
 

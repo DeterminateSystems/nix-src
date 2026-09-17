@@ -1,6 +1,5 @@
 #include "nix/store/filetransfer.hh"
 #include "nix/fetchers/cache.hh"
-#include "nix/store/globals.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/types.hh"
 #include "nix/util/url-parts.hh"
@@ -13,7 +12,6 @@
 
 #include <optional>
 #include <nlohmann/json.hpp>
-#include <fstream>
 
 namespace nix::fetchers {
 
@@ -41,16 +39,14 @@ struct GitArchiveInputScheme : InputScheme
         /* This ignores empty path segments for back-compat. Older versions used a tokenizeString here. */
         auto path = url.pathSegments(/*skipEmpty=*/true) | std::ranges::to<std::vector<std::string>>();
 
-        std::optional<std::string> rev;
-        std::optional<std::string> ref;
-        std::optional<std::string> host_url;
+        Attrs attrs;
 
         auto size = path.size();
         if (size == 3) {
             if (std::regex_match(path[2], revRegex))
-                rev = path[2];
+                attrs.insert_or_assign("rev", path[2]);
             else
-                ref = path[2];
+                attrs.insert_or_assign("ref", path[2]);
         } else if (size > 3) {
             std::string rs;
             for (auto i = std::next(path.begin(), 2); i != path.end(); i++) {
@@ -59,38 +55,30 @@ struct GitArchiveInputScheme : InputScheme
                     rs += "/";
                 }
             }
-            ref = rs;
+            attrs.insert_or_assign("ref", rs);
         } else if (size < 2)
             throw BadURL("URL '%s' is invalid", url);
 
         for (auto & [name, value] : url.query) {
             if (name == "rev") {
-                if (rev)
+                if (attrs.contains(name))
                     throw BadURL("URL '%s' contains multiple commit hashes", url);
-                rev = value;
+                attrs.insert_or_assign("rev", value);
             } else if (name == "ref") {
-                if (ref)
+                if (attrs.contains(name))
                     throw BadURL("URL '%s' contains multiple branch/tag names", url);
-                ref = value;
+                attrs.insert_or_assign("ref", value);
             } else if (name == "host")
-                host_url = value;
-            // FIXME: barf on unsupported attributes
+                attrs.insert_or_assign("host", value);
+            else if (name == "narHash")
+                attrs.insert_or_assign("narHash", value);
+            else
+                throw BadURL("URL '%s' contains unknown parameter '%s'", url, name);
         }
 
-        Attrs attrs;
         attrs.insert_or_assign("type", std::string{schemeName()});
         attrs.insert_or_assign("owner", path[0]);
         attrs.insert_or_assign("repo", path[1]);
-        if (rev)
-            attrs.insert_or_assign("rev", *rev);
-        if (ref)
-            attrs.insert_or_assign("ref", *ref);
-        if (host_url)
-            attrs.insert_or_assign("host", *host_url);
-
-        auto narHash = url.query.find("narHash");
-        if (narHash != url.query.end())
-            attrs.insert_or_assign("narHash", narHash->second);
 
         return inputFromAttrs(settings, attrs);
     }
@@ -162,7 +150,7 @@ struct GitArchiveInputScheme : InputScheme
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         auto owner = getStrAttr(input.attrs, "owner");
         auto repo = getStrAttr(input.attrs, "repo");
@@ -173,7 +161,7 @@ struct GitArchiveInputScheme : InputScheme
         if (ref)
             path.push_back(*ref);
         if (rev)
-            path.push_back(rev->to_string(HashFormat::Base16, false));
+            path.push_back(abbreviate ? rev->gitShortRev() : rev->gitRev());
         auto url = ParsedURL{
             .scheme = std::string{schemeName()},
             .path = path,
@@ -271,7 +259,8 @@ struct GitArchiveInputScheme : InputScheme
         time_t lastModified;
     };
 
-    std::pair<Input, TarballInfo> downloadArchive(const Settings & settings, Store & store, Input input) const
+    std::optional<std::pair<Input, TarballInfo>>
+    downloadArchive(const Settings & settings, Store & store, Input input, bool fastOnly) const
     {
         if (!maybeGetStrAttr(input.attrs, "ref"))
             input.attrs.insert_or_assign("ref", "HEAD");
@@ -299,11 +288,15 @@ struct GitArchiveInputScheme : InputScheme
                 auto treeHash = getRevAttr(*treeHashAttrs, "treeHash");
                 auto lastModified = getIntAttr(*lastModifiedAttrs, "lastModified");
                 if (settings.getTarballCache()->hasObject(treeHash))
-                    return {std::move(input), TarballInfo{.treeHash = treeHash, .lastModified = (time_t) lastModified}};
+                    return {
+                        {std::move(input), TarballInfo{.treeHash = treeHash, .lastModified = (time_t) lastModified}}};
                 else
                     debug("Git tree with hash '%s' has disappeared from the cache, refetching...", treeHash.gitRev());
             }
         }
+
+        if (fastOnly)
+            return std::nullopt;
 
         /* Stream the tarball into the tarball cache. */
         auto url = getDownloadUrl(settings, input);
@@ -340,13 +333,17 @@ struct GitArchiveInputScheme : InputScheme
                 rev->gitRev(), input.to_string(), upstreamTreeHash->gitRev(), tarballInfo.treeHash.gitRev());
 #endif
 
-        return {std::move(input), tarballInfo};
+        return {{std::move(input), tarballInfo}};
     }
 
-    std::pair<ref<SourceAccessor>, Input>
-    getAccessor(const Settings & settings, Store & store, const Input & _input) const override
+    std::optional<std::pair<ref<SourceAccessor>, Input>>
+    getAccessor(const Settings & settings, Store & store, const Input & _input, bool fastOnly) const override
     {
-        auto [input, tarballInfo] = downloadArchive(settings, store, _input);
+        auto res = downloadArchive(settings, store, _input, fastOnly);
+        if (fastOnly && !res)
+            return std::nullopt;
+        assert(res);
+        auto [input, tarballInfo] = *res;
 
 #if 0
         input.attrs.insert_or_assign("treeHash", tarballInfo.treeHash.gitRev());
@@ -354,9 +351,16 @@ struct GitArchiveInputScheme : InputScheme
         input.attrs.insert_or_assign("lastModified", uint64_t(tarballInfo.lastModified));
 
         auto accessor =
-            settings.getTarballCache()->getAccessor(tarballInfo.treeHash, {}, "«" + input.to_string() + "»");
+            settings.getTarballCache()->getAccessor(tarballInfo.treeHash, {}, "«" + input.to_string(true) + "»");
 
-        return {accessor, input};
+        if (!settings.trustTarballsFromGitForges)
+            // FIXME: computing the NAR hash here is wasteful if
+            // copyInputToStore() is just going to hash/copy it as
+            // well.
+            input.attrs.insert_or_assign(
+                "narHash", accessor->hashPath(CanonPath::root).to_string(HashFormat::SRI, true));
+
+        return {{accessor, input}};
     }
 
     bool isLocked(const Settings & settings, const Input & input) const override
@@ -368,15 +372,10 @@ struct GitArchiveInputScheme : InputScheme
         return input.getRev().has_value() && (settings.trustTarballsFromGitForges || input.getNarHash().has_value());
     }
 
-    std::optional<ExperimentalFeature> experimentalFeature() const override
-    {
-        return Xp::Flakes;
-    }
-
     std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
     {
         if (auto rev = input.getRev())
-            return rev->gitRev();
+            return "github:" + rev->gitRev();
         else
             return std::nullopt;
     }
@@ -454,8 +453,7 @@ struct GitHubInputScheme : GitArchiveInputScheme
                             : headers.empty()    ? "https://%s/%s/%s/archive/%s.tar.gz"
                                                  : "https://api.%s/repos/%s/%s/tarball/%s";
 
-        const auto url =
-            fmt(urlFmt, host, getOwner(input), getRepo(input), input.getRev()->to_string(HashFormat::Base16, false));
+        const auto url = fmt(urlFmt, host, getOwner(input), getRepo(input), input.getRev()->gitRev());
 
         return DownloadUrl{parseURL(url), headers};
     }
@@ -542,7 +540,7 @@ struct GitLabInputScheme : GitArchiveInputScheme
                 host,
                 getStrAttr(input.attrs, "owner"),
                 getStrAttr(input.attrs, "repo"),
-                input.getRev()->to_string(HashFormat::Base16, false));
+                input.getRev()->gitRev());
 
         Headers headers = makeHeadersWithAuthTokens(settings, host, input);
         return DownloadUrl{parseURL(url), headers};
@@ -638,7 +636,7 @@ struct SourceHutInputScheme : GitArchiveInputScheme
                 host,
                 getStrAttr(input.attrs, "owner"),
                 getStrAttr(input.attrs, "repo"),
-                input.getRev()->to_string(HashFormat::Base16, false));
+                input.getRev()->gitRev());
 
         Headers headers = makeHeadersWithAuthTokens(settings, host, input);
         return DownloadUrl{parseURL(url), headers};

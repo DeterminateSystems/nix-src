@@ -18,6 +18,9 @@
 #include "nix/expr/primops.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/sort.hh"
+#include "nix/util/mounted-source-accessor.hh"
+#include "nix/expr/provenance.hh"
+#include "nix/util/override-provenance-source-accessor.hh"
 
 #include <boost/container/small_vector.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
@@ -74,6 +77,7 @@ StringMap EvalState::realiseContext(const NixStringContext & context, StorePathS
 
     for (auto & c : context) {
         auto ensureValid = [&](const StorePath & p) {
+            waitForPath(p);
             if (!store->isValidPath(p))
                 error<InvalidPathError>(p).debugThrow();
         };
@@ -88,7 +92,10 @@ StringMap EvalState::realiseContext(const NixStringContext & context, StorePathS
                     ensureValid(b.drvPath->getBaseStorePath());
                 },
                 [&](const NixStringContextElem::Opaque & o) {
-                    ensureValid(o.path);
+                    // We consider virtual store paths valid here. They'll
+                    // be devirtualized if needed elsewhere.
+                    if (!storeFS->getMount(CanonPath(store->printStorePath(o.path))))
+                        ensureValid(o.path);
                     if (maybePathsOut)
                         maybePathsOut->emplace(o.path);
                 },
@@ -97,6 +104,9 @@ StringMap EvalState::realiseContext(const NixStringContext & context, StorePathS
                     ensureValid(d.drvPath);
                     if (maybePathsOut)
                         maybePathsOut->emplace(d.drvPath);
+                },
+                [&](const NixStringContextElem::Path & p) {
+                    // FIXME: do something?
                 },
             },
             c.raw);
@@ -239,18 +249,10 @@ void derivationToValue(
     auto w = state.allocValue();
     w->mkAttrs(attrs);
 
-    if (!state.vImportedDrvToDerivation) {
-        state.vImportedDrvToDerivation = allocRootValue(state.allocValue());
-        state.eval(
-            state.parseExprFromString(
-#include "imported-drv-to-derivation.nix.gen.hh"
-                , state.rootPath(CanonPath::root)),
-            **state.vImportedDrvToDerivation);
-    }
+    auto vImportedDrvToDerivation = state.allocValue();
+    state.evalFile(state.importedDrvToDerivation, *vImportedDrvToDerivation); // has caching
 
-    state.forceFunction(
-        **state.vImportedDrvToDerivation, pos, "while evaluating imported-drv-to-derivation.nix.gen.hh");
-    v.mkApp(*state.vImportedDrvToDerivation, w);
+    v.mkApp(vImportedDrvToDerivation, w);
     state.forceAttrs(v, pos, "while calling imported-drv-to-derivation.nix.gen.hh");
 }
 
@@ -299,6 +301,7 @@ static void import(EvalState & state, const PosIdx pos, Value & vPath, Value * v
         if (!state.store->isStorePath(path2))
             return std::nullopt;
         auto storePath = state.store->parseStorePath(path2);
+        state.waitForPath(storePath);
         if (!(state.store->isValidPath(storePath) && isDerivation(path2)))
             return std::nullopt;
         return storePath;
@@ -694,7 +697,7 @@ static RegisterPrimOp primop_isPath({
 });
 
 template<typename Callable>
-static inline void withExceptionContext(Trace trace, Callable && func)
+static inline void withExceptionContext(Trace trace, const Callable & func)
 {
     try {
         func();
@@ -781,10 +784,12 @@ struct CompareValues
     }
 };
 
-typedef std::list<Value *, gc_allocator<Value *>> ValueList;
-
 static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
+    /* The values are rooted via RootValue, so the lists themselves
+       don't need to be visible to the GC. */
+    using ValueList = std::list<RootValue>;
+
     state.forceAttrs(*args[0], noPos, "while evaluating the first argument passed to builtins.genericClosure");
 
     /* Get the start set. */
@@ -798,7 +803,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
 
     ValueList workSet;
     for (auto elem : startSet->value->listView())
-        workSet.push_back(elem);
+        workSet.push_back(RootValue(elem));
 
     if (startSet->value->listSize() == 0) {
         v = *startSet->value;
@@ -819,7 +824,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
     auto cmp = CompareValues(state, noPos, "");
     std::map<Value *, Value *, decltype(cmp)> keyToElem(cmp);
     while (!workSet.empty()) {
-        Value * e = *(workSet.begin());
+        Value * e = **workSet.begin();
         workSet.pop_front();
 
         try {
@@ -864,7 +869,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
             }
             throw;
         }
-        res.push_back(e);
+        res.push_back(RootValue(e));
 
         /* Call the `operator' function with `e' as argument. */
         Value newElements;
@@ -879,7 +884,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
             for (auto elem : newElements.listView()) {
                 state.forceValue(*elem, noPos); // "while evaluating one one of the elements returned by the `operator`
                                                 // passed to builtins.genericClosure");
-                workSet.push_back(elem);
+                workSet.push_back(RootValue(elem));
             }
         } catch (Error & err) {
             err.addTrace(
@@ -894,7 +899,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
     /* Create the result list. */
     auto list = state.buildList(res.size());
     for (const auto & [n, i] : enumerate(res))
-        list[n] = i;
+        list[n] = *i;
     v.mkList(list);
 }
 
@@ -976,6 +981,7 @@ static RegisterPrimOp primop_break(
          }
 
          // Return the value we were passed.
+         state.forceValue(*args[0], pos);
          v = *args[0];
      }});
 
@@ -1037,7 +1043,35 @@ static void prim_addErrorContext(EvalState & state, const PosIdx pos, Value ** a
 static RegisterPrimOp primop_addErrorContext(
     PrimOp{
         .name = "__addErrorContext",
+        .args = {"context", "value"},
         .arity = 2,
+        .doc = R"(
+            Evaluate *context*, which can be coerced to a string,
+            and append it to any error or stack traces displayed while evaluating *value*.
+            Then return *value*.
+
+            This function is useful for providing helpful context in complex Nix expressions
+            when the evaluation of *value* fails.
+            The additional context is applied when evaluating *value* itself fails,
+            not when attributes or elements of *value* are evaluated.
+
+            For example, the module system from nixpkgs uses this to show
+            the relevant information about the options that were evaluating
+            when an error occurs.
+
+            ```nix-repl
+            nix-repl> addErrorContext "while evaluating foo" (throw "bar")
+            error:
+                   … while evaluating foo
+
+                   … while calling the 'throw' builtin
+                     at «string»:1:56:
+                        1| with builtins; addErrorContext "while evaluating foo" (throw "bar")
+                         |                                                        ^
+
+                   error: bar
+            ```
+        )",
         // The normal trace item is redundant
         .addTrace = false,
         .impl = prim_addErrorContext,
@@ -1148,7 +1182,7 @@ static RegisterPrimOp primop_floor({
         a NixInt and if `*number* < -9007199254740992` or `*number* > 9007199254740992`.
 
         If the datatype of *number* is neither a NixInt (signed 64-bit integer) nor a NixFloat
-        (IEEE-754 double-precision floating-point number), an evaluation error will be thrown.
+        (IEEE-754 double-precision floating-point number), an evaluation error is thrown.
     )",
     .impl = prim_floor,
 });
@@ -1195,7 +1229,7 @@ static RegisterPrimOp primop_tryEval({
       `false` if an error was thrown) and `value`, equalling *e* if
       successful and `false` otherwise. `tryEval` only prevents
       errors created by `throw` or `assert` from being thrown.
-      Errors `tryEval` doesn't catch are, for example, those created
+      Errors that `tryEval` doesn't catch are, for example, those created
       by `abort` and type errors generated by builtins. Also note that
       this doesn't evaluate *e* deeply, so `let e = { x = throw ""; };
       in (builtins.tryEval e).success` is `true`. Using
@@ -1348,7 +1382,7 @@ static RegisterPrimOp primop_warn({
       [`debugger-on-trace`](@docroot@/command-ref/conf-file.md#conf-debugger-on-trace)
       or [`debugger-on-warn`](@docroot@/command-ref/conf-file.md#conf-debugger-on-warn)
       option is set to `true` and the `--debugger` flag is given, the
-      interactive debugger will be started when `warn` is called (like
+      interactive debugger is started when `warn` is called (like
       [`break`](@docroot@/language/builtins.md#builtins-break)).
 
       If the
@@ -1372,16 +1406,15 @@ static void prim_second(EvalState & state, const PosIdx pos, Value ** args, Valu
  * Derivations
  *************************************************************/
 
-static void derivationStrictInternal(EvalState & state, std::string_view name, const Bindings * attrs, Value & v);
+static void derivationStrictInternal(
+    EvalState & state,
+    std::string_view name,
+    const Bindings * attrs,
+    Value & v,
+    std::shared_ptr<const Provenance> provenance,
+    bool acceptMeta);
 
-/* Construct (as a unobservable side effect) a Nix derivation
-   expression that performs the derivation described by the argument
-   set.  Returns the original set extended with the following
-   attributes: `outPath' containing the primary output path of the
-   derivation; `drvPath' containing the path of the Nix expression;
-   and `type' set to `derivation' to indicate that this is a
-   derivation. */
-static void prim_derivationStrict(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_derivationStrictGeneric(EvalState & state, const PosIdx pos, Value ** args, Value & v, bool acceptMeta)
 {
     state.forceAttrs(*args[0], pos, "while evaluating the argument passed to builtins.derivationStrict");
 
@@ -1401,7 +1434,7 @@ static void prim_derivationStrict(EvalState & state, const PosIdx pos, Value ** 
     }
 
     try {
-        derivationStrictInternal(state, drvName, attrs, v);
+        derivationStrictInternal(state, drvName, attrs, v, state.evalContext.provenance, acceptMeta);
     } catch (Error & e) {
         Pos pos = state.positions[nameAttr->pos];
         /*
@@ -1432,6 +1465,18 @@ static void prim_derivationStrict(EvalState & state, const PosIdx pos, Value ** 
     }
 }
 
+/* Construct a Nix derivation with metadata provenance */
+static RegisterPrimOp primop_derivationStrictWithMeta(
+    PrimOp{
+        .name = "derivationStrictWithMeta",
+        .arity = 1,
+        .impl =
+            [](EvalState & state, const PosIdx pos, Value ** args, Value & v) {
+                prim_derivationStrictGeneric(state, pos, args, v, /*acceptMeta=*/true);
+            },
+        .internal = true,
+    });
+
 /**
  * Early validation for the derivation name, for better error message.
  * It is checked again when constructing store paths.
@@ -1455,7 +1500,13 @@ static void checkDerivationName(EvalState & state, std::string_view drvName)
     }
 }
 
-static void derivationStrictInternal(EvalState & state, std::string_view drvName, const Bindings * attrs, Value & v)
+static void derivationStrictInternal(
+    EvalState & state,
+    std::string_view drvName,
+    const Bindings * attrs,
+    Value & v,
+    std::shared_ptr<const Provenance> provenance,
+    bool acceptMeta)
 {
     checkDerivationName(state, drvName);
 
@@ -1580,7 +1631,19 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
                the environment. */
             default:
 
-                if (jsonObject) {
+                if (acceptMeta && i->name == EvalState::s.__meta) {
+                    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+                        state.forceAttrs(*i->value, pos, "while evaluating __meta");
+                        NixStringContext ctx;
+                        auto obj = printValueAsJSON(state, true, *i->value, pos, ctx);
+
+                        if (!ctx.empty())
+                            throw Error("Derivation __meta provenance can't contain string context like store paths.");
+
+                        provenance =
+                            std::make_shared<const DerivationProvenance>(provenance, make_ref<nlohmann::json>(obj));
+                    }
+                } else if (jsonObject) {
 
                     if (i->name == state.s.structuredAttrs)
                         continue;
@@ -1704,6 +1767,10 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
     /* Everything in the context of the strings in the derivation
        attributes should be added as dependencies of the resulting
        derivation. */
+    StringMap rewrites;
+
+    std::optional<std::string> drvS;
+
     for (auto & c : context) {
         std::visit(
             overloaded{
@@ -1715,6 +1782,8 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
                 [&](const NixStringContextElem::DrvDeep & d) {
                     /* !!! This doesn't work if readOnlyMode is set. */
                     StorePathSet refs;
+                    // FIXME: don't need to wait, we only need the references.
+                    state.waitForPath(d.drvPath);
                     state.store->computeFSClosure(d.drvPath, refs);
                     for (auto & j : refs) {
                         drv.inputSrcs.insert(j);
@@ -1726,10 +1795,26 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
                 [&](const NixStringContextElem::Built & b) {
                     drv.inputDrvs.ensureSlot(*b.drvPath).value.insert(b.output);
                 },
-                [&](const NixStringContextElem::Opaque & o) { drv.inputSrcs.insert(o.path); },
+                [&](const NixStringContextElem::Opaque & o) {
+                    drv.inputSrcs.insert(state.devirtualize(o.path, &rewrites));
+                },
+                [&](const NixStringContextElem::Path & p) {
+                    if (!drvS)
+                        drvS = drv.unparse(*state.store, true);
+                    if (drvS->find(p.storePath.to_string()) != drvS->npos) {
+                        auto devirtualized = state.devirtualize(p.storePath, &rewrites);
+                        warn(
+                            "Using 'builtins.derivation' to create a derivation named '%s' that references the store path '%s' without a proper context. "
+                            "The resulting derivation will not have a correct store reference, so this is unreliable and may stop working in the future.",
+                            drvName,
+                            state.store->printStorePath(devirtualized));
+                    }
+                },
             },
             c.raw);
     }
+
+    drv.applyRewrites(rewrites);
 
     /* Do we have all required attributes? */
     if (drv.builder == "")
@@ -1822,8 +1907,9 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
        Unless we are in read-only mode, that is, in which case we do not
        write anything. Users commonly do this to speed up evaluation in
        contexts where they don't actually want to build anything. */
-    auto drvPath =
-        settings.readOnlyMode ? computeStorePath(*state.store, drv) : state.store->writeDerivation(drv, state.repair);
+    auto drvPath = settings.readOnlyMode
+                       ? computeStorePath(*state.store, drv)
+                       : state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair, provenance);
     auto drvPathS = state.store->printStorePath(drvPath);
 
     printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
@@ -1850,11 +1936,21 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
     v.mkAttrs(result);
 }
 
+/* Construct (as a unobservable side effect) a Nix derivation
+   expression that performs the derivation described by the argument
+   set.  Returns the original set extended with the following
+   attributes: `outPath' containing the primary output path of the
+   derivation; `drvPath' containing the path of the Nix expression;
+   and `type' set to `derivation' to indicate that this is a
+   derivation. */
 static RegisterPrimOp primop_derivationStrict(
     PrimOp{
         .name = "derivationStrict",
         .arity = 1,
-        .impl = prim_derivationStrict,
+        .impl =
+            [](EvalState & state, const PosIdx pos, Value ** args, Value & v) {
+                prim_derivationStrictGeneric(state, pos, args, v, /*acceptMeta=*/false);
+            },
     });
 
 /* Return a placeholder string for the specified output that will be
@@ -1927,21 +2023,21 @@ static void prim_storePath(EvalState & state, const PosIdx pos, Value ** args, V
             .debugThrow();
 
     NixStringContext context;
-    auto path =
-        state.coerceToPath(pos, *args[0], context, "while evaluating the first argument passed to 'builtins.storePath'")
-            .path;
+    SourcePath sourcePath = state.coerceToPath(
+        pos, *args[0], context, "while evaluating the first argument passed to 'builtins.storePath'");
+
     /* Resolve symlinks in ‘path’, unless ‘path’ itself is a symlink
        directly in the store.  The latter condition is necessary so
        e.g. nix-push does the right thing. */
-    if (!state.store->isStorePath(path.abs()))
-        path = CanonPath(canonPath(path.abs(), true).string());
-    if (!state.store->isInStore(path.abs()))
-        state.error<EvalError>("path '%1%' is not in the Nix store", path).atPos(pos).debugThrow();
-    auto path2 = state.store->toStorePath(path.abs()).first;
-    if (!settings.readOnlyMode)
-        state.store->ensurePath(path2);
-    context.insert(NixStringContextElem::Opaque{.path = path2});
-    v.mkString(path.abs(), context, state.mem);
+    if (!state.store->isStorePath(sourcePath.path.abs()))
+        sourcePath = sourcePath.resolveSymlinks(SymlinkResolution::Full);
+    if (!state.store->isInStore(sourcePath.path.abs()))
+        state.error<EvalError>("path '%1%' is not in the Nix store", sourcePath).atPos(pos).debugThrow();
+    auto storePath = state.store->toStorePath(sourcePath.path.abs()).first;
+    if (!state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath))) && !settings.readOnlyMode)
+        state.store->ensurePath(storePath);
+    context.insert(NixStringContextElem::Opaque{.path = storePath});
+    v.mkString(sourcePath.path.abs(), context, state.mem);
 }
 
 static RegisterPrimOp primop_storePath({
@@ -2090,14 +2186,17 @@ static void prim_readFile(EvalState & state, const PosIdx pos, Value ** args, Va
             .debugThrow();
     StorePathSet refs;
     if (state.store->isInStore(path.path.abs())) {
-        try {
-            refs = state.store->queryPathInfo(state.store->toStorePath(path.path.abs()).first)->references;
-        } catch (Error &) { // FIXME: should be InvalidPathError
+        auto storePath = state.store->toStorePath(path.path.abs()).first;
+        // Skip virtual paths since they don't have references and
+        // don't exist anyway.
+        if (!state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath)))) {
+            if (auto info = state.store->maybeQueryPathInfo(state.store->toStorePath(path.path.abs()).first)) {
+                // Re-scan references to filter down to just the ones that actually occur in the file.
+                auto refsSink = PathRefScanSink::fromPaths(info->references);
+                refsSink << s;
+                refs = refsSink.getResultPaths();
+            }
         }
-        // Re-scan references to filter down to just the ones that actually occur in the file.
-        auto refsSink = PathRefScanSink::fromPaths(refs);
-        refsSink << s;
-        refs = refsSink.getResultPaths();
     }
     NixStringContext context;
     for (auto && p : std::move(refs)) {
@@ -2331,6 +2430,23 @@ static RegisterPrimOp primop_hashFile({
       of `"md5"`, `"sha1"`, `"sha256"` or `"sha512"`.
     )",
     .impl = prim_hashFile,
+});
+
+static RegisterPrimOp primop_narHash({
+    .name = "__narHash",
+    .args = {"p"},
+    .doc = R"(
+      Return an SRI representation of the SHA-256 hash of the NAR serialisation of the path *p*.
+    )",
+    .impl =
+        [](EvalState & state, const PosIdx pos, Value ** args, Value & v) {
+            auto path = state.realisePath(pos, *args[0]);
+            auto hash =
+                fetchToStore2(state.fetchSettings, *state.store, path.resolveSymlinks(), FetchMode::DryRun).second;
+            v.mkString(hash.to_string(HashFormat::SRI, true), state.mem);
+        },
+    // FIXME: may be useful to expose to the user.
+    .internal = true,
 });
 
 static const Value & fileTypeToString(EvalState & state, SourceAccessor::Type type)
@@ -2660,15 +2776,25 @@ static void prim_toFile(EvalState & state, const PosIdx pos, Value ** args, Valu
 {
     NixStringContext context;
     auto name = state.forceStringNoCtx(*args[0], pos, "while evaluating the first argument passed to builtins.toFile");
-    auto contents =
-        state.forceString(*args[1], context, pos, "while evaluating the second argument passed to builtins.toFile");
+    std::string contents(
+        state.forceString(*args[1], context, pos, "while evaluating the second argument passed to builtins.toFile"));
 
     StorePathSet refs;
+    StringMap rewrites;
 
     for (auto c : context) {
         if (auto p = std::get_if<NixStringContextElem::Opaque>(&c.raw))
             refs.insert(p->path);
-        else
+        else if (auto p = std::get_if<NixStringContextElem::Path>(&c.raw)) {
+            if (contents.find(p->storePath.to_string()) != contents.npos) {
+                auto devirtualized = state.devirtualize(p->storePath, &rewrites);
+                warn(
+                    "Using 'builtins.toFile' to create a file named '%s' that references the store path '%s' without a proper context. "
+                    "The resulting file will not have a correct store reference, so this is unreliable and may stop working in the future.",
+                    name,
+                    state.store->printStorePath(devirtualized));
+            }
+        } else
             state
                 .error<EvalError>(
                     "files created by %1% may not reference derivations, but %2% references %3%",
@@ -2678,6 +2804,8 @@ static void prim_toFile(EvalState & state, const PosIdx pos, Value ** args, Valu
                 .atPos(pos)
                 .debugThrow();
     }
+
+    contents = rewriteStrings(contents, rewrites);
 
     auto storePath = settings.readOnlyMode ? state.store->makeFixedOutputPathFromCA(
                                                  name,
@@ -2694,7 +2822,8 @@ static void prim_toFile(EvalState & state, const PosIdx pos, Value ** args, Valu
                                                      ContentAddressMethod::Raw::Text,
                                                      HashAlgorithm::SHA256,
                                                      refs,
-                                                     state.repair);
+                                                     state.repair,
+                                                     state.evalContext.provenance);
                                              });
 
     /* Note: we don't need to add `context' to the context of the
@@ -2838,11 +2967,23 @@ static void addPath(
                 name, ContentAddressWithReferences::fromParts(method, *expectedHash, {refs}));
 
         if (!expectedHash || !state.store->isValidPath(*expectedStorePath)) {
+            // FIXME: make this lazy?
             // FIXME: support refs in fetchToStore()?
+            auto path2 = path.resolveSymlinks();
+            // Don't use source path provenance if we have a filter applied, since we can't accurately
+            // record that. Instead, use the current global provenance, since it's better than nothing.
+            auto path3 = filter
+                ? SourcePath{
+                      make_ref<OverrideProvenanceSourceAccessor>(
+                          path2.accessor, state.evalContext.provenance),
+                      path2.path
+                  }
+                : path2;
+
             auto dstPath = refs.empty() ? fetchToStore(
                                               state.fetchSettings,
                                               *state.store,
-                                              path.resolveSymlinks(),
+                                              path3,
                                               settings.readOnlyMode ? FetchMode::DryRun : FetchMode::Copy,
                                               name,
                                               method,
@@ -2850,7 +2991,7 @@ static void addPath(
                                               state.repair)
                                         : state.store->addToStore(
                                               name,
-                                              path.resolveSymlinks(),
+                                              path3,
                                               method,
                                               HashAlgorithm::SHA256,
                                               refs,
@@ -2880,7 +3021,15 @@ static void prim_filterSource(EvalState & state, const PosIdx pos, Value ** args
     state.forceFunction(*args[0], pos, "while evaluating the first argument passed to builtins.filterSource");
 
     addPath(
-        state, pos, path.baseName(), path, args[0], ContentAddressMethod::Raw::NixArchive, std::nullopt, v, context);
+        state,
+        pos,
+        state.computeBaseName(path, pos),
+        path,
+        args[0],
+        ContentAddressMethod::Raw::NixArchive,
+        std::nullopt,
+        v,
+        context);
 }
 
 static RegisterPrimOp primop_filterSource({
@@ -3050,6 +3199,8 @@ static RegisterPrimOp primop_attrNames({
       Return the names of the attributes in the set *set* in an
       alphabetically sorted list. For instance, `builtins.attrNames { y
       = 1; x = "foo"; }` evaluates to `[ "x" "y" ]`.
+
+      Has `O(n log n)` time complexity, where `n` is number of attributes in the *set*.
     )",
     .impl = prim_attrNames,
 });
@@ -3082,6 +3233,8 @@ static RegisterPrimOp primop_attrValues({
     .doc = R"(
       Return the values of the attributes in the set *set* in the order
       corresponding to the sorted attribute names.
+
+      Has `O(n log n)` time complexity, where `n` is number of attributes in the *set*.
     )",
     .impl = prim_attrValues,
 });
@@ -3094,7 +3247,7 @@ void prim_getAttr(EvalState & state, const PosIdx pos, Value ** args, Value & v)
     auto i = state.getAttr(state.symbols.create(attr), args[1]->attrs(), "in the attribute set under consideration");
     // !!! add to stack trace?
     if (state.countCalls && i->pos)
-        state.attrSelects[i->pos]++;
+        state.attrSelects->try_emplace_or_visit(i->pos, 1, [](auto & j) { j.second++; });
     state.forceValue(*i->value, pos);
     v = *i->value;
 }
@@ -3107,6 +3260,8 @@ static RegisterPrimOp primop_getAttr({
       aborts if the attribute doesn’t exist. This is a dynamic version of
       the `.` operator, since *s* is an expression rather than an
       identifier.
+
+      Has `O(log n)` time complexity, where `n` is number of attributes in the *set*.
     )",
     .impl = prim_getAttr,
 });
@@ -3195,6 +3350,8 @@ static RegisterPrimOp primop_hasAttr({
       `hasAttr` returns `true` if *set* has an attribute named *s*, and
       `false` otherwise. This is a dynamic version of the `?` operator,
       since *s* is an expression rather than an identifier.
+
+      Has `O(log n)` time complexity, where `n` is number of attributes in the *set*.
     )",
     .impl = prim_hasAttr,
 });
@@ -3254,6 +3411,8 @@ static RegisterPrimOp primop_removeAttrs({
       ```
 
       evaluates to `{ y = 2; }`.
+
+      Has `O(n + k log k)` time complexity, where `n` is number of attributes in the *set* and `k` is the size of *list*.
     )",
     .impl = prim_removeAttrs,
 });
@@ -3341,6 +3500,8 @@ static RegisterPrimOp primop_listToAttrs({
       ```nix
       { foo = 123; bar = 456; }
       ```
+
+      Has `O(n log n)` time complexity, where `n` is size of the list.
     )",
     .impl = prim_listToAttrs,
 });
@@ -3417,7 +3578,7 @@ static RegisterPrimOp primop_intersectAttrs({
       Return a set consisting of the attributes in the set *e2* which have the
       same name as some attribute in *e1*.
 
-      Performs in O(*n* log *m*) where *n* is the size of the smaller set and *m* the larger set's size.
+      Has `O(n log m)` time complexity, where `n` and `m` are the sizes of the smallest and largest set respectively.
     )",
     .impl = prim_intersectAttrs,
 });
@@ -3457,6 +3618,8 @@ static RegisterPrimOp primop_catAttrs({
       ```
 
       evaluates to `[1 2]`.
+
+      Has `O(n)` time complexity, where `n` is the size of the *list*.
     )",
     .impl = prim_catAttrs,
 });
@@ -3500,6 +3663,8 @@ static RegisterPrimOp primop_functionArgs({
       "Formal argument" here refers to the attributes pattern-matched by
       the function. Plain lambdas are not included, e.g. `functionArgs (x:
       ...) = { }`.
+
+      Has constant time complexity.
     )",
     .impl = prim_functionArgs,
 });
@@ -3532,61 +3697,147 @@ static RegisterPrimOp primop_mapAttrs({
       ```
 
       evaluates to `{ a = 10; b = 20; }`.
+
+      Has `O(n)` time complexity, where `n` is the size of the *attrset*.
+      Note that no calls to *f* are performed by the builtin.
+      The function *f* is called on demand when a resulting attribute value is evaluated.
     )",
     .impl = prim_mapAttrs,
 });
 
+static void prim_filterAttrs(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+{
+    state.forceAttrs(*args[1], pos, "while evaluating the second argument passed to builtins.filterAttrs");
+
+    if (args[1]->attrs()->empty()) {
+        v = *args[1];
+        return;
+    }
+
+    state.forceFunction(*args[0], pos, "while evaluating the first argument passed to builtins.filterAttrs");
+
+    auto attrs = state.buildBindings(args[1]->attrs()->size());
+
+    for (auto & i : *args[1]->attrs()) {
+        Value * vName = Value::toPtr(state.symbols[i.name]);
+        Value * callArgs[] = {vName, i.value};
+        Value res;
+        state.callFunction(*args[0], callArgs, res, noPos);
+        if (state.forceBool(
+                res, pos, "while evaluating the return value of the filtering function passed to builtins.filterAttrs"))
+            attrs.insert(i.name, i.value);
+    }
+
+    v.mkAttrs(attrs.alreadySorted());
+}
+
+static RegisterPrimOp primop_filterAttrs({
+    .name = "__filterAttrs",
+    .args = {"f", "attrset"},
+    .doc = R"(
+      Return an attribute set consisting of the attributes in *attrset* for which
+      the function *f* returns `true`. The function *f* is called with two arguments:
+      the name of the attribute and the value of the attribute. For example,
+
+      ```nix
+      builtins.filterAttrs (name: value: name == "foo") { foo = 1; bar = 2; }
+      ```
+
+      evaluates to `{ foo = 1; }`.
+    )",
+    .impl = prim_filterAttrs,
+});
+
+/**
+ * A (name, value) pair collected by primops that group values by name
+ * (`zipAttrsWith`, `groupBy`).
+ *
+ * Note that vectors of these can be invisible to the GC (provided that
+ * the values are reachable in some other way for the duration of the
+ * primop, e.g. from the primop's arguments), which avoids allocating
+ * GC-visible (uncollectable) storage for temporaries. The latter is
+ * expensive and a source of GC allocation lock contention during
+ * parallel evaluation.
+ */
+struct NameValue
+{
+    Symbol name;
+    Value * value;
+};
+
+/**
+ * Stably sort `items` by name, so that the values of equal names form
+ * contiguous runs in their original relative order, and return the
+ * number of distinct names. The resulting order is the same as that of
+ * a std::map<Symbol, ...>.
+ */
+static size_t sortByName(std::vector<NameValue> & items)
+{
+    std::stable_sort(
+        items.begin(), items.end(), [](const NameValue & a, const NameValue & b) { return a.name < b.name; });
+
+    size_t nrNames = 0;
+    for (size_t i = 0; i < items.size(); ++i)
+        if (i == 0 || items[i - 1].name != items[i].name)
+            nrNames++;
+    return nrNames;
+}
+
+/**
+ * Call `f(name, list)` for every distinct name in `items` (which must
+ * have been sorted with `sortByName()`), where `list` is a ListBuilder
+ * containing the values associated with that name.
+ */
+template<typename F>
+static void forEachByName(EvalState & state, const std::vector<NameValue> & items, F f)
+{
+    for (size_t i = 0; i < items.size();) {
+        auto sym = items[i].name;
+        size_t j = i;
+        while (j < items.size() && items[j].name == sym)
+            j++;
+        auto list = state.buildList(j - i);
+        for (size_t k = i; k < j; ++k)
+            list[k - i] = items[k].value;
+        f(sym, list);
+        i = j;
+    }
+}
+
 static void prim_zipAttrsWith(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
-    // we will first count how many values are present for each given key.
-    // we then allocate a single attrset and pre-populate it with lists of
-    // appropriate sizes, stash the pointers to the list elements of each,
-    // and populate the lists. after that we replace the list in the every
-    // attribute with the merge function application. this way we need not
-    // use (slightly slower) temporary storage the GC does not know about.
-
-    struct Item
-    {
-        size_t size = 0;
-        size_t pos = 0;
-        std::optional<ListBuilder> list;
-    };
-
-    std::map<Symbol, Item, std::less<Symbol>, traceable_allocator<std::pair<const Symbol, Item>>> attrsSeen;
-
     state.forceFunction(*args[0], pos, "while evaluating the first argument passed to builtins.zipAttrsWith");
     state.forceList(*args[1], pos, "while evaluating the second argument passed to builtins.zipAttrsWith");
     const auto listItems = args[1]->listView();
 
+    size_t nrAttrs = 0;
     for (auto & vElem : listItems) {
         state.forceAttrs(
             *vElem, noPos, "while evaluating a value of the list passed as second argument to builtins.zipAttrsWith");
+        nrAttrs += vElem->attrs()->size();
+    }
+
+    /* The vector is invisible to the GC, but that's fine: the values are
+       kept alive by the attrsets in *args[1]. */
+    std::vector<NameValue> attrsSeen;
+    attrsSeen.reserve(nrAttrs);
+
+    for (auto & vElem : listItems)
         for (auto & attr : *vElem->attrs())
-            attrsSeen.try_emplace(attr.name).first->second.size++;
-    }
+            attrsSeen.push_back({attr.name, attr.value});
 
-    for (auto & [sym, elem] : attrsSeen)
-        elem.list.emplace(state.buildList(elem.size));
+    auto attrs = state.buildBindings(sortByName(attrsSeen));
 
-    for (auto & vElem : listItems) {
-        for (auto & attr : *vElem->attrs()) {
-            auto & item = attrsSeen.at(attr.name);
-            (*item.list)[item.pos++] = attr.value;
-        }
-    }
-
-    auto attrs = state.buildBindings(attrsSeen.size());
-
-    for (auto & [sym, elem] : attrsSeen) {
+    forEachByName(state, attrsSeen, [&](Symbol sym, ListBuilder & list) {
         auto name = Value::toPtr(state.symbols[sym]);
         auto call1 = state.allocValue();
         call1->mkApp(args[0], name);
         auto call2 = state.allocValue();
         auto arg = state.allocValue();
-        arg->mkList(*elem.list);
+        arg->mkList(list);
         call2->mkApp(call1, arg);
         attrs.insert(sym, call2);
-    }
+    });
 
     v.mkAttrs(attrs.alreadySorted());
 }
@@ -3619,6 +3870,8 @@ static RegisterPrimOp primop_zipAttrsWith({
         b = { name = "b"; values = [ "z" ]; };
       }
       ```
+
+      Has `O(n log n)` time complexity, where `n` is the number of attributes across all sets.
     )",
     .impl = prim_zipAttrsWith,
 });
@@ -3653,8 +3906,9 @@ static void prim_elemAt(EvalState & state, const PosIdx pos, Value ** args, Valu
         state.error<EvalError>("'builtins.elemAt' called with index %d on a list of size %d", n, args[0]->listSize())
             .atPos(pos)
             .debugThrow();
-    state.forceValue(*args[0]->listView()[n], pos);
-    v = *args[0]->listView()[n];
+    auto ptr = args[0]->listView()[n];
+    state.forceValue(*ptr, pos);
+    v = *ptr;
 }
 
 static RegisterPrimOp primop_elemAt({
@@ -3684,6 +3938,8 @@ static RegisterPrimOp primop_head({
       Return the first element of a list; abort evaluation if the argument
       isn’t a list or is an empty list. You can test whether a list is
       empty by comparing it with `[]`.
+
+      Has constant time complexity.
     )",
     .impl = prim_head,
 });
@@ -3749,6 +4005,10 @@ static RegisterPrimOp primop_map({
       ```
 
       evaluates to `[ "foobar" "foobla" "fooabc" ]`.
+
+      Has `O(n)` time complexity, where `n` is the size of the *list*.
+      Note that no calls to *f* are performed by the builtin, but *f* itself is evaluated and its type is checked eagerly.
+      The function *f* is called on demand when a resulting list element is evaluated.
     )",
     .impl = prim_map,
 });
@@ -3798,6 +4058,7 @@ static RegisterPrimOp primop_filter({
     .doc = R"(
       Return a list consisting of the elements of *list* for which the
       function *f* returns `true`.
+      Has linear time complexity in the size of the input *list*.
     )",
     .impl = prim_filter,
 });
@@ -3821,6 +4082,7 @@ static RegisterPrimOp primop_elem({
     .doc = R"(
       Return `true` if a value equal to *x* occurs in the list *xs*, and
       `false` otherwise.
+      Short-circuits and does not evaluate elements that occur in the list after the first match.
     )",
     .impl = prim_elem,
 });
@@ -3830,12 +4092,7 @@ static void prim_concatLists(EvalState & state, const PosIdx pos, Value ** args,
 {
     state.forceList(*args[0], pos, "while evaluating the first argument passed to builtins.concatLists");
     auto listView = args[0]->listView();
-    state.concatLists(
-        v,
-        args[0]->listSize(),
-        listView.data(),
-        pos,
-        "while evaluating a value of the list passed to builtins.concatLists");
+    state.concatLists(v, listView.span(), pos, "while evaluating a value of the list passed to builtins.concatLists");
 }
 
 static RegisterPrimOp primop_concatLists({
@@ -3891,17 +4148,40 @@ static RegisterPrimOp primop_foldlStrict({
     .args = {"op", "nul", "list"},
     .doc = R"(
       Reduce a list by applying a binary operator, from left to right,
-      e.g. `foldl' op nul [x0 x1 x2 ...] = op (op (op nul x0) x1) x2)
-      ...`.
+      e.g.
+      ```nix
+      foldl' op nul [ x0 x1 x2 ]
+        =
+          let
+            strictly = f: a: builtins.seq a (f a);
+            y0 = op nul x0;
+            y1 = strictly op y0 x1;
+            y2 = strictly op y1 x2;
+          in
+            y2
+
+        # and, ignoring strictness/laziness
+        ==
+          op (op (op nul x0) x1) x2
+      ```
 
       For example, `foldl' (acc: elem: acc + elem) 0 [1 2 3]` evaluates
       to `6` and `foldl' (acc: elem: { "${elem}" = elem; } // acc) {}
       ["a" "b"]` evaluates to `{ a = "a"; b = "b"; }`.
 
       The first argument of `op` is the accumulator whereas the second
-      argument is the current element being processed. The return value
-      of each application of `op` is evaluated immediately, even for
-      intermediate values.
+      argument is the current element being processed.
+
+      The return value of each application of `op` is evaluated immediately,
+      even for intermediate values.
+      This way, `foldl'` can operate in constant stack space, allowing it to operate on large lists,
+      regardless of [max-call-depth](@docroot@/command-ref/conf-file.md#conf-max-call-depth).
+
+      Conventionally, a fold function without the `'` ("prime") preserves laziness,
+      but lacks these benefits.
+      See also [Nixpkgs `lib.foldl`](https://nixos.org/manual/nixpkgs/unstable/#function-library-lib.lists.foldl).
+
+      Has linear time complexity in the size of the list.
     )",
     .impl = prim_foldlStrict,
 });
@@ -3916,8 +4196,8 @@ static void anyOrAll(bool any, EvalState & state, const PosIdx pos, Value ** arg
     std::string_view errorCtx = any ? "while evaluating the return value of the function passed to builtins.any"
                                     : "while evaluating the return value of the function passed to builtins.all";
 
-    Value vTmp;
     for (auto elem : args[1]->listView()) {
+        Value vTmp;
         state.callFunction(*args[0], *elem, vTmp, pos);
         bool res = state.forceBool(vTmp, pos, errorCtx);
         if (res == any) {
@@ -3940,6 +4220,7 @@ static RegisterPrimOp primop_any({
     .doc = R"(
       Return `true` if the function *pred* returns `true` for at least one
       element of *list*, and `false` otherwise.
+      Short-circuits and does not evaluate elements that appear later in the list if `pred` evaluates to `true`.
     )",
     .impl = prim_any,
 });
@@ -3955,6 +4236,7 @@ static RegisterPrimOp primop_all({
     .doc = R"(
       Return `true` if the function *pred* returns `true` for all elements
       of *list*, and `false` otherwise.
+      Short-circuits and does not evaluate elements that appear later in the list if `pred` evaluates to `false`.
     )",
     .impl = prim_all,
 });
@@ -3993,6 +4275,8 @@ static RegisterPrimOp primop_genList({
       ```
 
       returns the list `[ 0 1 4 9 16 ]`.
+
+      Has linear time complexity.
     )",
     .impl = prim_genList,
 });
@@ -4103,6 +4387,9 @@ static RegisterPrimOp primop_sort({
 
       If the *comparator* violates any of these properties, then `builtins.sort`
       reorders elements in an unspecified manner.
+
+      Runs in `O(n log n)` time on average, where `n` is the size of the *list*.
+      Uses an adaptive sort that exploits existing sorted runs in the input, down to `O(n)` when the list is already sorted.
     )",
     .impl = prim_sort,
 });
@@ -4164,6 +4451,8 @@ static RegisterPrimOp primop_partition({
       ```nix
       { right = [ 23 42 ]; wrong = [ 1 9 3 ]; }
       ```
+
+      Runs in linear time in the size of the *list*.
     )",
     .impl = prim_partition,
 });
@@ -4173,26 +4462,24 @@ static void prim_groupBy(EvalState & state, const PosIdx pos, Value ** args, Val
     state.forceFunction(*args[0], pos, "while evaluating the first argument passed to builtins.groupBy");
     state.forceList(*args[1], pos, "while evaluating the second argument passed to builtins.groupBy");
 
-    ValueVectorMap attrs;
+    const auto listItems = args[1]->listView();
 
-    for (auto vElem : args[1]->listView()) {
+    /* The vector is invisible to the GC, but that's fine: the values are
+       kept alive by the list in *args[1]. */
+    std::vector<NameValue> items;
+    items.reserve(listItems.size());
+
+    for (auto vElem : listItems) {
         Value res;
         state.callFunction(*args[0], *vElem, res, pos);
         auto name = state.forceStringNoCtx(
             res, pos, "while evaluating the return value of the grouping function passed to builtins.groupBy");
-        auto sym = state.symbols.create(name);
-        auto vector = attrs.try_emplace<ValueVector>(sym, {}).first;
-        vector->second.push_back(vElem);
+        items.push_back({state.symbols.create(name), vElem});
     }
 
-    auto attrs2 = state.buildBindings(attrs.size());
+    auto attrs2 = state.buildBindings(sortByName(items));
 
-    for (auto & i : attrs) {
-        auto size = i.second.size();
-        auto list = state.buildList(size);
-        memcpy(list.elems, i.second.data(), sizeof(Value *) * size);
-        attrs2.alloc(i.first).mkList(list);
-    }
+    forEachByName(state, items, [&](Symbol sym, ListBuilder & list) { attrs2.alloc(sym).mkList(list); });
 
     v.mkAttrs(attrs2.alreadySorted());
 }
@@ -4217,6 +4504,8 @@ static RegisterPrimOp primop_groupBy({
       ```nix
       { b = [ "bar" "baz" ]; f = [ "foo" ]; }
       ```
+
+      Has `O(n log n)` time complexity, where `n` is the size of the input *list*.
     )",
     .impl = prim_groupBy,
 });
@@ -4599,8 +4888,9 @@ static void prim_hashString(EvalState & state, const PosIdx pos, Value ** args, 
         state.error<EvalError>("unknown hash algorithm '%1%'", algo).atPos(pos).debugThrow();
 
     NixStringContext context; // discarded
-    auto s =
-        state.forceString(*args[1], context, pos, "while evaluating the second argument passed to builtins.hashString");
+    auto s = state.devirtualize(
+        state.forceString(*args[1], context, pos, "while evaluating the second argument passed to builtins.hashString"),
+        context);
 
     v.mkString(hashString(*ha, s).to_string(HashFormat::Base16, false), state.mem);
 }
@@ -5046,6 +5336,8 @@ static RegisterPrimOp primop_replaceStrings({
       ```
 
       evaluates to `"fabir"`.
+
+      Has `O(n k)` time complexity, where `n` is the length of *s* and `k` is the number of replacements.
     )",
     .impl = prim_replaceStrings,
 });
@@ -5229,9 +5521,7 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
         )",
         });
 
-    if (!settings.pureEval) {
-        v.mkInt(time(nullptr));
-    }
+    v.mkInt(time(nullptr));
     addConstant(
         "__currentTime",
         v,
@@ -5259,8 +5549,7 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
             .impureOnly = true,
         });
 
-    if (!settings.pureEval)
-        v.mkString(settings.getCurrentSystem(), mem);
+    v.mkString(settings.getCurrentSystem(), mem);
     addConstant(
         "__currentSystem",
         v,
@@ -5446,6 +5735,16 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
             .type = nFunction,
         });
 
+    auto vDerivationWithMeta = allocValue();
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+        addConstant(
+            "derivationWithMeta",
+            vDerivationWithMeta,
+            {
+                .type = nFunction,
+            });
+    }
+
     /* Now that we've added all primops, sort the `builtins' set,
        because attribute lookups expect it to be sorted. */
     const_cast<Bindings *>(getBuiltins().attrs())->sort();
@@ -5454,7 +5753,14 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
 
     /* Note: we have to initialize the 'derivation' constant *after*
        building baseEnv/staticBaseEnv because it uses 'builtins'. */
-    evalFile(derivationInternal, *vDerivation);
+    auto vDerivationValue = allocValue();
+    evalFile(derivationInternal, *vDerivationValue);
+
+    callFunction(*vDerivationValue, getBuiltin("derivationStrict"), *vDerivation, PosIdx());
+
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        callFunction(
+            *vDerivationValue, ***get(internalPrimOps, "derivationStrictWithMeta"), *vDerivationWithMeta, PosIdx());
 }
 
 } // namespace nix

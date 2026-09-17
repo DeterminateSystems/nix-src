@@ -1,6 +1,6 @@
 #include "nix/cmd/command.hh"
 
-using namespace nix;
+namespace nix {
 
 struct CmdDerivation : NixMultiCommand
 {
@@ -11,7 +11,7 @@ struct CmdDerivation : NixMultiCommand
 
     std::string description() override
     {
-        return "Work with derivations, Nix's notion of a build plan.";
+        return "work with derivations";
     }
 
     Category category() override
@@ -21,3 +21,5 @@ struct CmdDerivation : NixMultiCommand
 };
 
 static auto rCmdDerivation = registerCommand<CmdDerivation>("derivation");
+
+} // namespace nix

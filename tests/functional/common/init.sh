@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 
 # for shellcheck
-: "${test_nix_conf_dir?}" "${test_nix_conf?}"
+: "${test_nix_conf_dir?}" "${test_nix_conf?}" "${config_nix?}"
+
+# Don't upload crashes from tests to Sentry.
+export NIX_SENTRY_ENDPOINT=
 
 if isTestOnNixOS; then
 
@@ -12,7 +15,7 @@ if isTestOnNixOS; then
   ! test -e "$test_nix_conf"
   cat > "$test_nix_conf" <<EOF
 # TODO: this is not needed for all tests and prevents stable commands from be tested in isolation
-experimental-features = nix-command flakes
+experimental-features = ${experimental_features:-}
 flake-registry = $TEST_ROOT/registry.json
 show-trace = true
 EOF
@@ -47,18 +50,20 @@ cat > "$NIX_CONF_DIR"/nix.conf <<EOF
 build-users-group =
 keep-derivations = false
 sandbox = false
-experimental-features = nix-command
+experimental-features = ${experimental_features:-}
 gc-reserved-space = 0
 substituters =
 flake-registry = $TEST_ROOT/registry.json
 show-trace = true
+host-name = test-host
+build-provenance-tags = {"pr": "1234", "branch": "main"}
 include nix.conf.extra
 trusted-users = $(whoami)
+${_NIX_TEST_EXTRA_CONFIG:-}
 EOF
 
 cat > "$NIX_CONF_DIR"/nix.conf.extra <<EOF
 fsync-metadata = false
-extra-experimental-features = flakes
 !include nix.conf.extra.not-there
 EOF
 
@@ -69,3 +74,8 @@ nix-store --init
 test -e "$NIX_STATE_DIR"/db/db.sqlite
 
 fi # !isTestOnNixOS
+
+# Salt the test-specific config.nix file a bit to improve test isolation with a
+# shared store.
+echo "# config.nix for test $TEST_SUITE_NAME / $TEST_NAME" > "$config_nix"
+cat "${_NIX_TEST_BUILD_DIR}/config.nix" >> "$config_nix"

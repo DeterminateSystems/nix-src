@@ -26,6 +26,7 @@
 #include "nix/store/outputs-spec.hh"
 #include "nix/util/ref.hh"
 #include "nix/util/types.hh"
+#include "nix/fetchers/fetch-settings.hh"
 
 namespace nix {
 class Store;
@@ -42,12 +43,12 @@ const static std::string subDirElemRegex = "(?:[a-zA-Z0-9_-]+[a-zA-Z0-9._-]*)";
 const static std::string subDirRegex = subDirElemRegex + "(?:/" + subDirElemRegex + ")*";
 #endif
 
-std::string FlakeRef::to_string() const
+std::string FlakeRef::to_string(bool abbreviate) const
 {
     StringMap extraQuery;
     if (subdir != "")
         extraQuery.insert_or_assign("dir", subdir);
-    return input.toURLString(extraQuery);
+    return input.toURLString(extraQuery, abbreviate);
 }
 
 fetchers::Attrs FlakeRef::toAttrs() const
@@ -95,7 +96,33 @@ fromParsedURL(const fetchers::Settings & fetchSettings, ParsedURL && parsedURL, 
     std::string fragment;
     std::swap(fragment, parsedURL.fragment);
 
-    return {FlakeRef(fetchers::Input::fromURL(fetchSettings, parsedURL, isFlake), dir), fragment};
+    auto input = fetchers::Input::fromURL(fetchSettings, parsedURL, isFlake);
+
+    /* Backward compatibility hack: Nix < 2.20 retained the `dir`
+       query parameter in the `url` attribute of input types that have
+       one (i.e. `git`, `hg`, `tarball` and `file`), resulting in lock
+       file entries like
+
+         "original": {
+           "dir": "subdir",
+           "type": "git",
+           "url": "https://foo/bar?dir=subdir"
+         }
+
+       In compat mode, reproduce that behavior so that we write lock
+       files that Nix < 2.20 considers up to date. Input types that
+       don't have a `url` attribute (such as `github`) never included
+       the `dir` parameter in their attributes, so they're left
+       alone. */
+    if (fetchSettings.nix219Compat && dir != "") {
+        if (auto url = fetchers::maybeGetStrAttr(input.attrs, "url")) {
+            auto parsedUrlAttr = parseURL(*url, /*lenient=*/true);
+            parsedUrlAttr.query.insert_or_assign("dir", dir);
+            input.attrs.insert_or_assign("url", parsedUrlAttr.to_string());
+        }
+    }
+
+    return {FlakeRef(std::move(input), dir), fragment};
 }
 
 std::pair<FlakeRef, std::string> parsePathFlakeRefWithFragment(
@@ -146,7 +173,7 @@ std::pair<FlakeRef, std::string> parsePathFlakeRefWithFragment(
                 // Save device to detect filesystem boundary
                 dev_t device = lstat(path).st_dev;
                 bool found = false;
-                while (path != "/") {
+                while (path.parent_path() != path) {
                     if (pathExists(path / "flake.nix")) {
                         found = true;
                         break;
@@ -171,7 +198,7 @@ std::pair<FlakeRef, std::string> parsePathFlakeRefWithFragment(
             auto flakeRoot = path;
             std::string subdir;
 
-            while (flakeRoot != "/") {
+            while (flakeRoot.parent_path() != flakeRoot) {
                 if (pathExists(flakeRoot / ".git")) {
                     auto parsedURL = ParsedURL{
                         .scheme = "git+file",
@@ -248,18 +275,27 @@ std::optional<std::pair<FlakeRef, std::string>> parseURLFlakeRef(
     const std::optional<std::filesystem::path> & baseDir,
     bool isFlake)
 {
+    std::optional<ParsedURL> parsed;
     try {
-        auto parsed = parseURL(url, /*lenient=*/true);
-        if (baseDir && (parsed.scheme == "path" || parsed.scheme == "git+file")) {
-            /* Here we know that the path must not contain encoded '/' or NUL bytes. */
-            auto path = urlPathToPath(parsed.path);
-            if (!path.is_absolute())
-                parsed.path = pathToUrlPath(absPath(path, get(baseDir)));
-        }
-        return fromParsedURL(fetchSettings, std::move(parsed), isFlake);
+        parsed = parseURL(url, /*lenient=*/true);
     } catch (BadURL &) {
+        /* The string is not a URL, so try to interpret it as a path
+           instead (in the caller). Note that errors that occur while
+           *interpreting* a syntactically valid URL (such as an
+           unsupported query parameter) are not caught here; they
+           should be shown to the user rather than masked by a
+           confusing error about the flake ref not being a valid
+           path. */
         return std::nullopt;
     }
+
+    if (baseDir && (parsed->scheme == "path" || parsed->scheme == "git+file")) {
+        /* Here we know that the path must not contain encoded '/' or NUL bytes. */
+        auto path = urlPathToPath(parsed->path);
+        if (!path.is_absolute())
+            parsed->path = pathToUrlPath(absPath(path, get(baseDir)));
+    }
+    return fromParsedURL(fetchSettings, std::move(*parsed), isFlake);
 }
 
 std::pair<FlakeRef, std::string> parseFlakeRefWithFragment(
@@ -270,7 +306,7 @@ std::pair<FlakeRef, std::string> parseFlakeRefWithFragment(
     bool isFlake,
     bool preserveRelativePaths)
 {
-    using namespace fetchers;
+    using namespace nix::fetchers;
 
     if (auto res = parseFlakeIdRef(fetchSettings, url, isFlake)) {
         return *res;

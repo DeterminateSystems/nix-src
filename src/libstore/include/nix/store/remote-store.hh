@@ -10,6 +10,7 @@
 #include "nix/util/file-descriptor.hh"
 #include "nix/store/gc-store.hh"
 #include "nix/store/log-store.hh"
+#include "nix/store/active-builds.hh"
 
 namespace nix {
 
@@ -23,10 +24,17 @@ class RemoteFSAccessor;
 
 struct RemoteStoreConfig : virtual StoreConfig
 {
-    using StoreConfig::StoreConfig;
+private:
+    void anchor() override;
+
+public:
+    RemoteStoreConfig(const Params & params, FilePathType pathType)
+        : StoreConfig(params, pathType)
+    {
+    }
 
     Setting<int> maxConnections{
-        this, 1, "max-connections", "Maximum number of concurrent connections to the Nix daemon."};
+        this, 64, "max-connections", "Maximum number of concurrent connections to the Nix daemon."};
 
     Setting<unsigned int> maxConnectionAge{
         this,
@@ -39,8 +47,15 @@ struct RemoteStoreConfig : virtual StoreConfig
  * \todo RemoteStore is a misnomer - should be something like
  * DaemonStore.
  */
-struct RemoteStore : public virtual Store, public virtual GcStore, public virtual LogStore
+struct RemoteStore : public virtual Store,
+                     public virtual GcStore,
+                     public virtual LogStore,
+                     public virtual QueryActiveBuildsStore
 {
+private:
+    void anchor() override;
+
+public:
     using Config = RemoteStoreConfig;
 
     const Config & config;
@@ -57,6 +72,10 @@ struct RemoteStore : public virtual Store, public virtual GcStore, public virtua
 
     void queryPathInfoUncached(
         const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override;
+
+    asio::awaitable<void> queryPathInfos(
+        const std::set<StorePath> & paths,
+        fun<void(std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>>)> callback) override;
 
     void queryReferrers(const StorePath & path, StorePathSet & referrers) override;
 
@@ -81,7 +100,8 @@ struct RemoteStore : public virtual Store, public virtual GcStore, public virtua
         ContentAddressMethod caMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair);
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance);
 
     /**
      * Add a content-addressable store path. `dump` will be drained.
@@ -89,15 +109,14 @@ struct RemoteStore : public virtual Store, public virtual GcStore, public virtua
     StorePath addToStoreFromDump(
         Source & dump,
         std::string_view name,
-        FileSerialisationMethod dumpMethod = FileSerialisationMethod::NixArchive,
-        ContentAddressMethod hashMethod = FileIngestionMethod::NixArchive,
-        HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
-        const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) override;
+        FileSerialisationMethod dumpMethod,
+        ContentAddressMethod hashMethod,
+        HashAlgorithm hashAlgo,
+        const StorePathSet & references,
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override;
 
     void addToStore(const ValidPathInfo & info, Source & nar, RepairFlag repair, CheckSigsFlag checkSigs) override;
-
-    void addMultipleToStore(Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
     void
     addMultipleToStore(PathsSource && pathsToCopy, Activity & act, RepairFlag repair, CheckSigsFlag checkSigs) override;
@@ -117,7 +136,7 @@ struct RemoteStore : public virtual Store, public virtual GcStore, public virtua
 
     void ensurePath(const StorePath & path) override;
 
-    void addTempRoot(const StorePath & path) override;
+    void addTempRoots(const StorePathSet & paths, bool skipIfSlow) override;
 
     Roots findRoots(bool censor) override;
 
@@ -145,6 +164,8 @@ struct RemoteStore : public virtual Store, public virtual GcStore, public virtua
     MissingPaths queryMissing(const std::vector<DerivedPath> & targets) override;
 
     void addBuildLog(const StorePath & drvPath, std::string_view log) override;
+
+    std::vector<ActiveBuildInfo> queryActiveBuilds() override;
 
     std::optional<std::string> getVersion() override;
 

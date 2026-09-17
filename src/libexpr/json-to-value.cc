@@ -3,12 +3,14 @@
 #include "nix/expr/eval.hh"
 
 #include <limits>
-#include <variant>
+#include <boost/container/small_vector.hpp>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 
 namespace nix {
+
+namespace {
 
 // for more information, refer to
 // https://github.com/nlohmann/json/blob/master/include/nlohmann/detail/input/json_sax.hpp
@@ -18,7 +20,18 @@ class JSONSax : nlohmann::json_sax<json>
     {
     protected:
         std::unique_ptr<JSONState> parent;
-        RootValue v;
+
+        /**
+         * The value being built by this state, or null. Kept alive by
+         * `JSONSax::rootValues`.
+         */
+        Value * v = nullptr;
+
+        /**
+         * Reference to `JSONSax::rootValues`.
+         */
+        ValueVector & rootValues;
+
     public:
         virtual std::unique_ptr<JSONState> resolve(EvalState &)
         {
@@ -27,11 +40,13 @@ class JSONSax : nlohmann::json_sax<json>
 
         explicit JSONState(std::unique_ptr<JSONState> && p)
             : parent(std::move(p))
+            , rootValues(parent->rootValues)
         {
         }
 
-        explicit JSONState(Value * v)
-            : v(allocRootValue(v))
+        JSONState(Value * v, ValueVector & rootValues)
+            : v(v)
+            , rootValues(rootValues)
         {
         }
 
@@ -39,9 +54,13 @@ class JSONSax : nlohmann::json_sax<json>
 
         Value & value(EvalState & state)
         {
-            if (!v)
-                v = allocRootValue(state.allocValue());
-            return **v;
+            if (!v) {
+                v = state.allocValue();
+                /* Root the value for the duration of the parse (see
+                   `JSONSax::rootValues`). */
+                rootValues.push_back(v);
+            }
+            return *v;
         }
 
         virtual ~JSONState() {}
@@ -52,14 +71,29 @@ class JSONSax : nlohmann::json_sax<json>
     class JSONObjectState : public JSONState
     {
         using JSONState::JSONState;
-        ValueMap attrs;
+
+        /**
+         * Note: deliberately not `ValueMap`: the values are rooted via
+         * `JSONSax::rootValues`, so there is no need for a GC-visible
+         * (uncollectable) container, whose allocations would take the
+         * global GC allocation lock. The inline capacity avoids a heap
+         * allocation for small objects.
+         */
+        boost::container::small_vector<std::pair<Symbol, Value *>, 16> attrs;
 
         std::unique_ptr<JSONState> resolve(EvalState & state) override
         {
+            /* JSON allows duplicate keys, and the last occurrence
+               wins. `Bindings` requires unique keys, so drop all but
+               the last entry of every run of equal keys. The stable
+               sort keeps equal keys in insertion order. */
+            std::stable_sort(
+                attrs.begin(), attrs.end(), [](const auto & a, const auto & b) { return a.first < b.first; });
             auto attrs2 = state.buildBindings(attrs.size());
-            for (auto & i : attrs)
-                attrs2.insert(i.first, i.second);
-            parent->value(state).mkAttrs(attrs2);
+            for (auto i = attrs.begin(); i != attrs.end(); ++i)
+                if (std::next(i) == attrs.end() || std::next(i)->first != i->first)
+                    attrs2.insert(i->first, i->second);
+            parent->value(state).mkAttrs(attrs2.alreadySorted());
             return std::move(parent);
         }
 
@@ -71,13 +105,19 @@ class JSONSax : nlohmann::json_sax<json>
         void key(string_t & name, EvalState & state)
         {
             forceNoNullByte(name);
-            attrs.insert_or_assign(state.symbols.create(name), &value(state));
+            attrs.emplace_back(state.symbols.create(name), &value(state));
         }
     };
 
     class JSONListState : public JSONState
     {
-        ValueVector values;
+        using JSONState::JSONState;
+
+        /**
+         * Note: deliberately not `ValueVector` (see
+         * `JSONObjectState::attrs`).
+         */
+        boost::container::small_vector<Value *, 16> values;
 
         std::unique_ptr<JSONState> resolve(EvalState & state) override
         {
@@ -90,24 +130,30 @@ class JSONSax : nlohmann::json_sax<json>
 
         void add() override
         {
-            values.push_back(*v);
+            values.push_back(v);
             v = nullptr;
-        }
-    public:
-        JSONListState(std::unique_ptr<JSONState> && p, std::size_t reserve)
-            : JSONState(std::move(p))
-        {
-            values.reserve(reserve);
         }
     };
 
     EvalState & state;
+
+    /**
+     * Keeps all values allocated during the parse alive. This is the
+     * only GC-visible container of the parser: the per-node containers
+     * in `JSONObjectState`/`JSONListState` use ordinary allocators,
+     * since GC-visible (uncollectable) allocations take the global GC
+     * allocation lock, and a big JSON document would otherwise do one
+     * or more of them per object/array node — a significant source of
+     * lock contention during parallel evaluation.
+     */
+    ValueVector rootValues;
+
     std::unique_ptr<JSONState> rs;
 
 public:
     JSONSax(EvalState & state, Value & v)
         : state(state)
-        , rs(new JSONState(&v)) {};
+        , rs(new JSONState(&v, rootValues)) {};
 
     bool null() override
     {
@@ -191,7 +237,7 @@ public:
 
     bool start_array(size_t len) override
     {
-        rs = std::make_unique<JSONListState>(std::move(rs), len != std::numeric_limits<size_t>::max() ? len : 128);
+        rs = std::make_unique<JSONListState>(std::move(rs));
         return true;
     }
 
@@ -201,6 +247,8 @@ public:
     }
 };
 
+} // namespace
+
 void parseJSON(EvalState & state, const std::string_view & s_, Value & v)
 {
     JSONSax parser(state, v);
@@ -208,5 +256,7 @@ void parseJSON(EvalState & state, const std::string_view & s_, Value & v)
     if (!res)
         throw JSONParseError("Invalid JSON Value");
 }
+
+void JSONParseError::anchor() {}
 
 } // namespace nix
