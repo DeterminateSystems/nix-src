@@ -238,5 +238,3 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 <!-- Determinate Nix version 3.22.4 -->
 
 <!-- Determinate Nix version 3.22.5 -->
-
-* Backport libutil/serialise: Use zero-copy copy_file_range for copying PosixFileSourceAccessor -> FdSink by @cole-h in [DeterminateSystems/nix-src#630](https://github.com/DeterminateSystems/nix-src/pull/630)
