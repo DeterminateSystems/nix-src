@@ -236,6 +236,17 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
     conn->out = std::move(out.readSide);
     conn->in = std::move(in.writeSide);
 
+    /* Without real SSH, the child *is* the remote program (e.g.
+       `nix-daemon --stdio`), rather than an `ssh` client that we can
+       kill without affecting the remote side. So on teardown, give
+       it a chance to exit by itself after it sees EOF on its stdin,
+       e.g. to export its telemetry, instead of killing it right
+       away. */
+    if (fakeSSH) {
+        conn->sshPid.setKillSignal(0);
+        conn->sshPid.setKillTimeout(std::chrono::seconds(10));
+    }
+
     return conn;
 #endif
 }

@@ -7,6 +7,7 @@
 #include "nix/util/position.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/unix-domain-socket.hh"
+#include "nix/util/exit.hh"
 
 #include <atomic>
 #include <sstream>
@@ -36,6 +37,23 @@ void setCurActivity(const ActivityId activityId)
     curActivity = activityId;
 }
 
+[[gnu::tls_model("initial-exec")]] static thread_local unsigned int remoteLogSourceDepth = 0;
+
+RemoteLogSource::RemoteLogSource()
+{
+    remoteLogSourceDepth++;
+}
+
+RemoteLogSource::~RemoteLogSource()
+{
+    remoteLogSourceDepth--;
+}
+
+bool isRemoteLogSource()
+{
+    return remoteLogSourceDepth > 0;
+}
+
 /**
  * This is a raw pointer to allow it to leak.
  * Avoids races in activity teardown.
@@ -47,6 +65,38 @@ Logger::~Logger() {}
 void Logger::warn(const std::string & msg) noexcept
 {
     log(lvlWarn, ANSI_WARNING "warning:" ANSI_NORMAL " " + msg);
+}
+
+void Logger::printException(const std::exception_ptr & ex, std::string_view programName) noexcept
+{
+    /* Note: we log to `this` rather than to the global `logger`, so
+       that a `TeeLogger` can forward this to each of its loggers
+       without the message being printed once per logger. */
+    auto doLog = [&](const BaseError & e) {
+        try {
+            logEI(e.info());
+        } catch (...) {
+            log(lvlError, ANSI_RED "error:" ANSI_NORMAL " Exception while printing an exception.");
+        }
+    };
+
+    constexpr std::string_view error = ANSI_RED "error:" ANSI_NORMAL " ";
+
+    try {
+        std::rethrow_exception(ex);
+    } catch (Exit &) {
+    } catch (UsageError & e) {
+        doLog(e);
+        log(lvlError, fmt("\nTry '%1% --help' for more information.", programName));
+    } catch (BaseError & e) {
+        doLog(e);
+    } catch (std::bad_alloc & e) {
+        log(lvlError, std::string(error) + "out of memory");
+    } catch (std::exception & e) {
+        log(lvlError, std::string(error) + e.what());
+    } catch (...) {
+        log(lvlError, std::string(error) + "unknown exception");
+    }
 }
 
 void Logger::writeToStdout(std::string_view s)
@@ -150,13 +200,10 @@ public:
 
     void result(ActivityId act, ResultType type, const Fields & fields) noexcept override
     {
-        if (type == resBuildLogLine && printBuildLogs) {
-            auto lastLine = fields[0].s;
-            printError(lastLine);
-        } else if (type == resPostBuildLogLine && printBuildLogs) {
-            auto lastLine = fields[0].s;
-            printError("post-build-hook: " + lastLine);
-        }
+        if (type == resBuildLogLine && printBuildLogs)
+            printError(std::get<std::string>(fields[0].raw));
+        else if (type == resPostBuildLogLine && printBuildLogs)
+            printError("post-build-hook: " + std::get<std::string>(fields[0].raw));
     }
 };
 
@@ -210,6 +257,19 @@ Activity::Activity(
     logger.startActivity(id, lvl, type, s, fields, parent);
 }
 
+Activity::Activity(
+    Logger & logger,
+    Verbosity lvl,
+    std::string_view name,
+    Logger::ActivityMetadata metadata,
+    std::string_view s,
+    ActivityId parent)
+    : logger(logger)
+    , id(nextId++ + (((uint64_t) getPid()) << 32))
+{
+    logger.startActivity(id, lvl, name, metadata, s, parent);
+}
+
 void to_json(nlohmann::json & json, std::shared_ptr<const Pos> pos)
 {
     if (pos) {
@@ -259,10 +319,10 @@ struct JSONLogger : Logger
             return;
         auto & arr = json["fields"] = nlohmann::json::array();
         for (auto & f : fields)
-            if (f.type == Logger::Field::tInt)
-                arr.push_back(f.i);
-            else if (f.type == Logger::Field::tString)
-                arr.push_back(f.s);
+            if (auto p = std::get_if<uint64_t>(&f.raw))
+                arr.push_back(*p);
+            else if (auto p = std::get_if<std::string>(&f.raw))
+                arr.push_back(*p);
             else
                 unreachable();
     }
@@ -352,6 +412,29 @@ struct JSONLogger : Logger
         write(std::move(json));
     }
 
+    void startActivity(
+        ActivityId act,
+        Verbosity lvl,
+        std::string_view name,
+        ActivityMetadata metadata,
+        std::string_view s,
+        ActivityId parent) noexcept override
+    {
+        nlohmann::json json;
+        json["action"] = "start";
+        json["id"] = act;
+        json["level"] = lvl;
+        json["type"] = actStringly;
+        json["text"] = s;
+        json["parent"] = parent;
+        json["name"] = name;
+        auto payload = nlohmann::json::object();
+        for (auto & [key, value] : metadata)
+            std::visit([&](auto & v) { payload[std::string(key)] = v; }, value.raw);
+        json["payload"] = std::move(payload);
+        write(std::move(json));
+    }
+
     void stopActivity(ActivityId act) noexcept override
     {
         nlohmann::json json;
@@ -416,18 +499,19 @@ std::unique_ptr<Logger> makeJSONLogger(const std::filesystem::path & path, bool 
     return std::make_unique<JSONFileLogger>(std::move(fd), includeNixPrefix);
 }
 
+std::string getTraceparent(const Headers & headers)
+{
+    for (auto & [name, value] : headers)
+        if (name == "traceparent")
+            return value;
+    return "";
+}
+
 void applyJSONLogger()
 {
     if (auto & opt = loggerSettings.jsonLogPath.get()) {
         try {
-            std::vector<std::unique_ptr<Logger>> loggers;
-            loggers.push_back(makeJSONLogger(*opt, false));
-            try {
-                logger = makeTeeLogger(std::unique_ptr<Logger>(logger), std::move(loggers)).release();
-            } catch (...) {
-                // `logger` is now gone so give up.
-                abort();
-            }
+            applyExtraLogger(makeJSONLogger(*opt, false));
         } catch (...) {
             ignoreExceptionExceptInterrupt();
         }

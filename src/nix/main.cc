@@ -23,10 +23,12 @@
 #include "nix/expr/eval-cache.hh"
 #include "nix/flake/flake.hh"
 #include "nix/flake/settings.hh"
+#include "nix/util/exit.hh"
 #include "nix/util/sentry.hh"
 
 #include "self-exe.hh"
 #include "crash-handler.hh"
+#include "otel-logger.hh"
 #include "cli-config-private.hh"
 
 #include <sys/types.h>
@@ -533,8 +535,6 @@ void mainWrapped(int argc, char ** argv)
         tryEnterPrivateMountNamespace();
 #endif
 
-    Finally f([] { logger->stop(); });
-
     programPath = argv[0];
     auto programName = std::string(baseNameOf(programPath));
     auto extensionPos = programName.find_last_of(".");
@@ -548,8 +548,18 @@ void mainWrapped(int argc, char ** argv)
     }
 
     {
-        if (auto legacy = get(RegisterLegacyCommand::commands(), programName))
+        if (auto legacy = get(RegisterLegacyCommand::commands(), programName)) {
+            /* Legacy commands don't have subcommands, so we can set up
+               the root span right away. Note that they parse their
+               arguments themselves, so unlike for the commands below,
+               `--option` cannot configure tracing here. The daemon and
+               the build hook are the exceptions: they install their
+               own logger, so they set up tracing themselves. */
+            if (programName != "nix-daemon" && programName != "build-remote") {
+                initOtel(programName, programName, getEnv("TRACEPARENT").value_or(""));
+            }
             return (*legacy)(argc, argv);
+        }
     }
 
     evalSettings.pureEval = true;
@@ -706,6 +716,19 @@ void mainWrapped(int argc, char ** argv)
 
     setSentryTag("nix_subcommand", concatStringsSep(" ", subcommand).c_str());
 
+    /* Map activities to OpenTelemetry spans, under a root span named
+       after the subcommand. Note: this must happen after
+       `parseCmdline()`, so that `--option` can configure tracing. The
+       daemon is the exception: it sets up tracing itself, per
+       connection, parented to the client's trace.
+
+       The root span is parented to the trace context in `TRACEPARENT`,
+       if any, so that a parent process (such as `nix` running
+       `build-remote`) can include us in its trace. */
+    if (subcommand != std::vector<std::string>{"daemon"}) {
+        initOtel(programName, "nix " + concatStringsSep(" ", subcommand), getEnv("TRACEPARENT").value_or(""));
+    }
+
     try {
         args.command->second->run();
     } catch (eval_cache::CachedEvalError & e) {
@@ -724,5 +747,6 @@ int main(int argc, char ** argv)
 
     // The CLI has a more detailed version than the libraries; see nixVersion.
     nix::nixVersion = NIX_CLI_VERSION;
+
     return nix::handleExceptions(argv[0], [&]() { nix::mainWrapped(argc, argv); });
 }

@@ -144,6 +144,7 @@ suites = [
       'nix_path.sh',
       'no-url-literals.sh',
       'optimise-store.sh',
+      'otel.sh',
       'output-normalization.sh',
       'pass-as-file.sh',
       'path-from-hash-part.sh',

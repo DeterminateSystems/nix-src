@@ -263,6 +263,15 @@ pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
                ~ProgressBar() tries to join a thread that doesn't
                exist. */
             logger = newLogger;
+
+            /* Discard other state that doesn't survive the fork,
+               such as objects owning a thread. */
+            for (auto & callback : RegisterForkCallback::callbacks()) {
+                try {
+                    callback();
+                } catch (...) {
+                }
+            }
         }
         try {
 #ifdef __linux__

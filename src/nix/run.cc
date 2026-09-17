@@ -43,7 +43,9 @@ void execProgramInStore(
     std::optional<std::string_view> system,
     std::optional<StringMap> env)
 {
+    /* We're about to exec, so end and export any telemetry. */
     logger->stop();
+    logger->flush();
 
     char ** envp;
     Strings envStrs;

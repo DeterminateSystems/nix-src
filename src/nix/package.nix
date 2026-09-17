@@ -8,6 +8,7 @@
   nix-expr,
   nix-main,
   nix-cmd,
+  opentelemetry-cpp,
   sentry-native,
 
   libmicrohttpd,
@@ -45,6 +46,7 @@
 let
   inherit (lib) fileset;
   enableSentry = !stdenv.hostPlatform.isStatic;
+  withOtel = !stdenv.hostPlatform.isStatic && stdenv.buildPlatform.canExecute stdenv.hostPlatform;
 in
 
 mkMesonExecutable (finalAttrs: {
@@ -116,12 +118,14 @@ mkMesonExecutable (finalAttrs: {
     && stdenv.cc.libcxx != null
     && stdenv.cc.libcxx.isLLVM
   ) llvmPackages.libunwind
-  ++ lib.optional enableSentry sentry-native;
+  ++ lib.optional enableSentry sentry-native
+  ++ lib.optional withOtel opentelemetry-cpp;
 
   mesonFlags = [
     (lib.mesonEnable "mimalloc" withMimalloc)
     (lib.mesonBool "plugin-c-api" withPluginCApi)
     (lib.mesonEnable "sentry" enableSentry)
+    (lib.mesonEnable "otel" withOtel)
   ]
   ++ lib.optional enableSentry (
     lib.mesonOption "crashpad-handler" "${sentry-native}/bin/crashpad_handler"

@@ -219,7 +219,8 @@ static void collectDerivedPaths(
 
 MissingPaths Store::queryMissing(const std::vector<DerivedPath> & targets)
 {
-    Activity act(*logger, lvlDebug, actUnknown, "querying info about missing paths");
+    Activity act(*logger, lvlDebug, "QueryMissing", {}, "querying info about missing paths");
+    PushActivity pact(act.id);
 
     MissingPaths res;
 
