@@ -36,7 +36,7 @@ typedef enum {
      * paths, cf. the name-based `Logger::startActivity()`. Do not use
      * directly.
      */
-    actStringly = 113,
+    actStringly = 10113,
 } ActivityType;
 
 typedef enum {
@@ -58,7 +58,7 @@ typedef enum {
      * (the number of body bytes received). More fields may be added
      * in the future.
      */
-    resHttpStatus = 111,
+    resHttpStatus = 10111,
 } ResultType;
 
 typedef uint64_t ActivityId;
