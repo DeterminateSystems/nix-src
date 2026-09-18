@@ -172,7 +172,7 @@ static RegisterPrimOp primop_bakedDerivation({
       ```
     )",
     .impl = prim_bakedDerivation,
-    .experimentalFeature = Xp::BakedDerivation,
+    .experimentalFeature = Xp::BakedDerivations,
 });
 
 } // namespace nix

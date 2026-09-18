@@ -42,7 +42,7 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas
 
     std::optional<ExperimentalFeature> experimentalFeature() override
     {
-        return Xp::BakedDerivation;
+        return Xp::BakedDerivations;
     }
 
     std::string doc() override

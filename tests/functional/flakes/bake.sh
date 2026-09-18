@@ -13,9 +13,9 @@ cacheDir=$TEST_ROOT/binary-cache
 mkdir -p "$flakeDir"
 writeSimpleFlake "$flakeDir"
 
-# Baking requires the `baked-derivation` experimental feature.
-expectStderr 1 nix flake bake "$flakeDir" --dest-dir "$bakedDir" | grepQuiet "experimental Nix feature 'baked-derivation' is disabled"
-enableFeatures "baked-derivation"
+# Baking requires the `baked-derivations` experimental feature.
+expectStderr 1 nix flake bake "$flakeDir" --dest-dir "$bakedDir" | grepQuiet "experimental Nix feature 'baked-derivations' is disabled"
+enableFeatures "baked-derivations"
 
 # Bake the flake.
 nix flake bake "$flakeDir" --dest-dir "$bakedDir"

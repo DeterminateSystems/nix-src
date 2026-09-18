@@ -27,7 +27,7 @@ void MissingExperimentalFeature::anchor() {}
  * feature, we either have no issue at all if few features are not added
  * at the end of the list, or a proper merge conflict if they are.
  */
-constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::BakedDerivation);
+constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::BakedDerivations);
 
 constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails = {{
     {
@@ -318,8 +318,8 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
         .trackingUrl = "",
     },
     {
-        .tag = Xp::BakedDerivation,
-        .name = "baked-derivation",
+        .tag = Xp::BakedDerivations,
+        .name = "baked-derivations",
         .description = R"(
             Enable *baked derivations*: derivations with the builder
             `builtin:substitute` that are never built, but whose outputs are

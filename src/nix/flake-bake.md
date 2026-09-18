@@ -41,6 +41,6 @@ By default, only the outputs for the current system are baked. Use `--all-system
 
 * Outputs whose derivation is nested inside the output attribute (such as `nixosConfigurations.<name>.config.system.build.toplevel`) are baked at that nested attribute. Other attributes of the output are not included. Consequently, `nix flake show` may not work on a baked flake for such outputs if the flake schema needs those other attributes.
 
-This command requires the [`baked-derivation`](@docroot@/development/experimental-features.md#xp-feature-baked-derivation) experimental feature, both in the Nix CLI and in the Nix daemon.
+This command requires the [`baked-derivations`](@docroot@/development/experimental-features.md#xp-feature-baked-derivations) experimental feature, both in the Nix CLI and in the Nix daemon.
 
 )""

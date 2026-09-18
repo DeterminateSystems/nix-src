@@ -42,7 +42,7 @@ enum struct ExperimentalFeature {
     WasmDerivations,
     Provenance,
     CNSA,
-    BakedDerivation,
+    BakedDerivations,
 };
 
 extern std::set<std::string> stabilizedFeatures;
