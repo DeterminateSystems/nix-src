@@ -41,6 +41,7 @@ suites += {
     'shallow.sh',
     'provenance.sh',
     'search.sh',
+    'bake.sh',
   ],
   'workdir' : meson.current_source_dir(),
 }
