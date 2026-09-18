@@ -102,6 +102,7 @@ nix flake show --json --legacy "path:$bakedDir" > "$TEST_ROOT/show-baked-legacy.
 
 # `meta.mainProgram` is preserved, so `nix run` works on baked packages
 # whose binary isn't named after the package.
+enableFeatures "ca-derivations"
 greeterDir=$TEST_ROOT/greeter
 mkdir -p "$greeterDir"
 cp "${config_nix}" "$greeterDir/"
@@ -124,11 +125,22 @@ cat > "$greeterDir/flake.nix" <<EOF
       buildCommand = "mkdir \$bin \$dev; echo bin > \$bin/what; echo dev > \$dev/what";
     };
     packages.$system.multiDev = self.packages.$system.multi.dev;
+    # Content-addressed derivations cannot be baked.
+    packages.$system.ca = with import ./config.nix; mkDerivation {
+      name = "ca";
+      __contentAddressed = true;
+      outputHashMode = "recursive";
+      outputHashAlgo = "sha256";
+      buildCommand = "echo ca > \$out";
+    };
   };
 }
 EOF
 
-nix flake bake "$greeterDir" --dest-dir "$bakedDir-greeter"
+# Derivations that cannot be baked produce a warning and are omitted.
+nix flake bake "$greeterDir" --dest-dir "$bakedDir-greeter" 2>&1 | grepQuiet "warning: cannot bake 'packages.$system.ca'"
+[[ $(nix eval "path:$bakedDir-greeter#packages.$system" --apply 'x: x ? ca') = false ]]
+[[ $(nix eval "path:$bakedDir-greeter#packages.$system" --apply 'x: x ? greeter') = true ]]
 [[ $(jq -r ".packages.output.children.\"$system\".children.greeter.derivation.mainProgram" < "$bakedDir-greeter/outputs.json") = hi ]]
 [[ $(nix eval --raw "path:$bakedDir-greeter#greeter.meta.mainProgram") = hi ]]
 

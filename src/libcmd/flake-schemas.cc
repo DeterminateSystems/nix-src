@@ -428,6 +428,11 @@ nlohmann::json getFlakeInventory(
                         drvObj.emplace("path", state.store->printStorePath(drvPath));
                     }
 
+                    /* Derivations whose output paths are not known in advance (e.g. content-addressed
+                       derivations) cannot be baked, since baking requires the output paths to be known at
+                       evaluation time. */
+                    bool bakeable = true;
+
                     if (options.showOutputPaths) {
                         auto outputs = nlohmann::json::object();
                         auto drvPath = drv->forceDerivation();
@@ -435,13 +440,21 @@ nlohmann::json getFlakeInventory(
                         for (auto & i : drv.outputsAndOptPaths(*state.store)) {
                             if (auto outPath = i.second.second)
                                 outputs.emplace(i.first, state.store->printStorePath(*outPath));
-                            else
+                            else {
                                 outputs.emplace(i.first, nullptr);
+                                bakeable = false;
+                            }
                         }
                         drvObj.emplace("outputs", std::move(outputs));
                     }
 
-                    obj.emplace("derivation", std::move(drvObj));
+                    if (options.bake && !bakeable)
+                        warn(
+                            "cannot bake '%s' because its output paths are not known in advance (e.g. it is a "
+                            "content-addressed derivation)",
+                            leaf.node->getAttrPathStr());
+                    else
+                        obj.emplace("derivation", std::move(drvObj));
                 }
 
                 if (auto forSystems = leaf.forSystems())
