@@ -7,13 +7,12 @@
 using namespace nix;
 using namespace nix::flake;
 
-struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas
+struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas, MixReadOnlyOption
 {
     std::filesystem::path destDir;
 
     flake_schemas::FlakeInventoryOptions options{
         .showLegacy = true,
-        .showOutputPaths = true,
         .showDrvNames = true,
         .bake = true,
     };

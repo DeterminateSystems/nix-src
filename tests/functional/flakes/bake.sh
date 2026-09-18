@@ -190,6 +190,29 @@ nix build --no-link "$greeterDir#multi^*"
 [[ $(nix build --no-link --json "path:$bakedDir-greeter#multi^dev" | jq -r '.[0].outputs.dev') = "$multiDev" ]]
 [[ $(cat "$multiDev/what") = dev ]]
 
+# With --read-only, baking doesn't write any derivations to the store,
+# and produces the same result.
+roDir=$TEST_ROOT/ro
+mkdir -p "$roDir"
+cp "${config_nix}" "$roDir/"
+cat > "$roDir/flake.nix" <<EOF
+{
+  outputs = { self }: {
+    packages.$system.ro = with import ./config.nix; mkDerivation {
+      name = "read-only-bake";
+      buildCommand = "echo ro > \$out";
+    };
+  };
+}
+EOF
+nix flake bake --read-only "$roDir" --dest-dir "$bakedDir-ro"
+roDrvPath=$(nix eval --read-only --no-eval-cache --raw "$roDir#packages.$system.ro.drvPath")
+[[ ! -e $roDrvPath ]]
+nix flake bake "$roDir" --dest-dir "$bakedDir-ro2"
+[[ -e $roDrvPath ]]
+cmp "$bakedDir-ro/outputs.json" "$bakedDir-ro2/outputs.json"
+[[ $(nix eval --raw "path:$bakedDir-ro#ro.outPath") = $(nix eval --raw "$roDir#packages.$system.ro.outPath") ]]
+
 # Outputs whose derivation lives at a sub-path of the output attribute
 # (`derivationAttrPath` in the flake schema, e.g.
 # `nixosConfigurations.<name>.config.system.build.toplevel`) are baked

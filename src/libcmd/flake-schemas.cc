@@ -447,17 +447,49 @@ nlohmann::json getFlakeInventory(
                        evaluation time. */
                     bool bakeable = true;
 
-                    if (options.showOutputPaths) {
+                    if (options.bake) {
+                        // FIXME: remove this once we have on-demand writing of .drvs.
+                        /* Get the output paths from the derivation attribute set rather than from the `.drv` file
+                           in the store. This avoids waiting for the derivation to be written to the store (which
+                           would serialise parallel evaluation on the store writer) and works in read-only mode.
+                           Outputs whose path is not known at evaluation time (e.g. content-addressed outputs)
+                           have a placeholder rather than a store path. */
+                        auto outputs = nlohmann::json::object();
+                        auto getOutPath = [&](ref<eval_cache::AttrCursor> out) {
+                            /* `derivation` produces an attribute set per output, but `import`ing a `.drv`
+                               produces plain strings. */
+                            return out->forceValue().type() == nAttrs ? out->getAttr(state.s.outPath)->getString()
+                                                                      : out->getString();
+                        };
+                        auto addOutput = [&](const std::string & outputName, const std::string & outPath) {
+                            if (state.store->isStorePath(outPath))
+                                outputs.emplace(outputName, outPath);
+                            else {
+                                outputs.emplace(outputName, nullptr);
+                                bakeable = false;
+                            }
+                        };
+                        if (auto aOutputs = drv->maybeGetAttr(state.s.outputs))
+                            for (auto & outputName : aOutputs->getListOfStrings())
+                                addOutput(outputName, getOutPath(drv->getAttr(outputName)));
+                        else {
+                            auto aOutputName = drv->maybeGetAttr(state.s.outputName);
+                            addOutput(
+                                aOutputName ? aOutputName->getString() : "out",
+                                drv->getAttr(state.s.outPath)->getString());
+                        }
+                        drvObj.emplace("outputs", std::move(outputs));
+                    }
+
+                    else if (options.showOutputPaths) {
                         auto outputs = nlohmann::json::object();
                         auto drvPath = drv->forceDerivation();
                         auto drv = evalStore.derivationFromPath(drvPath);
                         for (auto & i : drv.outputsAndOptPaths(*state.store)) {
                             if (auto outPath = i.second.second)
                                 outputs.emplace(i.first, state.store->printStorePath(*outPath));
-                            else {
+                            else
                                 outputs.emplace(i.first, nullptr);
-                                bakeable = false;
-                            }
                         }
                         drvObj.emplace("outputs", std::move(outputs));
                     }
