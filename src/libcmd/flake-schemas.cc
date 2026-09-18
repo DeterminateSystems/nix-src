@@ -421,6 +421,10 @@ nlohmann::json getFlakeInventory(
                         /* Record which output this attribute refers to, since it's not necessarily `out`. */
                         if (auto aOutputName = drv->maybeGetAttr(state.s.outputName))
                             drvObj.emplace("outputName", aOutputName->getString());
+
+                        /* Record the system of the derivation. */
+                        if (auto aSystem = drv->maybeGetAttr(state.s.system))
+                            drvObj.emplace("system", aSystem->getString());
                     }
 
                     if (options.showDrvPaths) {

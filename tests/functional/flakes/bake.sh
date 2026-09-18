@@ -150,6 +150,10 @@ nix flake bake "$greeterDir" --dest-dir "$bakedDir-greeter" 2>&1 | grepQuiet "wa
 [[ $(jq -r ".packages.output.children.\"$system\".children.greeter.derivation.mainProgram" < "$bakedDir-greeter/outputs.json") = hi ]]
 [[ $(nix eval --raw "path:$bakedDir-greeter#greeter.meta.mainProgram") = hi ]]
 
+# The system of each derivation is recorded, so the baked flake doesn't depend on the schema's `forSystems`.
+[[ $(jq -r ".packages.output.children.\"$system\".children.greeter.derivation.system" < "$bakedDir-greeter/outputs.json") = "$system" ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#greeter.system") = "$system" ]]
+
 # Build the original so that the baked package's output is valid, then run it.
 nix build --no-link "$greeterDir#greeter"
 [[ $(nix run "path:$bakedDir-greeter#greeter") = "hello from hi" ]]

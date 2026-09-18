@@ -34,7 +34,7 @@
             commonAttrs = {
               type = "derivation";
               name = output.derivation.name;
-              system = builtins.head output.forSystems; # FIXME
+              system = output.derivation.system or (builtins.head output.forSystems);
               meta =
                 (if output ? shortDescription then { description = output.shortDescription; } else { })
                 // (
