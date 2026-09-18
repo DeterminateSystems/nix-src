@@ -43,6 +43,11 @@ nix derivation show "$drvPath" > "$TEST_ROOT/baked-drv.json"
 [[ $(jq -r '.derivations[].inputs.drvs | length' < "$TEST_ROOT/baked-drv.json") = 0 ]]
 [[ $(jq -r '.derivations[].outputs.out.path' < "$TEST_ROOT/baked-drv.json") = "$(basename "$fooPath")" ]]
 
+# A `builtin:substitute` derivation must have input-addressed outputs with known paths.
+jq '.derivations[]' < "$TEST_ROOT/baked-drv.json" > "$TEST_ROOT/baked-drv-single.json"
+[[ $(nix derivation add < "$TEST_ROOT/baked-drv-single.json") = "$drvPath" ]]
+jq '.outputs.out = {}' < "$TEST_ROOT/baked-drv-single.json" | expectStderr 1 nix derivation add | grepQuiet "must have input-addressed outputs"
+
 # Building a baked derivation fails if its outputs cannot be substituted.
 expectStderr 1 nix build --no-link "path:$bakedDir#foo" | grepQuiet "failed to substitute"
 
