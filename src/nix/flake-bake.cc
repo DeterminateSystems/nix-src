@@ -58,7 +58,9 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas
         auto evalStore = getEvalStore();
         auto flake = make_ref<LockedFlake>(lockFlake());
 
-        auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas());
+        /* Don't use the eval cache: baking evaluates everything exactly once, so caching every attribute in
+           SQLite is pure overhead (and it serialises parallel evaluation on the database writer). */
+        auto cache = flake_schemas::call(*state, flake, getDefaultFlakeSchemas(), /*allowEvalCache=*/false);
 
         auto inv = flake_schemas::getFlakeInventory(*state, *getEvalStore(), *flake, cache, options);
 
