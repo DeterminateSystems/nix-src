@@ -422,21 +422,6 @@ nlohmann::json getFlakeInventory(
                     if (options.showDrvNames)
                         drvObj.emplace("name", drv->getAttr(state.s.name)->getString());
 
-                    if (options.bake) {
-                        /* Record `meta.mainProgram` so that the baked flake can preserve it for `nix run`. */
-                        if (auto aMeta = drv->maybeGetAttr(state.s.meta))
-                            if (auto aMainProgram = aMeta->maybeGetAttr("mainProgram"))
-                                drvObj.emplace("mainProgram", aMainProgram->getString());
-
-                        /* Record which output this attribute refers to, since it's not necessarily `out`. */
-                        if (auto aOutputName = drv->maybeGetAttr(state.s.outputName))
-                            drvObj.emplace("outputName", aOutputName->getString());
-
-                        /* Record the system of the derivation. */
-                        if (auto aSystem = drv->maybeGetAttr(state.s.system))
-                            drvObj.emplace("system", aSystem->getString());
-                    }
-
                     if (options.showDrvPaths) {
                         auto drvPath = drv->forceDerivation();
                         drvObj.emplace("path", state.store->printStorePath(drvPath));
@@ -447,39 +432,67 @@ nlohmann::json getFlakeInventory(
                        evaluation time. */
                     bool bakeable = true;
 
-                    if (options.bake) {
-                        // FIXME: remove this once we have on-demand writing of .drvs.
-                        /* Get the output paths from the derivation attribute set rather than from the `.drv` file
-                           in the store. This avoids waiting for the derivation to be written to the store (which
-                           would serialise parallel evaluation on the store writer) and works in read-only mode.
-                           Outputs whose path is not known at evaluation time (e.g. content-addressed outputs)
-                           have a placeholder rather than a store path. */
-                        auto outputs = nlohmann::json::object();
-                        auto getOutPath = [&](ref<eval_cache::AttrCursor> out) {
-                            /* `derivation` produces an attribute set per output, but `import`ing a `.drv`
-                               produces plain strings. */
-                            return out->forceValue().type() == nAttrs ? out->getAttr(state.s.outPath)->getString()
-                                                                      : out->getString();
-                        };
-                        auto addOutput = [&](const std::string & outputName, const std::string & outPath) {
-                            if (state.store->isStorePath(outPath))
-                                outputs.emplace(outputName, outPath);
+                    if (options.bake)
+                        try {
+                            /* Record `meta.mainProgram` so that the baked flake can preserve it for `nix run`. */
+                            if (auto aMeta = drv->maybeGetAttr(state.s.meta))
+                                if (auto aMainProgram = aMeta->maybeGetAttr("mainProgram"))
+                                    drvObj.emplace("mainProgram", aMainProgram->getString());
+
+                            /* Record which output this attribute refers to, since it's not necessarily `out`. */
+                            if (auto aOutputName = drv->maybeGetAttr(state.s.outputName))
+                                drvObj.emplace("outputName", aOutputName->getString());
+
+                            /* Record the system of the derivation. */
+                            if (auto aSystem = drv->maybeGetAttr(state.s.system))
+                                drvObj.emplace("system", aSystem->getString());
+
+                            // FIXME: remove this once we have on-demand writing of .drvs.
+                            /* Get the output paths from the derivation attribute set rather than from the `.drv` file
+                               in the store. This avoids waiting for the derivation to be written to the store (which
+                               would serialise parallel evaluation on the store writer) and works in read-only mode.
+                               Outputs whose path is not known at evaluation time (e.g. content-addressed outputs)
+                               have a placeholder rather than a store path. */
+                            auto outputs = nlohmann::json::object();
+                            auto getOutPath = [&](ref<eval_cache::AttrCursor> out) {
+                                /* `derivation` produces an attribute set per output, but `import`ing a `.drv`
+                                   produces plain strings. */
+                                return out->forceValue().type() == nAttrs ? out->getAttr(state.s.outPath)->getString()
+                                                                          : out->getString();
+                            };
+                            auto addOutput = [&](const std::string & outputName, const std::string & outPath) {
+                                if (state.store->isStorePath(outPath))
+                                    outputs.emplace(outputName, outPath);
+                                else {
+                                    outputs.emplace(outputName, nullptr);
+                                    bakeable = false;
+                                }
+                            };
+                            if (auto aOutputs = drv->maybeGetAttr(state.s.outputs))
+                                for (auto & outputName : aOutputs->getListOfStrings())
+                                    addOutput(outputName, getOutPath(drv->getAttr(outputName)));
                             else {
-                                outputs.emplace(outputName, nullptr);
-                                bakeable = false;
+                                auto aOutputName = drv->maybeGetAttr(state.s.outputName);
+                                addOutput(
+                                    aOutputName ? aOutputName->getString() : "out",
+                                    drv->getAttr(state.s.outPath)->getString());
                             }
-                        };
-                        if (auto aOutputs = drv->maybeGetAttr(state.s.outputs))
-                            for (auto & outputName : aOutputs->getListOfStrings())
-                                addOutput(outputName, getOutPath(drv->getAttr(outputName)));
-                        else {
-                            auto aOutputName = drv->maybeGetAttr(state.s.outputName);
-                            addOutput(
-                                aOutputName ? aOutputName->getString() : "out",
-                                drv->getAttr(state.s.outPath)->getString());
+                            drvObj.emplace("outputs", std::move(outputs));
+
+                            if (!bakeable) {
+                                warn(
+                                    "cannot bake '%s' because its output paths are not known in advance (e.g. it is a "
+                                    "content-addressed derivation)",
+                                    leaf.node->getAttrPathStr());
+                                drvObj.emplace("failed", true);
+                            }
+                        } catch (EvalError & e) {
+                            /* The derivation cannot be evaluated (e.g. a package marked as broken). Record it anyway,
+                           so that the baked flake can still list it (like the original flake would), but fail
+                           when it is built. */
+                            drvObj.erase("outputs");
+                            drvObj.emplace("failed", true);
                         }
-                        drvObj.emplace("outputs", std::move(outputs));
-                    }
 
                     else if (options.showOutputPaths) {
                         auto outputs = nlohmann::json::object();
@@ -494,13 +507,7 @@ nlohmann::json getFlakeInventory(
                         drvObj.emplace("outputs", std::move(outputs));
                     }
 
-                    if (options.bake && !bakeable)
-                        warn(
-                            "cannot bake '%s' because its output paths are not known in advance (e.g. it is a "
-                            "content-addressed derivation)",
-                            leaf.node->getAttrPathStr());
-                    else
-                        obj.emplace("derivation", std::move(drvObj));
+                    obj.emplace("derivation", std::move(drvObj));
                 }
 
                 if (options.bake && leaf.isFlakeCheck())

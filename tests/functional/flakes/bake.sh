@@ -139,6 +139,16 @@ cat > "$greeterDir/flake.nix" <<EOF
       buildCommand = "mkdir \$bin \$dev; echo bin > \$bin/what; echo dev > \$dev/what";
     };
     packages.$system.multiDev = self.packages.$system.multi.dev;
+    # A package that fails to evaluate when built (like a package marked as broken).
+    packages.$system.broken = {
+      type = "derivation";
+      name = "broken";
+      system = "$system";
+      meta.description = "a broken package";
+      outPath = throw "this package is broken";
+      drvPath = throw "this package is broken";
+      outputName = "out";
+    };
     # Content-addressed derivations cannot be baked.
     packages.$system.ca = with import ./config.nix; mkDerivation {
       name = "ca";
@@ -153,9 +163,18 @@ EOF
 
 # Derivations that cannot be baked produce a warning and are omitted.
 nix flake bake "$greeterDir" --dest-dir "$bakedDir-greeter" 2>&1 | grepQuiet "warning: cannot bake 'packages.$system.ca'"
-[[ $(jq -r ".packages.output.children.\"$system\".children | has(\"ca\")" < "$bakedDir-greeter/outputs.json") = false ]]
-[[ $(nix eval "path:$bakedDir-greeter#packages.$system" --apply 'x: x ? ca') = false ]]
-[[ $(nix eval "path:$bakedDir-greeter#packages.$system" --apply 'x: x ? greeter') = true ]]
+# Unbakeable derivations are recorded as failed. The baked flake still
+# lists them (so `nix search` and `nix flake show` behave like the original)...
+[[ $(jq -r ".packages.output.children.\"$system\".children.ca.derivation.failed" < "$bakedDir-greeter/outputs.json") = true ]]
+[[ $(jq -r ".packages.output.children.\"$system\".children.broken.derivation.failed" < "$bakedDir-greeter/outputs.json") = true ]]
+[[ $(jq -r ".packages.output.children.\"$system\".children.greeter.derivation | has(\"failed\")" < "$bakedDir-greeter/outputs.json") = false ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#ca.name") = ca ]]
+[[ $(nix eval --raw "path:$bakedDir-greeter#broken.meta.description") = "a broken package" ]]
+nix search --json "path:$bakedDir-greeter" broken | jq -e ".\"packages.$system.broken\""
+nix flake show --json "path:$bakedDir-greeter" | jq -e ".inventory.packages.output.children.\"$system\".children.broken.derivation.name == \"broken\""
+# ... but building them fails.
+expectStderr 1 nix build --no-link "path:$bakedDir-greeter#ca" | grepQuiet "package 'ca' cannot be built because it could not be baked"
+expectStderr 1 nix build --no-link "path:$bakedDir-greeter#broken" | grepQuiet "package 'broken' cannot be built because it could not be baked"
 [[ $(jq -r ".packages.output.children.\"$system\".children.greeter.derivation.mainProgram" < "$bakedDir-greeter/outputs.json") = hi ]]
 [[ $(nix eval --raw "path:$bakedDir-greeter#greeter.meta.mainProgram") = hi ]]
 

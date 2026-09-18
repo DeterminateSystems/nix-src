@@ -24,6 +24,33 @@
         node:
         if node ? children then
           builtins.mapAttrs (name: child: convert child) node.children
+          # Unlike in Nixpkgs, every attribute set in a baked flake only
+          # contains things worth recursing into, so mark them all with the
+          # Nixpkgs `recurseForDerivations` convention for `nix search`.
+          // {
+            recurseForDerivations = true;
+          }
+        else if node.derivation.failed or false then
+          # The derivation could not be baked (e.g. because it is marked as
+          # broken, or is a content-addressed derivation). Provide a stub
+          # that can be listed (e.g. by `nix search`) but fails when built,
+          # like the original.
+          let
+            error = throw "package '${node.derivation.name}' cannot be built because it could not be baked (e.g. because it is marked as broken)";
+          in
+          setAttrByPath (node.derivationAttrPath or [ ]) (
+            {
+              type = "derivation";
+              name = node.derivation.name;
+              meta =
+                optionalAttrs (node ? shortDescription) { description = node.shortDescription; }
+                // optionalAttrs (node.derivation ? mainProgram) { mainProgram = node.derivation.mainProgram; };
+              drvPath = error;
+              outPath = error;
+              outputName = node.derivation.outputName or "out";
+            }
+            // optionalAttrs (node.derivation ? system) { inherit (node.derivation) system; }
+          )
         else
           let
             baked = builtins.bakedDerivation {
