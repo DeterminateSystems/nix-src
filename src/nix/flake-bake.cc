@@ -54,8 +54,6 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas
 
     void run(nix::ref<nix::Store> store) override
     {
-        experimentalFeatureSettings.require(Xp::BakedDerivation);
-
         auto state = getEvalState();
         auto evalStore = getEvalStore();
         auto flake = make_ref<LockedFlake>(lockFlake());
