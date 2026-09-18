@@ -39,7 +39,9 @@ By default, only the outputs for the current system are baked. Use `--all-system
 
 * Derivations whose output paths are not known at evaluation time cannot be baked. This includes [content-addressed derivations](@docroot@/store/derivation/outputs/content-address.md) and impure derivations. `nix flake bake` prints a warning for each such derivation and omits it from the baked flake.
 
-* Outputs whose derivation is nested inside the output attribute (such as `nixosConfigurations.<name>.config.system.build.toplevel`) are baked at that nested attribute. Other attributes of the output are not included. Consequently, `nix flake show` may not work on a baked flake for such outputs if the flake schema needs those other attributes.
+* Outputs whose derivation is nested inside the output attribute (such as `nixosConfigurations.<name>.config.system.build.toplevel`) are baked at that nested attribute. Other attributes of the output are not included.
+
+* The baked flake provides its own [flake schemas](@docroot@/protocols/flake-schemas.md) (in the `schemas` output) that reproduce the structure of the original flake's outputs, so `nix flake show` and `nix flake check` work on it. However, any evaluation checks defined by the original flake's schemas are not performed on the baked flake.
 
 This command requires the [`baked-derivations`](@docroot@/development/experimental-features.md#xp-feature-baked-derivations) experimental feature, both in the Nix CLI and in the Nix daemon.
 

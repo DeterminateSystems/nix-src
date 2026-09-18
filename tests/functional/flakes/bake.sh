@@ -223,11 +223,25 @@ activationPath=$(nix eval --raw "$configsDir#homeConfigurations.bar.activationPa
 [[ $(nix eval "path:$bakedDir-configs#nixosConfigurations.foo" --apply 'x: x ? drvPath') = false ]]
 [[ $(nix eval "path:$bakedDir-configs#homeConfigurations.bar" --apply 'x: x ? drvPath') = false ]]
 
-# `nix flake show` on a baked flake evaluates the flake schemas against
-# the baked values. This works for `homeConfigurations`, whose schema
-# only needs `activationPackage.system`. It does not currently work for
-# `nixosConfigurations`, whose schema reads `pkgs.stdenv.system`, which
-# the baked flake does not provide, so we don't test that here.
+# The baked flake provides its own flake schemas, so `nix flake show`
+# and `nix flake check` work even for outputs whose original schema
+# needs attributes that the baked flake doesn't have (e.g.
+# `pkgs.stdenv.system` for `nixosConfigurations`).
+nix flake show --json "path:$bakedDir-configs" > "$TEST_ROOT/show-baked-configs.json"
+[[ $(jq -r '.inventory.nixosConfigurations.output.children.foo.what' < "$TEST_ROOT/show-baked-configs.json") = "NixOS configuration" ]]
+[[ $(jq -c '.inventory.nixosConfigurations.output.children.foo.forSystems' < "$TEST_ROOT/show-baked-configs.json") = "[\"$system\"]" ]]
+[[ $(jq -r '.inventory.nixosConfigurations.output.children.foo.derivation.name' < "$TEST_ROOT/show-baked-configs.json") = simple ]]
+nix flake show "path:$bakedDir-configs" | grepQuiet "NixOS configuration"
+nix flake check --no-build "path:$bakedDir-configs"
+nix flake check "path:$bakedDir-greeter"
+
+# Schema-level attributes are preserved, so e.g. `foo` still resolves to `packages.<system>.foo`...
+[[ $(jq -c '.packages.defaultAttrPath' < "$bakedDir/outputs.json") = '["default"]' ]]
+[[ $(jq -c '.packages.roles | sort' < "$bakedDir/outputs.json") = '["nix-build","nix-develop","nix-run","nix-search"]' ]]
+[[ $(nix eval --raw "path:$bakedDir#default.outPath") = "$fooPath" ]]
+# ... and `legacyPackages` is still hidden without `--legacy`.
+[[ $(jq -r ".inventory.legacyPackages.output.children.\"$system\".isLegacy" < "$TEST_ROOT/show-baked.json") = true ]]
+
 homeDir=$TEST_ROOT/home
 mkdir -p "$homeDir"
 cp ../simple.nix ../simple.builder.sh "${config_nix}" "$homeDir/"

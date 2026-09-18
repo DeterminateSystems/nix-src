@@ -381,6 +381,16 @@ nlohmann::json getFlakeInventory(
     std::function<void(ref<eval_cache::AttrCursor> node, nlohmann::json & obj)> visit;
 
     visit = [&](ref<eval_cache::AttrCursor> node, nlohmann::json & obj) {
+        /* Record the schema attributes that apply to both leaf and non-leaf nodes. Non-leaf `forSystems` and
+           `isLegacy` are only needed by `nix flake bake` to reproduce the schema. */
+        auto addNodeInfo = [&](bool isLeaf) {
+            if (auto forSystems = flake_schemas::Node(node).forSystems(); forSystems && (isLeaf || options.bake))
+                obj.emplace("forSystems", *forSystems);
+            if (options.bake)
+                if (auto b = node->maybeGetAttr("isLegacy"); b && b->getBool())
+                    obj.emplace("isLegacy", true);
+        };
+
         flake_schemas::visit(
             options.showAllSystems ? std::optional<std::string>() : localSystem,
             options.showLegacy,
@@ -461,8 +471,10 @@ nlohmann::json getFlakeInventory(
                         obj.emplace("derivation", std::move(drvObj));
                 }
 
-                if (auto forSystems = leaf.forSystems())
-                    obj.emplace("forSystems", *forSystems);
+                if (options.bake && leaf.isFlakeCheck())
+                    obj.emplace("isFlakeCheck", true);
+
+                addNodeInfo(true);
             },
 
             [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
@@ -482,6 +494,8 @@ nlohmann::json getFlakeInventory(
                     });
                 });
                 obj.emplace("children", std::move(children));
+
+                addNodeInfo(false);
             },
 
             [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
@@ -493,6 +507,8 @@ nlohmann::json getFlakeInventory(
 
     auto inv = nlohmann::json::object();
 
+    auto schemas = getSchemas(inventory);
+
     flake_schemas::forEachOutput(
         inventory,
         [&](Symbol outputName, std::shared_ptr<eval_cache::AttrCursor> output, const std::string & doc, bool isLast) {
@@ -500,6 +516,20 @@ nlohmann::json getFlakeInventory(
 
             if (output) {
                 j.emplace("doc", doc);
+
+                /* Record the schema-level attributes, so that `nix flake bake` can reproduce the schema. */
+                if (auto schema = get(schemas, std::string(state.symbols[outputName])); schema && options.bake) {
+                    if (!schema->roles.empty())
+                        j.emplace("roles", schema->roles);
+                    if (schema->appendSystem)
+                        j.emplace("appendSystem", true);
+                    if (schema->defaultAttrPath) {
+                        auto attrPath = nlohmann::json::array();
+                        for (auto & attr : *schema->defaultAttrPath)
+                            attrPath.push_back(std::string(state.symbols[attr]));
+                        j.emplace("defaultAttrPath", std::move(attrPath));
+                    }
+                }
                 auto & j2 = j.emplace("output", nlohmann::json::object()).first.value();
                 state.spawn(futures, 1, [&visit, output, &j2]() { visit(ref(output), j2); });
             } else
