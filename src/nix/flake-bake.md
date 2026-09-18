@@ -27,7 +27,7 @@ This command evaluates the outputs of the flake specified by flake reference *fl
 
 The baked flake has no inputs, so it can be used without access to the inputs of the original flake.
 
-Derivation attributes in the baked flake have the same `name`, `system`, `drvPath`, `outPath`, `outputName`, `outputs` and `meta.mainProgram` as in the original flake, so commands such as `nix build` and `nix run` behave the same. The outputs of a baked flake can also be used as inputs of other derivations, e.g. by another flake that has the baked flake as an input.
+Derivation attributes in the baked flake have the same `name`, `system`, `outPath`, `outputName`, `outputs` and `meta.mainProgram` as in the original flake, so commands such as `nix build` and `nix run` behave the same. Their `drvPath` is different, however: it refers to the baked derivation rather than the original one. The outputs of a baked flake can also be used as inputs of other derivations, e.g. by another flake that has the baked flake as an input.
 
 Building the outputs of a baked flake requires that their store paths can be [substituted](@docroot@/command-ref/conf-file.md#conf-substituters) (or are already present in the Nix store). If a store path cannot be substituted, the build fails; Nix will not fall back to building the original derivation.
 
