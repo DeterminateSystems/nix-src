@@ -1300,6 +1300,8 @@ static void processDerivationOutputPaths(Store & store, auto && drv, std::string
             throw Error("'builtin:substitute' derivation must have no environment variables");
         if (!drv.inputSrcs.empty())
             throw Error("'builtin:substitute' derivation must have no inputs");
+        /* Check the output types (and the experimental feature). */
+        drv.type();
         return;
     }
 

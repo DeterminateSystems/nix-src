@@ -47,6 +47,7 @@ nix derivation show "$drvPath" > "$TEST_ROOT/baked-drv.json"
 jq '.derivations[]' < "$TEST_ROOT/baked-drv.json" > "$TEST_ROOT/baked-drv-single.json"
 [[ $(nix derivation add < "$TEST_ROOT/baked-drv-single.json") = "$drvPath" ]]
 jq '.outputs.out = {}' < "$TEST_ROOT/baked-drv-single.json" | expectStderr 1 nix derivation add | grepQuiet "must have input-addressed outputs"
+jq '.outputs.out = {"method": "nar", "hash": "sha256-iUUXyRY8iW7DGirb0zwGgf1fRbLA7wimTJKgP7l/OQ8="}' < "$TEST_ROOT/baked-drv-single.json" | expectStderr 1 nix derivation add | grepQuiet "must have input-addressed outputs"
 
 # Building a baked derivation fails if its outputs cannot be substituted.
 expectStderr 1 nix build --no-link "path:$bakedDir#foo" | grepQuiet "failed to substitute"
