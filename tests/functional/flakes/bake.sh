@@ -22,6 +22,11 @@ nix flake bake "$flakeDir" --dest-dir "$bakedDir"
 [[ -e $bakedDir/flake.nix ]]
 [[ -e $bakedDir/outputs.json ]]
 
+# Only outputs that can be baked are recorded: unknown outputs (like
+# `number`) and outputs for other systems are omitted.
+[[ $(jq -c 'keys' < "$bakedDir/outputs.json") = '["legacyPackages","packages"]' ]]
+[[ $(jq -c '.packages.output.children | keys' < "$bakedDir/outputs.json") = "[\"$system\"]" ]]
+
 # The baked flake has the same outputs as the original for the current
 # system. Outputs for other systems are not included by default.
 nix flake show --json "path:$bakedDir" > "$TEST_ROOT/show-baked.json"
@@ -145,6 +150,7 @@ EOF
 
 # Derivations that cannot be baked produce a warning and are omitted.
 nix flake bake "$greeterDir" --dest-dir "$bakedDir-greeter" 2>&1 | grepQuiet "warning: cannot bake 'packages.$system.ca'"
+[[ $(jq -r ".packages.output.children.\"$system\".children | has(\"ca\")" < "$bakedDir-greeter/outputs.json") = false ]]
 [[ $(nix eval "path:$bakedDir-greeter#packages.$system" --apply 'x: x ? ca') = false ]]
 [[ $(nix eval "path:$bakedDir-greeter#packages.$system" --apply 'x: x ? greeter') = true ]]
 [[ $(jq -r ".packages.output.children.\"$system\".children.greeter.derivation.mainProgram" < "$bakedDir-greeter/outputs.json") = hi ]]

@@ -538,6 +538,32 @@ nlohmann::json getFlakeInventory(
 
     futures.finishAll();
 
+    if (options.bake) {
+        /* Prune the inventory to the nodes that can be baked: derivation leaves, and non-leaf nodes that contain at
+           least one of them. This drops non-derivation leaves (e.g. overlays), filtered/failed nodes, derivations
+           that cannot be baked, and unknown outputs. */
+        auto prune = [](this const auto & prune, nlohmann::json & node) -> bool {
+            if (auto children = node.find("children"); children != node.end()) {
+                for (auto i = children->begin(); i != children->end();) {
+                    if (prune(i.value()))
+                        ++i;
+                    else
+                        i = children->erase(i);
+                }
+                return !children->empty();
+            }
+            return node.contains("derivation");
+        };
+
+        for (auto i = inv.begin(); i != inv.end();) {
+            auto output = i.value().find("output");
+            if (output != i.value().end() && prune(*output))
+                ++i;
+            else
+                i = inv.erase(i);
+        }
+    }
+
     return inv;
 }
 

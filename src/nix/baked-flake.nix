@@ -14,25 +14,10 @@
         else
           { ${builtins.head path} = setAttrByPath (builtins.tail path) value; };
 
-      # Prune the inventory to the nodes that can be baked: derivation
-      # leaves, and non-leaf nodes that contain at least one of them.
-      prune =
-        node:
-        if node ? children then
-          let
-            children = builtins.filterAttrs (name: child: child != null) (
-              builtins.mapAttrs (name: child: prune child) node.children
-            );
-          in
-          if children == { } then null else node // { inherit children; }
-        else if node ? derivation then
-          node
-        else
-          null;
-
-      inventories = builtins.filterAttrs (name: node: node != null) (
-        builtins.mapAttrs (name: output: prune (output.output or null)) data
-      );
+      # The inventory of each output. `nix flake bake` only records
+      # nodes that can be baked: derivation leaves, and non-leaf nodes
+      # that contain at least one of them.
+      inventories = builtins.mapAttrs (name: output: output.output) data;
 
       # Convert an inventory node into the corresponding flake output.
       convert =
