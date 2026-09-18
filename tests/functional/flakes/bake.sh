@@ -27,6 +27,9 @@ nix flake bake "$flakeDir" --dest-dir "$bakedDir"
 [[ $(jq -c 'keys' < "$bakedDir/outputs.json") = '["legacyPackages","packages"]' ]]
 [[ $(jq -c '.packages.output.children | keys' < "$bakedDir/outputs.json") = "[\"$system\"]" ]]
 
+# In read-only mode, evaluating the baked flake doesn't write the baked derivations to the store.
+[[ ! -e $(nix eval --read-only --no-eval-cache --raw "path:$bakedDir#foo.drvPath") ]]
+
 # The baked flake has the same outputs as the original for the current
 # system. Outputs for other systems are not included by default.
 nix flake show --json "path:$bakedDir" > "$TEST_ROOT/show-baked.json"

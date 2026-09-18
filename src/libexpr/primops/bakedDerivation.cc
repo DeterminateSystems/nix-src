@@ -3,6 +3,7 @@
 #include "nix/store/derivations.hh"
 #include "nix/store/derived-path.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/globals.hh"
 
 #include <boost/unordered/concurrent_flat_map.hpp>
 
@@ -93,7 +94,9 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
     for (auto & [outName, outPath] : outputs)
         drv.outputs.insert_or_assign(outName, DerivationOutput::InputAddressed{.path = outPath});
 
-    auto drvPath = state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair);
+    /* As in `derivationStrict`, don't write the derivation in read-only mode. */
+    auto drvPath = settings.readOnlyMode ? computeStorePath(*state.store, drv)
+                                         : state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair);
 
     /* As in `derivationStrict`, cache the derivation hash so that derivations depending on this one don't need to
        read it back from the store. */
