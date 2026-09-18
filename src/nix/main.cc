@@ -578,6 +578,7 @@ void mainWrapped(int argc, char ** argv)
             Xp::FetchClosure,
             Xp::DynamicDerivations,
             Xp::FetchTree,
+            Xp::BakedDerivations,
         };
         evalSettings.pureEval = false;
         auto statePtr = std::make_shared<EvalState>(
