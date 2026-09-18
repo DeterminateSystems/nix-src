@@ -3,7 +3,6 @@
 #include "nix/store/derivations.hh"
 #include "nix/store/derived-path.hh"
 #include "nix/store/store-api.hh"
-#include "nix/util/hash.hh"
 
 #include <boost/unordered/concurrent_flat_map.hpp>
 
@@ -15,13 +14,8 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
 
     std::optional<std::string> name;
 
-    struct BakedDerivationOutput
-    {
-        StorePath path;
-        std::optional<Hash> narHash;
-    };
-
-    std::map<std::string, BakedDerivationOutput> outputs;
+    /* TODO: add a `narHash` attribute to assert the known contents of a pre-built output. */
+    std::map<std::string, StorePath> outputs;
 
     for (auto & attr : *args[0]->attrs()) {
         std::string_view attrName = state.symbols[attr.name];
@@ -42,7 +36,6 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
                     fmt("while evaluating the output '%s' passed to builtins.bakedDerivation", outName));
 
                 std::optional<StorePath> path;
-                std::optional<Hash> narHash;
 
                 for (auto & outField : *outAttr.value->attrs()) {
                     std::string_view fieldName = state.symbols[outField.name];
@@ -54,11 +47,6 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
                     if (fieldName == "path") {
                         auto s = state.forceStringNoCtx(*outField.value, outField.pos, fieldHint);
                         path = state.store->parseStorePath(s);
-                    }
-
-                    else if (fieldName == "narHash") {
-                        auto s = state.forceStringNoCtx(*outField.value, outField.pos, fieldHint);
-                        narHash = Hash::parseAny(s, std::nullopt);
                     }
 
                     else
@@ -77,7 +65,7 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
                         .atPos(outAttr.pos)
                         .debugThrow();
 
-                outputs.emplace(std::string(outName), BakedDerivationOutput{std::move(*path), std::move(narHash)});
+                outputs.emplace(std::string(outName), std::move(*path));
             }
         }
 
@@ -102,20 +90,8 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
     drv.platform = "builtin";
     drv.builder = "builtin:substitute";
 
-    for (auto & [outName, out] : outputs) {
-        if (out.narHash)
-            drv.outputs.insert_or_assign(
-                outName,
-                DerivationOutput::CAFixed{
-                    .ca =
-                        ContentAddress{
-                            .method = ContentAddressMethod::Raw::NixArchive,
-                            .hash = *out.narHash,
-                        },
-                });
-        else
-            drv.outputs.insert_or_assign(outName, DerivationOutput::InputAddressed{.path = out.path});
-    }
+    for (auto & [outName, outPath] : outputs)
+        drv.outputs.insert_or_assign(outName, DerivationOutput::InputAddressed{.path = outPath});
 
     auto drvPath = state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair);
 
@@ -133,14 +109,14 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
                 NixStringContextElem::DrvDeep{.drvPath = drvPath},
             },
             state.mem);
-    for (auto & [outName, out] : outputs)
+    for (auto & [outName, outPath] : outputs)
         state.mkOutputString(
             result.alloc(outName),
             SingleDerivedPath::Built{
                 .drvPath = makeConstantStorePathRef(drvPath),
                 .output = outName,
             },
-            out.path);
+            outPath);
 
     v.mkAttrs(result);
 }
