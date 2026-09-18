@@ -128,7 +128,7 @@
     - [Build Trace Entry](protocols/json/build-trace-entry.md)
     - [Build Result](protocols/json/build-result.md)
     - [Store](protocols/json/store.md)
-  - [Serving Tarball Flakes](protocols/tarball-fetcher.md)
+  - [Lockable HTTP Protocol](protocols/tarball-fetcher.md)
   - [Store Path Specification](protocols/store-path.md)
   - [Nix Archive (NAR) Format](protocols/nix-archive/index.md)
   - [Binary Cache](protocols/binary-cache/index.md)
