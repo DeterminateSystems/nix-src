@@ -22,8 +22,12 @@
 
       nixMake = import ./lib.nix { inherit pkgs; };
 
-      components = {
-        nix-util = import ./libutil.nix { inherit pkgs nixMake; };
+      components = rec {
+        nix-util = import ./libutil.nix { inherit nixMake; };
+        nix-store = import ./libstore.nix {
+          inherit pkgs nixMake;
+          inherit nix-util;
+        };
       };
     in
     {
