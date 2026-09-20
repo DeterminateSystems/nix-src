@@ -21,9 +21,8 @@ nixMake.mkComponent {
     "windows"
     "freebsd"
     "darwin"
-    # Requires AWS CRT; disabled for now (see NIX_WITH_AWS_AUTH below).
-    "aws-creds.cc"
-  ];
+  ]
+  ++ lib.optional (!nixMake.config.awsAuth) "aws-creds.cc";
 
   includeDirs = [
     ""
@@ -43,7 +42,7 @@ nixMake.mkComponent {
     "include/nix/store/config.hh" = {
       NIX_LOCAL_SYSTEM = "x86_64-linux";
       NIX_SUPPORT_ACL = 1;
-      NIX_WITH_AWS_AUTH = 0;
+      NIX_WITH_AWS_AUTH = nixMake.config.awsAuth;
     };
     "store-config-private.hh" = {
       CAN_LINK_SYMLINK = 1;

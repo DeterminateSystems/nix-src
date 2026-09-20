@@ -183,7 +183,10 @@ let
         srcPath = unit.path;
         includeDirs = component.includeDirs ++ component.depIncludeDirs;
         cxxFlags =
-          commonCxxFlags ++ component.extraCxxFlags ++ (component.unitCxxFlags.${unit.path} or [ ]);
+          commonCxxFlags
+          ++ component.extraCxxFlags
+          ++ (component.unitCxxFlags.${unit.path} or [ ])
+          ++ lib.concatMap (d: d.cflags or [ ]) deps;
         pkgConfigDeps = lib.concatMap (d: d.pkgconfig or [ ]) deps;
         buildInputs = depPackages deps;
         nativeBuildInputs = [ pkgs.pkg-config ];

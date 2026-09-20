@@ -13,6 +13,8 @@
 
 let
   inherit (pkgs) lib;
+  # The overridden dependencies used by the Meson build, layered over Nixpkgs.
+  nixDeps = pkgs // pkgs.nixDependencies2;
 in
 
 nixMake.mkComponent {
@@ -55,9 +57,11 @@ nixMake.mkComponent {
       NIX_BIN_DIR = "/nix/var/nix/profiles/default/bin";
       NIX_MAN_DIR = "/nix/var/nix/profiles/default/share/man";
       HAVE_MIMALLOC = 1;
-      # Crash reporting and tracing are disabled for now.
-      HAVE_SENTRY = 0;
-      HAVE_OTEL = 0;
+      HAVE_SENTRY = nixMake.config.sentry;
+      HAVE_OTEL = nixMake.config.otel;
+    }
+    // lib.optionalAttrs nixMake.config.sentry {
+      CRASHPAD_HANDLER_PATH = "${nixDeps.sentry-native}/bin/crashpad_handler";
     };
   };
 

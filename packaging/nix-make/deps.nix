@@ -5,6 +5,7 @@
 # - `pkg`: the package(s) providing the headers and libraries.
 # - `pkgconfig`: pkg-config names used for compile and link flags.
 # - `libs`: extra linker flags for libraries without pkg-config files.
+# - `cflags`: extra compiler flags for libraries without pkg-config files.
 { pkgs }:
 
 let
@@ -127,6 +128,67 @@ in
   {
     prefix = "toml11/";
     pkg = deps.toml11;
+  }
+  {
+    # The AWS CRT and its C libraries have no pkg-config files; the
+    # defines are what their CMake targets would set.
+    prefix = "aws/";
+    pkg = with deps; [
+      aws-crt-cpp
+      aws-c-auth
+      aws-c-cal
+      aws-c-common
+      aws-c-compression
+      aws-c-event-stream
+      aws-checksums
+      aws-c-http
+      aws-c-io
+      aws-c-mqtt
+      aws-c-s3
+      aws-c-sdkutils
+      s2n-tls
+    ];
+    cflags = [
+      "-DAWS_ENABLE_EPOLL"
+      "-DAWS_AUTH_USE_IMPORT_EXPORT"
+      "-DAWS_CAL_USE_IMPORT_EXPORT"
+      "-DAWS_CHECKSUMS_USE_IMPORT_EXPORT"
+      "-DAWS_COMMON_USE_IMPORT_EXPORT"
+      "-DAWS_COMPRESSION_USE_IMPORT_EXPORT"
+      "-DAWS_CRT_CPP_USE_IMPORT_EXPORT"
+      "-DAWS_EVENT_STREAM_USE_IMPORT_EXPORT"
+      "-DAWS_HTTP_USE_IMPORT_EXPORT"
+      "-DAWS_IO_USE_IMPORT_EXPORT"
+      "-DAWS_MQTT_USE_IMPORT_EXPORT"
+      "-DAWS_S3_USE_IMPORT_EXPORT"
+      "-DAWS_SDKUTILS_USE_IMPORT_EXPORT"
+    ];
+    libs = [
+      "-laws-crt-cpp"
+      "-laws-c-auth"
+      "-laws-c-cal"
+      "-laws-c-common"
+      "-laws-c-compression"
+      "-laws-c-event-stream"
+      "-laws-checksums"
+      "-laws-c-http"
+      "-laws-c-io"
+      "-laws-c-mqtt"
+      "-laws-c-s3"
+      "-laws-c-sdkutils"
+      "-ls2n"
+    ];
+  }
+  {
+    prefix = "opentelemetry/";
+    pkg = deps.opentelemetry-cpp;
+    pkgconfig = [ "opentelemetry_trace" ];
+  }
+  {
+    # No pkg-config file.
+    prefix = "sentry.h";
+    pkg = deps.sentry-native;
+    libs = [ "-lsentry" ];
   }
   {
     prefix = "microhttpd.h";
