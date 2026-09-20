@@ -60,10 +60,24 @@
             nix-main
             ;
         };
+        nix = import ./nix.nix {
+          inherit pkgs nixMake;
+          inherit
+            nix-util
+            nix-store
+            nix-fetchers
+            nix-expr
+            nix-flake
+            nix-main
+            nix-cmd
+            ;
+        };
       };
     in
     {
-      packages.${system} = components;
+      packages.${system} = components // {
+        default = components.nix;
+      };
 
       # The raw scanner output for each component, for debugging.
       lib.${system}.scan = pkgs.lib.mapAttrs (_: c: c.units) components;

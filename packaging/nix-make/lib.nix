@@ -153,7 +153,8 @@ let
         $CXX "''${cxxFlags[@]}" "''${flags[@]}" -c "$srcPath" -o "$out"
       '';
 
-  linkSharedLibrary =
+  # Link the objects into a shared library or an executable.
+  link =
     component: objects:
     let
       # Link against every external dependency used by any unit.
@@ -164,7 +165,14 @@ let
         __structuredAttrs = true;
         # Instantiate the objects and the dependencies in parallel.
         objects = parallel (map (d: d.drvPath) component.allDeps ++ map (o: o.drvPath) objects) objects;
-        inherit (component) libName linkFlags;
+        inherit (component)
+          type
+          libName
+          exeName
+          binSymlinks
+          linkFlags
+          postInstall
+          ;
         linkPkgConfig = lib.concatMap (d: d.pkgconfig or [ ]) deps;
         linkLibs =
           map (d: "-l${d.libName}") component.allDeps
@@ -180,30 +188,52 @@ let
         };
       }
       ''
-        mkdir -p $out/lib
-
         libs=()
         if [[ ''${#linkPkgConfig[@]} -gt 0 ]]; then
           libs+=($(pkg-config --libs "''${linkPkgConfig[@]}"))
         fi
 
-        $CXX -shared -fPIC \
-          -Wl,-soname,lib$libName.so \
-          -Wl,--as-needed -Wl,--no-undefined \
-          "''${linkFlags[@]}" \
-          -o $out/lib/lib$libName.so \
-          "''${objects[@]}" \
-          "''${libs[@]}" \
-          "''${linkLibs[@]}"
+        case "$type" in
+          library)
+            mkdir -p $out/lib
+            $CXX -shared -fPIC \
+              -Wl,-soname,lib$libName.so \
+              -Wl,--as-needed -Wl,--no-undefined \
+              "''${linkFlags[@]}" \
+              -o $out/lib/lib$libName.so \
+              "''${objects[@]}" \
+              "''${libs[@]}" \
+              "''${linkLibs[@]}"
+            ;;
+          executable)
+            mkdir -p $out/bin
+            $CXX \
+              -Wl,--as-needed -Wl,--no-undefined \
+              "''${linkFlags[@]}" \
+              -o $out/bin/$exeName \
+              "''${objects[@]}" \
+              "''${libs[@]}" \
+              "''${linkLibs[@]}"
+            for name in "''${binSymlinks[@]}"; do
+              ln -s $exeName $out/bin/$name
+            done
+            ;;
+        esac
+
+        eval "$postInstall"
       '';
 
   /**
-    Build a shared library component.
+    Build a component: a shared library (the default) or an executable.
 
     - `name`: derivation name (e.g. `nix-util`).
+    - `type`: `"library"` or `"executable"`.
     - `libName`: library name without `lib` prefix (e.g. `nixutil`).
+    - `exeName`: executable name; defaults to `name`.
+    - `binSymlinks`: names of symlinks to the executable to create in `bin/`.
+    - `postInstall`: shell snippet run after linking.
     - `deps`: other components this one depends on. Their public headers
-      are made available under `<name>/` and their libraries are linked.
+      are made available under `_deps/<name>/` and their libraries are linked.
       Dependencies are transitive.
     - `root`: the directory scanned for sources and headers; shorthand for
       a `roots` entry with an empty prefix.
@@ -238,7 +268,11 @@ let
   mkComponent =
     {
       name,
-      libName,
+      type ? "library",
+      libName ? null,
+      exeName ? name,
+      binSymlinks ? [ ],
+      postInstall ? "",
       deps ? [ ],
       root ? null,
       roots ? [ ],
@@ -273,8 +307,10 @@ let
       allDeps = lib.unique (deps ++ lib.concatMap (d: d.component.allDeps) deps);
 
       # Dependencies contribute their roots, public include directories and
-      # extra files under `<name>/`, but no compilation units.
-      prefixed = d: p: if p == "" then d.component.name else "${d.component.name}/${p}";
+      # extra files under `_deps/<name>/` (a prefix that cannot collide with
+      # the component's own directories), but no compilation units.
+      depPrefix = d: "_deps/${d.component.name}";
+      prefixed = d: p: if p == "" then depPrefix d else "${depPrefix d}/${p}";
       depRoots = lib.concatMap (
         d:
         map (r: {
@@ -286,7 +322,7 @@ let
       depFiles = lib.foldl' (
         acc: d: acc // lib.mapAttrs' (k: v: lib.nameValuePair (prefixed d k) v) d.component.files
       ) { } allDeps;
-      depExcludes = map (d: d.component.name) allDeps;
+      depExcludes = map depPrefix allDeps;
       depGenerated = lib.foldl' (
         acc: d:
         acc
@@ -336,6 +372,13 @@ let
       );
 
       component = args // {
+        inherit
+          type
+          libName
+          exeName
+          binSymlinks
+          postInstall
+          ;
         roots = allRoots;
         # Only our own files and generated files are exported to dependents;
         # their own dependencies are resolved transitively.
@@ -353,7 +396,7 @@ let
           ;
       };
     in
-    linkSharedLibrary component (map (compileUnit component) units);
+    link component (map (compileUnit component) units);
 
   # Macros the scanner can rely on when evaluating preprocessor conditionals
   # (Linux, x86_64, GCC). Only what is certain: an unknown macro keeps both

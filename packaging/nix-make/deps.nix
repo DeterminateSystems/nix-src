@@ -129,6 +129,17 @@ in
     pkg = deps.toml11;
   }
   {
+    prefix = "microhttpd.h";
+    pkg = deps.libmicrohttpd;
+    pkgconfig = [ "libmicrohttpd" ];
+  }
+  {
+    # `<mimalloc.h>`, `<mimalloc-override.h>`, ...
+    prefix = "mimalloc";
+    pkg = deps.mimalloc;
+    pkgconfig = [ "mimalloc" ];
+  }
+  {
     prefix = "lowdown.h";
     pkg = deps.lowdown;
     pkgconfig = [ "lowdown" ];
