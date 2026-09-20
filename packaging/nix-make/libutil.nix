@@ -15,10 +15,12 @@ nixMake.mkComponent {
       root = ../../src/libutil;
       prefix = "";
     }
-    {
-      root = ../../nix-meson-build-support;
-      prefix = "nix-meson-build-support";
-    }
+  ];
+
+  # Every .cc file under the root is a compilation unit, except these.
+  excludeSources = [
+    "windows"
+    "freebsd"
   ];
 
   includeDirs = [
@@ -30,7 +32,13 @@ nixMake.mkComponent {
     "widecharwidth"
   ];
 
-  files = {
+  files = nixMake.commonSupportFiles // {
+    # Interposes __cxa_throw; linked into libnixutil only.
+    "nix-meson-build-support/common/cxa-throw/interpose-cxa-throw.cc" =
+      ../../nix-meson-build-support/common/cxa-throw/interpose-cxa-throw.cc;
+    "nix-meson-build-support/common/cxa-throw/is-logic-error.hh" =
+      ../../nix-meson-build-support/common/cxa-throw/is-logic-error.hh;
+
     "include/nix/util/config.hh" = nixMake.mkConfigHeader "config.hh" {
       NIX_UBSAN_ENABLED = 0;
       NIX_ASAN_ENABLED = 0;
@@ -51,90 +59,6 @@ nixMake.mkComponent {
       HAVE_UTIMENSAT = 1;
     };
   };
-
-  sources = [
-    "archive.cc"
-    "args.cc"
-    "base-n.cc"
-    "base-nix-32.cc"
-    "bump-memory-resource.cc"
-    "caching-source-accessor.cc"
-    "canon-path.cc"
-    "checked-arithmetic.cc"
-    "compression-algo.cc"
-    "compression-settings.cc"
-    "compression.cc"
-    "compute-levels.cc"
-    "config-global.cc"
-    "configuration.cc"
-    "current-process.cc"
-    "english.cc"
-    "environment-variables.cc"
-    "error.cc"
-    "executable-path.cc"
-    "exit.cc"
-    "experimental-features.cc"
-    "file-content-address.cc"
-    "file-descriptor.cc"
-    "file-system.cc"
-    "forwarding-source-accessor.cc"
-    "fs-sink.cc"
-    "git.cc"
-    "hash.cc"
-    "hilite.cc"
-    "json-utils.cc"
-    "logging.cc"
-    "memory-source-accessor.cc"
-    "memory-source-accessor/json.cc"
-    "mounted-source-accessor.cc"
-    "nar-accessor.cc"
-    "nar-cache.cc"
-    "nar-listing.cc"
-    "pos-table.cc"
-    "position.cc"
-    "posix-source-accessor.cc"
-    "processes.cc"
-    "provenance.cc"
-    "serialise.cc"
-    "signature/local-keys.cc"
-    "signature/signer.cc"
-    "source-accessor.cc"
-    "source-path.cc"
-    "strings.cc"
-    "suggestions.cc"
-    "table.cc"
-    "tarfile.cc"
-    "tee-logger.cc"
-    "terminal.cc"
-    "thread-pool.cc"
-    "union-source-accessor.cc"
-    "unix-domain-socket.cc"
-    "url.cc"
-    "users.cc"
-    "util.cc"
-    "xml-writer.cc"
-
-    # linux/meson.build
-    "linux/cgroup.cc"
-    "linux/linux-namespaces.cc"
-
-    # unix/meson.build
-    "unix/current-process.cc"
-    "unix/environment-variables.cc"
-    "unix/file-descriptor.cc"
-    "unix/file-path.cc"
-    "unix/file-system-at.cc"
-    "unix/file-system.cc"
-    "unix/muxable-pipe.cc"
-    "unix/processes.cc"
-    "unix/signals.cc"
-    "unix/users.cc"
-    "unix/xdg-dirs.cc"
-
-    # nix-meson-build-support/common
-    "nix-meson-build-support/common/assert-fail/wrap-assert-fail.cc"
-    "nix-meson-build-support/common/cxa-throw/interpose-cxa-throw.cc"
-  ];
 
   externalDeps = [
     {

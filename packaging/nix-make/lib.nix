@@ -164,7 +164,12 @@ let
     - `libName`: library name without `lib` prefix (e.g. `nixutil`).
     - `roots`: list of `{ root; prefix; }` directories scanned for sources and headers.
     - `includeDirs`: include search path, relative to the root namespace.
-    - `sources`: compilation units, as paths in the root namespace.
+    - `sourceExtensions`: suffixes identifying compilation units.
+    - `sources`: explicit list of compilation units, as paths in the root
+      namespace. By default, every file in the roots or `files` with a
+      source extension is a compilation unit.
+    - `excludeSources`: paths (files, or directories with everything below
+      them) to leave out of the compilation units.
     - `files`: extra files (e.g. generated headers) by path in the root namespace.
     - `externalDeps`: list of `{ prefix; pkg; pkgconfig ? []; }` mapping
       external `#include`s to packages.
@@ -176,7 +181,14 @@ let
       libName,
       roots,
       includeDirs,
-      sources,
+      sourceExtensions ? [
+        ".cc"
+        ".cpp"
+        ".cxx"
+        ".c"
+      ],
+      sources ? null,
+      excludeSources ? [ ],
       files ? { },
       externalDeps ? [ ],
       extraCxxFlags ? [ ],
@@ -186,15 +198,22 @@ let
       linkDeps ? [ ],
     }@args:
     let
-      units = getDeps {
-        inherit builtins;
-        inherit
-          roots
-          includeDirs
-          files
-          sources
-          ;
-      };
+      units = getDeps (
+        {
+          inherit builtins;
+          inherit
+            roots
+            includeDirs
+            sourceExtensions
+            excludeSources
+            ;
+          # Work around a crash in `builtins.wasm` (Nix <= 3.22.5) when
+          # copying "layered" attribute sets (the result of `//`) into Wasm:
+          # `mapAttrs` produces a fresh, non-layered attribute set.
+          files = lib.mapAttrs (_: v: v) files;
+        }
+        // lib.optionalAttrs (sources != null) { inherit sources; }
+      );
       component = args // {
         inherit
           units
@@ -209,11 +228,18 @@ let
     in
     linkSharedLibrary component (map (compileUnit component) units);
 
+  # Sources from nix-meson-build-support that Meson links into every component.
+  commonSupportFiles = {
+    "nix-meson-build-support/common/assert-fail/wrap-assert-fail.cc" =
+      ../../nix-meson-build-support/common/assert-fail/wrap-assert-fail.cc;
+  };
+
 in
 {
   inherit
     getDeps
     mkConfigHeader
     mkComponent
+    commonSupportFiles
     ;
 }
