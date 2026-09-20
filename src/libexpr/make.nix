@@ -76,5 +76,23 @@ nixMake.mkComponent {
     };
   };
 
+  # Build the parser without assertions and with a higher inlining
+  # threshold in non-debug builds: Bison/Flex are particularly sensitive
+  # to the compiler failing to inline.
+  unitCxxFlags =
+    let
+      parserFlags = pkgs.lib.optionals (!nixMake.config.debug) [
+        "-DNDEBUG"
+        "--param=max-inline-insns-single=1000"
+        "--param=max-inline-insns-auto=1000"
+        "--param=inline-unit-growth=400"
+      ];
+    in
+    {
+      "parser-tab.cc" = parserFlags;
+      "lexer-tab.cc" = parserFlags;
+      "lexer-helpers.cc" = parserFlags;
+    };
+
   linkFlags = [ "-Wl,--wrap=__assert_fail" ];
 }

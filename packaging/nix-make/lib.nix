@@ -182,7 +182,8 @@ let
           );
         srcPath = unit.path;
         includeDirs = component.includeDirs ++ component.depIncludeDirs;
-        cxxFlags = commonCxxFlags ++ component.extraCxxFlags;
+        cxxFlags =
+          commonCxxFlags ++ component.extraCxxFlags ++ (component.unitCxxFlags.${unit.path} or [ ]);
         pkgConfigDeps = lib.concatMap (d: d.pkgconfig or [ ]) deps;
         buildInputs = depPackages deps;
         nativeBuildInputs = [ pkgs.pkg-config ];
@@ -320,6 +321,8 @@ let
       can be scanned without building it), and `path` is the generated
       file in the output of a derivation.
     - `extraCxxFlags`, `linkFlags`, `extraLinkLibs`: what they say.
+    - `unitCxxFlags`: extra compiler flags for specific units, as an
+      attribute set from path in the root namespace to a list of flags.
 
     External dependencies (compile flags and libraries) are derived from
     the `#include`s of the units, via `deps.nix`.
@@ -351,6 +354,7 @@ let
       defines ? { },
       undefines ? [ ],
       extraCxxFlags ? [ ],
+      unitCxxFlags ? { },
       linkFlags ? [ ],
       extraLinkLibs ? [ ],
     }@args:
@@ -466,6 +470,7 @@ let
           depIncludeDirs
           publicIncludeDirs
           extraCxxFlags
+          unitCxxFlags
           linkFlags
           extraLinkLibs
           ;
@@ -507,6 +512,10 @@ let
 
 in
 {
+  # The build configuration (see config.nix), for component files that
+  # need to vary with it.
+  inherit config;
+
   inherit
     getDeps
     mkConfigHeader
