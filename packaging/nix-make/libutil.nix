@@ -34,15 +34,18 @@ nixMake.mkComponent {
     "nix-meson-build-support/common/cxa-throw/is-logic-error.hh" =
       ../../nix-meson-build-support/common/cxa-throw/is-logic-error.hh;
 
-    "include/nix/util/config.hh" = nixMake.mkConfigHeader "config.hh" {
+  };
+
+  configHeaders = {
+    "include/nix/util/config.hh" = {
       NIX_UBSAN_ENABLED = 0;
       NIX_ASAN_ENABLED = 0;
     };
-    "util-config-private.hh" = nixMake.mkConfigHeader "util-config-private.hh" {
+    "util-config-private.hh" = {
       HAVE_LIBCPUID = 1;
       HAVE_POSIX_FALLOCATE = 1;
     };
-    "unix/util-unix-config-private.hh" = nixMake.mkConfigHeader "util-unix-config-private.hh" {
+    "unix/util-unix-config-private.hh" = {
       HAVE_CLOSE_RANGE = 1;
       HAVE_COPY_FILE_RANGE = 1;
       HAVE_DECL_AT_SYMLINK_NOFOLLOW = 1;

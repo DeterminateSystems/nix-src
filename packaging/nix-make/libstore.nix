@@ -40,12 +40,17 @@ nixMake.mkComponent {
   ];
 
   files = nixMake.commonSupportFiles // {
-    "include/nix/store/config.hh" = nixMake.mkConfigHeader "config.hh" {
+    "schema.sql.gen.hh" = nixMake.mkStringHeader ../../src/libstore/schema.sql;
+    "ca-specific-schema.sql.gen.hh" = nixMake.mkStringHeader ../../src/libstore/ca-specific-schema.sql;
+  };
+
+  configHeaders = {
+    "include/nix/store/config.hh" = {
       NIX_LOCAL_SYSTEM = "x86_64-linux";
       NIX_SUPPORT_ACL = 1;
       NIX_WITH_AWS_AUTH = 0;
     };
-    "store-config-private.hh" = nixMake.mkConfigHeader "store-config-private.hh" {
+    "store-config-private.hh" = {
       CAN_LINK_SYMLINK = 1;
       DETERMINATE_NIX_VERSION = lib.fileContents ../../.version-determinate;
       HAVE_EMBEDDED_SANDBOX_SHELL = 0;
@@ -65,8 +70,6 @@ nixMake.mkComponent {
       PACKAGE_VERSION = lib.fileContents ../../.version;
       SANDBOX_SHELL = "${pkgs.busybox-sandbox-shell}/bin/busybox";
     };
-    "schema.sql.gen.hh" = nixMake.mkStringHeader ../../src/libstore/schema.sql;
-    "ca-specific-schema.sql.gen.hh" = nixMake.mkStringHeader ../../src/libstore/ca-specific-schema.sql;
   };
 
   linkFlags = [ "-Wl,--wrap=__assert_fail" ];

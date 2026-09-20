@@ -210,6 +210,12 @@ let
     - `excludeSources`: paths (files, or directories with everything below
       them) to leave out of the compilation units.
     - `files`: extra files (e.g. generated headers) by path in the root namespace.
+    - `configHeaders`: generated config headers, as an attribute set from
+      path in the root namespace to the `#define`s (see `mkConfigHeader`).
+      Their macros are also used to evaluate preprocessor conditionals.
+    - `defines`, `undefines`: further macros known to be defined (with
+      value) or undefined when evaluating preprocessor conditionals, on
+      top of the platform defaults and the config headers.
     - `extraCxxFlags`, `linkFlags`, `extraLinkLibs`: what they say.
 
     External dependencies (compile flags and libraries) are derived from
@@ -232,6 +238,9 @@ let
       sources ? null,
       excludeSources ? [ ],
       files ? { },
+      configHeaders ? { },
+      defines ? { },
+      undefines ? [ ],
       extraCxxFlags ? [ ],
       linkFlags ? [ ],
       extraLinkLibs ? [ ],
@@ -256,6 +265,24 @@ let
       ) { } allDeps;
       depExcludes = map (d: d.component.name) allDeps;
 
+      # Generated config headers, whose macros are also known to the scanner.
+      configFiles = lib.mapAttrs (path: attrs: mkConfigHeader (baseNameOf path) attrs) configHeaders;
+      configDefines = lib.foldl' (acc: attrs: acc // attrs) { } (lib.attrValues configHeaders);
+      allFiles = files // configFiles;
+
+      # Macros for evaluating conditionals: platform defaults, then the
+      # dependencies' config macros, then our own. `null` means undefined.
+      allDefines =
+        lib.foldl' (acc: d: acc // d.component.allDefines) platformDefines allDeps
+        // configDefines
+        // defines;
+      knownDefines = lib.mapAttrs (
+        _: v: if builtins.isBool v then (if v then "1" else "0") else toString v
+      ) (lib.filterAttrs (_: v: v != null) allDefines);
+      knownUndefines = lib.unique (
+        platformUndefines ++ undefines ++ lib.attrNames (lib.filterAttrs (_: v: v == null) allDefines)
+      );
+
       # Scan this component in parallel with its dependencies.
       units = parallel (map (d: d.units) deps) (
         getDeps (
@@ -268,19 +295,22 @@ let
             # Work around a crash in `builtins.wasm` (Nix <= 3.22.5) when
             # copying "layered" attribute sets (the result of `//`) into Wasm:
             # `mapAttrs` produces a fresh, non-layered attribute set.
-            files = lib.mapAttrs (_: v: v) (files // depFiles);
+            files = lib.mapAttrs (_: v: v) (allFiles // depFiles);
+            defines = lib.mapAttrs (_: v: v) knownDefines;
+            undefines = knownUndefines;
           }
           // lib.optionalAttrs (sources != null) { inherit sources; }
         )
       );
 
       component = args // {
+        files = allFiles;
         inherit
           units
           allDeps
+          allDefines
           depIncludeDirs
           publicIncludeDirs
-          files
           extraCxxFlags
           linkFlags
           extraLinkLibs
@@ -288,6 +318,32 @@ let
       };
     in
     linkSharedLibrary component (map (compileUnit component) units);
+
+  # Macros the scanner can rely on when evaluating preprocessor conditionals
+  # (Linux, x86_64, GCC). Only what is certain: an unknown macro keeps both
+  # branches of a conditional, but a wrong one would drop includes.
+  platformDefines = {
+    __linux__ = 1;
+    __gnu_linux__ = 1;
+    __unix__ = 1;
+    __unix = 1;
+    __x86_64__ = 1;
+    __LP64__ = 1;
+  };
+  platformUndefines = [
+    "_WIN32"
+    "_WIN64"
+    "__CYGWIN__"
+    "__MINGW32__"
+    "__APPLE__"
+    "__MACH__"
+    "__FreeBSD__"
+    "__NetBSD__"
+    "__OpenBSD__"
+    "__DragonFly__"
+    "__sun"
+    "__clang__"
+  ];
 
   # Sources from nix-meson-build-support that Meson links into every component.
   commonSupportFiles = {
