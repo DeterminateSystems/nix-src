@@ -91,28 +91,83 @@ let
     path:
     builtins.toFile "${baseNameOf path}.gen.hh" "R\"__NIX_STR(\n${builtins.readFile path})__NIX_STR\"\n";
 
-  # Map external (angle-bracket) includes to the entries of `externalDeps`,
-  # by prefix match, deduplicated. Unmatched includes (libc, libstdc++) are
-  # ignored.
-  matchExternalDeps =
-    externalIncludes:
-    let
-      matches = lib.filter (d: d != null) (
-        map (inc: lib.findFirst (d: lib.hasPrefix d.prefix inc) null externalDeps) externalIncludes
-      );
-    in
-    lib.attrValues (lib.listToAttrs (map (d: lib.nameValuePair d.prefix d) matches));
+  # The `dev` outputs, as `stdenv.mkDerivation` would pick for `buildInputs`.
+  depPackages = deps: map lib.getDev (lib.concatMap (d: lib.toList d.pkg) deps);
 
-  depPackages = deps: lib.concatMap (d: lib.toList d.pkg) deps;
+  # A minimal derivation that sources the stdenv setup script (which
+  # provides the C++ compiler, and handles `buildInputs` etc.) but avoids
+  # the evaluation cost of `stdenv.mkDerivation`, which is significant
+  # for hundreds of derivations. Unlike `runCommand`, it does not set
+  # `preferLocalBuild`, so units can be built remotely.
+  mkLeanDerivation =
+    attrs: script:
+    derivation (
+      {
+        system = pkgs.stdenv.hostPlatform.system;
+        builder = pkgs.stdenv.shell;
+        args = [
+          "-e"
+          (builtins.toFile "builder.sh" ''
+            # With structured attrs, attributes are not in the environment.
+            if [ -e "$NIX_ATTRS_SH_FILE" ]; then . "$NIX_ATTRS_SH_FILE"; fi
+            source $stdenv/setup
+            ${script}
+          '')
+        ];
+        inherit (pkgs) stdenv;
+        __structuredAttrs = true;
+      }
+      // attrs
+    );
+
+  # What `stdenv.mkDerivation` would set for `hardeningDisable = [ "fortify" ]`:
+  # `_FORTIFY_SOURCE` warns on every unit when not optimizing.
+  hardeningWithoutFortify = lib.concatStringsSep " " (
+    lib.subtractLists [
+      "fortify"
+      "fortify3"
+    ] pkgs.stdenv.cc.defaultHardeningFlags
+  );
+
+  # Deduplicate strings in O(n log n) rather than `lib.unique`'s O(n^2).
+  uniqueStrings = xs: lib.attrNames (lib.listToAttrs (map (x: lib.nameValuePair x null) xs));
+
+  # Deduplicate a list by a key, keeping the first occurrence and the order.
+  # Note: `lib.unique` on derivations would compare them by output path,
+  # which instantiates them and all their inputs.
+  uniqueBy =
+    key: xs:
+    (lib.foldl'
+      (
+        acc: x:
+        let
+          k = key x;
+        in
+        if acc.seen ? ${k} then
+          acc
+        else
+          {
+            seen = acc.seen // {
+              ${k} = null;
+            };
+            result = acc.result ++ [ x ];
+          }
+      )
+      {
+        seen = { };
+        result = [ ];
+      }
+      xs
+    ).result;
 
   compileUnit =
     component: unit:
     let
-      deps = matchExternalDeps unit.externalIncludes;
+      deps = component.externalDepsFor unit.externalIncludes;
     in
-    pkgs.runCommandCC "${baseNameOf unit.path}.o"
+    mkLeanDerivation
       {
-        __structuredAttrs = true;
+        name = "${baseNameOf unit.path}.o";
         # Generated files come from the output of their generator derivation.
         src = if unit.src == null then component.allGenerated.${unit.path}.path else unit.src;
         includes =
@@ -126,8 +181,7 @@ let
         pkgConfigDeps = lib.concatMap (d: d.pkgconfig or [ ]) deps;
         buildInputs = depPackages deps;
         nativeBuildInputs = [ pkgs.pkg-config ];
-        # `_FORTIFY_SOURCE` warns on every unit when not optimizing.
-        hardeningDisable = [ "fortify" ];
+        NIX_HARDENING_ENABLE = hardeningWithoutFortify;
       }
       ''
         mkdir tree
@@ -158,11 +212,11 @@ let
     component: objects:
     let
       # Link against every external dependency used by any unit.
-      deps = matchExternalDeps (lib.unique (lib.concatMap (u: u.externalIncludes) component.units));
+      deps = component.externalDepsFor component.allExternalIncludes;
     in
-    pkgs.runCommandCC component.name
+    mkLeanDerivation
       {
-        __structuredAttrs = true;
+        inherit (component) name;
         # Instantiate the objects and the dependencies in parallel.
         objects = parallel (map (d: d.drvPath) component.allDeps ++ map (o: o.drvPath) objects) objects;
         inherit (component)
@@ -181,11 +235,6 @@ let
           ++ commonLinkLibs;
         buildInputs = component.allDeps ++ depPackages deps;
         nativeBuildInputs = [ pkgs.pkg-config ];
-        passthru = {
-          inherit objects;
-          inherit (component) units;
-          inherit component;
-        };
       }
       ''
         libs=()
@@ -221,7 +270,12 @@ let
         esac
 
         eval "$postInstall"
-      '';
+      ''
+    // {
+      inherit objects;
+      inherit (component) units;
+      inherit component;
+    };
 
   /**
     Build a component: a shared library (the default) or an executable.
@@ -304,7 +358,7 @@ let
         ++ roots;
 
       # The transitive closure of the dependencies, direct ones first.
-      allDeps = lib.unique (deps ++ lib.concatMap (d: d.component.allDeps) deps);
+      allDeps = uniqueBy (d: d.component.name) (deps ++ lib.concatMap (d: d.component.allDeps) deps);
 
       # Dependencies contribute their roots, public include directories and
       # extra files under `_deps/<name>/` (a prefix that cannot collide with
@@ -371,7 +425,23 @@ let
         )
       );
 
+      # Every external include of any unit, and a map from external include to
+      # its `externalDeps` entry, computed once per component. `externalDepsFor`
+      # then maps a unit's external includes to its dependencies.
+      allExternalIncludes = uniqueStrings (lib.concatMap (u: u.externalIncludes) units);
+      externalDepByInclude = lib.listToAttrs (
+        map (
+          inc: lib.nameValuePair inc (lib.findFirst (d: lib.hasPrefix d.prefix inc) null externalDeps)
+        ) allExternalIncludes
+      );
+      externalDepsFor =
+        includes:
+        uniqueBy (d: d.prefix) (
+          lib.filter (d: d != null) (map (inc: externalDepByInclude.${inc}) includes)
+        );
+
       component = args // {
+        inherit allExternalIncludes externalDepsFor;
         inherit
           type
           libName
