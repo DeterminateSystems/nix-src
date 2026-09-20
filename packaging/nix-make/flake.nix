@@ -45,6 +45,10 @@
             nix-expr
             ;
         };
+        nix-main = import ./libmain.nix {
+          inherit nixMake;
+          inherit nix-util nix-store nix-expr;
+        };
       };
     in
     {
