@@ -36,6 +36,17 @@
         "url": "https://flakehub.com/f/hercules-ci/flake-parts/0.1"
       }
     },
+    "flake-schemas": {
+      "locked": {
+        "path": "../../src/libcmd/builtin-flake-schemas",
+        "type": "path"
+      },
+      "original": {
+        "path": "../../src/libcmd/builtin-flake-schemas",
+        "type": "path"
+      },
+      "parent": []
+    },
     "git-hooks-nix": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -123,6 +134,7 @@
     },
     "root": {
       "inputs": {
+        "flake-schemas": "flake-schemas",
         "nix": "nix",
         "nixpkgs": [
           "nix",

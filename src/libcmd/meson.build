@@ -101,7 +101,10 @@ endif
 
 sources += [
   gen_header.process('call-flake-schemas.nix'),
-  gen_header.process('builtin-flake-schemas.nix'),
+  gen_header.process(
+    'builtin-flake-schemas/flake.nix',
+    preserve_path_from : meson.current_source_dir(),
+  ),
 ]
 
 subdir('include/nix/cmd')

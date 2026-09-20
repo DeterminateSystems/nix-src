@@ -4,12 +4,15 @@
 {
   inputs.nix.url = "../..";
   inputs.nixpkgs.follows = "nix/nixpkgs";
+  # The built-in flake schemas that ship with Nix.
+  inputs.flake-schemas.url = "../../src/libcmd/builtin-flake-schemas";
 
   outputs =
     {
       self,
       nix,
       nixpkgs,
+      flake-schemas,
     }:
     let
       system = "x86_64-linux";
@@ -104,6 +107,35 @@
 
       packages.${system} = make.release // {
         default = make.release.nix;
+      };
+
+      # Describe the `make` output to `nix flake show` and `nix flake check`.
+      # Defining `schemas` replaces the built-in ones, so re-export the ones
+      # for the other outputs of this flake.
+      schemas = {
+        inherit (flake-schemas.schemas) packages schemas;
+
+        make = {
+          version = 1;
+          doc = ''
+            The `make` output provides the Nix components (libraries and the
+            `nix` executable) built with Nix as the build system, one attribute
+            set of components per build variant (`release`, `debugoptimized`,
+            `debug`).
+          '';
+          inventory =
+            output:
+            flake-schemas.lib.mkChildren (
+              builtins.mapAttrs (variant: components: {
+                shortDescription = "The `${variant}` build variant";
+                children = builtins.mapAttrs (name: package: {
+                  what = "package";
+                  forSystems = [ package.system ];
+                  derivationAttrPath = [ ];
+                }) components;
+              }) output
+            );
+        };
       };
     };
 }

@@ -32,7 +32,7 @@ nixMake.mkComponent {
 
   files = nixMake.commonSupportFiles // {
     "call-flake-schemas.nix.gen.hh" = nixMake.mkStringHeader ./call-flake-schemas.nix;
-    "builtin-flake-schemas.nix.gen.hh" = nixMake.mkStringHeader ./builtin-flake-schemas.nix;
+    "builtin-flake-schemas/flake.nix.gen.hh" = nixMake.mkStringHeader ./builtin-flake-schemas/flake.nix;
   };
 
   configHeaders = {
