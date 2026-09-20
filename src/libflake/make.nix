@@ -1,4 +1,4 @@
-# libnixflake, transcribed from src/libflake/meson.build.
+# libnixflake, transcribed from meson.build.
 {
   nixMake,
   nix-util,
@@ -18,7 +18,7 @@ nixMake.mkComponent {
     nix-expr
   ];
 
-  root = ../../src/libflake;
+  root = ./.;
 
   includeDirs = [
     ""
@@ -26,7 +26,7 @@ nixMake.mkComponent {
   ];
 
   files = nixMake.commonSupportFiles // {
-    "call-flake.nix.gen.hh" = nixMake.mkStringHeader ../../src/libflake/call-flake.nix;
+    "call-flake.nix.gen.hh" = nixMake.mkStringHeader ./call-flake.nix;
   };
 
   linkFlags = [ "-Wl,--wrap=__assert_fail" ];

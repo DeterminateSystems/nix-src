@@ -1,4 +1,4 @@
-# libnixfetchers, transcribed from src/libfetchers/meson.build.
+# libnixfetchers, transcribed from meson.build.
 {
   nixMake,
   nix-util,
@@ -14,7 +14,7 @@ nixMake.mkComponent {
     nix-store
   ];
 
-  root = ../../src/libfetchers;
+  root = ./.;
 
   includeDirs = [
     ""
@@ -22,8 +22,7 @@ nixMake.mkComponent {
   ];
 
   files = nixMake.commonSupportFiles // {
-    "builtin-flake-registry.json.gen.hh" =
-      nixMake.mkStringHeader ../../src/libfetchers/builtin-flake-registry.json;
+    "builtin-flake-registry.json.gen.hh" = nixMake.mkStringHeader ./builtin-flake-registry.json;
   };
 
   linkFlags = [ "-Wl,--wrap=__assert_fail" ];

@@ -1,4 +1,4 @@
-# libnixexpr, transcribed from src/libexpr/meson.build and its subdirectories.
+# libnixexpr, transcribed from meson.build and its subdirectories.
 {
   pkgs,
   nixMake,
@@ -14,12 +14,12 @@ let
   # time.
   parserTab = pkgs.runCommand "parser-tab" { nativeBuildInputs = [ pkgs.bison ]; } ''
     mkdir $out
-    bison -v -o $out/parser-tab.cc -d ${../../src/libexpr/parser.y}
+    bison -v -o $out/parser-tab.cc -d ${./parser.y}
   '';
 
   lexerTab = pkgs.runCommand "lexer-tab" { nativeBuildInputs = [ pkgs.flex ]; } ''
     mkdir $out
-    flex -Cf --outfile $out/lexer-tab.cc --header-file=$out/lexer-tab.hh ${../../src/libexpr/lexer.l}
+    flex -Cf --outfile $out/lexer-tab.cc --header-file=$out/lexer-tab.hh ${./lexer.l}
   '';
 in
 
@@ -33,7 +33,7 @@ nixMake.mkComponent {
     nix-fetchers
   ];
 
-  root = ../../src/libexpr;
+  root = ./.;
 
   includeDirs = [
     ""
@@ -41,10 +41,9 @@ nixMake.mkComponent {
   ];
 
   files = nixMake.commonSupportFiles // {
-    "imported-drv-to-derivation.nix.gen.hh" =
-      nixMake.mkStringHeader ../../src/libexpr/imported-drv-to-derivation.nix;
-    "fetchurl.nix.gen.hh" = nixMake.mkStringHeader ../../src/libexpr/fetchurl.nix;
-    "primops/derivation.nix.gen.hh" = nixMake.mkStringHeader ../../src/libexpr/primops/derivation.nix;
+    "imported-drv-to-derivation.nix.gen.hh" = nixMake.mkStringHeader ./imported-drv-to-derivation.nix;
+    "fetchurl.nix.gen.hh" = nixMake.mkStringHeader ./fetchurl.nix;
+    "primops/derivation.nix.gen.hh" = nixMake.mkStringHeader ./primops/derivation.nix;
   };
 
   generated = {

@@ -1,4 +1,4 @@
-# The `nix` executable, transcribed from src/nix/meson.build.
+# The `nix` executable, transcribed from meson.build.
 {
   pkgs,
   nixMake,
@@ -29,7 +29,7 @@ nixMake.mkComponent {
     nix-cmd
   ];
 
-  root = ../../src/nix;
+  root = ./.;
 
   # Every .cc file under the root (including the legacy commands in
   # subdirectories and unix/) is a compilation unit. The `doc`, `misc`
@@ -41,11 +41,11 @@ nixMake.mkComponent {
     "generate-settings.nix.gen.hh" = nixMake.mkStringHeader ../../doc/manual/generate-settings.nix;
     "generate-store-info.nix.gen.hh" = nixMake.mkStringHeader ../../doc/manual/generate-store-info.nix;
     "utils.nix.gen.hh" = nixMake.mkStringHeader ../../doc/manual/utils.nix;
-    "get-env.sh.gen.hh" = nixMake.mkStringHeader ../../src/nix/get-env.sh;
+    "get-env.sh.gen.hh" = nixMake.mkStringHeader ./get-env.sh;
     "help-stores.md.gen.hh" = nixMake.mkStringHeader ../../doc/manual/source/store/types/index.md.in;
     "profiles.md.gen.hh" = nixMake.mkStringHeader ../../doc/manual/source/command-ref/files/profiles.md;
-    "unpack-channel.nix.gen.hh" = nixMake.mkStringHeader ../../src/nix/nix-channel/unpack-channel.nix;
-    "buildenv.nix.gen.hh" = nixMake.mkStringHeader ../../src/nix/nix-env/buildenv.nix;
+    "unpack-channel.nix.gen.hh" = nixMake.mkStringHeader ./nix-channel/unpack-channel.nix;
+    "buildenv.nix.gen.hh" = nixMake.mkStringHeader ./nix-env/buildenv.nix;
   };
 
   configHeaders = {

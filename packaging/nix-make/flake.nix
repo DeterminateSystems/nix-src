@@ -23,20 +23,20 @@
       nixMake = import ./lib.nix { inherit pkgs; };
 
       components = rec {
-        nix-util = import ./libutil.nix { inherit nixMake; };
-        nix-store = import ./libstore.nix {
+        nix-util = import ../../src/libutil/make.nix { inherit nixMake; };
+        nix-store = import ../../src/libstore/make.nix {
           inherit pkgs nixMake;
           inherit nix-util;
         };
-        nix-fetchers = import ./libfetchers.nix {
+        nix-fetchers = import ../../src/libfetchers/make.nix {
           inherit nixMake;
           inherit nix-util nix-store;
         };
-        nix-expr = import ./libexpr.nix {
+        nix-expr = import ../../src/libexpr/make.nix {
           inherit pkgs nixMake;
           inherit nix-util nix-store nix-fetchers;
         };
-        nix-flake = import ./libflake.nix {
+        nix-flake = import ../../src/libflake/make.nix {
           inherit nixMake;
           inherit
             nix-util
@@ -45,11 +45,11 @@
             nix-expr
             ;
         };
-        nix-main = import ./libmain.nix {
+        nix-main = import ../../src/libmain/make.nix {
           inherit nixMake;
           inherit nix-util nix-store nix-expr;
         };
-        nix-cmd = import ./libcmd.nix {
+        nix-cmd = import ../../src/libcmd/make.nix {
           inherit nixMake;
           inherit
             nix-util
@@ -60,7 +60,7 @@
             nix-main
             ;
         };
-        nix = import ./nix.nix {
+        nix = import ../../src/nix/make.nix {
           inherit pkgs nixMake;
           inherit
             nix-util

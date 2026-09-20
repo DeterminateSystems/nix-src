@@ -1,11 +1,11 @@
-# libnixutil, transcribed from src/libutil/meson.build and its subdirectories.
+# libnixutil, transcribed from meson.build and its subdirectories.
 { nixMake }:
 
 nixMake.mkComponent {
   name = "nix-util";
   libName = "nixutil";
 
-  root = ../../src/libutil;
+  root = ./.;
 
   # Every .cc file under the root is a compilation unit, except these.
   excludeSources = [

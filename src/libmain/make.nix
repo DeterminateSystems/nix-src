@@ -1,4 +1,4 @@
-# libnixmain, transcribed from src/libmain/meson.build.
+# libnixmain, transcribed from meson.build.
 {
   nixMake,
   nix-util,
@@ -17,7 +17,7 @@ nixMake.mkComponent {
     nix-expr
   ];
 
-  root = ../../src/libmain;
+  root = ./.;
 
   # unix/stack.cc is a plain source file; there is no windows/ directory.
   includeDirs = [

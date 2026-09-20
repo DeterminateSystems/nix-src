@@ -1,4 +1,4 @@
-# libnixcmd, transcribed from src/libcmd/meson.build.
+# libnixcmd, transcribed from meson.build.
 {
   nixMake,
   nix-util,
@@ -22,7 +22,7 @@ nixMake.mkComponent {
     nix-main
   ];
 
-  root = ../../src/libcmd;
+  root = ./.;
 
   # unix/unix-socket-server.cc is a plain source file; there is no windows/ directory.
   includeDirs = [
@@ -31,9 +31,8 @@ nixMake.mkComponent {
   ];
 
   files = nixMake.commonSupportFiles // {
-    "call-flake-schemas.nix.gen.hh" = nixMake.mkStringHeader ../../src/libcmd/call-flake-schemas.nix;
-    "builtin-flake-schemas.nix.gen.hh" =
-      nixMake.mkStringHeader ../../src/libcmd/builtin-flake-schemas.nix;
+    "call-flake-schemas.nix.gen.hh" = nixMake.mkStringHeader ./call-flake-schemas.nix;
+    "builtin-flake-schemas.nix.gen.hh" = nixMake.mkStringHeader ./builtin-flake-schemas.nix;
   };
 
   configHeaders = {

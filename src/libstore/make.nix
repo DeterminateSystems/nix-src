@@ -1,4 +1,4 @@
-# libnixstore, transcribed from src/libstore/meson.build and its subdirectories.
+# libnixstore, transcribed from meson.build and its subdirectories.
 {
   pkgs,
   nixMake,
@@ -15,7 +15,7 @@ nixMake.mkComponent {
 
   deps = [ nix-util ];
 
-  root = ../../src/libstore;
+  root = ./.;
 
   excludeSources = [
     "windows"
@@ -35,8 +35,8 @@ nixMake.mkComponent {
   ];
 
   files = nixMake.commonSupportFiles // {
-    "schema.sql.gen.hh" = nixMake.mkStringHeader ../../src/libstore/schema.sql;
-    "ca-specific-schema.sql.gen.hh" = nixMake.mkStringHeader ../../src/libstore/ca-specific-schema.sql;
+    "schema.sql.gen.hh" = nixMake.mkStringHeader ./schema.sql;
+    "ca-specific-schema.sql.gen.hh" = nixMake.mkStringHeader ./ca-specific-schema.sql;
   };
 
   configHeaders = {
