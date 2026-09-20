@@ -104,6 +104,12 @@
         optimize = false;
         debug = true;
       };
+      # Like `release`, but without the Boehm garbage collector.
+      make.nogc = makeNixVariant {
+        optimize = true;
+        debug = false;
+        boehmgc = false;
+      };
 
       packages.${system} = make.release // {
         default = make.release.nix;

@@ -34,5 +34,11 @@
       default = true;
       description = "Whether to support AWS authentication for S3 binary caches.";
     };
+
+    boehmgc = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Whether to use the Boehm garbage collector in the Nix language evaluator.";
+    };
   };
 }

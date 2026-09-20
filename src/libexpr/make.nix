@@ -67,7 +67,7 @@ nixMake.mkComponent {
 
   configHeaders = {
     "include/nix/expr/config.hh" = {
-      NIX_USE_BOEHMGC = 1;
+      NIX_USE_BOEHMGC = nixMake.config.boehmgc;
     };
     "expr-config-private.hh" = {
       HAVE_PTHREAD_GETATTR_NP = 1;
