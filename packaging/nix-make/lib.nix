@@ -12,6 +12,11 @@ let
 
   externalDeps = import ./deps.nix { inherit pkgs; };
 
+  # `builtins.parallel xs x` starts evaluating the values `xs` on other
+  # threads and returns `x`. It requires the `parallel-eval` experimental
+  # feature (and `eval-cores`); without it, evaluation is sequential.
+  parallel = builtins.parallel or (xs: x: x);
+
   # Non-optimized for now, for faster iteration.
   optimizationFlags = [ "-O0" ];
 
@@ -151,7 +156,8 @@ let
     pkgs.runCommandCC component.name
       {
         __structuredAttrs = true;
-        inherit objects;
+        # Instantiate the objects and the dependencies in parallel.
+        objects = parallel (map (d: d.drvPath) component.allDeps ++ map (o: o.drvPath) objects) objects;
         inherit (component) libName linkFlags;
         linkPkgConfig = lib.concatMap (d: d.pkgconfig or [ ]) deps;
         linkLibs =
@@ -250,19 +256,22 @@ let
       ) { } allDeps;
       depExcludes = map (d: d.component.name) allDeps;
 
-      units = getDeps (
-        {
-          inherit builtins;
-          inherit sourceExtensions;
-          roots = roots ++ depRoots;
-          includeDirs = includeDirs ++ depIncludeDirs;
-          excludeSources = excludeSources ++ depExcludes;
-          # Work around a crash in `builtins.wasm` (Nix <= 3.22.5) when
-          # copying "layered" attribute sets (the result of `//`) into Wasm:
-          # `mapAttrs` produces a fresh, non-layered attribute set.
-          files = lib.mapAttrs (_: v: v) (files // depFiles);
-        }
-        // lib.optionalAttrs (sources != null) { inherit sources; }
+      # Scan this component in parallel with its dependencies.
+      units = parallel (map (d: d.units) deps) (
+        getDeps (
+          {
+            inherit builtins;
+            inherit sourceExtensions;
+            roots = roots ++ depRoots;
+            includeDirs = includeDirs ++ depIncludeDirs;
+            excludeSources = excludeSources ++ depExcludes;
+            # Work around a crash in `builtins.wasm` (Nix <= 3.22.5) when
+            # copying "layered" attribute sets (the result of `//`) into Wasm:
+            # `mapAttrs` produces a fresh, non-layered attribute set.
+            files = lib.mapAttrs (_: v: v) (files // depFiles);
+          }
+          // lib.optionalAttrs (sources != null) { inherit sources; }
+        )
       );
 
       component = args // {
