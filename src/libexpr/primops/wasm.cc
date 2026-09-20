@@ -410,7 +410,15 @@ struct NixWasmInstance
         if ((size_t) attrIdx >= attrs.size())
             throw Error("copy_attrname: attribute index out of bounds");
 
-        std::string_view name = state.symbols[attrs[attrIdx].name];
+        /* Note: `Bindings::operator[]` is not supported for layered
+           bindings (e.g. the result of `//`), so iterate instead. This
+           has to match the iteration order used by `copy_attrset`.
+
+           TODO: Since this function is called once per attribute, copying
+           an attrset is O(n^2) (and n host calls). Come up with a more
+           efficient interface, e.g. a `copy_attrnames` function that copies
+           all names in one go. */
+        std::string_view name = state.symbols[std::next(attrs.begin(), attrIdx)->name];
 
         if ((size_t) len != name.size())
             throw Error("copy_attrname: buffer length does not match attribute name length");
