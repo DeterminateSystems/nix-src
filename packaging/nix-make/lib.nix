@@ -113,7 +113,13 @@ let
     pkgs.runCommandCC "${baseNameOf unit.path}.o"
       {
         __structuredAttrs = true;
-        inherit (unit) src includes;
+        # Generated files come from the output of their generator derivation.
+        src = if unit.src == null then component.generated.${unit.path}.path else unit.src;
+        includes =
+          unit.includes
+          // lib.listToAttrs (
+            map (g: lib.nameValuePair g component.generated.${g}.path) unit.generatedIncludes
+          );
         srcPath = unit.path;
         includeDirs = component.includeDirs ++ component.depIncludeDirs;
         cxxFlags = commonCxxFlags ++ component.extraCxxFlags;
@@ -216,6 +222,11 @@ let
     - `defines`, `undefines`: further macros known to be defined (with
       value) or undefined when evaluating preprocessor conditionals, on
       top of the platform defaults and the config headers.
+    - `generated`: files generated at build time (e.g. by bison), as an
+      attribute set from path in the root namespace to `{ from; path; }`:
+      `from` is the real file whose `#include`s it inherits (so that it
+      can be scanned without building it), and `path` is the generated
+      file in the output of a derivation.
     - `extraCxxFlags`, `linkFlags`, `extraLinkLibs`: what they say.
 
     External dependencies (compile flags and libraries) are derived from
@@ -239,6 +250,7 @@ let
       excludeSources ? [ ],
       files ? { },
       configHeaders ? { },
+      generated ? { },
       defines ? { },
       undefines ? [ ],
       extraCxxFlags ? [ ],
@@ -264,6 +276,10 @@ let
         acc: d: acc // lib.mapAttrs' (k: v: lib.nameValuePair (prefixed d k) v) d.component.files
       ) { } allDeps;
       depExcludes = map (d: d.component.name) allDeps;
+      depGenerated = lib.foldl' (
+        acc: d: acc // lib.mapAttrs' (k: v: lib.nameValuePair (prefixed d k) v) d.component.generated
+      ) { } allDeps;
+      allGenerated = generated // depGenerated;
 
       # Generated config headers, whose macros are also known to the scanner.
       configFiles = lib.mapAttrs (path: attrs: mkConfigHeader (baseNameOf path) attrs) configHeaders;
@@ -298,6 +314,7 @@ let
             files = lib.mapAttrs (_: v: v) (allFiles // depFiles);
             defines = lib.mapAttrs (_: v: v) knownDefines;
             undefines = knownUndefines;
+            generated = lib.mapAttrs (_: g: g.from) allGenerated;
           }
           // lib.optionalAttrs (sources != null) { inherit sources; }
         )
@@ -305,6 +322,7 @@ let
 
       component = args // {
         files = allFiles;
+        generated = allGenerated;
         inherit
           units
           allDeps

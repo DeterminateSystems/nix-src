@@ -110,6 +110,30 @@ in
     pkgconfig = [ "sqlite3" ];
   }
   {
+    prefix = "gc.h";
+    pkg = deps.boehmgc;
+    pkgconfig = [ "bdw-gc" ];
+  }
+  {
+    prefix = "gc/";
+    pkg = deps.boehmgc;
+    pkgconfig = [ "bdw-gc" ];
+  }
+  {
+    # Header-only.
+    prefix = "toml.hpp";
+    pkg = deps.toml11;
+  }
+  {
+    prefix = "toml11/";
+    pkg = deps.toml11;
+  }
+  {
+    prefix = "git2/";
+    pkg = deps.libgit2;
+    pkgconfig = [ "libgit2" ];
+  }
+  {
     prefix = "wasmtime";
     pkg = [
       deps.wasmtime

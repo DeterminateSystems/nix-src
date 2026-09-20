@@ -28,6 +28,14 @@
           inherit pkgs nixMake;
           inherit nix-util;
         };
+        nix-fetchers = import ./libfetchers.nix {
+          inherit nixMake;
+          inherit nix-util nix-store;
+        };
+        nix-expr = import ./libexpr.nix {
+          inherit pkgs nixMake;
+          inherit nix-util nix-store nix-fetchers;
+        };
       };
     in
     {
