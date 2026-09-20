@@ -2,7 +2,7 @@
 { nixMake }:
 
 nixMake.mkComponent {
-  name = "nix-util";
+  name = "determinate-nix-util";
   libName = "nixutil";
 
   root = ./.;

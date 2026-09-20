@@ -10,7 +10,7 @@
 }:
 
 nixMake.mkComponent {
-  name = "nix-cmd";
+  name = "determinate-nix-cmd";
   libName = "nixcmd";
 
   deps = [

@@ -6,7 +6,7 @@
 }:
 
 nixMake.mkComponent {
-  name = "nix-fetchers";
+  name = "determinate-nix-fetchers";
   libName = "nixfetchers";
 
   deps = [

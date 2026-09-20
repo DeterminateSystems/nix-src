@@ -24,7 +24,7 @@ let
 in
 
 nixMake.mkComponent {
-  name = "nix-expr";
+  name = "determinate-nix-expr";
   libName = "nixexpr";
 
   deps = [

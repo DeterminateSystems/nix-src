@@ -7,7 +7,7 @@
 }:
 
 nixMake.mkComponent {
-  name = "nix-main";
+  name = "determinate-nix-main";
   libName = "nixmain";
 
   deps = [

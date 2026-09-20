@@ -18,8 +18,9 @@ let
 in
 
 nixMake.mkComponent {
-  name = "nix";
+  name = "determinate-nix";
   type = "executable";
+  exeName = "nix";
 
   deps = [
     nix-util

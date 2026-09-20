@@ -10,7 +10,7 @@ let
 in
 
 nixMake.mkComponent {
-  name = "nix-store";
+  name = "determinate-nix-store";
   libName = "nixstore";
 
   deps = [ nix-util ];

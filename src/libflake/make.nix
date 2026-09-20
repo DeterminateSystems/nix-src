@@ -8,7 +8,7 @@
 }:
 
 nixMake.mkComponent {
-  name = "nix-flake";
+  name = "determinate-nix-flake";
   libName = "nixflake";
 
   deps = [
