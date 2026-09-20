@@ -20,66 +20,90 @@
         overlays = [ nix.overlays.internal ];
       };
 
-      nixMake = import ./lib.nix { inherit pkgs; };
+      # Build all components with the configuration given by `cfg`, a module
+      # setting the options declared in config.nix.
+      makeNixVariant =
+        cfg:
+        let
+          config =
+            (nixpkgs.lib.evalModules {
+              modules = [
+                ./config.nix
+                cfg
+              ];
+            }).config;
 
-      components = rec {
-        nix-util = import ../../src/libutil/make.nix { inherit nixMake; };
-        nix-store = import ../../src/libstore/make.nix {
-          inherit pkgs nixMake;
-          inherit nix-util;
+          nixMake = import ./lib.nix { inherit pkgs config; };
+        in
+        rec {
+          nix-util = import ../../src/libutil/make.nix { inherit nixMake; };
+          nix-store = import ../../src/libstore/make.nix {
+            inherit pkgs nixMake;
+            inherit nix-util;
+          };
+          nix-fetchers = import ../../src/libfetchers/make.nix {
+            inherit nixMake;
+            inherit nix-util nix-store;
+          };
+          nix-expr = import ../../src/libexpr/make.nix {
+            inherit pkgs nixMake;
+            inherit nix-util nix-store nix-fetchers;
+          };
+          nix-flake = import ../../src/libflake/make.nix {
+            inherit nixMake;
+            inherit
+              nix-util
+              nix-store
+              nix-fetchers
+              nix-expr
+              ;
+          };
+          nix-main = import ../../src/libmain/make.nix {
+            inherit nixMake;
+            inherit nix-util nix-store nix-expr;
+          };
+          nix-cmd = import ../../src/libcmd/make.nix {
+            inherit nixMake;
+            inherit
+              nix-util
+              nix-store
+              nix-fetchers
+              nix-expr
+              nix-flake
+              nix-main
+              ;
+          };
+          nix = import ../../src/nix/make.nix {
+            inherit pkgs nixMake;
+            inherit
+              nix-util
+              nix-store
+              nix-fetchers
+              nix-expr
+              nix-flake
+              nix-main
+              nix-cmd
+              ;
+          };
         };
-        nix-fetchers = import ../../src/libfetchers/make.nix {
-          inherit nixMake;
-          inherit nix-util nix-store;
-        };
-        nix-expr = import ../../src/libexpr/make.nix {
-          inherit pkgs nixMake;
-          inherit nix-util nix-store nix-fetchers;
-        };
-        nix-flake = import ../../src/libflake/make.nix {
-          inherit nixMake;
-          inherit
-            nix-util
-            nix-store
-            nix-fetchers
-            nix-expr
-            ;
-        };
-        nix-main = import ../../src/libmain/make.nix {
-          inherit nixMake;
-          inherit nix-util nix-store nix-expr;
-        };
-        nix-cmd = import ../../src/libcmd/make.nix {
-          inherit nixMake;
-          inherit
-            nix-util
-            nix-store
-            nix-fetchers
-            nix-expr
-            nix-flake
-            nix-main
-            ;
-        };
-        nix = import ../../src/nix/make.nix {
-          inherit pkgs nixMake;
-          inherit
-            nix-util
-            nix-store
-            nix-fetchers
-            nix-expr
-            nix-flake
-            nix-main
-            nix-cmd
-            ;
-        };
-      };
     in
-    {
-      packages.${system} = components // {
-        default = components.nix;
+    rec {
+      # The build variants, named after Meson's build types.
+      make.release = makeNixVariant {
+        optimize = true;
+        debug = false;
+      };
+      make.debugoptimized = makeNixVariant {
+        optimize = true;
+        debug = true;
+      };
+      make.debug = makeNixVariant {
+        optimize = false;
+        debug = true;
       };
 
-      # The raw scanner output for each component, for debugging.
-      lib.${system}.scan = pkgs.lib.mapAttrs (_: c: c.units) components;
+      packages.${system} = make.release // {
+        default = make.release.nix;
+      };
     };
 }

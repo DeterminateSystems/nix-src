@@ -1,6 +1,6 @@
 # Generic machinery for building C++ components with one derivation per
 # compilation unit.
-{ pkgs }:
+{ pkgs, config }:
 
 let
   inherit (pkgs) lib;
@@ -17,8 +17,11 @@ let
   # feature (and `eval-cores`); without it, evaluation is sequential.
   parallel = builtins.parallel or (xs: x: x);
 
-  # Non-optimized for now, for faster iteration.
-  optimizationFlags = [ "-O0" ];
+  # Optimization and debug flags, following Meson's build types: `release`
+  # is `-O3`, `debugoptimized` is `-O2 -g`, and `debug` is `-O0 -g`.
+  optimizationFlags =
+    if config.optimize then [ (if config.debug then "-O2" else "-O3") ] else [ "-O0" ];
+  debugFlags = lib.optional config.debug "-g";
 
   # From nix-meson-build-support/common/meson.build (GCC-supported subset).
   warningFlags = [
@@ -48,6 +51,7 @@ let
     "-fno-semantic-interposition"
   ]
   ++ optimizationFlags
+  ++ debugFlags
   ++ warningFlags;
 
   commonLinkLibs = [
@@ -120,13 +124,14 @@ let
       // attrs
     );
 
-  # What `stdenv.mkDerivation` would set for `hardeningDisable = [ "fortify" ]`:
-  # `_FORTIFY_SOURCE` warns on every unit when not optimizing.
-  hardeningWithoutFortify = lib.concatStringsSep " " (
-    lib.subtractLists [
+  # The stdenv's default hardening flags, except that `_FORTIFY_SOURCE`
+  # warns on every unit when not optimizing, so it is disabled then (like
+  # `hardeningDisable = [ "fortify" ]` in `stdenv.mkDerivation`).
+  hardeningFlags = lib.concatStringsSep " " (
+    lib.subtractLists (lib.optionals (!config.optimize) [
       "fortify"
       "fortify3"
-    ] pkgs.stdenv.cc.defaultHardeningFlags
+    ]) pkgs.stdenv.cc.defaultHardeningFlags
   );
 
   # Deduplicate strings in O(n log n) rather than `lib.unique`'s O(n^2).
@@ -181,7 +186,7 @@ let
         pkgConfigDeps = lib.concatMap (d: d.pkgconfig or [ ]) deps;
         buildInputs = depPackages deps;
         nativeBuildInputs = [ pkgs.pkg-config ];
-        NIX_HARDENING_ENABLE = hardeningWithoutFortify;
+        NIX_HARDENING_ENABLE = hardeningFlags;
       }
       ''
         mkdir tree
