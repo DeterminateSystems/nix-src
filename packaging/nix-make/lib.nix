@@ -12,6 +12,9 @@ let
 
   externalDeps = import ./deps.nix { inherit pkgs; };
 
+  # The version, as in the package.nix files.
+  defaultVersion = lib.fileContents ../../.version-determinate;
+
   # `builtins.parallel xs x` starts evaluating the values `xs` on other
   # threads and returns `x`. It requires the `parallel-eval` experimental
   # feature (and `eval-cores`); without it, evaluation is sequential.
@@ -225,7 +228,7 @@ let
     in
     mkLeanDerivation
       {
-        inherit (component) name;
+        name = "${component.name}-${component.version}";
         # Instantiate the objects and the dependencies in parallel.
         objects = parallel (map (d: d.drvPath) component.allDeps ++ map (o: o.drvPath) objects) objects;
         inherit (component)
@@ -289,7 +292,9 @@ let
   /**
     Build a component: a shared library (the default) or an executable.
 
-    - `name`: derivation name (e.g. `nix-util`).
+    - `name`: component name (e.g. `determinate-nix-util`); the derivation is
+      named `<name>-<version>`.
+    - `version`: defaults to the contents of `.version-determinate`.
     - `type`: `"library"` or `"executable"`.
     - `libName`: library name without `lib` prefix (e.g. `nixutil`).
     - `exeName`: executable name; defaults to `name`.
@@ -333,6 +338,7 @@ let
   mkComponent =
     {
       name,
+      version ? defaultVersion,
       type ? "library",
       libName ? null,
       exeName ? name,
@@ -455,6 +461,7 @@ let
       component = args // {
         inherit allExternalIncludes externalDepsFor;
         inherit
+          version
           type
           libName
           exeName
