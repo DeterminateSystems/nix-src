@@ -92,27 +92,29 @@
     in
     rec {
       # The build variants, named after Meson's build types.
-      make.release = makeNixVariant {
-        optimize = true;
-        debug = false;
-      };
-      make.debugoptimized = makeNixVariant {
-        optimize = true;
-        debug = true;
-      };
-      make.debug = makeNixVariant {
-        optimize = false;
-        debug = true;
-      };
-      # Like `release`, but without the Boehm garbage collector.
-      make.nogc = makeNixVariant {
-        optimize = true;
-        debug = false;
-        boehmgc = false;
+      make.${system} = {
+        release = makeNixVariant {
+          optimize = true;
+          debug = false;
+        };
+        debugoptimized = makeNixVariant {
+          optimize = true;
+          debug = true;
+        };
+        debug = makeNixVariant {
+          optimize = false;
+          debug = true;
+        };
+        # Like `release`, but without the Boehm garbage collector.
+        nogc = makeNixVariant {
+          optimize = true;
+          debug = false;
+          boehmgc = false;
+        };
       };
 
-      packages.${system} = make.release // {
-        default = make.release.nix;
+      packages.${system} = make.${system}.release // {
+        default = make.${system}.release.nix;
       };
 
       # Describe the `make` output to `nix flake show` and `nix flake check`.
@@ -125,20 +127,26 @@
           version = 1;
           doc = ''
             The `make` output provides the Nix components (libraries and the
-            `nix` executable) built with Nix as the build system, one attribute
-            set of components per build variant (`release`, `debugoptimized`,
-            `debug`).
+            `nix` executable) built with Nix as the build system, per system
+            and build variant (`release`, `debugoptimized`, `debug`, `nogc`).
           '';
+          roles.nix-build = { };
+          appendSystem = true;
+          defaultAttrPath = [ "release" "nix" ];
           inventory =
             output:
             flake-schemas.lib.mkChildren (
-              builtins.mapAttrs (variant: components: {
-                shortDescription = "The `${variant}` build variant";
-                children = builtins.mapAttrs (name: package: {
-                  what = "package";
-                  forSystems = [ package.system ];
-                  derivationAttrPath = [ ];
-                }) components;
+              builtins.mapAttrs (system: variants: {
+                forSystems = [ system ];
+                children = builtins.mapAttrs (variant: components: {
+                  forSystems = [ system ];
+                  shortDescription = "The `${variant}` build variant";
+                  children = builtins.mapAttrs (name: package: {
+                    what = "package";
+                    forSystems = [ system ];
+                    derivationAttrPath = [ ];
+                  }) components;
+                }) variants;
               }) output
             );
         };
