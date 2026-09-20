@@ -114,11 +114,11 @@ let
       {
         __structuredAttrs = true;
         # Generated files come from the output of their generator derivation.
-        src = if unit.src == null then component.generated.${unit.path}.path else unit.src;
+        src = if unit.src == null then component.allGenerated.${unit.path}.path else unit.src;
         includes =
           unit.includes
           // lib.listToAttrs (
-            map (g: lib.nameValuePair g component.generated.${g}.path) unit.generatedIncludes
+            map (g: lib.nameValuePair g component.allGenerated.${g}.path) unit.generatedIncludes
           );
         srcPath = unit.path;
         includeDirs = component.includeDirs ++ component.depIncludeDirs;
@@ -337,8 +337,10 @@ let
 
       component = args // {
         roots = allRoots;
+        # Only our own files and generated files are exported to dependents;
+        # their own dependencies are resolved transitively.
         files = allFiles;
-        generated = allGenerated;
+        inherit generated allGenerated;
         inherit
           units
           allDeps

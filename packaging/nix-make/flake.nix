@@ -49,6 +49,17 @@
           inherit nixMake;
           inherit nix-util nix-store nix-expr;
         };
+        nix-cmd = import ./libcmd.nix {
+          inherit nixMake;
+          inherit
+            nix-util
+            nix-store
+            nix-fetchers
+            nix-expr
+            nix-flake
+            nix-main
+            ;
+        };
       };
     in
     {

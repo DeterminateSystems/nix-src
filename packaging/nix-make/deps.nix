@@ -129,6 +129,16 @@ in
     pkg = deps.toml11;
   }
   {
+    prefix = "lowdown.h";
+    pkg = deps.lowdown;
+    pkgconfig = [ "lowdown" ];
+  }
+  {
+    prefix = "editline.h";
+    pkg = deps.editline;
+    pkgconfig = [ "libeditline" ];
+  }
+  {
     prefix = "git2/";
     pkg = deps.libgit2;
     pkgconfig = [ "libgit2" ];
