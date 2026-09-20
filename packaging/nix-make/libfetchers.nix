@@ -14,12 +14,7 @@ nixMake.mkComponent {
     nix-store
   ];
 
-  roots = [
-    {
-      root = ../../src/libfetchers;
-      prefix = "";
-    }
-  ];
+  root = ../../src/libfetchers;
 
   includeDirs = [
     ""

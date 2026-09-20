@@ -15,12 +15,7 @@ nixMake.mkComponent {
 
   deps = [ nix-util ];
 
-  roots = [
-    {
-      root = ../../src/libstore;
-      prefix = "";
-    }
-  ];
+  root = ../../src/libstore;
 
   excludeSources = [
     "windows"

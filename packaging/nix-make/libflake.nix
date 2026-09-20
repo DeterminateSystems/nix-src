@@ -18,12 +18,7 @@ nixMake.mkComponent {
     nix-expr
   ];
 
-  roots = [
-    {
-      root = ../../src/libflake;
-      prefix = "";
-    }
-  ];
+  root = ../../src/libflake;
 
   includeDirs = [
     ""

@@ -205,7 +205,10 @@ let
     - `deps`: other components this one depends on. Their public headers
       are made available under `<name>/` and their libraries are linked.
       Dependencies are transitive.
-    - `roots`: list of `{ root; prefix; }` directories scanned for sources and headers.
+    - `root`: the directory scanned for sources and headers; shorthand for
+      a `roots` entry with an empty prefix.
+    - `roots`: further `{ root; prefix; }` directories scanned for sources
+      and headers, known by `prefix/<relative path>`.
     - `includeDirs`: include search path, relative to the root namespace.
     - `publicIncludeDirs`: the subset of `includeDirs` exported to
       dependent components. Defaults to all but the root.
@@ -237,7 +240,8 @@ let
       name,
       libName,
       deps ? [ ],
-      roots,
+      root ? null,
+      roots ? [ ],
       includeDirs,
       publicIncludeDirs ? lib.filter (d: d != "") includeDirs,
       sourceExtensions ? [
@@ -258,6 +262,13 @@ let
       extraLinkLibs ? [ ],
     }@args:
     let
+      allRoots =
+        lib.optional (root != null) {
+          inherit root;
+          prefix = "";
+        }
+        ++ roots;
+
       # The transitive closure of the dependencies, direct ones first.
       allDeps = lib.unique (deps ++ lib.concatMap (d: d.component.allDeps) deps);
 
@@ -309,7 +320,7 @@ let
           {
             inherit builtins;
             inherit sourceExtensions;
-            roots = roots ++ depRoots;
+            roots = allRoots ++ depRoots;
             includeDirs = includeDirs ++ depIncludeDirs;
             excludeSources = excludeSources ++ depExcludes;
             # Work around a crash in `builtins.wasm` (Nix <= 3.22.5) when
@@ -325,6 +336,7 @@ let
       );
 
       component = args // {
+        roots = allRoots;
         files = allFiles;
         generated = allGenerated;
         inherit

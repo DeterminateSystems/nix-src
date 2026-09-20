@@ -33,12 +33,7 @@ nixMake.mkComponent {
     nix-fetchers
   ];
 
-  roots = [
-    {
-      root = ../../src/libexpr;
-      prefix = "";
-    }
-  ];
+  root = ../../src/libexpr;
 
   includeDirs = [
     ""

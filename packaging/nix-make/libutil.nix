@@ -5,12 +5,7 @@ nixMake.mkComponent {
   name = "nix-util";
   libName = "nixutil";
 
-  roots = [
-    {
-      root = ../../src/libutil;
-      prefix = "";
-    }
-  ];
+  root = ../../src/libutil;
 
   # Every .cc file under the root is a compilation unit, except these.
   excludeSources = [

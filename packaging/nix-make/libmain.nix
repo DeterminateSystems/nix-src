@@ -17,12 +17,7 @@ nixMake.mkComponent {
     nix-expr
   ];
 
-  roots = [
-    {
-      root = ../../src/libmain;
-      prefix = "";
-    }
-  ];
+  root = ../../src/libmain;
 
   # unix/stack.cc is a plain source file; there is no windows/ directory.
   includeDirs = [
