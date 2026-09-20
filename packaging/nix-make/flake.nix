@@ -36,6 +36,15 @@
           inherit pkgs nixMake;
           inherit nix-util nix-store nix-fetchers;
         };
+        nix-flake = import ./libflake.nix {
+          inherit nixMake;
+          inherit
+            nix-util
+            nix-store
+            nix-fetchers
+            nix-expr
+            ;
+        };
       };
     in
     {

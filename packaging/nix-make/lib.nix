@@ -277,7 +277,11 @@ let
       ) { } allDeps;
       depExcludes = map (d: d.component.name) allDeps;
       depGenerated = lib.foldl' (
-        acc: d: acc // lib.mapAttrs' (k: v: lib.nameValuePair (prefixed d k) v) d.component.generated
+        acc: d:
+        acc
+        // lib.mapAttrs' (
+          k: g: lib.nameValuePair (prefixed d k) (g // { from = prefixed d g.from; })
+        ) d.component.generated
       ) { } allDeps;
       allGenerated = generated // depGenerated;
 
