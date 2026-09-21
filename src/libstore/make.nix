@@ -60,7 +60,7 @@ nixMake.mkComponent {
       NIX_LOG_DIR = "/nix/var/log/nix";
       NIX_STATE_DIR = "/nix/var/nix";
       NIX_STORE_DIR = "/nix/store";
-      NIX_USE_WASMTIME = 1;
+      NIX_USE_WASMTIME = nixMake.config.wasm;
       PACKAGE_VERSION = lib.fileContents ../../.version;
       SANDBOX_SHELL = "${pkgs.busybox-sandbox-shell}/bin/busybox";
     };

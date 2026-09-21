@@ -35,6 +35,9 @@ nixMake.mkComponent {
 
   root = ./.;
 
+  # `builtins.wasm` is only built with WebAssembly support.
+  excludeSources = pkgs.lib.optional (!nixMake.config.wasm) "primops/wasm.cc";
+
   includeDirs = [
     ""
     "include"

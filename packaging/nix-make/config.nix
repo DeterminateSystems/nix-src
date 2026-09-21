@@ -40,5 +40,11 @@
       default = true;
       description = "Whether to use the Boehm garbage collector in the Nix language evaluator.";
     };
+
+    wasm = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Whether to support WebAssembly: `builtins.wasm` in the evaluator and building WASI derivations.";
+    };
   };
 }
