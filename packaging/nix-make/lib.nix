@@ -147,28 +147,15 @@ let
   # which instantiates them and all their inputs.
   uniqueBy =
     key: xs:
-    (lib.foldl'
-      (
-        acc: x:
-        let
-          k = key x;
-        in
-        if acc.seen ? ${k} then
-          acc
-        else
-          {
-            seen = acc.seen // {
-              ${k} = null;
-            };
-            result = acc.result ++ [ x ];
-          }
-      )
-      {
-        seen = { };
-        result = [ ];
+    map (x: x.value) (
+      builtins.genericClosure {
+        startSet = map (x: {
+          key = key x;
+          value = x;
+        }) xs;
+        operator = _: [ ];
       }
-      xs
-    ).result;
+    );
 
   compileUnit =
     component: unit:
@@ -324,7 +311,19 @@ let
         ++ roots;
 
       # The transitive closure of the dependencies, direct ones first.
-      allDeps = uniqueBy (d: d.component.name) (deps ++ lib.concatMap (d: d.component.allDeps) deps);
+      allDeps =
+        let
+          item = d: {
+            key = d.component.name;
+            value = d;
+          };
+        in
+        map (x: x.value) (
+          builtins.genericClosure {
+            startSet = map item deps;
+            operator = x: map item x.value.component.deps;
+          }
+        );
 
       # Dependencies contribute their roots, public include directories and
       # extra files under `_deps/<name>/` (a prefix that cannot collide with
@@ -430,6 +429,7 @@ let
         files = allFiles;
         inherit generated allGenerated;
         inherit
+          deps
           units
           allDeps
           allDefines
