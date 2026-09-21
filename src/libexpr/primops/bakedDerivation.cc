@@ -160,7 +160,7 @@ static RegisterPrimOp primop_bakedDerivation({
       builtins.bakedDerivation {
         name = "hello-2.12.1";
         outputs = {
-          out.path = "/nix/store/1q8w6grhdj6pn0cvlw18cw07nvjb7pj5-hello-2.12.1";
+          out.path = "/nix/store/1q8w6grh…-hello-2.12.1";
         };
       }
       ```
@@ -169,8 +169,8 @@ static RegisterPrimOp primop_bakedDerivation({
 
       ```nix
       {
-        drvPath = "/nix/store/1jczli5n8zgxl2vgfsc5vy3z0f5lfn3q-hello-2.12.1.drv";
-        out = "/nix/store/1q8w6grhdj6pn0cvlw18cw07nvjb7pj5-hello-2.12.1";
+        drvPath = "/nix/store/1jczli5n…-hello-2.12.1.drv";
+        out = "/nix/store/1q8w6grh…-hello-2.12.1";
       }
       ```
     )",
