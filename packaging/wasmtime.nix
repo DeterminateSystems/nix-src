@@ -29,7 +29,7 @@ rust.packages.stable.rustPlatform.buildRustPackage (finalAttrs: {
     "--package"
     "wasmtime-c-api"
     "--no-default-features"
-    "--features cranelift,wasi,pooling-allocator,wat,demangle,gc-null"
+    "--features cache,cranelift,wasi,pooling-allocator,wat,demangle,gc-null"
   ];
 
   outputs = [

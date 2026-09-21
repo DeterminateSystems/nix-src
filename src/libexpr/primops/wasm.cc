@@ -1,5 +1,7 @@
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval-inline.hh"
+#include "nix/util/users.hh"
+#include "nix/util/file-system.hh"
 
 #include <wasmtime.hh>
 #include <boost/unordered/concurrent_flat_map.hpp>
@@ -18,12 +20,41 @@ T unwrap(Result<T, E> && res)
     throw Error(res.err().message());
 }
 
+/**
+ * Enable wasmtime's compilation cache, so that a module is only compiled
+ * once per machine rather than once per process. The cache lives in Nix's
+ * cache directory; wasmtime is configured through a TOML file, which we
+ * write there as well.
+ */
+static void enableCompilationCache(wasmtime::Config & config)
+{
+    try {
+        auto cacheDir = getCacheDir() / "wasmtime";
+        createDirs(cacheDir);
+
+        // TOML literal strings cannot contain single quotes.
+        auto dir = cacheDir.string();
+        if (dir.find('\'') != std::string::npos)
+            throw Error("cache directory '%s' contains a single quote", dir);
+
+        auto configFile = cacheDir / "config.toml";
+        auto contents = fmt("[cache]\ndirectory = '%s'\n", dir);
+        writeFile(configFile, contents);
+
+        unwrap(config.cache_load(configFile.string()));
+    } catch (Error & e) {
+        // Not being able to cache is not fatal.
+        warn("unable to enable the Wasm compilation cache: %s", e.msg());
+    }
+}
+
 static Engine & getEngine()
 {
     static Engine engine = []() {
         wasmtime::Config config;
         config.pooling_allocation_strategy(PoolAllocationConfig());
         config.memory_init_cow(true);
+        enableCompilationCache(config);
         return Engine(std::move(config));
     }();
     return engine;
