@@ -381,7 +381,7 @@ void Executor::runFiber(FiberPtr fiber)
        `saved_sp` after it has been resumed (see `suspendFiber()`). */
     auto prevStack = GC_current_stack;
     if (prevStack)
-        prevStack->saved_sp = (char *) __builtin_frame_address(0) - 512;
+        prevStack->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
     GC_current_stack = fib->gcStack;
 #endif
 
@@ -626,15 +626,13 @@ suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::V
     lk.release();
 #if NIX_USE_BOEHMGC
     /* Publish the used portion of our stack, so that the garbage
-       collector will scan it while we're suspended. The slack below
-       the current frame covers the register block that the context
-       switch is about to push; those bytes are touched by the switch
-       anyway, so this doesn't fault in any untouched stack pages.
+       collector will scan it while we're suspended (see
+       `gcStackSwitchSlack` for why the approximation is lowered).
        Note: from this point until we clear `saved_sp` after being
        resumed, the GC may see the stack both as some thread's active
        stack and as a suspended one; it scans it only once (from the
        lower stack pointer). */
-    fib->gcStack->saved_sp = (char *) __builtin_frame_address(0) - 512;
+    fib->gcStack->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
 #endif
     /* Switch back to the scheduler (`Executor::runFiber()`), which
        will register us in the domain's wait list and then release the

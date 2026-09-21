@@ -96,13 +96,13 @@ static void coroStackUnregisterImpl(void * cookie)
     delete stk;
 }
 
-static void * coroSwitchToImpl(void * cookie, void * callerSp)
+static void * coroSwitchToImpl(void * cookie)
 {
     auto prev = GC_current_stack;
     /* `prev` is null on threads not registered with the GC; such
        threads hold no GC roots and need no scanning. */
     if (prev)
-        prev->saved_sp = callerSp;
+        prev->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
     GC_current_stack = (struct GC_stack *) cookie;
     return prev;
 }
@@ -115,10 +115,10 @@ static void coroSwitchBackImpl(void * prevHandle)
         prev->saved_sp = nullptr;
 }
 
-static void coroMarkSuspendedImpl(void * cookie, void * sp)
+static void coroMarkSuspendedImpl(void * cookie)
 {
     if (cookie)
-        ((struct GC_stack *) cookie)->saved_sp = sp;
+        ((struct GC_stack *) cookie)->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
 }
 
 static void coroMarkActiveImpl(void * cookie)

@@ -379,9 +379,9 @@ static constexpr size_t defaultCoroutineStackSize = 512 * 1024;
 
 void * (*coroStackRegister)(void * base, size_t size) = nullptr;
 void (*coroStackUnregister)(void * cookie) = nullptr;
-void * (*coroSwitchTo)(void * cookie, void * callerSp) = nullptr;
+void * (*coroSwitchTo)(void * cookie) = nullptr;
 void (*coroSwitchBack)(void * prevHandle) = nullptr;
-void (*coroMarkSuspended)(void * cookie, void * sp) = nullptr;
+void (*coroMarkSuspended)(void * cookie) = nullptr;
 void (*coroMarkActive)(void * cookie) = nullptr;
 
 namespace {
@@ -415,8 +415,7 @@ struct GCTrackedStackAllocator
 /**
  * Notify the GC hooks that the current thread is about to switch onto
  * (and, on destruction, back off) the coroutine stack identified by
- * `cookie`. `callerSp` must be the frame address of the function
- * performing the switch. Construct just before resuming a coroutine
+ * `cookie`. Construct just before resuming a coroutine
  * (this includes destroying a suspended one, which unwinds on its own
  * stack); the switch back happens when the coroutine yields or
  * finishes.
@@ -426,10 +425,10 @@ struct CoroutineGuard
     void * prev = nullptr;
     bool active = false;
 
-    CoroutineGuard(void * cookie, void * callerSp)
+    CoroutineGuard(void * cookie)
     {
         if (coroSwitchTo) {
-            prev = coroSwitchTo(cookie, callerSp);
+            prev = coroSwitchTo(cookie);
             active = true;
         }
     }
@@ -463,7 +462,7 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
             /* Destroying a suspended coroutine unwinds it on its own
                stack, so this too is a switch onto the coroutine
                stack. */
-            CoroutineGuard guard{stackCookie, __builtin_frame_address(0)};
+            CoroutineGuard guard{stackCookie};
             coro.reset();
         }
 
@@ -475,14 +474,14 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
                 return;
             cur = in;
 
-            CoroutineGuard guard{stackCookie, __builtin_frame_address(0)};
+            CoroutineGuard guard{stackCookie};
 
             if (!coro) {
                 coro = coro_t::push_type(GCTrackedStackAllocator{&stackCookie}, [&](coro_t::pull_type & yield) {
                     LambdaSource source([&](char * out, size_t out_len) {
                         if (cur.empty()) {
                             if (coroMarkSuspended)
-                                coroMarkSuspended(stackCookie, (char *) __builtin_frame_address(0) - 512);
+                                coroMarkSuspended(stackCookie);
                             yield();
                             if (coroMarkActive)
                                 coroMarkActive(stackCookie);
@@ -510,7 +509,7 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
         void finish() override
         {
             if (coro && *coro) {
-                CoroutineGuard guard{stackCookie, __builtin_frame_address(0)};
+                CoroutineGuard guard{stackCookie};
                 (*coro)(true);
             }
         }
@@ -539,7 +538,7 @@ std::unique_ptr<Source> sinkToSource(fun<void(Sink &)> writer, fun<void()> eof)
         ~SinkToSource()
         {
             /* See `SourceToSink::~SourceToSink()`. */
-            CoroutineGuard guard{stackCookie, __builtin_frame_address(0)};
+            CoroutineGuard guard{stackCookie};
             coro.reset();
         }
 
@@ -547,7 +546,7 @@ std::unique_ptr<Source> sinkToSource(fun<void(Sink &)> writer, fun<void()> eof)
 
         size_t read(char * data, size_t len) override
         {
-            CoroutineGuard guard{stackCookie, __builtin_frame_address(0)};
+            CoroutineGuard guard{stackCookie};
 
             bool hasCoro = coro.has_value();
             if (!hasCoro) {
@@ -564,7 +563,7 @@ std::unique_ptr<Source> sinkToSource(fun<void(Sink &)> writer, fun<void()> eof)
                         void writeUnbuffered(std::string_view data) override
                         {
                             if (coroMarkSuspended)
-                                coroMarkSuspended(stackCookie, (char *) __builtin_frame_address(0) - 512);
+                                coroMarkSuspended(stackCookie);
                             yield(data);
                             if (coroMarkActive)
                                 coroMarkActive(stackCookie);
