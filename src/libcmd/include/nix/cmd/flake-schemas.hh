@@ -4,6 +4,10 @@
 #include "nix/flake/flake.hh"
 #include "nix/cmd/command.hh"
 
+namespace nix::flake {
+struct LockedFlake;
+}
+
 namespace nix::flake_schemas {
 
 using namespace eval_cache;
@@ -92,5 +96,26 @@ struct SchemaInfo
 using Schemas = std::map<std::string, SchemaInfo>;
 
 Schemas getSchemas(ref<AttrCursor> root);
+
+struct FlakeInventoryOptions
+{
+    bool showLegacy = false;
+    bool showAllSystems = false;
+    bool showOutputPaths = false;
+    bool showDrvPaths = false;
+    bool showDrvNames = false;
+    /**
+     * Include additional information needed by `nix flake bake`
+     * (e.g. `derivationAttrPath` and `mainProgram`).
+     */
+    bool bake = false;
+};
+
+nlohmann::json getFlakeInventory(
+    EvalState & state,
+    Store & evalStore,
+    flake::LockedFlake & flake,
+    ref<eval_cache::EvalCache> cache,
+    const FlakeInventoryOptions & options);
 
 } // namespace nix::flake_schemas

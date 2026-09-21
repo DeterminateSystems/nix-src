@@ -4,6 +4,10 @@
 #include "nix/util/memory-source-accessor.hh"
 #include "nix/util/mounted-source-accessor.hh"
 #include "nix/flake/provenance.hh"
+#include "nix/expr/parallel-eval.hh"
+#include "nix/store/globals.hh"
+
+#include <nlohmann/json.hpp>
 
 namespace nix::flake_schemas {
 
@@ -358,6 +362,248 @@ Schemas getSchemas(ref<AttrCursor> inventory)
     }
 
     return schemas;
+}
+
+nlohmann::json getFlakeInventory(
+    EvalState & state,
+    Store & evalStore,
+    LockedFlake & flake,
+    ref<eval_cache::EvalCache> cache,
+    const FlakeInventoryOptions & options)
+{
+    auto inventory = cache->getRoot()->getAttr("inventory");
+    auto outputs = cache->getRoot()->getAttr("outputs");
+
+    auto localSystem = std::string(settings.thisSystem.get());
+
+    FutureVector futures(*state.executor);
+
+    std::function<void(ref<eval_cache::AttrCursor> node, nlohmann::json & obj)> visit;
+
+    visit = [&](ref<eval_cache::AttrCursor> node, nlohmann::json & obj) {
+        /* Record the schema attributes that apply to both leaf and non-leaf nodes. Non-leaf `forSystems` and
+           `isLegacy` are only needed by `nix flake bake` to reproduce the schema. */
+        auto addNodeInfo = [&](bool isLeaf) {
+            if (auto forSystems = flake_schemas::Node(node).forSystems(); forSystems && (isLeaf || options.bake))
+                obj.emplace("forSystems", *forSystems);
+            if (options.bake)
+                if (auto b = node->maybeGetAttr("isLegacy"); b && b->getBool())
+                    obj.emplace("isLegacy", true);
+        };
+
+        flake_schemas::visit(
+            options.showAllSystems ? std::optional<std::string>() : localSystem,
+            options.showLegacy,
+            node,
+            flake.flake.provenance,
+
+            [&](const flake_schemas::Leaf & leaf) {
+                if (auto what = leaf.what())
+                    obj.emplace("what", *what);
+
+                if (auto shortDescription = leaf.shortDescription())
+                    obj.emplace("shortDescription", *shortDescription);
+
+                /* Record the attribute path of the derivation relative to the output attribute (e.g.
+                   `config.system.build.toplevel` for `nixosConfigurations`), so that the baked flake can put the
+                   derivation in the right place. Omitted if the output attribute is the derivation itself. */
+                if (options.bake) {
+                    if (auto path = leaf.derivationAttrPath(); path && !path->empty()) {
+                        auto attrPath = nlohmann::json::array();
+                        for (auto & attr : *path)
+                            attrPath.push_back(std::string(state.symbols[attr]));
+                        obj.emplace("derivationAttrPath", std::move(attrPath));
+                    }
+                }
+
+                if (auto drv = leaf.derivation(outputs)) {
+                    auto drvObj = nlohmann::json::object();
+
+                    if (options.showDrvNames)
+                        drvObj.emplace("name", drv->getAttr(state.s.name)->getString());
+
+                    if (options.showDrvPaths) {
+                        auto drvPath = drv->forceDerivation();
+                        drvObj.emplace("path", state.store->printStorePath(drvPath));
+                    }
+
+                    /* Derivations whose output paths are not known in advance (e.g. content-addressed
+                       derivations) cannot be baked, since baking requires the output paths to be known at
+                       evaluation time. */
+                    bool bakeable = true;
+
+                    if (options.bake)
+                        try {
+                            /* Record `meta.mainProgram` so that the baked flake can preserve it for `nix run`. */
+                            if (auto aMeta = drv->maybeGetAttr(state.s.meta))
+                                if (auto aMainProgram = aMeta->maybeGetAttr("mainProgram"))
+                                    drvObj.emplace("mainProgram", aMainProgram->getString());
+
+                            /* Record which output this attribute refers to, since it's not necessarily `out`. */
+                            if (auto aOutputName = drv->maybeGetAttr(state.s.outputName))
+                                drvObj.emplace("outputName", aOutputName->getString());
+
+                            /* Record the system of the derivation. */
+                            if (auto aSystem = drv->maybeGetAttr(state.s.system))
+                                drvObj.emplace("system", aSystem->getString());
+
+                            // FIXME: remove this once we have on-demand writing of .drvs.
+                            /* Get the output paths from the derivation attribute set rather than from the `.drv` file
+                               in the store. This avoids waiting for the derivation to be written to the store (which
+                               would serialise parallel evaluation on the store writer) and works in read-only mode.
+                               Outputs whose path is not known at evaluation time (e.g. content-addressed outputs)
+                               have a placeholder rather than a store path. */
+                            auto outputs = nlohmann::json::object();
+                            auto getOutPath = [&](ref<eval_cache::AttrCursor> out) {
+                                /* `derivation` produces an attribute set per output, but `import`ing a `.drv`
+                                   produces plain strings. */
+                                return out->forceValue().type() == nAttrs ? out->getAttr(state.s.outPath)->getString()
+                                                                          : out->getString();
+                            };
+                            auto addOutput = [&](const std::string & outputName, const std::string & outPath) {
+                                if (state.store->isStorePath(outPath))
+                                    outputs.emplace(outputName, outPath);
+                                else {
+                                    outputs.emplace(outputName, nullptr);
+                                    bakeable = false;
+                                }
+                            };
+                            if (auto aOutputs = drv->maybeGetAttr(state.s.outputs))
+                                for (auto & outputName : aOutputs->getListOfStrings())
+                                    addOutput(outputName, getOutPath(drv->getAttr(outputName)));
+                            else {
+                                auto aOutputName = drv->maybeGetAttr(state.s.outputName);
+                                addOutput(
+                                    aOutputName ? aOutputName->getString() : "out",
+                                    drv->getAttr(state.s.outPath)->getString());
+                            }
+                            drvObj.emplace("outputs", std::move(outputs));
+
+                            if (!bakeable) {
+                                warn(
+                                    "cannot bake '%s' because its output paths are not known in advance (e.g. it is a "
+                                    "content-addressed derivation)",
+                                    leaf.node->getAttrPathStr());
+                                drvObj.emplace("failed", true);
+                            }
+                        } catch (EvalError & e) {
+                            /* The derivation cannot be evaluated (e.g. a package marked as broken). Record it anyway,
+                           so that the baked flake can still list it (like the original flake would), but fail
+                           when it is built. */
+                            drvObj.erase("outputs");
+                            drvObj.emplace("failed", true);
+                        }
+
+                    else if (options.showOutputPaths) {
+                        auto outputs = nlohmann::json::object();
+                        auto drvPath = drv->forceDerivation();
+                        auto drv = evalStore.derivationFromPath(drvPath);
+                        for (auto & i : drv.outputsAndOptPaths(*state.store)) {
+                            if (auto outPath = i.second.second)
+                                outputs.emplace(i.first, state.store->printStorePath(*outPath));
+                            else
+                                outputs.emplace(i.first, nullptr);
+                        }
+                        drvObj.emplace("outputs", std::move(outputs));
+                    }
+
+                    obj.emplace("derivation", std::move(drvObj));
+                }
+
+                if (options.bake && leaf.isFlakeCheck())
+                    obj.emplace("isFlakeCheck", true);
+
+                addNodeInfo(true);
+            },
+
+            [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
+                auto children = nlohmann::json::object();
+                forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
+                    auto & j = children.emplace(state.symbols[attrName], nlohmann::json::object()).first.value();
+                    state.spawn(futures, 1, [&visit, &j, node]() {
+                        try {
+                            visit(node, j);
+                        } catch (EvalError & e) {
+                            // FIXME: make it a flake schema attribute whether to ignore evaluation errors.
+                            if (node->root->state.symbols[node->getAttrPath()[0]] == "legacyPackages")
+                                j.emplace("failed", true);
+                            else
+                                throw;
+                        }
+                    });
+                });
+                obj.emplace("children", std::move(children));
+
+                addNodeInfo(false);
+            },
+
+            [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
+                obj.emplace("filtered", true);
+            },
+
+            [&](ref<eval_cache::AttrCursor> node) { obj.emplace("isLegacy", true); });
+    };
+
+    auto inv = nlohmann::json::object();
+
+    auto schemas = getSchemas(inventory);
+
+    flake_schemas::forEachOutput(
+        inventory,
+        [&](Symbol outputName, std::shared_ptr<eval_cache::AttrCursor> output, const std::string & doc, bool isLast) {
+            auto & j = inv.emplace(state.symbols[outputName], nlohmann::json::object()).first.value();
+
+            if (output) {
+                j.emplace("doc", doc);
+
+                /* Record the schema-level attributes, so that `nix flake bake` can reproduce the schema. */
+                if (auto schema = get(schemas, std::string(state.symbols[outputName])); schema && options.bake) {
+                    if (!schema->roles.empty())
+                        j.emplace("roles", schema->roles);
+                    if (schema->appendSystem)
+                        j.emplace("appendSystem", true);
+                    if (schema->defaultAttrPath) {
+                        auto attrPath = nlohmann::json::array();
+                        for (auto & attr : *schema->defaultAttrPath)
+                            attrPath.push_back(std::string(state.symbols[attr]));
+                        j.emplace("defaultAttrPath", std::move(attrPath));
+                    }
+                }
+                auto & j2 = j.emplace("output", nlohmann::json::object()).first.value();
+                state.spawn(futures, 1, [&visit, output, &j2]() { visit(ref(output), j2); });
+            } else
+                j.emplace("unknown", true);
+        });
+
+    futures.finishAll();
+
+    if (options.bake) {
+        /* Prune the inventory to the nodes that can be baked: derivation leaves, and non-leaf nodes that contain at
+           least one of them. This drops non-derivation leaves (e.g. overlays), filtered/failed nodes, derivations
+           that cannot be baked, and unknown outputs. */
+        auto prune = [](this const auto & prune, nlohmann::json & node) -> bool {
+            if (auto children = node.find("children"); children != node.end()) {
+                for (auto i = children->begin(); i != children->end();) {
+                    if (prune(i.value()))
+                        ++i;
+                    else
+                        i = children->erase(i);
+                }
+                return !children->empty();
+            }
+            return node.contains("derivation");
+        };
+
+        for (auto i = inv.begin(); i != inv.end();) {
+            auto output = i.value().find("output");
+            if (output != i.value().end() && prune(*output))
+                ++i;
+            else
+                i = inv.erase(i);
+        }
+    }
+
+    return inv;
 }
 
 } // namespace nix::flake_schemas
