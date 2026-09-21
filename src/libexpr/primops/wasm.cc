@@ -1,5 +1,7 @@
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval-inline.hh"
+#include "nix/util/users.hh"
+#include "nix/util/file-system.hh"
 
 #include <wasmtime.hh>
 #include <boost/unordered/concurrent_flat_map.hpp>
@@ -18,12 +20,41 @@ T unwrap(Result<T, E> && res)
     throw Error(res.err().message());
 }
 
+/**
+ * Enable wasmtime's compilation cache, so that a module is only compiled
+ * once per machine rather than once per process. The cache lives in Nix's
+ * cache directory; wasmtime is configured through a TOML file, which we
+ * write there as well.
+ */
+static void enableCompilationCache(wasmtime::Config & config)
+{
+    try {
+        auto cacheDir = getCacheDir() / "wasmtime";
+        createDirs(cacheDir);
+
+        // TOML literal strings cannot contain single quotes.
+        auto dir = cacheDir.string();
+        if (dir.find('\'') != std::string::npos)
+            throw Error("cache directory '%s' contains a single quote", dir);
+
+        auto configFile = cacheDir / "config.toml";
+        auto contents = fmt("[cache]\ndirectory = '%s'\n", dir);
+        writeFile(configFile, contents);
+
+        unwrap(config.cache_load(configFile.string()));
+    } catch (Error & e) {
+        // Not being able to cache is not fatal.
+        warn("unable to enable the Wasm compilation cache: %s", e.msg());
+    }
+}
+
 static Engine & getEngine()
 {
     static Engine engine = []() {
         wasmtime::Config config;
         config.pooling_allocation_strategy(PoolAllocationConfig());
         config.memory_init_cow(true);
+        enableCompilationCache(config);
         return Engine(std::move(config));
     }();
     return engine;
@@ -132,6 +163,8 @@ struct NixWasmInstance
     wasmtime::Store::Context wasmCtx;
     Instance instance;
     Memory memory_;
+    // The guest's allocator, if it exports one (see `allocInGuest`).
+    std::optional<Func> allocFn;
 
     ValueVector values;
     std::exception_ptr ex;
@@ -152,6 +185,13 @@ struct NixWasmInstance
         , logPrefix(pre->name)
     {
         wasmCtx.set_data(this);
+
+        if (auto ext = instance.get(wasmCtx, "nix_wasm_alloc")) {
+            auto fun = std::get_if<Func>(&*ext);
+            if (!fun)
+                throw Error("export 'nix_wasm_alloc' of Wasm module '%s' is not a function", pre->name);
+            allocFn = *fun;
+        }
 
         /* Reserve value ID 0 so it can be used in functions like get_attr() to denote a missing attribute. */
         values.push_back(nullptr);
@@ -410,7 +450,15 @@ struct NixWasmInstance
         if ((size_t) attrIdx >= attrs.size())
             throw Error("copy_attrname: attribute index out of bounds");
 
-        std::string_view name = state.symbols[attrs[attrIdx].name];
+        /* Note: `Bindings::operator[]` is not supported for layered
+           bindings (e.g. the result of `//`), so iterate instead. This
+           has to match the iteration order used by `copy_attrset`.
+
+           TODO: Since this function is called once per attribute, copying
+           an attrset is O(n^2) (and n host calls). Come up with a more
+           efficient interface, e.g. a `copy_attrnames` function that copies
+           all names in one go. */
+        std::string_view name = state.symbols[std::next(attrs.begin(), attrIdx)->name];
 
         if ((size_t) len != name.size())
             throw Error("copy_attrname: buffer length does not match attribute name length");
@@ -469,8 +517,26 @@ struct NixWasmInstance
     }
 
     /**
+     * Allocate `size` bytes in the guest by calling its `nix_wasm_alloc` export. The guest is responsible for freeing
+     * the buffer (e.g. by reconstructing a `Vec` from it).
+     */
+    uint32_t allocInGuest(uint32_t size)
+    {
+        if (!allocFn)
+            throw Error("Wasm module '%s' does not export 'nix_wasm_alloc'", pre->name);
+        auto res = unwrap(allocFn->call(wasmCtx, {(int32_t) size}));
+        if (res.size() != 1 || res[0].kind() != ValKind::I32)
+            throw Error("'nix_wasm_alloc' of Wasm module '%s' did not return an i32", pre->name);
+        state.nrWasmGuestAllocs++;
+        state.wasmGuestAllocBytes += size;
+        return (uint32_t) res[0].i32();
+    }
+
+    /**
      * Read the contents of a file into Wasm memory. This is like calling `builtins.readFile`, except that it can handle
      * binary files that cannot be represented as Nix strings.
+     *
+     * Deprecated: the guest has to guess the buffer size, so the file may be read twice. Use `read_file_v2`.
      */
     uint32_t read_file(ValueId pathId, uint32_t ptr, uint32_t len)
     {
@@ -482,13 +548,36 @@ struct NixWasmInstance
         if (contents.size() > std::numeric_limits<uint32_t>::max())
             throw Error("file '%s' is too large to process in Wasm (size: %d)", path, contents.size());
 
-        // FIXME: this is an inefficient interface since it may cause the file to be read twice.
         if (contents.size() <= len) {
             auto buf = memory().subspan(ptr, len);
             memcpy(buf.data(), contents.data(), contents.size());
         }
 
         return contents.size();
+    }
+
+    /**
+     * Read the contents of a file into a buffer allocated in the guest via `nix_wasm_alloc`, so that the file is read
+     * and copied only once. Returns the buffer and stores its length at `lenPtr`.
+     */
+    uint32_t read_file_v2(ValueId pathId, uint32_t lenPtr)
+    {
+        auto & pathValue = getValue(pathId);
+        auto path = state.realisePath(noPos, pathValue);
+
+        auto contents = path.readFile();
+
+        if (contents.size() > std::numeric_limits<uint32_t>::max())
+            throw Error("file '%s' is too large to process in Wasm (size: %d)", path, contents.size());
+
+        auto ptr = allocInGuest(contents.size());
+
+        // Note: the allocation may have grown the memory, so get the data pointer only now.
+        auto mem = memory();
+        memcpy(mem.subspan(ptr, contents.size()).data(), contents.data(), contents.size());
+        subspan<uint32_t>(mem.subspan(lenPtr), 1)[0] = contents.size(); // FIXME: endianness
+
+        return ptr;
     }
 };
 
@@ -532,6 +621,7 @@ static void regFuns(Linker & linker, bool useWasi)
     regFun(linker, "call_function", &NixWasmInstance::call_function);
     regFun(linker, "make_app", &NixWasmInstance::make_app);
     regFun(linker, "read_file", &NixWasmInstance::read_file);
+    regFun(linker, "read_file_v2", &NixWasmInstance::read_file_v2);
 
     if (useWasi) {
         unwrap(linker.func_wrap(

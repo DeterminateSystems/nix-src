@@ -1091,6 +1091,10 @@ private:
     Counter nrFunctionCalls;
 
 public:
+    // Buffers allocated in Wasm guests on behalf of host functions (e.g. `read_file_v2`).
+    Counter nrWasmGuestAllocs;
+    Counter wasmGuestAllocBytes;
+
     Counter nrThunksAwaited;
     Counter nrThunksAwaitedSlow;
     Counter microsecondsWaiting;
