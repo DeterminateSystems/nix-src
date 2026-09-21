@@ -51,10 +51,12 @@ struct Executor::Fiber
     size_t callDepth = 0;
 
     /**
-     * This fiber's evaluation context. `runFiber()` points the
-     * thread-local `EvalState::evalContext` at it while the fiber is
-     * running, so that the context travels with the fiber across
-     * threads.
+     * This fiber's evaluation context while it's not running.
+     * `runFiber()` swaps it with the thread-local
+     * `EvalState::evalContext` on every switch-in/out (a mere pointer
+     * exchange), so that the context travels with the fiber across
+     * threads, while this slot holds the resuming thread's own context
+     * in the meantime.
      */
     EvalState::EvalContext evalContext;
 
@@ -367,11 +369,10 @@ void Executor::runFiber(FiberPtr fiber)
 
     auto savedThreadId = myEvalThreadId;
     auto savedCallDepth = CallDepth::callDepth;
-    auto savedEvalContext = EvalState::evalContext;
     currentFiber = fib;
     myEvalThreadId = fib->evalThreadId;
     CallDepth::callDepth = fib->callDepth;
-    EvalState::evalContext = &fib->evalContext;
+    std::swap(EvalState::evalContext, fib->evalContext);
 
 #if NIX_USE_BOEHMGC
     /* Make this thread's stack scannable by the GC while the fiber
@@ -397,7 +398,7 @@ void Executor::runFiber(FiberPtr fiber)
     myEvalThreadId = savedThreadId;
     fib->callDepth = CallDepth::callDepth;
     CallDepth::callDepth = savedCallDepth;
-    EvalState::evalContext = savedEvalContext;
+    std::swap(EvalState::evalContext, fib->evalContext);
 
     if (fib->ctx) {
         /* The fiber suspended itself in `waitOnThunk()`. We are still

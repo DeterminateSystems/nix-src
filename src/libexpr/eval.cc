@@ -252,15 +252,7 @@ EvalMemory::EvalMemory()
     assertGCInitialized();
 }
 
-/**
- * The evaluation context of non-fiber execution contexts (e.g. the
- * main thread, or any other thread that evaluates outside of the
- * executor). One per thread, since the context is mutable (see
- * `PushProvenance`) and unsynchronized.
- */
-static thread_local EvalState::EvalContext defaultEvalContext;
-
-[[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext * EvalState::evalContext = &defaultEvalContext;
+[[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext EvalState::evalContext;
 
 EvalState::EvalState(
     const LookupPath & lookupPathFromArguments,
