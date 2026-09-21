@@ -97,13 +97,16 @@ let
   # The `dev` outputs, as `stdenv.mkDerivation` would pick for `buildInputs`.
   depPackages = deps: map lib.getDev (lib.concatMap (d: lib.toList d.pkg) deps);
 
-  # A minimal derivation that sources the stdenv setup script (which
-  # provides the C++ compiler, and handles `buildInputs` etc.) but avoids
-  # the evaluation cost of `stdenv.mkDerivation`, which is significant
-  # for hundreds of derivations. Unlike `runCommand`, it does not set
+  # A minimal derivation running a nushell build script, which (unlike
+  # bash) can read the typed JSON of the structured attributes
+  # (`$NIX_ATTRS_JSON_FILE`). A bash prelude sources the stdenv setup
+  # script first, which provides the C++ compiler and handles
+  # `buildInputs` etc. This avoids the evaluation cost of
+  # `stdenv.mkDerivation`, which is significant for hundreds of
+  # derivations, and unlike `runCommand` it does not set
   # `preferLocalBuild`, so units can be built remotely.
-  mkLeanDerivation =
-    attrs: script:
+  mkNuDerivation =
+    attrs: nuScript:
     derivation (
       {
         system = stdenv.hostPlatform.system;
@@ -114,24 +117,17 @@ let
             # With structured attrs, attributes are not in the environment.
             if [ -e "$NIX_ATTRS_SH_FILE" ]; then . "$NIX_ATTRS_SH_FILE"; fi
             source $stdenv/setup
-            ${script}
+            exec nu --no-config-file ${nuScript}
           '')
         ];
         inherit stdenv;
         __structuredAttrs = true;
       }
       // attrs
+      // {
+        nativeBuildInputs = attrs.nativeBuildInputs or [ ] ++ [ pkgs.nushell ];
+      }
     );
-
-  # Like `mkLeanDerivation`, but the build script is a nushell script,
-  # which (unlike bash) can read the typed JSON of the structured
-  # attributes (`$NIX_ATTRS_JSON_FILE`). The stdenv setup script is still
-  # sourced first, for the compiler and the build inputs.
-  mkNuDerivation =
-    attrs: nuScript:
-    mkLeanDerivation (
-      attrs // { nativeBuildInputs = attrs.nativeBuildInputs or [ ] ++ [ pkgs.nushell ]; }
-    ) "exec nu --no-config-file ${nuScript}";
 
   # The stdenv's default hardening flags, except that `_FORTIFY_SOURCE`
   # warns on every unit when not optimizing, so it is disabled then (like
@@ -212,63 +208,27 @@ let
       # Link against every external dependency used by any unit.
       deps = component.externalDepsFor component.allExternalIncludes;
     in
-    mkLeanDerivation
-      {
-        name = "${component.name}-${component.version}";
-        # Instantiate the objects and the dependencies in parallel.
-        objects = parallel (map (d: d.drvPath) component.allDeps ++ map (o: o.drvPath) objects) objects;
-        inherit (component)
-          type
-          libName
-          exeName
-          binSymlinks
-          linkFlags
-          postInstall
-          ;
-        linkPkgConfig = lib.concatMap (d: d.pkgconfig or [ ]) deps;
-        linkLibs =
-          map (d: "-l${d.libName}") component.allDeps
-          ++ lib.concatMap (d: d.libs or [ ]) deps
-          ++ component.extraLinkLibs
-          ++ commonLinkLibs;
-        buildInputs = component.allDeps ++ depPackages deps;
-        nativeBuildInputs = [ pkgs.pkg-config ];
-      }
-      ''
-        libs=()
-        if [[ ''${#linkPkgConfig[@]} -gt 0 ]]; then
-          libs+=($(pkg-config --libs "''${linkPkgConfig[@]}"))
-        fi
-
-        case "$type" in
-          library)
-            mkdir -p $out/lib
-            $CXX -shared -fPIC \
-              -Wl,-soname,lib$libName.so \
-              -Wl,--as-needed -Wl,--no-undefined \
-              "''${linkFlags[@]}" \
-              -o $out/lib/lib$libName.so \
-              "''${objects[@]}" \
-              "''${libs[@]}" \
-              "''${linkLibs[@]}"
-            ;;
-          executable)
-            mkdir -p $out/bin
-            $CXX \
-              -Wl,--as-needed -Wl,--no-undefined \
-              "''${linkFlags[@]}" \
-              -o $out/bin/$exeName \
-              "''${objects[@]}" \
-              "''${libs[@]}" \
-              "''${linkLibs[@]}"
-            for name in "''${binSymlinks[@]}"; do
-              ln -s $exeName $out/bin/$name
-            done
-            ;;
-        esac
-
-        eval "$postInstall"
-      ''
+    mkNuDerivation {
+      name = "${component.name}-${component.version}";
+      # Instantiate the objects and the dependencies in parallel.
+      objects = parallel (map (d: d.drvPath) component.allDeps ++ map (o: o.drvPath) objects) objects;
+      inherit (component)
+        type
+        libName
+        exeName
+        binSymlinks
+        linkFlags
+        postInstall
+        ;
+      linkPkgConfig = lib.concatMap (d: d.pkgconfig or [ ]) deps;
+      linkLibs =
+        map (d: "-l${d.libName}") component.allDeps
+        ++ lib.concatMap (d: d.libs or [ ]) deps
+        ++ component.extraLinkLibs
+        ++ commonLinkLibs;
+      buildInputs = component.allDeps ++ depPackages deps;
+      nativeBuildInputs = [ pkgs.pkg-config ];
+    } ./link.nu
     // {
       inherit objects;
       inherit (component) units;
@@ -285,7 +245,7 @@ let
     - `libName`: library name without `lib` prefix (e.g. `nixutil`).
     - `exeName`: executable name; defaults to `name`.
     - `binSymlinks`: names of symlinks to the executable to create in `bin/`.
-    - `postInstall`: shell snippet run after linking.
+    - `postInstall`: nushell snippet run after linking, with `$env.out` set.
     - `deps`: other components this one depends on. Their public headers
       are made available under `_deps/<name>/` and their libraries are linked.
       Dependencies are transitive.

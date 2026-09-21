@@ -82,8 +82,9 @@ nixMake.mkComponent {
     "nix-store"
   ];
 
+  # A nushell snippet.
   postInstall = ''
-    mkdir -p $out/libexec/nix
-    ln -s ../../bin/nix $out/libexec/nix/build-remote
+    mkdir $"($env.out)/libexec/nix"
+    ln -s ../../bin/nix $"($env.out)/libexec/nix/build-remote"
   '';
 }
