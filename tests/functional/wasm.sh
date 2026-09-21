@@ -15,3 +15,10 @@ fi
 [[ $(nix eval --json --impure \
     --extra-experimental-features wasm-builtin \
     --expr "builtins.wasm { path = ./fib.wasm; function = \"fib\"; } 40") = 165580141 ]]
+
+# A host function called with an out-of-range pointer must fail with an
+# error rather than access memory outside the Wasm memory.
+expectStderr 1 nix eval --impure \
+    --extra-experimental-features wasm-builtin \
+    --expr "builtins.wasm { wat = builtins.readFile ./oob.wat; function = \"oob\"; } 0" \
+    | grepQuiet "Wasm memory access out of bounds"
