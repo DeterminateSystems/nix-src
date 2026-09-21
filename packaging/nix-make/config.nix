@@ -5,6 +5,15 @@
 
 {
   options = {
+    compiler = lib.mkOption {
+      type = lib.types.enum [
+        "gcc"
+        "clang"
+      ];
+      default = "gcc";
+      description = "The C++ compiler to build Nix with. Dependencies are used as built by Nixpkgs either way.";
+    };
+
     optimize = lib.mkOption {
       type = lib.types.bool;
       default = true;

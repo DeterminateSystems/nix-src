@@ -66,5 +66,7 @@ nixMake.mkComponent {
     };
   };
 
+  extraCxxFlags = nixMake.weakVtablesFlags;
+
   linkFlags = [ "-Wl,--wrap=__assert_fail" ];
 }

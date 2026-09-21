@@ -15,6 +15,10 @@ let
   # The version, as in the package.nix files.
   defaultVersion = lib.fileContents ../../.version-determinate;
 
+  # The stdenv providing the compiler. `clangStdenv` uses libstdc++, so the
+  # dependencies built by Nixpkgs with GCC can be used as is.
+  stdenv = if config.compiler == "clang" then pkgs.clangStdenv else pkgs.stdenv;
+
   # `builtins.parallel xs x` starts evaluating the values `xs` on other
   # threads and returns `x`. It requires the `parallel-eval` experimental
   # feature (and `eval-cores`); without it, evaluation is sequential.
@@ -26,7 +30,8 @@ let
     if config.optimize then [ (if config.debug then "-O2" else "-O3") ] else [ "-O0" ];
   debugFlags = lib.optional config.debug "-g";
 
-  # From nix-meson-build-support/common/meson.build (GCC-supported subset).
+  # From nix-meson-build-support/common/meson.build, where Meson keeps the
+  # ones the compiler supports; the last few are compiler-specific.
   warningFlags = [
     "-Wall"
     "-Wdeprecated-copy"
@@ -41,9 +46,21 @@ let
     "-Wignored-qualifiers"
     "-Wimplicit-fallthrough"
     "-Wno-deprecated-declarations"
-    "-Wno-interference-size"
-    "-Wno-subobject-linkage"
-  ];
+  ]
+  ++ (
+    if config.compiler == "clang" then
+      [ "-Werror=c99-designator" ]
+    else
+      [
+        "-Wno-interference-size"
+        "-Wno-subobject-linkage"
+      ]
+  );
+
+  # Meson enables this for libutil, libstore and libexpr only: all vtables
+  # must have a "key" function so they are emitted as strong symbols, which
+  # matters for dynamic linking on Darwin. Clang only.
+  weakVtablesFlags = lib.optional (config.compiler == "clang") "-Werror=weak-vtables";
 
   commonCxxFlags = [
     "-std=c++23"
@@ -110,8 +127,8 @@ let
     attrs: script:
     derivation (
       {
-        system = pkgs.stdenv.hostPlatform.system;
-        builder = pkgs.stdenv.shell;
+        system = stdenv.hostPlatform.system;
+        builder = stdenv.shell;
         args = [
           "-e"
           (builtins.toFile "builder.sh" ''
@@ -121,7 +138,7 @@ let
             ${script}
           '')
         ];
-        inherit (pkgs) stdenv;
+        inherit stdenv;
         __structuredAttrs = true;
       }
       // attrs
@@ -134,7 +151,7 @@ let
     lib.subtractLists (lib.optionals (!config.optimize) [
       "fortify"
       "fortify3"
-    ]) pkgs.stdenv.cc.defaultHardeningFlags
+    ]) stdenv.cc.defaultHardeningFlags
   );
 
   # Deduplicate strings in O(n log n) rather than `lib.unique`'s O(n^2).
@@ -528,6 +545,7 @@ in
 
   inherit
     getDeps
+    weakVtablesFlags
     mkConfigHeader
     mkStringHeader
     mkComponent

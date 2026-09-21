@@ -72,6 +72,12 @@
           debug = false;
           boehmgc = false;
         };
+        # Like `debug`, but built with clang, which compiles faster.
+        debug-fast = makeNixVariant {
+          optimize = false;
+          debug = true;
+          compiler = "clang";
+        };
       };
 
       # Describe the `make` output to `nix flake show` and `nix flake check`.
@@ -85,7 +91,8 @@
           doc = ''
             The `make` output provides the Nix components (libraries and the
             `nix` executable) built with Nix as the build system, per system
-            and build variant (`release`, `debugoptimized`, `debug`, `nogc`).
+            and build variant (`release`, `debugoptimized`, `debug`, `nogc`,
+            `debug-fast`).
           '';
           roles.nix-build = { };
           appendSystem = true;

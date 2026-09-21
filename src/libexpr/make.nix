@@ -97,5 +97,7 @@ nixMake.mkComponent {
       "lexer-helpers.cc" = parserFlags;
     };
 
+  extraCxxFlags = nixMake.weakVtablesFlags;
+
   linkFlags = [ "-Wl,--wrap=__assert_fail" ];
 }
