@@ -574,9 +574,10 @@ struct NixWasmInstance
 
     /**
      * Read the contents of a file into a buffer allocated in the guest via `nix_wasm_alloc`, so that the file is read
-     * and copied only once. Returns the buffer and stores its length at `lenPtr`.
+     * and copied only once. Returns the buffer pointer in the low 32 bits and its length in the high 32 bits (Rust's
+     * C ABI cannot express Wasm multi-value returns, so pack both into one `u64`).
      */
-    uint32_t read_file_v2(ValueId pathId, uint32_t lenPtr)
+    uint64_t read_file_v2(ValueId pathId)
     {
         auto & pathValue = getValue(pathId);
         auto path = state.realisePath(noPos, pathValue);
@@ -590,9 +591,8 @@ struct NixWasmInstance
 
         // Note: the allocation may have grown the memory; `guestSpan` fetches it afresh.
         memcpy(guestSpan(ptr, contents.size()).data(), contents.data(), contents.size());
-        guestSpan<uint32_t>(lenPtr, 1)[0] = contents.size(); // FIXME: endianness
 
-        return ptr;
+        return ((uint64_t) contents.size() << 32) | ptr;
     }
 };
 
