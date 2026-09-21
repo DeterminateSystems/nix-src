@@ -88,17 +88,6 @@ let
     name:
     builtins.toFile name "#pragma once\n// The macros of this configuration header are passed to the compiler as -D flags.\n";
 
-  # Render a macro value as a `-D` value: integers and booleans become
-  # bare, strings become C string literals.
-  renderDefine =
-    v:
-    if builtins.isBool v then
-      (if v then "1" else "0")
-    else if builtins.isInt v then
-      toString v
-    else
-      builtins.toJSON v;
-
   # Wrap a file in a C++ raw string literal, like the `gen_header`
   # generator in nix-meson-build-support/generate-header.
   mkStringHeader =
@@ -133,6 +122,16 @@ let
       }
       // attrs
     );
+
+  # Like `mkLeanDerivation`, but the build script is a nushell script,
+  # which (unlike bash) can read the typed JSON of the structured
+  # attributes (`$NIX_ATTRS_JSON_FILE`). The stdenv setup script is still
+  # sourced first, for the compiler and the build inputs.
+  mkNuDerivation =
+    attrs: nuScript:
+    mkLeanDerivation (
+      attrs // { nativeBuildInputs = attrs.nativeBuildInputs or [ ] ++ [ pkgs.nushell ]; }
+    ) "exec nu --no-config-file ${nuScript}";
 
   # The stdenv's default hardening flags, except that `_FORTIFY_SOURCE`
   # warns on every unit when not optimizing, so it is disabled then (like
@@ -180,61 +179,31 @@ let
     let
       deps = component.externalDepsFor unit.externalIncludes;
     in
-    mkLeanDerivation
-      {
-        name = "${baseNameOf unit.path}.o";
-        # The config macros this unit is sensitive to (see `configHeaders`),
-        # as reported by the scanner; `null` means undefined.
-        defines = lib.mapAttrs (_: renderDefine) (lib.filterAttrs (_: v: v != null) unit.usedDefines);
-        undefines = lib.attrNames (lib.filterAttrs (_: v: v == null) unit.usedDefines);
-        # Generated files come from the output of their generator derivation.
-        src = if unit.src == null then component.allGenerated.${unit.path}.path else unit.src;
-        includes =
-          unit.includes
-          // lib.listToAttrs (
-            map (g: lib.nameValuePair g component.allGenerated.${g}.path) unit.generatedIncludes
-          );
-        srcPath = unit.path;
-        includeDirs = component.includeDirs ++ component.depIncludeDirs;
-        cxxFlags =
-          commonCxxFlags
-          ++ component.extraCxxFlags
-          ++ (component.unitCxxFlags.${unit.path} or [ ])
-          ++ lib.concatMap (d: d.cflags or [ ]) deps;
-        pkgConfigDeps = lib.concatMap (d: d.pkgconfig or [ ]) deps;
-        buildInputs = depPackages deps;
-        nativeBuildInputs = [ pkgs.pkg-config ];
-        NIX_HARDENING_ENABLE = hardeningFlags;
-      }
-      ''
-        mkdir tree
-        cd tree
-
-        # Recreate the source layout: each header and the source file is a
-        # separate store path.
-        for name in "''${!includes[@]}"; do
-          mkdir -p "$(dirname "$name")"
-          ln -s "''${includes[$name]}" "$name"
-        done
-        mkdir -p "$(dirname "$srcPath")"
-        ln -s "$src" "$srcPath"
-
-        flags=()
-        for dir in "''${includeDirs[@]}"; do
-          flags+=("-I''${dir:-.}")
-        done
-        for name in "''${!defines[@]}"; do
-          flags+=("-D''${name}=''${defines[$name]}")
-        done
-        for name in "''${undefines[@]}"; do
-          flags+=("-U''${name}")
-        done
-        if [[ ''${#pkgConfigDeps[@]} -gt 0 ]]; then
-          flags+=($(pkg-config --cflags "''${pkgConfigDeps[@]}"))
-        fi
-
-        $CXX "''${cxxFlags[@]}" "''${flags[@]}" -c "$srcPath" -o "$out"
-      '';
+    mkNuDerivation {
+      name = "${baseNameOf unit.path}.o";
+      # The config macros this unit is sensitive to (see `configHeaders`),
+      # as reported by the scanner; `null` means undefined. The builder
+      # turns them into -D/-U flags.
+      defines = unit.usedDefines;
+      # Generated files come from the output of their generator derivation.
+      src = if unit.src == null then component.allGenerated.${unit.path}.path else unit.src;
+      includes =
+        unit.includes
+        // lib.listToAttrs (
+          map (g: lib.nameValuePair g component.allGenerated.${g}.path) unit.generatedIncludes
+        );
+      srcPath = unit.path;
+      includeDirs = component.includeDirs ++ component.depIncludeDirs;
+      cxxFlags =
+        commonCxxFlags
+        ++ component.extraCxxFlags
+        ++ (component.unitCxxFlags.${unit.path} or [ ])
+        ++ lib.concatMap (d: d.cflags or [ ]) deps;
+      pkgConfigDeps = lib.concatMap (d: d.pkgconfig or [ ]) deps;
+      buildInputs = depPackages deps;
+      nativeBuildInputs = [ pkgs.pkg-config ];
+      NIX_HARDENING_ENABLE = hardeningFlags;
+    } ./compile.nu;
 
   # Link the objects into a shared library or an executable.
   link =
@@ -336,8 +305,9 @@ let
     - `files`: extra files (e.g. generated headers) by path in the root namespace.
     - `configHeaders`: generated config headers, as an attribute set from
       path in the root namespace to the `#define`s. The header itself is an
-      empty stub; each unit gets the macros it uses as `-D` flags. Their
-      macros are also used to evaluate preprocessor conditionals.
+      empty stub; each unit gets the macros it uses, and the builder
+      (compile.nu) turns them into `-D` flags. Their macros are also used
+      to evaluate preprocessor conditionals.
     - `defines`, `undefines`: further macros known to be defined (with
       value) or undefined when evaluating preprocessor conditionals, on
       top of the platform defaults and the config headers.
