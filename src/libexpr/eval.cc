@@ -253,12 +253,14 @@ EvalMemory::EvalMemory()
 }
 
 /**
- * The evaluation context of non-fiber execution contexts (i.e. the
- * main thread).
+ * The evaluation context of non-fiber execution contexts (e.g. the
+ * main thread, or any other thread that evaluates outside of the
+ * executor). One per thread, since the context is mutable (see
+ * `PushProvenance`) and unsynchronized.
  */
-static EvalState::EvalContext globalEvalContext;
+static thread_local EvalState::EvalContext defaultEvalContext;
 
-[[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext * EvalState::evalContext = &globalEvalContext;
+[[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext * EvalState::evalContext = &defaultEvalContext;
 
 EvalState::EvalState(
     const LookupPath & lookupPathFromArguments,
