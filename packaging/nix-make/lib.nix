@@ -80,34 +80,24 @@ let
     "-lrt"
   ];
 
-  # Write a file to the store. `builtins.toFile` cannot reference
-  # derivations, so fall back to `writeText` for content with context;
-  # such a file is then built when the scanner reads it at eval time.
-  writeFile =
-    name: text:
-    if builtins.hasContext text then pkgs.writeText name text else builtins.toFile name text;
+  # A stand-in for a configuration header (like Meson's `configure_file()`
+  # output). It is empty: the macros are passed to the compiler as `-D`
+  # flags instead, and only to the units that use them, so that changing a
+  # macro does not rebuild every unit that includes the header.
+  mkStubHeader =
+    name:
+    builtins.toFile name "#pragma once\n// The macros of this configuration header are passed to the compiler as -D flags.\n";
 
-  # Generate a header with `#define`s, like Meson's `configure_file()`.
-  # Integers and booleans become bare defines, strings become quoted
-  # defines, and `null` becomes an `#undef`.
-  mkConfigHeader =
-    name: attrs:
-    writeFile name (
-      "#pragma once\n"
-      + lib.concatStrings (
-        lib.mapAttrsToList (
-          k: v:
-          if v == null then
-            "#undef ${k}\n"
-          else if builtins.isBool v then
-            "#define ${k} ${if v then "1" else "0"}\n"
-          else if builtins.isInt v then
-            "#define ${k} ${toString v}\n"
-          else
-            "#define ${k} ${builtins.toJSON v}\n"
-        ) attrs
-      )
-    );
+  # Render a macro value as a `-D` value: integers and booleans become
+  # bare, strings become C string literals.
+  renderDefine =
+    v:
+    if builtins.isBool v then
+      (if v then "1" else "0")
+    else if builtins.isInt v then
+      toString v
+    else
+      builtins.toJSON v;
 
   # Wrap a file in a C++ raw string literal, like the `gen_header`
   # generator in nix-meson-build-support/generate-header.
@@ -193,6 +183,10 @@ let
     mkLeanDerivation
       {
         name = "${baseNameOf unit.path}.o";
+        # The config macros this unit is sensitive to (see `configHeaders`),
+        # as reported by the scanner; `null` means undefined.
+        defines = lib.mapAttrs (_: renderDefine) (lib.filterAttrs (_: v: v != null) unit.usedDefines);
+        undefines = lib.attrNames (lib.filterAttrs (_: v: v == null) unit.usedDefines);
         # Generated files come from the output of their generator derivation.
         src = if unit.src == null then component.allGenerated.${unit.path}.path else unit.src;
         includes =
@@ -228,6 +222,12 @@ let
         flags=()
         for dir in "''${includeDirs[@]}"; do
           flags+=("-I''${dir:-.}")
+        done
+        for name in "''${!defines[@]}"; do
+          flags+=("-D''${name}=''${defines[$name]}")
+        done
+        for name in "''${undefines[@]}"; do
+          flags+=("-U''${name}")
         done
         if [[ ''${#pkgConfigDeps[@]} -gt 0 ]]; then
           flags+=($(pkg-config --cflags "''${pkgConfigDeps[@]}"))
@@ -335,8 +335,9 @@ let
       them) to leave out of the compilation units.
     - `files`: extra files (e.g. generated headers) by path in the root namespace.
     - `configHeaders`: generated config headers, as an attribute set from
-      path in the root namespace to the `#define`s (see `mkConfigHeader`).
-      Their macros are also used to evaluate preprocessor conditionals.
+      path in the root namespace to the `#define`s. The header itself is an
+      empty stub; each unit gets the macros it uses as `-D` flags. Their
+      macros are also used to evaluate preprocessor conditionals.
     - `defines`, `undefines`: further macros known to be defined (with
       value) or undefined when evaluating preprocessor conditionals, on
       top of the platform defaults and the config headers.
@@ -422,9 +423,14 @@ let
       allGenerated = generated // depGenerated;
 
       # Generated config headers, whose macros are also known to the scanner.
-      configFiles = lib.mapAttrs (path: attrs: mkConfigHeader (baseNameOf path) attrs) configHeaders;
+      configFiles = lib.mapAttrs (path: _: mkStubHeader (baseNameOf path)) configHeaders;
       configDefines = lib.foldl' (acc: attrs: acc // attrs) { } (lib.attrValues configHeaders);
       allFiles = files // configFiles;
+
+      # The macros a unit may be sensitive to: the dependencies' config
+      # macros and our own. Each unit is passed only the ones it uses.
+      sensitiveDefines =
+        lib.foldl' (acc: d: acc // d.component.sensitiveDefines) { } allDeps // configDefines;
 
       # Macros for evaluating conditionals: platform defaults, then the
       # dependencies' config macros, then our own. `null` means undefined.
@@ -454,6 +460,9 @@ let
             files = lib.mapAttrs (_: v: v) (allFiles // depFiles);
             defines = lib.mapAttrs (_: v: v) knownDefines;
             undefines = knownUndefines;
+            # The scanner reports, per unit, which of these occur in its
+            # include closure, with their values.
+            trackedDefines = lib.mapAttrs (_: v: v) sensitiveDefines;
             generated = lib.mapAttrs (_: g: g.from) allGenerated;
           }
           // lib.optionalAttrs (sources != null) { inherit sources; }
@@ -494,6 +503,7 @@ let
           units
           allDeps
           allDefines
+          sensitiveDefines
           depIncludeDirs
           publicIncludeDirs
           extraCxxFlags
@@ -546,7 +556,6 @@ in
   inherit
     getDeps
     weakVtablesFlags
-    mkConfigHeader
     mkStringHeader
     mkComponent
     commonSupportFiles
