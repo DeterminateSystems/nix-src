@@ -49,6 +49,7 @@ nixMake.mkComponent {
     "profiles.md.gen.hh" = nixMake.mkStringHeader ../../doc/manual/source/command-ref/files/profiles.md;
     "unpack-channel.nix.gen.hh" = nixMake.mkStringHeader ./nix-channel/unpack-channel.nix;
     "buildenv.nix.gen.hh" = nixMake.mkStringHeader ./nix-env/buildenv.nix;
+    "baked-flake.nix.gen.hh" = nixMake.mkStringHeader ./baked-flake.nix;
   };
 
   configHeaders = {
