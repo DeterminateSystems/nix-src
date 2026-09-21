@@ -24,7 +24,9 @@
       };
 
       # Build all components with the configuration given by `cfg`, a module
-      # setting the options declared in config.nix.
+      # setting the options declared in config.nix. The result is a package
+      # scope (like `nixComponents` in packaging/components.nix), so it can be
+      # extended with `overrideScope`.
       makeNixVariant =
         cfg:
         let
@@ -35,60 +37,19 @@
                 cfg
               ];
             }).config;
-
-          nixMake = import ./lib.nix { inherit pkgs config; };
         in
-        rec {
-          nix-util = import ../../src/libutil/make.nix { inherit nixMake; };
-          nix-store = import ../../src/libstore/make.nix {
-            inherit pkgs nixMake;
-            inherit nix-util;
-          };
-          nix-fetchers = import ../../src/libfetchers/make.nix {
-            inherit nixMake;
-            inherit nix-util nix-store;
-          };
-          nix-expr = import ../../src/libexpr/make.nix {
-            inherit pkgs nixMake;
-            inherit nix-util nix-store nix-fetchers;
-          };
-          nix-flake = import ../../src/libflake/make.nix {
-            inherit nixMake;
-            inherit
-              nix-util
-              nix-store
-              nix-fetchers
-              nix-expr
-              ;
-          };
-          nix-main = import ../../src/libmain/make.nix {
-            inherit nixMake;
-            inherit nix-util nix-store nix-expr;
-          };
-          nix-cmd = import ../../src/libcmd/make.nix {
-            inherit nixMake;
-            inherit
-              nix-util
-              nix-store
-              nix-fetchers
-              nix-expr
-              nix-flake
-              nix-main
-              ;
-          };
-          nix = import ../../src/nix/make.nix {
-            inherit pkgs nixMake;
-            inherit
-              nix-util
-              nix-store
-              nix-fetchers
-              nix-expr
-              nix-flake
-              nix-main
-              nix-cmd
-              ;
-          };
-        };
+        pkgs.lib.makeScope pkgs.newScope (self: {
+          nixMake = import ./lib.nix { inherit pkgs config; };
+
+          nix-util = self.callPackage ../../src/libutil/make.nix { };
+          nix-store = self.callPackage ../../src/libstore/make.nix { };
+          nix-fetchers = self.callPackage ../../src/libfetchers/make.nix { };
+          nix-expr = self.callPackage ../../src/libexpr/make.nix { };
+          nix-flake = self.callPackage ../../src/libflake/make.nix { };
+          nix-main = self.callPackage ../../src/libmain/make.nix { };
+          nix-cmd = self.callPackage ../../src/libcmd/make.nix { };
+          nix = self.callPackage ../../src/nix/make.nix { };
+        });
     in
     rec {
       # The build variants, named after Meson's build types.
@@ -113,15 +74,11 @@
         };
       };
 
-      packages.${system} = make.${system}.release // {
-        default = make.${system}.release.nix;
-      };
-
       # Describe the `make` output to `nix flake show` and `nix flake check`.
       # Defining `schemas` replaces the built-in ones, so re-export the ones
       # for the other outputs of this flake.
       schemas = {
-        inherit (flake-schemas.schemas) packages schemas;
+        inherit (flake-schemas.schemas) schemas;
 
         make = {
           version = 1;
@@ -132,7 +89,10 @@
           '';
           roles.nix-build = { };
           appendSystem = true;
-          defaultAttrPath = [ "release" "nix" ];
+          defaultAttrPath = [
+            "release"
+            "nix"
+          ];
           inventory =
             output:
             flake-schemas.lib.mkChildren (
@@ -141,11 +101,12 @@
                 children = builtins.mapAttrs (variant: components: {
                   forSystems = [ system ];
                   shortDescription = "The `${variant}` build variant";
+                  # The components; a scope also has helper attributes.
                   children = builtins.mapAttrs (name: package: {
                     what = "package";
                     forSystems = [ system ];
                     derivationAttrPath = [ ];
-                  }) components;
+                  }) (nixpkgs.lib.filterAttrs (_: nixpkgs.lib.isDerivation) components);
                 }) variants;
               }) output
             );
