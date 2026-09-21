@@ -527,6 +527,8 @@ struct NixWasmInstance
         auto res = unwrap(allocFn->call(wasmCtx, {(int32_t) size}));
         if (res.size() != 1 || res[0].kind() != ValKind::I32)
             throw Error("'nix_wasm_alloc' of Wasm module '%s' did not return an i32", pre->name);
+        state.nrWasmGuestAllocs++;
+        state.wasmGuestAllocBytes += size;
         return (uint32_t) res[0].i32();
     }
 

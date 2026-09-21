@@ -3104,6 +3104,8 @@ void EvalState::printStatistics()
     topObj["nrLookups"] = nrLookups.load();
     topObj["nrPrimOpCalls"] = nrPrimOpCalls.load();
     topObj["nrFunctionCalls"] = nrFunctionCalls.load();
+    topObj["nrWasmGuestAllocs"] = nrWasmGuestAllocs.load();
+    topObj["wasmGuestAllocBytes"] = wasmGuestAllocBytes.load();
 #if NIX_USE_BOEHMGC
     topObj["gc"] = {
         {"heapSize", heapSize},
