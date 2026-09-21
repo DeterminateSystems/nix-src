@@ -163,6 +163,8 @@ struct NixWasmInstance
     wasmtime::Store::Context wasmCtx;
     Instance instance;
     Memory memory_;
+    // The guest's allocator, if it exports one (see `allocInGuest`).
+    std::optional<Func> allocFn;
 
     ValueVector values;
     std::exception_ptr ex;
@@ -183,6 +185,13 @@ struct NixWasmInstance
         , logPrefix(pre->name)
     {
         wasmCtx.set_data(this);
+
+        if (auto ext = instance.get(wasmCtx, "nix_wasm_alloc")) {
+            auto fun = std::get_if<Func>(&*ext);
+            if (!fun)
+                throw Error("export 'nix_wasm_alloc' of Wasm module '%s' is not a function", pre->name);
+            allocFn = *fun;
+        }
 
         /* Reserve value ID 0 so it can be used in functions like get_attr() to denote a missing attribute. */
         values.push_back(nullptr);
@@ -508,8 +517,24 @@ struct NixWasmInstance
     }
 
     /**
+     * Allocate `size` bytes in the guest by calling its `nix_wasm_alloc` export. The guest is responsible for freeing
+     * the buffer (e.g. by reconstructing a `Vec` from it).
+     */
+    uint32_t allocInGuest(uint32_t size)
+    {
+        if (!allocFn)
+            throw Error("Wasm module '%s' does not export 'nix_wasm_alloc'", pre->name);
+        auto res = unwrap(allocFn->call(wasmCtx, {(int32_t) size}));
+        if (res.size() != 1 || res[0].kind() != ValKind::I32)
+            throw Error("'nix_wasm_alloc' of Wasm module '%s' did not return an i32", pre->name);
+        return (uint32_t) res[0].i32();
+    }
+
+    /**
      * Read the contents of a file into Wasm memory. This is like calling `builtins.readFile`, except that it can handle
      * binary files that cannot be represented as Nix strings.
+     *
+     * Deprecated: the guest has to guess the buffer size, so the file may be read twice. Use `read_file_v2`.
      */
     uint32_t read_file(ValueId pathId, uint32_t ptr, uint32_t len)
     {
@@ -521,13 +546,36 @@ struct NixWasmInstance
         if (contents.size() > std::numeric_limits<uint32_t>::max())
             throw Error("file '%s' is too large to process in Wasm (size: %d)", path, contents.size());
 
-        // FIXME: this is an inefficient interface since it may cause the file to be read twice.
         if (contents.size() <= len) {
             auto buf = memory().subspan(ptr, len);
             memcpy(buf.data(), contents.data(), contents.size());
         }
 
         return contents.size();
+    }
+
+    /**
+     * Read the contents of a file into a buffer allocated in the guest via `nix_wasm_alloc`, so that the file is read
+     * and copied only once. Returns the buffer and stores its length at `lenPtr`.
+     */
+    uint32_t read_file_v2(ValueId pathId, uint32_t lenPtr)
+    {
+        auto & pathValue = getValue(pathId);
+        auto path = state.realisePath(noPos, pathValue);
+
+        auto contents = path.readFile();
+
+        if (contents.size() > std::numeric_limits<uint32_t>::max())
+            throw Error("file '%s' is too large to process in Wasm (size: %d)", path, contents.size());
+
+        auto ptr = allocInGuest(contents.size());
+
+        // Note: the allocation may have grown the memory, so get the data pointer only now.
+        auto mem = memory();
+        memcpy(mem.subspan(ptr, contents.size()).data(), contents.data(), contents.size());
+        subspan<uint32_t>(mem.subspan(lenPtr), 1)[0] = contents.size(); // FIXME: endianness
+
+        return ptr;
     }
 };
 
@@ -571,6 +619,7 @@ static void regFuns(Linker & linker, bool useWasi)
     regFun(linker, "call_function", &NixWasmInstance::call_function);
     regFun(linker, "make_app", &NixWasmInstance::make_app);
     regFun(linker, "read_file", &NixWasmInstance::read_file);
+    regFun(linker, "read_file_v2", &NixWasmInstance::read_file_v2);
 
     if (useWasi) {
         unwrap(linker.func_wrap(
