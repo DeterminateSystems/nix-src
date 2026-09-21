@@ -70,14 +70,6 @@ static std::string_view span2string(std::span<uint8_t> s)
     return std::string_view((char *) s.data(), s.size());
 }
 
-template<typename T>
-static std::span<T> subspan(std::span<uint8_t> s, size_t len)
-{
-    if (s.size() < len * sizeof(T))
-        throw Error("Wasm memory access out of bounds");
-    return std::span((T *) s.data(), len);
-}
-
 // FIXME: move to wasmtime C++ wrapper.
 class InstancePre
 {
@@ -241,14 +233,40 @@ struct NixWasmInstance
         return memory_.data(wasmCtx);
     }
 
+    /**
+     * A view of `len` bytes of guest memory at `ptr`, checked against the current size of the memory. All accesses
+     * to guest memory with guest-supplied offsets must go through this, since `std::span::subspan` does not check
+     * bounds. The memory is fetched afresh each time, since it may have grown (e.g. by `allocInGuest`).
+     */
+    std::span<uint8_t> guestSpan(uint32_t ptr, size_t len)
+    {
+        auto mem = memory();
+        if (ptr > mem.size() || len > mem.size() - ptr)
+            throw Error(
+                "Wasm memory access out of bounds (offset %d, length %d, memory size %d)", ptr, len, mem.size());
+        return mem.subspan(ptr, len);
+    }
+
+    /**
+     * Like `guestSpan`, for an array of `count` values of type `T`.
+     */
+    template<typename T>
+    std::span<T> guestSpan(uint32_t ptr, size_t count)
+    {
+        if (count > std::numeric_limits<size_t>::max() / sizeof(T))
+            throw Error("Wasm memory access out of bounds (offset %d, count %d)", ptr, count);
+        auto s = guestSpan(ptr, count * sizeof(T));
+        return std::span((T *) s.data(), count);
+    }
+
     std::monostate panic(uint32_t ptr, uint32_t len)
     {
-        throw Error("Wasm panic: %s", Uncolored(span2string(memory().subspan(ptr, len))));
+        throw Error("Wasm panic: %s", Uncolored(span2string(guestSpan(ptr, len))));
     }
 
     std::monostate warn(uint32_t ptr, uint32_t len)
     {
-        doWarn(span2string(memory().subspan(ptr, len)));
+        doWarn(span2string(guestSpan(ptr, len)));
         return {};
     }
 
@@ -304,7 +322,7 @@ struct NixWasmInstance
     ValueId make_string(uint32_t ptr, uint32_t len)
     {
         auto [valueId, value] = allocValue();
-        value.mkString(span2string(memory().subspan(ptr, len)), state.mem);
+        value.mkString(span2string(guestSpan(ptr, len)), state.mem);
         return valueId;
     }
 
@@ -312,7 +330,7 @@ struct NixWasmInstance
     {
         auto s = state.forceString(getValue(valueId), noPos, "while evaluating a value from Wasm");
         if (s.size() <= maxLen) {
-            auto buf = memory().subspan(ptr, maxLen);
+            auto buf = guestSpan(ptr, maxLen);
             memcpy(buf.data(), s.data(), s.size());
         }
         return s.size();
@@ -327,7 +345,7 @@ struct NixWasmInstance
         auto base = baseValue.path();
 
         auto [valueId, value] = allocValue();
-        value.mkPath({base.accessor, CanonPath(span2string(memory().subspan(ptr, len)), base.path)}, state.mem);
+        value.mkPath({base.accessor, CanonPath(span2string(guestSpan(ptr, len)), base.path)}, state.mem);
         return valueId;
     }
 
@@ -340,7 +358,7 @@ struct NixWasmInstance
         auto path = v.path().path;
         auto s = path.abs();
         if (s.size() <= maxLen) {
-            auto buf = memory().subspan(ptr, maxLen);
+            auto buf = guestSpan(ptr, maxLen);
             memcpy(buf.data(), s.data(), s.size());
         }
         return s.size();
@@ -363,7 +381,7 @@ struct NixWasmInstance
 
     ValueId make_list(uint32_t ptr, uint32_t len)
     {
-        auto vs = subspan<ValueId>(memory().subspan(ptr), len);
+        auto vs = guestSpan<ValueId>(ptr, len);
 
         auto [valueId, value] = allocValue();
 
@@ -381,7 +399,7 @@ struct NixWasmInstance
         state.forceList(value, noPos, "while getting a list from Wasm");
 
         if (value.listSize() <= maxLen) {
-            auto out = subspan<ValueId>(memory().subspan(ptr), value.listSize());
+            auto out = guestSpan<ValueId>(ptr, value.listSize());
 
             for (const auto & [n, elem] : enumerate(value.listView()))
                 out[n] = addValue(elem);
@@ -392,8 +410,6 @@ struct NixWasmInstance
 
     ValueId make_attrset(uint32_t ptr, uint32_t len)
     {
-        auto mem = memory();
-
         struct Attr
         {
             // FIXME: endianness
@@ -402,13 +418,13 @@ struct NixWasmInstance
             ValueId value;
         };
 
-        auto attrs = subspan<Attr>(mem.subspan(ptr), len);
+        auto attrs = guestSpan<Attr>(ptr, len);
 
         auto [valueId, value] = allocValue();
         auto builder = state.buildBindings(len);
         for (auto & attr : attrs)
             builder.insert(
-                state.symbols.create(span2string(mem.subspan(attr.attrNamePtr, attr.attrNameLen))),
+                state.symbols.create(span2string(guestSpan(attr.attrNamePtr, attr.attrNameLen))),
                 &getValue(attr.value));
         value.mkAttrs(builder);
 
@@ -428,7 +444,7 @@ struct NixWasmInstance
                 uint32_t nameLen;
             };
 
-            auto buf = subspan<Attr>(memory().subspan(ptr), maxLen);
+            auto buf = guestSpan<Attr>(ptr, maxLen);
 
             // FIXME: for determinism, we should return attributes in lexicographically sorted order.
             for (const auto & [n, attr] : enumerate(*value.attrs())) {
@@ -463,14 +479,14 @@ struct NixWasmInstance
         if ((size_t) len != name.size())
             throw Error("copy_attrname: buffer length does not match attribute name length");
 
-        memcpy(memory().subspan(ptr, len).data(), name.data(), name.size());
+        memcpy(guestSpan(ptr, len).data(), name.data(), name.size());
 
         return {};
     }
 
     ValueId get_attr(ValueId valueId, uint32_t ptr, uint32_t len)
     {
-        auto attrName = span2string(memory().subspan(ptr, len));
+        auto attrName = span2string(guestSpan(ptr, len));
 
         auto & value = getValue(valueId);
         state.forceAttrs(value, noPos, "while getting an attribute from Wasm");
@@ -486,7 +502,7 @@ struct NixWasmInstance
         state.forceFunction(fun, noPos, "while calling a function from Wasm");
 
         ValueVector args;
-        for (auto argId : subspan<ValueId>(memory().subspan(ptr), len))
+        for (auto argId : guestSpan<ValueId>(ptr, len))
             args.push_back(&getValue(argId));
 
         auto [valueId, value] = allocValue();
@@ -501,7 +517,7 @@ struct NixWasmInstance
         if (!len)
             return funId;
 
-        auto args = subspan<ValueId>(memory().subspan(ptr), len);
+        auto args = guestSpan<ValueId>(ptr, len);
 
         auto res = &getValue(funId);
 
@@ -549,7 +565,7 @@ struct NixWasmInstance
             throw Error("file '%s' is too large to process in Wasm (size: %d)", path, contents.size());
 
         if (contents.size() <= len) {
-            auto buf = memory().subspan(ptr, len);
+            auto buf = guestSpan(ptr, len);
             memcpy(buf.data(), contents.data(), contents.size());
         }
 
@@ -558,9 +574,10 @@ struct NixWasmInstance
 
     /**
      * Read the contents of a file into a buffer allocated in the guest via `nix_wasm_alloc`, so that the file is read
-     * and copied only once. Returns the buffer and stores its length at `lenPtr`.
+     * and copied only once. Returns the buffer pointer in the low 32 bits and its length in the high 32 bits (Rust's
+     * C ABI cannot express Wasm multi-value returns, so pack both into one `u64`).
      */
-    uint32_t read_file_v2(ValueId pathId, uint32_t lenPtr)
+    uint64_t read_file_v2(ValueId pathId)
     {
         auto & pathValue = getValue(pathId);
         auto path = state.realisePath(noPos, pathValue);
@@ -572,12 +589,10 @@ struct NixWasmInstance
 
         auto ptr = allocInGuest(contents.size());
 
-        // Note: the allocation may have grown the memory, so get the data pointer only now.
-        auto mem = memory();
-        memcpy(mem.subspan(ptr, contents.size()).data(), contents.data(), contents.size());
-        subspan<uint32_t>(mem.subspan(lenPtr), 1)[0] = contents.size(); // FIXME: endianness
+        // Note: the allocation may have grown the memory; `guestSpan` fetches it afresh.
+        memcpy(guestSpan(ptr, contents.size()).data(), contents.data(), contents.size());
 
-        return ptr;
+        return ((uint64_t) contents.size() << 32) | ptr;
     }
 };
 
