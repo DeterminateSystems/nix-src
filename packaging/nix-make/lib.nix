@@ -116,7 +116,8 @@ let
           (builtins.toFile "builder.sh" ''
             # With structured attrs, attributes are not in the environment.
             if [ -e "$NIX_ATTRS_SH_FILE" ]; then . "$NIX_ATTRS_SH_FILE"; fi
-            source $stdenv/setup
+            # The setup script prints "structuredAttrs is enabled" on stdout.
+            source $stdenv/setup >/dev/null
             exec nu --no-config-file ${nuScript}
           '')
         ];
