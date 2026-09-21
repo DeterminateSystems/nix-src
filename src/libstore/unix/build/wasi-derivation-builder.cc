@@ -54,14 +54,12 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
         if (!wasiConfig.preopen_dir(
                 store.config->realStoreDir.get().string(),
                 store.storeDir,
-                WASMTIME_WASI_DIR_PERMS_READ | WASMTIME_WASI_DIR_PERMS_WRITE,
-                WASMTIME_WASI_FILE_PERMS_READ | WASMTIME_WASI_FILE_PERMS_WRITE))
+                /* fs_mutable = */ true))
             throw Error("cannot add store directory to WASI config");
         if (!wasiConfig.preopen_dir(
                 tmpDir,
                 tmpDirInSandbox(),
-                WASMTIME_WASI_DIR_PERMS_READ | WASMTIME_WASI_DIR_PERMS_WRITE,
-                WASMTIME_WASI_FILE_PERMS_READ | WASMTIME_WASI_FILE_PERMS_WRITE))
+                /* fs_mutable = */ true))
             throw Error("cannot add temporary directory to WASI config");
 
         auto module = unwrap(Module::compile(engine, string2span(readFile(realPathInHost(drv.builder)))));
