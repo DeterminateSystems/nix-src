@@ -19,7 +19,7 @@
 #include <string>
 #include <nlohmann/json.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
-#include <boost/unordered/unordered_flat_set.hpp>
+#include <boost/unordered/concurrent_flat_set.hpp>
 
 #define TAB "    "
 
@@ -180,7 +180,7 @@ static auto rCmdProvenanceShow = registerCommand2<CmdProvenanceShow>({"provenanc
 struct TrackingStore : public Store
 {
     ref<Store> next;
-    boost::unordered_flat_set<StorePath> instantiatedPaths;
+    boost::concurrent_flat_set<StorePath> instantiatedPaths;
 
     TrackingStore(ref<Store> next)
         : Store(next->config)
