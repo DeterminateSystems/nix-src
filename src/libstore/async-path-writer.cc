@@ -171,9 +171,14 @@ struct AsyncPathWriterImpl : AsyncPathWriter
         store->addMultipleToStore(std::move(sources), act, repair);
 #endif
 
+        StorePathSet allPaths;
+        for (auto & item : items)
+            allPaths.insert(item.storePath);
+
+        store->addTempRoots(allPaths);
+
         for (auto & item : items) {
             StringSource source(item.contents);
-            store->addTempRoot(item.storePath);
             auto storePath = store->addToStoreFromDump(
                 source,
                 item.storePath.name(),
