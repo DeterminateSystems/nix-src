@@ -17,18 +17,39 @@ scope: {
   inherit stdenv;
 
   mimalloc =
-    if lib.versionAtLeast pkgs.mimalloc.version "3.3.2" then
-      pkgs.mimalloc
-    else
-      pkgs.mimalloc.overrideAttrs rec {
-        version = "3.3.2";
-        src = pkgs.fetchFromGitHub {
-          owner = "microsoft";
-          repo = "mimalloc";
-          tag = "v${version}";
-          hash = "sha256-GZ37qQVDe9jgMb4Coe5oKvgaLTspZDlSkS5rdy1MfUU=";
-        };
-      };
+    (
+      if lib.versionAtLeast pkgs.mimalloc.version "3.3.2" then
+        pkgs.mimalloc
+      else
+        pkgs.mimalloc.overrideAttrs rec {
+          version = "3.3.2";
+          src = pkgs.fetchFromGitHub {
+            owner = "microsoft";
+            repo = "mimalloc";
+            tag = "v${version}";
+            hash = "sha256-GZ37qQVDe9jgMb4Coe5oKvgaLTspZDlSkS5rdy1MfUU=";
+          };
+        }
+    ).overrideAttrs
+      (attrs: {
+        cmakeFlags = (attrs.cmakeFlags or [ ]) ++ [
+          # Don't `madvise(MADV_HUGEPAGE)` the 1 GiB arenas that
+          # mimalloc reserves. With the common kernel setting
+          # `transparent_hugepage/defrag=madvise`, that hint makes
+          # every first touch of a 2 MiB region in the arena attempt
+          # a huge page allocation with synchronous direct compaction.
+          # On a machine with fragmented physical memory this fails
+          # almost every time and costs several milliseconds per
+          # fault, which more than doubled the CPU time of evaluating
+          # large flakes. Defining this preprocessor macro only skips
+          # the `madvise()` call. (The cmake option `MI_NO_THP` and
+          # the runtime option `MIMALLOC_ALLOW_THP=0` are not
+          # equivalent: they also call `prctl(PR_SET_THP_DISABLE)`,
+          # which disables huge pages for the entire process and is
+          # inherited by the programs that `nix run` etc. execute.)
+          "-DMI_EXTRA_CPPDEFS=MI_NO_THP"
+        ];
+      });
 
   boehmgc =
     (pkgs.boehmgc.override {
