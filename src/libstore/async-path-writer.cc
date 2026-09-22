@@ -1,4 +1,5 @@
 #include "nix/store/async-path-writer.hh"
+#include "nix/store/globals.hh"
 #include "nix/util/archive.hh"
 #include "nix/util/provenance.hh"
 
@@ -87,9 +88,21 @@ struct AsyncPathWriterImpl : AsyncPathWriter
                 .references = references,
             });
 
+        /* In read-only mode, only compute the store path; don't
+           write anything. */
+        if (settings.readOnlyMode)
+            return storePath;
+
         auto state(state_.lock());
+
+        /* If we've already written or queued this path, there is
+           nothing to do. This also applies when `repair` is set,
+           since the first request already repaired it. */
+        if (state->futures.contains(storePath))
+            return storePath;
+
         std::promise<void> promise;
-        state->futures.insert_or_assign(storePath, promise.get_future());
+        state->futures.emplace(storePath, promise.get_future());
         state->items.push_back(
             Item{
                 .storePath = storePath,
@@ -120,9 +133,12 @@ struct AsyncPathWriterImpl : AsyncPathWriter
 
     void waitForAllPaths() override
     {
+        /* Copy rather than move the futures, since `futures` also
+           serves as the record of paths already written (see
+           `addPath()`). */
         auto futures = ({
             auto state(state_.lock());
-            std::move(state->futures);
+            state->futures;
         });
         for (auto & future : futures)
             future.second.get();
