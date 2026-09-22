@@ -171,13 +171,40 @@ struct AsyncPathWriterImpl : AsyncPathWriter
         store->addMultipleToStore(std::move(sources), act, repair);
 #endif
 
+        /* Filter out the paths that the store already has. Add temp
+           roots first so that a path found to be valid cannot be
+           garbage-collected before we return. */
         StorePathSet allPaths;
         for (auto & item : items)
             allPaths.insert(item.storePath);
 
         store->addTempRoots(allPaths);
 
+        StorePathSet valid;
+        if (!allPaths.empty()) {
+            asio::io_context ctx;
+            std::exception_ptr ex;
+            asio::co_spawn(
+                ctx,
+                store->queryPathInfos(
+                    allPaths,
+                    [&](std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>> infos) {
+                        for (auto & [path, info] : infos)
+                            if (info)
+                                valid.insert(path);
+                    }),
+                [&](std::exception_ptr e) {
+                    if (e)
+                        ex = e;
+                });
+            ctx.run();
+            if (ex)
+                std::rethrow_exception(ex);
+        }
+
         for (auto & item : items) {
+            if (!item.repair && valid.contains(item.storePath))
+                continue;
             StringSource source(item.contents);
             auto storePath = store->addToStoreFromDump(
                 source,
