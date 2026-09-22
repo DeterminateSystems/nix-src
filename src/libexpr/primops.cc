@@ -1,3 +1,4 @@
+#include "nix/store/async-path-writer.hh"
 #include "nix/store/derivations.hh"
 #include "nix/store/downstream-placeholder.hh"
 #include "nix/expr/eval-inline.hh"
@@ -1902,14 +1903,11 @@ static void derivationStrictInternal(
         drv.fillInOutputPaths(*state.store);
     }
 
-    /* Write the resulting term into the Nix store directory.
-
-       Unless we are in read-only mode, that is, in which case we do not
-       write anything. Users commonly do this to speed up evaluation in
-       contexts where they don't actually want to build anything. */
-    auto drvPath = settings.readOnlyMode
-                       ? computeStorePath(*state.store, drv)
-                       : state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair, provenance);
+    /* Write the resulting term into the Nix store directory. The
+       writer handles read-only mode (in which case nothing is written,
+       which users commonly rely on to speed up evaluation in contexts
+       where they don't actually want to build anything). */
+    auto drvPath = state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair, provenance);
     auto drvPathS = state.store->printStorePath(drvPath);
 
     printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
@@ -2034,8 +2032,12 @@ static void prim_storePath(EvalState & state, const PosIdx pos, Value ** args, V
     if (!state.store->isInStore(sourcePath.path.abs()))
         state.error<EvalError>("path '%1%' is not in the Nix store", sourcePath).atPos(pos).debugThrow();
     auto storePath = state.store->toStorePath(sourcePath.path.abs()).first;
-    if (!state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath))) && !settings.readOnlyMode)
+    if (!state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath))) && !settings.readOnlyMode) {
+        /* The path may still be being written asynchronously (e.g. by
+           `builtins.toFile`). */
+        state.waitForPath(storePath);
         state.store->ensurePath(storePath);
+    }
     context.insert(NixStringContextElem::Opaque{.path = storePath});
     v.mkString(sourcePath.path.abs(), context, state.mem);
 }
@@ -2807,24 +2809,12 @@ static void prim_toFile(EvalState & state, const PosIdx pos, Value ** args, Valu
 
     contents = rewriteStrings(contents, rewrites);
 
-    auto storePath = settings.readOnlyMode ? state.store->makeFixedOutputPathFromCA(
-                                                 name,
-                                                 TextInfo{
-                                                     .hash = hashString(HashAlgorithm::SHA256, contents),
-                                                     .references = std::move(refs),
-                                                 })
-                                           : ({
-                                                 StringSource s{contents};
-                                                 state.store->addToStoreFromDump(
-                                                     s,
-                                                     name,
-                                                     FileSerialisationMethod::Flat,
-                                                     ContentAddressMethod::Raw::Text,
-                                                     HashAlgorithm::SHA256,
-                                                     refs,
-                                                     state.repair,
-                                                     state.evalContext.provenance);
-                                             });
+    /* Write the file asynchronously. The writer skips paths it has
+       already written during this evaluation and handles read-only
+       mode. Any consumer of the resulting path waits for the write
+       to complete (see `EvalState::waitForPath()`). */
+    auto storePath = state.asyncPathWriter->addPath(
+        std::move(contents), std::string(name), std::move(refs), state.repair, state.evalContext.provenance);
 
     /* Note: we don't need to add `context' to the context of the
        result, since `storePath' itself has references to the paths
