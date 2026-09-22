@@ -49,9 +49,20 @@
           nix-main = self.callPackage ../../src/libmain/make.nix { };
           nix-cmd = self.callPackage ../../src/libcmd/make.nix { };
           nix = self.callPackage ../../src/nix/make.nix { };
+
+          test-runner = self.callPackage ../../tests/functional/test-runner.nix { };
+          functional-tests = self.callPackage ../../tests/functional/make.nix { };
         });
     in
     rec {
+      packages.${system} = {
+        inherit (make.${system}.release) test-runner;
+      };
+
+      devShells.${system}.default = pkgs.mkShell {
+        packages = [ make.${system}.release.test-runner ];
+      };
+
       # The build variants, named after Meson's build types.
       make.${system} = {
         release = makeNixVariant {
@@ -84,7 +95,11 @@
       # Defining `schemas` replaces the built-in ones, so re-export the ones
       # for the other outputs of this flake.
       schemas = {
-        inherit (flake-schemas.schemas) schemas;
+        inherit (flake-schemas.schemas)
+          schemas
+          packages
+          devShells
+          ;
 
         make = {
           version = 1;
