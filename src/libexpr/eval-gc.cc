@@ -8,17 +8,10 @@
 
 #if NIX_USE_BOEHMGC
 
-#  include <pthread.h>
-#  ifdef __FreeBSD__
-#    include <pthread_np.h>
-#  endif
-
 #  include <gc/gc_allocator.h>
 #  include <gc/gc_tiny_fl.h> // For GC_GRANULE_BYTES
 
-#  include <boost/coroutine2/coroutine.hpp>
-#  include <boost/coroutine2/protected_fixedsize_stack.hpp>
-#  include <boost/context/stack_context.hpp>
+#  include "nix/util/coroutine-gc.hh"
 
 #endif
 
@@ -78,51 +71,60 @@ static size_t getFreeMem()
 }
 
 /**
- * When a thread goes into a coroutine, we lose its original sp until
- * control flow returns to the thread. This causes Boehm GC to crash
- * since it will scan memory between the coroutine's sp and the
- * original stack base of the thread. Therefore, we detect when the
- * current sp is outside of the original thread stack and push the
- * entire thread stack instead, as an approximation.
- *
- * This is not optimal, because it causes the stack below sp to be
- * scanned. However, we usually we don't have active coroutines during
- * evaluation, so this is acceptable.
- *
- * Note that we don't scan coroutine stacks. It's currently assumed
- * that we don't have GC roots in coroutines.
+ * Implementations of the libutil coroutine GC hooks (see
+ * `coroutine-gc.hh`) in terms of bdwgc's registered stacks. Together
+ * with the fiber stack registration in `parallel-eval.cc`, this makes
+ * every stack that can hold GC roots — thread stacks (registered
+ * automatically), fiber stacks and coroutine stacks — scannable by
+ * the collector, including the frames of a fiber that has switched
+ * onto a coroutine stack.
  */
-void fixupBoehmStackPointer(void ** sp_ptr, void * _pthread_id)
+
+static void * coroStackRegisterImpl(void * base, size_t size)
 {
-    void *& sp = *sp_ptr;
-    auto pthread_id = reinterpret_cast<pthread_t>(_pthread_id);
-    size_t osStackSize;
-    char * osStackHi;
-    char * osStackLo;
+    auto stk = new GC_stack{};
+    stk->base = base;
+    stk->limit = (char *) base - size;
+    GC_register_stack(stk);
+    return stk;
+}
 
-#  ifdef __APPLE__
-    osStackSize = pthread_get_stacksize_np(pthread_id);
-    osStackHi = (char *) pthread_get_stackaddr_np(pthread_id);
-    osStackLo = osStackHi - osStackSize;
-#  else
-    pthread_attr_t pattr;
-    if (pthread_attr_init(&pattr))
-        throw Error("fixupBoehmStackPointer: pthread_attr_init failed");
-#    ifdef HAVE_PTHREAD_GETATTR_NP
-    if (pthread_getattr_np(pthread_id, &pattr))
-        throw Error("fixupBoehmStackPointer: pthread_getattr_np failed");
-#    else
-#      error "Need  `pthread_attr_get_np`"
-#    endif
-    if (pthread_attr_getstack(&pattr, (void **) &osStackLo, &osStackSize))
-        throw Error("fixupBoehmStackPointer: pthread_attr_getstack failed");
-    if (pthread_attr_destroy(&pattr))
-        throw Error("fixupBoehmStackPointer: pthread_attr_destroy failed");
-    osStackHi = osStackLo + osStackSize;
-#  endif
+static void coroStackUnregisterImpl(void * cookie)
+{
+    auto stk = (struct GC_stack *) cookie;
+    GC_unregister_stack(stk);
+    delete stk;
+}
 
-    if (sp >= osStackHi || sp < osStackLo) // sp is outside the os stack
-        sp = osStackLo;
+static void * coroSwitchToImpl(void * cookie)
+{
+    auto prev = GC_current_stack;
+    /* `prev` is null on threads not registered with the GC; such
+       threads hold no GC roots and need no scanning. */
+    if (prev)
+        prev->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+    GC_current_stack = (struct GC_stack *) cookie;
+    return prev;
+}
+
+static void coroSwitchBackImpl(void * prevHandle)
+{
+    auto prev = (struct GC_stack *) prevHandle;
+    GC_current_stack = prev;
+    if (prev)
+        prev->saved_sp = nullptr;
+}
+
+static void coroMarkSuspendedImpl(void * cookie)
+{
+    if (cookie)
+        ((struct GC_stack *) cookie)->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+}
+
+static void coroMarkActiveImpl(void * cookie)
+{
+    if (cookie)
+        ((struct GC_stack *) cookie)->saved_sp = nullptr;
 }
 
 static inline void initGCReal()
@@ -155,11 +157,18 @@ static inline void initGCReal()
 
     GC_set_oom_fn(oomHandler);
 
-    GC_set_sp_corrector(&fixupBoehmStackPointer);
-    assert(GC_get_sp_corrector());
+    /* Make the coroutine stacks of libutil scannable by the GC (fiber
+       stacks are registered in `parallel-eval.cc`; thread stacks are
+       registered automatically by bdwgc). */
+    coroStackRegister = coroStackRegisterImpl;
+    coroStackUnregister = coroStackUnregisterImpl;
+    coroSwitchTo = coroSwitchToImpl;
+    coroSwitchBack = coroSwitchBackImpl;
+    coroMarkSuspended = coroMarkSuspendedImpl;
+    coroMarkActive = coroMarkActiveImpl;
 
     /* Funnel boehm warnings into debug logs. */
-    GC_set_warn_proc([](char * msg, GC_word word) noexcept {
+    GC_set_warn_proc([](const char * msg, GC_word word) noexcept {
         std::array<char, 4096> buffer{};
         auto res = snprintf(buffer.data(), buffer.size(), msg, word);
         /* Ignore garbage. */
