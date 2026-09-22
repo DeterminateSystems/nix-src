@@ -4,6 +4,8 @@
 #include "nix/util/strings.hh"
 #include "nix/util/executable-path.hh"
 
+using namespace std::chrono_literals;
+
 namespace nix {
 
 HookInstance::HookInstance(const Strings & _buildHook)
@@ -42,12 +44,22 @@ HookInstance::HookInstance(const Strings & _buildHook)
     /* Create a pipe to get the output of the builder. */
     builderOut.create();
 
+    /* Propagate our trace context to the hook, so that its trace (and,
+       through it, the remote builder's) is part of ours. Note: this
+       has to be obtained before forking, since the child gets a
+       different logger. */
+    auto traceContext = logger->getTraceContext(getCurActivity());
+
     /* Fork the hook. */
     pid = startProcess([&]() {
         if (dup2(fromHook.writeSide.get(), STDERR_FILENO) == -1)
             throw SysError("cannot pipe standard error into log file");
 
         commonChildInit();
+
+        for (auto & [name, value] : traceContext)
+            if (name == "traceparent")
+                setenv("TRACEPARENT", value.c_str(), 1);
 
         if (chdir("/") == -1)
             throw SysError("changing into /");
@@ -69,6 +81,13 @@ HookInstance::HookInstance(const Strings & _buildHook)
 
         throw SysError("executing %s", PathFmt(buildHook));
     });
+
+    /* Give custom build hooks the chance to cleanup. */
+    /* The hook exits by itself when it sees EOF on its stdin, so on
+       teardown, give it a chance to do so (e.g. to export its
+       telemetry) instead of signalling it right away. */
+    pid.setKillSignal(0);
+    pid.setKillTimeout(10s);
 
     pid.setSeparatePG(true);
     fromHook.writeSide = -1;

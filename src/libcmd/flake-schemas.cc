@@ -1,0 +1,633 @@
+#include "nix/cmd/flake-schemas.hh"
+#include "nix/expr/eval-settings.hh"
+#include "nix/fetchers/fetch-to-store.hh"
+#include "nix/util/memory-source-accessor.hh"
+#include "nix/util/mounted-source-accessor.hh"
+#include "nix/flake/provenance.hh"
+#include "nix/expr/parallel-eval.hh"
+#include "nix/store/globals.hh"
+
+#include <nlohmann/json.hpp>
+
+namespace nix::flake_schemas {
+
+using namespace eval_cache;
+using namespace flake;
+
+static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
+{
+    auto accessor = make_ref<MemorySourceAccessor>();
+
+    accessor->setPathDisplay("«builtin-flake-schemas»");
+
+    accessor->addFile(
+        CanonPath("flake.nix"),
+#include "builtin-flake-schemas.nix.gen.hh"
+    );
+
+    auto [storePath, narHash] = state.store->computeStorePath("source", {accessor});
+
+    state.allowPath(storePath); // FIXME: should just whitelist the entire virtual store
+
+    state.storeFS->mount(CanonPath(state.store->printStorePath(storePath)), accessor);
+
+    // Construct a dummy flakeref.
+    auto flakeRef = parseFlakeRef(
+        fetchSettings,
+        fmt("tarball+https://builtin-flake-schemas?narHash=%s", narHash.to_string(HashFormat::SRI, true)));
+
+    auto flake = readFlake(state, flakeRef, flakeRef, flakeRef, state.storePath(storePath), {});
+
+    return lockFlake(flakeSettings, state, flakeRef, {}, flake);
+}
+
+ref<EvalCache> call(
+    EvalState & state,
+    std::shared_ptr<flake::LockedFlake> lockedFlake,
+    std::optional<FlakeRef> defaultSchemasFlake,
+    bool allowEvalCache)
+{
+    auto fingerprint = lockedFlake->getFingerprint(*state.store, state.fetchSettings);
+
+    std::string callFlakeSchemasNix =
+#include "call-flake-schemas.nix.gen.hh"
+        ;
+
+    auto lockedDefaultSchemasFlake = defaultSchemasFlake
+                                         ? flake::lockFlake(flakeSettings, state, *defaultSchemasFlake, {})
+                                         : getBuiltinDefaultSchemasFlake(state);
+    auto lockedDefaultSchemasFlakeFingerprint =
+        lockedDefaultSchemasFlake.getFingerprint(*state.store, state.fetchSettings);
+
+    std::optional<Fingerprint> fingerprint2;
+    if (allowEvalCache && evalSettings.useEvalCache && evalSettings.pureEval && fingerprint
+        && lockedDefaultSchemasFlakeFingerprint)
+        fingerprint2 = hashString(
+            HashAlgorithm::SHA256,
+            fmt("app:%s:%s:%s",
+                hashString(HashAlgorithm::SHA256, callFlakeSchemasNix).to_string(HashFormat::Base16, false),
+                fingerprint->to_string(HashFormat::Base16, false),
+                lockedDefaultSchemasFlakeFingerprint->to_string(HashFormat::Base16, false)));
+
+    if (fingerprint2) {
+        auto i = state.evalCaches.find(*fingerprint2);
+        if (i != state.evalCaches.end())
+            return i->second;
+    }
+
+    auto cache = make_ref<EvalCache>(
+        fingerprint2, state, [&state, lockedFlake, callFlakeSchemasNix, lockedDefaultSchemasFlake]() {
+            auto vCallFlakeSchemas = state.allocValue();
+            state.eval(
+                state.parseExprFromString(callFlakeSchemasNix, state.rootPath(CanonPath::root)), *vCallFlakeSchemas);
+
+            auto vFlake = state.allocValue();
+            flake::callFlake(state, *lockedFlake, *vFlake);
+
+            auto vDefaultSchemasFlake = state.allocValue();
+            if (vFlake->type() == nAttrs && vFlake->attrs()->get(state.symbols.create("schemas")))
+                vDefaultSchemasFlake->mkNull();
+            else
+                flake::callFlake(state, lockedDefaultSchemasFlake, *vDefaultSchemasFlake);
+
+            auto vRes = state.allocValue();
+            Value * args[] = {vDefaultSchemasFlake, vFlake};
+            state.callFunction(*vCallFlakeSchemas, args, *vRes, noPos);
+
+            return vRes;
+        });
+
+    /* Derive the flake output attribute path from the cursor used to
+       traverse the inventory. We do this so we don't have to maintain
+       a separate attrpath for that. */
+    cache->cleanupAttrPath = [&](AttrPath && attrPath) {
+        AttrPath res;
+        auto i = attrPath.begin();
+        if (i == attrPath.end())
+            return attrPath;
+
+        if (state.symbols[*i] == "inventory") {
+            ++i;
+            if (i != attrPath.end()) {
+                res.push_back(*i++); // copy output name
+                if (i != attrPath.end())
+                    ++i; // skip "outputs"
+                while (i != attrPath.end()) {
+                    ++i; // skip "children"
+                    if (i != attrPath.end())
+                        res.push_back(*i++);
+                }
+            }
+        }
+
+        else if (state.symbols[*i] == "outputs") {
+            res.insert(res.begin(), ++i, attrPath.end());
+        }
+
+        else
+            abort();
+
+        return res;
+    };
+
+    if (fingerprint2)
+        state.evalCaches.emplace(*fingerprint2, cache);
+
+    return cache;
+}
+
+void forEachOutput(
+    ref<AttrCursor> inventory,
+    std::function<void(Symbol outputName, std::shared_ptr<AttrCursor> output, const std::string & doc, bool isLast)> f)
+{
+    auto outputNames = inventory->getAttrs();
+
+    auto doOutputs = [&](bool allowIFD) {
+        evalSettings.enableImportFromDerivation.setDefault(allowIFD);
+        for (const auto & [i, outputName] : enumerate(outputNames)) {
+            auto outputInfo = inventory->getAttr(outputName);
+            try {
+                auto allowIFDAttr = outputInfo->maybeGetAttr("allowIFD");
+                if (allowIFD != (!allowIFDAttr || allowIFDAttr->getBool()))
+                    continue;
+                auto isUnknown = (bool) outputInfo->maybeGetAttr("unknown");
+                auto output = outputInfo->maybeGetAttr("output");
+                if (!output && !isUnknown)
+                    // We have a schema but no corresponding output, so skip this.
+                    continue;
+                Activity act(*logger, lvlInfo, actUnknown, fmt("evaluating '%s'", outputInfo->getAttrPathStr()));
+                f(outputName,
+                  isUnknown ? std::shared_ptr<AttrCursor>() : output,
+                  isUnknown ? "" : outputInfo->getAttr("doc")->getString(),
+                  i + 1 == outputNames.size());
+            } catch (Error & e) {
+                e.addTrace(nullptr, "while evaluating the flake output '%s':", outputInfo->getAttrPathStr());
+                throw;
+            }
+        }
+    };
+
+    // Do outputs that disallow import-from-derivation first. That way, they can't depend on outputs that do allow it.
+    doOutputs(false);
+    doOutputs(true);
+}
+
+void visit(
+    std::optional<std::string> system,
+    bool includeLegacy,
+    ref<AttrCursor> node,
+    std::shared_ptr<const Provenance> provenance,
+    std::function<void(const Leaf & leaf)> visitLeaf,
+    std::function<void(std::function<void(ForEachChild)>)> visitNonLeaf,
+    std::function<void(ref<AttrCursor> node, const std::vector<std::string> & systems)> visitFiltered,
+    std::function<void(ref<AttrCursor> node)> visitLegacy)
+{
+    Activity act(*logger, lvlInfo, actUnknown, fmt("evaluating '%s'", node->getAttrPathStr()));
+
+    PushProvenance pushedProvenance(
+        node->root->state,
+        provenance ? std::make_shared<const FlakeProvenance>(provenance, node->getAttrPathStr(), evalSettings.pureEval)
+                   : nullptr);
+
+    /* Filter out legacy outputs, unless --legacy is enabled. */
+    if (!includeLegacy) {
+        if (auto b = node->maybeGetAttr("isLegacy"); b && b->getBool()) {
+            visitLegacy(node);
+            return;
+        }
+    }
+
+    /* Apply the system type filter. */
+    if (system) {
+        if (auto forSystems = Node(node).forSystems()) {
+            if (std::find(forSystems->begin(), forSystems->end(), *system) == forSystems->end()) {
+                visitFiltered(node, *forSystems);
+                return;
+            }
+        }
+    }
+
+    if (auto children = node->maybeGetAttr("children")) {
+        visitNonLeaf([&](ForEachChild f) {
+            auto attrNames = children->getAttrs();
+            for (const auto & [i, attrName] : enumerate(attrNames)) {
+                try {
+                    f(attrName, children->getAttr(attrName), i + 1 == attrNames.size());
+                } catch (Error & e) {
+                    // FIXME: use the `isLegacy` attribute.
+                    if (node->root->state.symbols[node->getAttrPath()[0]] != "legacyPackages") {
+                        e.addTrace(
+                            nullptr, "while evaluating the flake output attribute '%s':", node->getAttrPathStr());
+                        throw;
+                    }
+                }
+            }
+        });
+    }
+
+    else
+        visitLeaf(Leaf(node));
+}
+
+std::optional<std::vector<std::string>> Node::forSystems() const
+{
+    if (auto forSystems = node->maybeGetAttr("forSystems"))
+        return forSystems->getListOfStrings();
+    else
+        return std::nullopt;
+}
+
+ref<AttrCursor> Node::getOutput(const ref<AttrCursor> & outputs) const
+{
+    auto res = outputs->findAlongAttrPath(node->getAttrPath());
+    if (!res)
+        throw Error("flake output '%s' should exist according to its schema, but it doesn't", node->getAttrPathStr());
+    return *res;
+}
+
+std::optional<std::string> Leaf::what() const
+{
+    if (auto what = node->maybeGetAttr("what"))
+        return what->getString();
+    else
+        return std::nullopt;
+}
+
+std::optional<std::string> Leaf::shortDescription() const
+{
+    if (auto what = node->maybeGetAttr("shortDescription"))
+        return what->getString();
+    return std::nullopt;
+}
+
+std::optional<AttrPath> Leaf::derivationAttrPath() const
+{
+    auto n = node->maybeGetAttr("derivationAttrPath");
+    if (!n)
+        return std::nullopt;
+    return AttrPath::fromStrings(node->root->state, n->getListOfStrings());
+}
+
+std::shared_ptr<AttrCursor> Leaf::derivation(const ref<AttrCursor> & outputs) const
+{
+    auto path = derivationAttrPath();
+    if (!path) {
+        auto n = node->maybeGetAttr("derivation");
+        if (n)
+            warn(
+                "Flake output '%s' has a schema that uses the deprecated 'derivation' attribute instead of 'derivationAttrPath'. "
+                "Please update the schema to use 'derivationAttrPath' instead. "
+                "You may want to upgrade to version 0.3.0 or higher of https://github.com/DeterminateSystems/flake-schemas.",
+                node->getAttrPathStr());
+        return n;
+    }
+    auto drv = getOutput(outputs)->findAlongAttrPath(*path);
+    if (!drv)
+        throw Error(
+            "flake output '%s' does not have a derivation attribute '%s'",
+            node->getAttrPathStr(),
+            path->to_string(node->root->state));
+    return *drv;
+}
+
+bool Leaf::isFlakeCheck() const
+{
+    auto isFlakeCheck = node->maybeGetAttr("isFlakeCheck");
+    return isFlakeCheck && isFlakeCheck->getBool();
+}
+
+std::optional<OutputInfo> getOutputInfo(ref<AttrCursor> inventory, AttrPath attrPath)
+{
+    if (attrPath.empty())
+        return std::nullopt;
+
+    auto outputName = attrPath.front();
+
+    auto schemaInfo = inventory->maybeGetAttr(outputName);
+    if (!schemaInfo)
+        return std::nullopt;
+
+    auto node = schemaInfo->maybeGetAttr("output");
+    if (!node)
+        return std::nullopt;
+
+    auto pathLeft = std::span(attrPath).subspan(1);
+
+    while (!pathLeft.empty()) {
+        auto children = node->maybeGetAttr("children");
+        if (!children)
+            break;
+        auto attr = pathLeft.front();
+        node = children->maybeGetAttr(attr);
+        if (!node)
+            return std::nullopt;
+        pathLeft = pathLeft.subspan(1);
+    }
+
+    return OutputInfo{
+        .schemaInfo = ref(schemaInfo),
+        .nodeInfo = ref(node),
+        .leafAttrPath = AttrPath(pathLeft.begin(), pathLeft.end()),
+    };
+}
+
+Schemas getSchemas(ref<AttrCursor> inventory)
+{
+    auto & state(inventory->root->state);
+
+    Schemas schemas;
+
+    for (auto & schemaName : inventory->getAttrs()) {
+        auto schema = inventory->getAttr(schemaName);
+
+        SchemaInfo schemaInfo;
+
+        if (auto roles = schema->maybeGetAttr("roles")) {
+            for (auto & roleName : roles->getAttrs()) {
+                schemaInfo.roles.insert(std::string(state.symbols[roleName]));
+            }
+        }
+
+        if (auto appendSystem = schema->maybeGetAttr("appendSystem"))
+            schemaInfo.appendSystem = appendSystem->getBool();
+
+        if (auto defaultAttrPath = schema->maybeGetAttr("defaultAttrPath")) {
+            AttrPath attrPath;
+            for (auto & s : defaultAttrPath->getListOfStrings())
+                attrPath.push_back(state.symbols.create(s));
+            schemaInfo.defaultAttrPath = std::move(attrPath);
+        }
+
+        schemas.insert_or_assign(std::string(state.symbols[schemaName]), std::move(schemaInfo));
+    }
+
+    return schemas;
+}
+
+nlohmann::json getFlakeInventory(
+    EvalState & state,
+    Store & evalStore,
+    LockedFlake & flake,
+    ref<eval_cache::EvalCache> cache,
+    const FlakeInventoryOptions & options)
+{
+    auto inventory = cache->getRoot()->getAttr("inventory");
+    auto outputs = cache->getRoot()->getAttr("outputs");
+
+    auto localSystem = std::string(settings.thisSystem.get());
+
+    FutureVector futures(*state.executor);
+
+    std::function<void(ref<eval_cache::AttrCursor> node, nlohmann::json & obj)> visit;
+
+    visit = [&](ref<eval_cache::AttrCursor> node, nlohmann::json & obj) {
+        /* Record the schema attributes that apply to both leaf and non-leaf nodes. Non-leaf `forSystems` and
+           `isLegacy` are only needed by `nix flake bake` to reproduce the schema. */
+        auto addNodeInfo = [&](bool isLeaf) {
+            if (auto forSystems = flake_schemas::Node(node).forSystems(); forSystems && (isLeaf || options.bake))
+                obj.emplace("forSystems", *forSystems);
+            if (options.bake)
+                if (auto b = node->maybeGetAttr("isLegacy"); b && b->getBool())
+                    obj.emplace("isLegacy", true);
+        };
+
+        flake_schemas::visit(
+            options.showAllSystems ? std::optional<std::string>() : localSystem,
+            options.showLegacy,
+            node,
+            flake.flake.provenance,
+
+            [&](const flake_schemas::Leaf & leaf) {
+                if (auto what = leaf.what())
+                    obj.emplace("what", *what);
+
+                if (auto shortDescription = leaf.shortDescription())
+                    obj.emplace("shortDescription", *shortDescription);
+
+                /* Record the attribute path of the derivation relative to the output attribute (e.g.
+                   `config.system.build.toplevel` for `nixosConfigurations`), so that the baked flake can put the
+                   derivation in the right place. Omitted if the output attribute is the derivation itself. */
+                if (options.bake) {
+                    if (auto path = leaf.derivationAttrPath(); path && !path->empty()) {
+                        auto attrPath = nlohmann::json::array();
+                        for (auto & attr : *path)
+                            attrPath.push_back(std::string(state.symbols[attr]));
+                        obj.emplace("derivationAttrPath", std::move(attrPath));
+                    }
+                }
+
+                if (auto drv = leaf.derivation(outputs)) {
+                    auto drvObj = nlohmann::json::object();
+
+                    if (options.showDrvNames)
+                        drvObj.emplace("name", drv->getAttr(state.s.name)->getString());
+
+                    if (options.showDrvPaths) {
+                        auto drvPath = drv->forceDerivation();
+                        drvObj.emplace("path", state.store->printStorePath(drvPath));
+                    }
+
+                    /* Derivations whose output paths are not known in advance (e.g. content-addressed
+                       derivations) cannot be baked, since baking requires the output paths to be known at
+                       evaluation time. */
+                    bool bakeable = true;
+
+                    if (options.bake)
+                        try {
+                            /* Record `meta.mainProgram` so that the baked flake can preserve it for `nix run`. */
+                            if (auto aMeta = drv->maybeGetAttr(state.s.meta))
+                                if (auto aMainProgram = aMeta->maybeGetAttr("mainProgram"))
+                                    drvObj.emplace("mainProgram", aMainProgram->getString());
+
+                            /* Record which output this attribute refers to, since it's not necessarily `out`. */
+                            if (auto aOutputName = drv->maybeGetAttr(state.s.outputName))
+                                drvObj.emplace("outputName", aOutputName->getString());
+
+                            /* Record the system of the derivation. */
+                            if (auto aSystem = drv->maybeGetAttr(state.s.system))
+                                drvObj.emplace("system", aSystem->getString());
+
+                            // FIXME: remove this once we have on-demand writing of .drvs.
+                            /* Get the output paths from the derivation attribute set rather than from the `.drv` file
+                               in the store. This avoids waiting for the derivation to be written to the store (which
+                               would serialise parallel evaluation on the store writer) and works in read-only mode.
+                               Outputs whose path is not known at evaluation time (e.g. content-addressed outputs)
+                               have a placeholder rather than a store path. */
+                            auto outputs = nlohmann::json::object();
+                            auto getOutPath = [&](ref<eval_cache::AttrCursor> out) {
+                                /* `derivation` produces an attribute set per output, but `import`ing a `.drv`
+                                   produces plain strings. */
+                                return out->forceValue().type() == nAttrs ? out->getAttr(state.s.outPath)->getString()
+                                                                          : out->getString();
+                            };
+                            auto addOutput = [&](const std::string & outputName, const std::string & outPath) {
+                                if (state.store->isStorePath(outPath))
+                                    outputs.emplace(outputName, outPath);
+                                else {
+                                    outputs.emplace(outputName, nullptr);
+                                    bakeable = false;
+                                }
+                            };
+                            if (auto aOutputs = drv->maybeGetAttr(state.s.outputs))
+                                for (auto & outputName : aOutputs->getListOfStrings())
+                                    addOutput(outputName, getOutPath(drv->getAttr(outputName)));
+                            else {
+                                auto aOutputName = drv->maybeGetAttr(state.s.outputName);
+                                addOutput(
+                                    aOutputName ? aOutputName->getString() : "out",
+                                    drv->getAttr(state.s.outPath)->getString());
+                            }
+                            drvObj.emplace("outputs", std::move(outputs));
+
+                            if (!bakeable) {
+                                warn(
+                                    "cannot bake '%s' because its output paths are not known in advance (e.g. it is a "
+                                    "content-addressed derivation)",
+                                    leaf.node->getAttrPathStr());
+                                drvObj.emplace("failed", true);
+                            }
+                        } catch (EvalError & e) {
+                            /* The derivation cannot be evaluated (e.g. a package marked as broken). Record it anyway,
+                           so that the baked flake can still list it (like the original flake would), but fail
+                           when it is built. */
+                            drvObj.erase("outputs");
+                            drvObj.emplace("failed", true);
+                        }
+
+                    else if (options.showOutputPaths) {
+                        auto outputs = nlohmann::json::object();
+                        auto drvPath = drv->forceDerivation();
+                        auto drv = evalStore.derivationFromPath(drvPath);
+                        for (auto & i : drv.outputsAndOptPaths(*state.store)) {
+                            if (auto outPath = i.second.second)
+                                outputs.emplace(i.first, state.store->printStorePath(*outPath));
+                            else
+                                outputs.emplace(i.first, nullptr);
+                        }
+                        drvObj.emplace("outputs", std::move(outputs));
+                    }
+
+                    obj.emplace("derivation", std::move(drvObj));
+                }
+
+                if (options.bake && leaf.isFlakeCheck())
+                    obj.emplace("isFlakeCheck", true);
+
+                addNodeInfo(true);
+            },
+
+            [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
+                auto children = nlohmann::json::object();
+                forEachChild([&](Symbol attrName, ref<eval_cache::AttrCursor> node, bool isLast) {
+                    auto & j = children.emplace(state.symbols[attrName], nlohmann::json::object()).first.value();
+                    state.spawn(futures, 1, [&visit, &j, node]() {
+                        try {
+                            visit(node, j);
+                        } catch (EvalError & e) {
+                            // FIXME: make it a flake schema attribute whether to ignore evaluation errors.
+                            if (node->root->state.symbols[node->getAttrPath()[0]] == "legacyPackages")
+                                j.emplace("failed", true);
+                            else
+                                throw;
+                        }
+                    });
+                });
+                obj.emplace("children", std::move(children));
+
+                addNodeInfo(false);
+            },
+
+            [&](ref<eval_cache::AttrCursor> node, const std::vector<std::string> & systems) {
+                obj.emplace("filtered", true);
+            },
+
+            [&](ref<eval_cache::AttrCursor> node) { obj.emplace("isLegacy", true); });
+    };
+
+    auto inv = nlohmann::json::object();
+
+    auto schemas = getSchemas(inventory);
+
+    flake_schemas::forEachOutput(
+        inventory,
+        [&](Symbol outputName, std::shared_ptr<eval_cache::AttrCursor> output, const std::string & doc, bool isLast) {
+            auto & j = inv.emplace(state.symbols[outputName], nlohmann::json::object()).first.value();
+
+            if (output) {
+                j.emplace("doc", doc);
+
+                /* Record the schema-level attributes, so that `nix flake bake` can reproduce the schema. */
+                if (auto schema = get(schemas, std::string(state.symbols[outputName])); schema && options.bake) {
+                    if (!schema->roles.empty())
+                        j.emplace("roles", schema->roles);
+                    if (schema->appendSystem)
+                        j.emplace("appendSystem", true);
+                    if (schema->defaultAttrPath) {
+                        auto attrPath = nlohmann::json::array();
+                        for (auto & attr : *schema->defaultAttrPath)
+                            attrPath.push_back(std::string(state.symbols[attr]));
+                        j.emplace("defaultAttrPath", std::move(attrPath));
+                    }
+                }
+                auto & j2 = j.emplace("output", nlohmann::json::object()).first.value();
+                state.spawn(futures, 1, [&visit, output, &j2]() { visit(ref(output), j2); });
+            } else
+                j.emplace("unknown", true);
+        });
+
+    futures.finishAll();
+
+    if (options.bake) {
+        /* Prune the inventory to the nodes that can be baked: derivation leaves, and non-leaf nodes that contain at
+           least one of them. This drops non-derivation leaves (e.g. overlays), filtered/failed nodes, derivations
+           that cannot be baked, and unknown outputs. */
+        auto prune = [](this const auto & prune, nlohmann::json & node) -> bool {
+            if (auto children = node.find("children"); children != node.end()) {
+                for (auto i = children->begin(); i != children->end();) {
+                    if (prune(i.value()))
+                        ++i;
+                    else
+                        i = children->erase(i);
+                }
+                return !children->empty();
+            }
+            return node.contains("derivation");
+        };
+
+        for (auto i = inv.begin(); i != inv.end();) {
+            auto output = i.value().find("output");
+            if (output != i.value().end() && prune(*output))
+                ++i;
+            else
+                i = inv.erase(i);
+        }
+    }
+
+    return inv;
+}
+
+} // namespace nix::flake_schemas
+
+namespace nix {
+
+MixFlakeSchemas::MixFlakeSchemas()
+{
+    addFlag(
+        {.longName = "default-flake-schemas",
+         .description = "The URL of the flake providing default flake schema definitions.",
+         .labels = {"flake-ref"},
+         .handler = {&defaultFlakeSchemas},
+         .completer = {[&](AddCompletions & completions, size_t, std::string_view prefix) {
+             completeFlakeRef(completions, getStore(), prefix);
+         }}});
+}
+
+std::optional<FlakeRef> MixFlakeSchemas::getDefaultFlakeSchemas()
+{
+    if (!defaultFlakeSchemas)
+        return std::nullopt;
+    else
+        return parseFlakeRef(fetchSettings, *defaultFlakeSchemas, absPath(getCommandBaseDir()));
+}
+
+} // namespace nix

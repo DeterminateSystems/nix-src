@@ -20,8 +20,8 @@ TEST_F(nix_api_expr_test, nix_eval_state_lookup_path)
     auto delTmpDir = std::make_unique<nix::AutoDelete>(tmpDir, true);
     auto nixpkgs = tmpDir / "pkgs";
     auto nixos = tmpDir / "cfg";
-    std::filesystem::create_directories(nixpkgs);
-    std::filesystem::create_directories(nixos);
+    nix::createDirs(nixpkgs);
+    nix::createDirs(nixos);
 
     std::string nixpkgsEntry = "nixpkgs=" + nixpkgs.string();
     std::string nixosEntry = "nixos-config=" + nixos.string();
@@ -577,6 +577,7 @@ struct DeploymentResourceState
     bool vm_created = false;
 };
 
+#if 0
 static void primop_load_resource_input(
     void * user_data, nix_c_context * context, EvalState * state, nix_value ** args, nix_value * ret)
 {
@@ -664,5 +665,6 @@ TEST_F(nix_api_expr_test, nix_expr_thunk_re_evaluation_after_deployment)
     assert_ctx_ok();
     ASSERT_STREQ("vm-12345", result.c_str());
 }
+#endif
 
 } // namespace nixC

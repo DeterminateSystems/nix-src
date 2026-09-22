@@ -16,37 +16,205 @@ in
 scope: {
   inherit stdenv;
 
+  mimalloc =
+    (
+      if lib.versionAtLeast pkgs.mimalloc.version "3.3.2" then
+        pkgs.mimalloc
+      else
+        pkgs.mimalloc.overrideAttrs rec {
+          version = "3.3.2";
+          src = pkgs.fetchFromGitHub {
+            owner = "microsoft";
+            repo = "mimalloc";
+            tag = "v${version}";
+            hash = "sha256-GZ37qQVDe9jgMb4Coe5oKvgaLTspZDlSkS5rdy1MfUU=";
+          };
+        }
+    ).overrideAttrs
+      (attrs: {
+        cmakeFlags = (attrs.cmakeFlags or [ ]) ++ [
+          # Don't `madvise(MADV_HUGEPAGE)` the 1 GiB arenas that
+          # mimalloc reserves. With the common kernel setting
+          # `transparent_hugepage/defrag=madvise`, that hint makes
+          # every first touch of a 2 MiB region in the arena attempt
+          # a huge page allocation with synchronous direct compaction.
+          # On a machine with fragmented physical memory this fails
+          # almost every time and costs several milliseconds per
+          # fault, which more than doubled the CPU time of evaluating
+          # large flakes. Defining this preprocessor macro only skips
+          # the `madvise()` call. (The cmake option `MI_NO_THP` and
+          # the runtime option `MIMALLOC_ALLOW_THP=0` are not
+          # equivalent: they also call `prctl(PR_SET_THP_DISABLE)`,
+          # which disables huge pages for the entire process and is
+          # inherited by the programs that `nix run` etc. execute.)
+          "-DMI_EXTRA_CPPDEFS=MI_NO_THP"
+        ];
+      });
+
   boehmgc =
     (pkgs.boehmgc.override {
       enableLargeConfig = true;
+      inherit stdenv;
     }).overrideAttrs
       (attrs: {
-        # Increase the initial mark stack size to avoid stack
-        # overflows, since these inhibit parallel marking (see
-        # GC_mark_some()). To check whether the mark stack is too
-        # small, run Nix with GC_PRINT_STATS=1 and look for messages
-        # such as `Mark stack overflow`, `No room to copy back mark
-        # stack`, and `Grew mark stack to ... frames`.
-        NIX_CFLAGS_COMPILE = "-DINITIAL_MARK_STACK_SIZE=1048576";
+        src = inputs.bdwgc;
+
+        nativeBuildInputs = (attrs.nativeBuildInputs or [ ]) ++ [
+          pkgs.buildPackages.autoreconfHook
+        ];
+
+        env = (attrs.env or { }) // {
+          # Increase the initial mark stack size to avoid stack
+          # overflows, since these inhibit parallel marking (see
+          # GC_mark_some()). To check whether the mark stack is too
+          # small, run Nix with GC_PRINT_STATS=1 and look for messages
+          # such as `Mark stack overflow`, `No room to copy back mark
+          # stack`, and `Grew mark stack to ... frames`.
+          NIX_CFLAGS_COMPILE = toString (
+            [
+              "-DINITIAL_MARK_STACK_SIZE=1048576"
+              "-DGC_MANY_BLOCKS_DEFAULT=64"
+              # Serve allocations up to 1520 bytes (95 granules) from
+              # the per-thread freelists instead of taking the global
+              # allocation lock. The default (25, i.e. <= 384 bytes) is
+              # too small for parallel evaluation: e.g. a typical
+              # derivation attrset (~46 attrs) is a 752-byte Bindings,
+              # of which nixpkgs evaluation does hundreds of thousands,
+              # all serialized on GC_allocate_ml.
+              "-DGC_TINY_FREELISTS=96"
+            ]
+            # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
+            # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
+            # Issue: https://github.com/NixOS/nixpkgs/issues/177129
+            ++
+              lib.optionals
+                (
+                  stdenv.cc.isClang
+                  && stdenv.hostPlatform.isStatic
+                  && stdenv.cc.libcxx != null
+                  && stdenv.cc.libcxx.isLLVM
+                )
+                [
+                  "-rtlib=compiler-rt"
+                  "-unwindlib=libunwind"
+                ]
+          );
+        };
+
+        buildInputs =
+          (attrs.buildInputs or [ ])
+          ++ lib.optional (
+            stdenv.cc.isClang
+            && stdenv.hostPlatform.isStatic
+            && stdenv.cc.libcxx != null
+            && stdenv.cc.libcxx.isLLVM
+          ) pkgs.llvmPackages.libunwind;
       });
 
-  curl =
-    (pkgs.curl.override {
-      http3Support = !pkgs.stdenv.hostPlatform.isWindows;
-      # Make sure we enable all the dependencies for Content-Encoding/Transfer-Encoding decompression.
-      zstdSupport = true;
-      brotliSupport = true;
-      zlibSupport = true;
-    }).overrideAttrs
-      {
-        # TODO: Fix in nixpkgs. Static build with brotli is marked as broken, but it's not the case.
-        # Remove once https://github.com/NixOS/nixpkgs/pull/494111 lands in the 25.11 channel.
-        meta.broken = false;
-      };
+  lowdown =
+    if lib.versionAtLeast pkgs.lowdown.version "2.0.2" then
+      pkgs.lowdown
+    else
+      pkgs.lowdown.overrideAttrs (prevAttrs: rec {
+        version = "2.0.2";
+        src = pkgs.fetchurl {
+          url = "https://kristaps.bsd.lv/lowdown/snapshots/lowdown-${version}.tar.gz";
+          hash = "sha512-cfzhuF4EnGmLJf5EGSIbWqJItY3npbRSALm+GarZ7SMU7Hr1xw0gtBFMpOdi5PBar4TgtvbnG4oRPh+COINGlA==";
+        };
+        nativeBuildInputs = prevAttrs.nativeBuildInputs ++ [ pkgs.buildPackages.bmake ];
+        postInstall =
+          lib.replaceStrings [ "lowdown.so.1" "lowdown.1.dylib" ] [ "lowdown.so.2" "lowdown.2.dylib" ]
+            (prevAttrs.postInstall or "");
+      });
 
-  libblake3 = pkgs.libblake3.override {
-    useTBB = !(stdenv.hostPlatform.isWindows || stdenv.hostPlatform.isStatic);
+  curl = pkgs.curl.override {
+    http3Support = !pkgs.stdenv.hostPlatform.isWindows;
+    # Make sure we enable all the dependencies for Content-Encoding/Transfer-Encoding decompression.
+    zstdSupport = true;
+    brotliSupport = true;
+    zlibSupport = true;
+    # libpsl uses a data file needed at runtime, not useful for nix.
+    pslSupport = !stdenv.hostPlatform.isStatic;
+    idnSupport = !stdenv.hostPlatform.isStatic;
   };
+
+  libblake3 =
+    (pkgs.libblake3.override {
+      inherit stdenv;
+      # Nixpkgs disables tbb on static
+      useTBB =
+        !(
+          stdenv.hostPlatform.isWindows
+          || stdenv.hostPlatform.isStatic
+          # Some tbb tests fail with libc++.
+          || (stdenv.cc.libcxx != null && stdenv.cc.libcxx.isLLVM)
+        );
+    })
+    # For some reason that is not clear, it is wanting to use libgcc_eh which is not available.
+    # Force this to be built with compiler-rt & libunwind over libgcc_eh works.
+    # Issue: https://github.com/NixOS/nixpkgs/issues/177129
+    .overrideAttrs
+      (
+        attrs:
+        lib.optionalAttrs
+          (
+            stdenv.cc.isClang
+            && stdenv.hostPlatform.isStatic
+            && stdenv.cc.libcxx != null
+            && stdenv.cc.libcxx.isLLVM
+          )
+          {
+            NIX_CFLAGS_COMPILE = [
+              "-rtlib=compiler-rt"
+              "-unwindlib=libunwind"
+            ];
+
+            buildInputs = [
+              pkgs.llvmPackages.libunwind
+            ];
+          }
+      );
+
+  sqlite =
+    if !stdenv.hostPlatform.isWindows then
+      pkgs.sqlite
+    else
+      pkgs.sqlite.overrideAttrs (prevAttrs: {
+        nativeBuildInputs = lib.filter (x: !(x.pname == "tcl")) prevAttrs.nativeBuildInputs or [ ];
+        configureFlags = (lib.filter (x: !(lib.hasPrefix "--with-tcl" x)) prevAttrs.configureFlags) ++ [
+          "--disable-tcl"
+        ];
+      });
+
+  libgit2 = pkgs.libgit2.overrideAttrs (
+    finalAttrs: prevAttrs: {
+      version = "2.0.0-rc.1";
+      src = pkgs.fetchFromGitHub {
+        owner = "libgit2";
+        repo = "libgit2";
+        rev = "ae45d0d168f7e8dbfdb8c623589cb51caac96ab3";
+        hash = "sha256-3sbqHm37SOwBeFgtjI2DLN6kx1F7G2N1m6rRIkqDXNI=";
+      };
+      patches = prevAttrs.patches or [ ] ++ [
+        ./patches/0002-memory-config.patch
+        ./patches/0003-packbuilder-correct-config.patch
+
+        # Fix a use-after-free crash when `git_thread_create` fails during
+        # pack building (e.g. with EAGAIN under thread pressure), leaving
+        # orphaned delta-search worker threads running while the
+        # packbuilder is freed.
+        # TODO: we can probably drop this patch since we're not finding deltas anymore.
+        ./patches/libgit2-packbuilder-dont-fail-on-thread-create-error.patch
+      ];
+      separateDebugInfo = true;
+      # Nixpkgs derives `meta.changelog` from `src.tag`, which is null
+      # here since we fetch an untagged commit. This would be harmless
+      # except that nixpkgs variants with provenance support
+      # (`derivationWithMeta`) force `meta.changelog` at derivation
+      # instantiation time, causing an eval error.
+      meta = builtins.removeAttrs prevAttrs.meta [ "changelog" ];
+    }
+  );
 
   # TODO Hack until https://github.com/NixOS/nixpkgs/issues/45462 is fixed.
   boost =
@@ -57,12 +225,35 @@ scope: {
         "--with-coroutine"
         "--with-iostreams"
         "--with-url"
+        "--with-thread"
       ];
       enableIcu = false;
+      inherit stdenv;
     }).overrideAttrs
       (old: {
         # Need to remove `--with-*` to use `--with-libraries=...`
         buildPhase = lib.replaceStrings [ "--without-python" ] [ "" ] old.buildPhase;
         installPhase = lib.replaceStrings [ "--without-python" ] [ "" ] old.installPhase;
       });
+
+  # Build opentelemetry-cpp against the standard library, so that its
+  # API uses `std::string_view`, `std::shared_ptr` etc. instead of its
+  # own `nostd::` back-ports. This is an ABI switch, so it has to be
+  # done when building the library, not just on our side.
+  opentelemetry-cpp = pkgs.opentelemetry-cpp.override { cxxStandard = "20"; };
+
+  wasmtime = pkgs.callPackage ./wasmtime.nix { };
+
+  sentry-native = (pkgs.callPackage ./sentry-native.nix { }).override {
+    # Avoid having two curls in our closure.
+    inherit (scope) curl;
+  };
+
+  libmicrohttpd = pkgs.libmicrohttpd.overrideDerivation (old: {
+    # Don't pull in gnutls since it's pretty big and we don't need it.
+    configureFlags = old.configureFlags or [ ] ++ [ "--without-gnutls" ];
+
+    # Required for configuration detection for getsockname (for automatic port allocation for `nix serve`)
+    __darwinAllowLocalNetworking = true;
+  });
 }

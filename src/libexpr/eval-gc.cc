@@ -1,8 +1,6 @@
-#include "nix/util/error.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/expr/eval-settings.hh"
 #include "nix/util/config-global.hh"
-#include "nix/util/serialise.hh"
 #include "nix/expr/eval-gc.hh"
 #include "nix/expr/value.hh"
 
@@ -10,17 +8,10 @@
 
 #if NIX_USE_BOEHMGC
 
-#  include <pthread.h>
-#  ifdef __FreeBSD__
-#    include <pthread_np.h>
-#  endif
-
 #  include <gc/gc_allocator.h>
 #  include <gc/gc_tiny_fl.h> // For GC_GRANULE_BYTES
 
-#  include <boost/coroutine2/coroutine.hpp>
-#  include <boost/coroutine2/protected_fixedsize_stack.hpp>
-#  include <boost/context/stack_context.hpp>
+#  include "nix/util/coroutine-gc.hh"
 
 #endif
 
@@ -42,8 +33,98 @@ static_assert(sizeof(void *) * 2 == GC_GRANULE_BYTES, "Boehm GC must use GC_GRAN
 /* Called when the Boehm GC runs out of memory. */
 static void * oomHandler(size_t requested)
 {
-    /* Convert this to a proper C++ exception. */
-    throw std::bad_alloc();
+    outOfMemory();
+}
+
+static size_t getFreeMem()
+{
+    /* On Linux, use the `MemAvailable` or `MemFree` fields from
+       /proc/cpuinfo. */
+#  ifdef __linux__
+    {
+        std::unordered_map<std::string, std::string> fields;
+        for (auto & line :
+             tokenizeString<std::vector<std::string>>(readFile(std::filesystem::path("/proc/meminfo")), "\n")) {
+            auto colon = line.find(':');
+            if (colon == line.npos)
+                continue;
+            fields.emplace(line.substr(0, colon), trim(line.substr(colon + 1)));
+        }
+
+        auto i = fields.find("MemAvailable");
+        if (i == fields.end())
+            i = fields.find("MemFree");
+        if (i != fields.end()) {
+            auto kb = tokenizeString<std::vector<std::string>>(i->second, " ");
+            if (kb.size() == 2 && kb[1] == "kB")
+                return string2Int<size_t>(kb[0]).value_or(0) * 1024;
+        }
+    }
+#  endif
+
+    /* On non-Linux systems, conservatively assume that 25% of memory is free. */
+    long pageSize = sysconf(_SC_PAGESIZE);
+    long pages = sysconf(_SC_PHYS_PAGES);
+    if (pageSize > 0 && pages > 0)
+        return (static_cast<size_t>(pageSize) * static_cast<size_t>(pages)) / 4;
+    return 0;
+}
+
+/**
+ * Implementations of the libutil coroutine GC hooks (see
+ * `coroutine-gc.hh`) in terms of bdwgc's registered stacks. Together
+ * with the fiber stack registration in `parallel-eval.cc`, this makes
+ * every stack that can hold GC roots — thread stacks (registered
+ * automatically), fiber stacks and coroutine stacks — scannable by
+ * the collector, including the frames of a fiber that has switched
+ * onto a coroutine stack.
+ */
+
+static void * coroStackRegisterImpl(void * base, size_t size)
+{
+    auto stk = new GC_stack{};
+    stk->base = base;
+    stk->limit = (char *) base - size;
+    GC_register_stack(stk);
+    return stk;
+}
+
+static void coroStackUnregisterImpl(void * cookie)
+{
+    auto stk = (struct GC_stack *) cookie;
+    GC_unregister_stack(stk);
+    delete stk;
+}
+
+static void * coroSwitchToImpl(void * cookie)
+{
+    auto prev = GC_current_stack;
+    /* `prev` is null on threads not registered with the GC; such
+       threads hold no GC roots and need no scanning. */
+    if (prev)
+        prev->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+    GC_current_stack = (struct GC_stack *) cookie;
+    return prev;
+}
+
+static void coroSwitchBackImpl(void * prevHandle)
+{
+    auto prev = (struct GC_stack *) prevHandle;
+    GC_current_stack = prev;
+    if (prev)
+        prev->saved_sp = nullptr;
+}
+
+static void coroMarkSuspendedImpl(void * cookie)
+{
+    if (cookie)
+        ((struct GC_stack *) cookie)->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+}
+
+static void coroMarkActiveImpl(void * cookie)
+{
+    if (cookie)
+        ((struct GC_stack *) cookie)->saved_sp = nullptr;
 }
 
 static inline void initGCReal()
@@ -76,8 +157,33 @@ static inline void initGCReal()
 
     GC_set_oom_fn(oomHandler);
 
-    /* Set the initial heap size to something fairly big (25% of
-       physical RAM, up to a maximum of 384 MiB) so that in most cases
+    /* Make the coroutine stacks of libutil scannable by the GC (fiber
+       stacks are registered in `parallel-eval.cc`; thread stacks are
+       registered automatically by bdwgc). */
+    coroStackRegister = coroStackRegisterImpl;
+    coroStackUnregister = coroStackUnregisterImpl;
+    coroSwitchTo = coroSwitchToImpl;
+    coroSwitchBack = coroSwitchBackImpl;
+    coroMarkSuspended = coroMarkSuspendedImpl;
+    coroMarkActive = coroMarkActiveImpl;
+
+    /* Funnel boehm warnings into debug logs. */
+    GC_set_warn_proc([](const char * msg, GC_word word) noexcept {
+        std::array<char, 4096> buffer{};
+        auto res = snprintf(buffer.data(), buffer.size(), msg, word);
+        /* Ignore garbage. */
+        if (res < 0)
+            return;
+
+        try {
+            debug("%s", chomp(std::string_view(buffer.data(), std::min<size_t>(res, buffer.size() - 1))));
+        } catch (...) {
+            /* Swallow all errors. */
+        }
+    });
+
+    /* Set the initial heap size to something fairly big (80% of
+       free RAM, up to a maximum of 4 GiB) so that in most cases
        we don't need to garbage collect at all.  (Collection has a
        fairly significant overhead.)  The heap size can be overridden
        through libgc's GC_INITIAL_HEAP_SIZE environment variable.  We
@@ -88,15 +194,10 @@ static inline void initGCReal()
     if (!getEnv("GC_INITIAL_HEAP_SIZE")) {
         size_t size = 32 * 1024 * 1024;
 #  if HAVE_SYSCONF && defined(_SC_PAGESIZE) && defined(_SC_PHYS_PAGES)
-        size_t maxSize = 384 * 1024 * 1024;
-        long pageSize = sysconf(_SC_PAGESIZE);
-        long pages = sysconf(_SC_PHYS_PAGES);
-        if (pageSize != -1)
-            size = (pageSize * pages) / 4; // 25% of RAM
-        if (size > maxSize)
-            size = maxSize;
+        size_t maxSize = 4ULL * 1024 * 1024 * 1024;
+        auto free = getFreeMem();
+        size = std::max(size, std::min((size_t) (free * 0.5), maxSize));
 #  endif
-        debug("setting initial heap size to %1% bytes", size);
         GC_expand_hp(size);
     }
 }

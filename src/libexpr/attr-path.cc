@@ -5,6 +5,10 @@
 
 namespace nix {
 
+void AttrPathNotFound::anchor() {}
+
+void NoPositionInfo::anchor() {}
+
 static Strings parseAttrPath(std::string_view s)
 {
     Strings res;
@@ -40,9 +44,23 @@ AttrPath AttrPath::parse(EvalState & state, std::string_view s)
     return res;
 }
 
+AttrPath AttrPath::fromStrings(EvalState & state, const std::vector<std::string> & attrNames)
+{
+    AttrPath res;
+    for (auto & attrName : attrNames)
+        res.push_back(state.symbols.create(attrName));
+    return res;
+}
+
 std::string AttrPath::to_string(EvalState & state) const
 {
-    return dropEmptyInitThenConcatStringsSep(".", state.symbols.resolve({*this}));
+    std::ostringstream ss;
+    for (const auto & [idx, attr] : enumerate(state.symbols.resolve({*this}))) {
+        if (idx)
+            ss << '.';
+        printAttributeName(ss, attr);
+    }
+    return ss.str();
 }
 
 std::vector<SymbolStr> AttrPath::resolve(EvalState & state) const

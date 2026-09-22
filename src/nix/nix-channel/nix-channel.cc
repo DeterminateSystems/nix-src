@@ -9,7 +9,6 @@
 #include "nix/util/os-string.hh"
 #include "nix/util/users.hh"
 #include "nix/fetchers/tarball.hh"
-#include "nix/fetchers/fetch-settings.hh"
 #include "self-exe.hh"
 #include "man-pages.hh"
 
@@ -17,7 +16,7 @@
 #include <regex>
 #include <pwd.h>
 
-using namespace nix;
+namespace nix {
 
 typedef StringMap Channels;
 
@@ -203,6 +202,11 @@ static void update(const StringSet & channelNames)
 
 static int main_nix_channel(int argc, char ** argv)
 {
+    warn(
+        "nix-channel is deprecated in favor of flakes in Determinate Nix. \
+See https://zero-to-nix.com for a guide to Nix flakes. \
+For details and to offer feedback on the deprecation process, see: https://github.com/DeterminateSystems/nix-src/issues/34.");
+
     {
         // Figure out the name of the `.nix-channels' file to use
         auto home = getHome();
@@ -307,3 +311,5 @@ static int main_nix_channel(int argc, char ** argv)
 }
 
 static RegisterLegacyCommand r_nix_channel("nix-channel", main_nix_channel);
+
+} // namespace nix

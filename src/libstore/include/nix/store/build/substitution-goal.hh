@@ -4,7 +4,6 @@
 #include "nix/store/build/worker.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/build/goal.hh"
-#include "nix/util/muxable-pipe.hh"
 #include <coroutine>
 #include <future>
 #include <source_location>
@@ -19,14 +18,14 @@ struct PathSubstitutionGoal : public Goal
     StorePath storePath;
 
     /**
+     * Whether, if there are not substituters, to return ecNoSubstituters or ecFailed.
+     */
+    bool pathRequired;
+
+    /**
      * Whether to try to repair a valid path.
      */
     RepairFlag repair;
-
-    /**
-     * Pipe for the substituter's standard output.
-     */
-    MuxablePipe outPipe;
 
     /**
      * The substituter thread.
@@ -45,6 +44,7 @@ public:
     PathSubstitutionGoal(
         const StorePath & storePath,
         Worker & worker,
+        bool pathRequired,
         RepairFlag repair = NoRepair,
         std::optional<ContentAddress> ca = std::nullopt);
     ~PathSubstitutionGoal();
@@ -60,7 +60,11 @@ public:
     Co init();
     Co gotInfo();
     Co tryToRun(
-        StorePath subPath, nix::ref<Store> sub, std::shared_ptr<const ValidPathInfo> info, bool & substituterFailed);
+        StorePath subPath,
+        nix::ref<Store> sub,
+        std::shared_ptr<const ValidPathInfo> info,
+        bool & substituterFailed,
+        ActivityId parentAct);
     Co finished();
 
     /* Called by destructor, can't be overridden */
@@ -70,6 +74,8 @@ public:
     {
         return JobCategory::Substitution;
     };
+
+    Done doneFailure(ExitCode result, BuildResult::Failure failure, ActivityId act = 0);
 };
 
 } // namespace nix

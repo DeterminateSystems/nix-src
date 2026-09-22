@@ -20,9 +20,13 @@ void printAmbiguous(EvalState & state, Value & v, std::ostream & str, std::set<c
     case nBool:
         printLiteralBool(str, v.boolean());
         break;
-    case nString:
-        printLiteralString(str, v.string_view());
+    case nString: {
+        NixStringContext context;
+        copyContext(v, context);
+        // FIXME: make devirtualization configurable?
+        printLiteralString(str, state.devirtualize(v.string_view(), context));
         break;
+    }
     case nPath:
         str << v.path().to_string(); // !!! escaping?
         break;
@@ -76,7 +80,7 @@ void printAmbiguous(EvalState & state, Value & v, std::ostream & str, std::set<c
     case nFailed:
         // Historically, a tried and then ignored value (e.g. through tryEval) was
         // reverted to the original thunk.
-        str << "<CODE>";
+        str << "«failed»";
         break;
     case nFunction:
         if (v.isLambda()) {

@@ -5,7 +5,7 @@
 #include <set>
 #include <memory>
 #include <tuple>
-#include <iomanip>
+
 #ifdef __APPLE__
 #  include <sys/time.h>
 #endif
@@ -18,6 +18,10 @@
 #include "nix/util/serialise.hh"
 #include "nix/store/build-result.hh"
 #include "nix/store/store-open.hh"
+#include "nix/util/config-global.hh"
+#include "nix/util/environment-variables.hh"
+
+#include "otel-logger.hh"
 #include "nix/util/strings.hh"
 #include "nix/store/derivations.hh"
 #include "nix/store/local-store.hh"
@@ -25,8 +29,7 @@
 #include "nix/util/experimental-features.hh"
 #include "nix/store/globals.hh"
 
-using namespace nix;
-using std::cin;
+namespace nix {
 
 static void handleAlarm(int sig) {}
 
@@ -54,7 +57,24 @@ static bool allSupportedLocally(Store & store, const StringSet & requiredFeature
 static int main_build_remote(int argc, char ** argv)
 {
     {
-        logger = makeJSONLogger(getStandardError());
+        /* Upon exiting, Nix will attempt to terminate this process with
+           SIGTERM. initNix will block or handle SIGTERM, so we need to unblock
+           and unhandle it here.
+        */
+        struct sigaction act;
+        sigemptyset(&act.sa_mask);
+        act.sa_flags = 0;
+        act.sa_handler = SIG_DFL;
+        if (sigaction(SIGTERM, &act, 0))
+            throw SysError("resetting SIGTERM");
+
+        sigset_t set;
+        sigemptyset(&set);
+        sigaddset(&set, SIGTERM);
+        if (pthread_sigmask(SIG_UNBLOCK, &set, nullptr))
+            throw SysError("unblocking SIGTERM");
+
+        logger = makeJSONLogger(getStandardError()).release();
 
         /* Ensure we don't get any SSH passphrase or host key popups. */
         unsetenv("DISPLAY");
@@ -70,11 +90,21 @@ static int main_build_remote(int argc, char ** argv)
 
         FdSource source(STDIN_FILENO);
 
-        /* Read the parent's settings. */
+        /* Read the parent's settings. The parent sends the settings of
+           all `Config`s, not just `Settings`, so apply them
+           accordingly. Only apply those that differ from ours, though:
+           we've read the same configuration files, so the rest are
+           defaults, and setting a deprecated setting warns even if
+           it's to its default. (Note that we can't just have the
+           parent send its overridden settings: things like `--store`
+           set the setting without marking it as overridden.) */
+        std::map<std::string, Config::SettingInfo> ourSettings;
+        globalConfig.getSettings(ourSettings);
         while (readInt(source)) {
             auto name = readString(source);
             auto value = readString(source);
-            settings.set(name, value);
+            if (auto i = ourSettings.find(name); i == ourSettings.end() || i->second.value != value)
+                globalConfig.set(name, value);
         }
 
         auto maxBuildJobs = settings.getWorkerSettings().maxBuildJobs;
@@ -93,6 +123,7 @@ static int main_build_remote(int argc, char ** argv)
 
         std::shared_ptr<Store> sshStore;
         AutoCloseFD bestSlotLock;
+        bool tracing = false;
 
         auto machines = Machine::parseConfig({settings.thisSystem}, settings.getWorkerSettings().builders);
         debug("got %d remote builders", machines.size());
@@ -229,6 +260,18 @@ static int main_build_remote(int argc, char ** argv)
 
                 lock = -1;
 
+                /* Set up tracing only now that we're actually going to
+                   use a remote builder, so that a build hook that
+                   turns out to be unused (which is the common case,
+                   since we're started for every build) doesn't upload
+                   a trace. Our root span is parented to the trace of
+                   the `nix` process that runs us, which it passes in
+                   `TRACEPARENT`. */
+                if (!tracing) {
+                    tracing = true;
+                    initOtel("nix-build-remote", "nix-build-remote", getEnv("TRACEPARENT").value_or(""));
+                }
+
                 try {
                     storeUri = bestMachine->storeUri.render();
 
@@ -346,13 +389,11 @@ static int main_build_remote(int argc, char ** argv)
             optResult = std::move(res[0]);
         }
 
-        auto outputHashes = staticOutputHashes(*store, drv);
         std::set<Realisation> missingRealisations;
         StorePathSet missingPaths;
         if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations) && !drv.type().hasKnownOutputPaths()) {
             for (auto & outputName : wantedOutputs) {
-                auto thisOutputHash = outputHashes.at(outputName);
-                auto thisOutputId = DrvOutput{thisOutputHash, outputName};
+                auto thisOutputId = DrvOutput{*drvPath, outputName};
                 if (!store->queryRealisation(thisOutputId)) {
                     debug("missing output %s", outputName);
                     assert(optResult);
@@ -362,7 +403,7 @@ static int main_build_remote(int argc, char ** argv)
                         auto i = success.builtOutputs.find(outputName);
                         assert(i != success.builtOutputs.end());
                         auto & newRealisation = i->second;
-                        missingRealisations.insert(newRealisation);
+                        missingRealisations.insert({newRealisation, thisOutputId});
                         missingPaths.insert(newRealisation.outPath);
                     }
                 }
@@ -396,3 +437,5 @@ static int main_build_remote(int argc, char ** argv)
 }
 
 static RegisterLegacyCommand r_build_remote("build-remote", main_build_remote);
+
+} // namespace nix

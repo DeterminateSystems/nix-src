@@ -8,7 +8,7 @@ project(
     'warning_level=1',
     'errorlogs=true', # Please print logs for tests that fail
   ],
-  meson_version : '>= 1.1',
+  meson_version : '>= 1.8',
   license : 'LGPL-2.1-or-later',
 )
 
@@ -35,6 +35,7 @@ subdir('nix-meson-build-support/common')
 
 sources = files(
   'attrs.cc',
+  'builtin.cc',
   'cache.cc',
   'fetch-settings.cc',
   'fetch-to-store.cc',
@@ -48,11 +49,19 @@ sources = files(
   'input-cache.cc',
   'mercurial.cc',
   'path.cc',
+  'provenance.cc',
   'registry.cc',
   'tarball.cc',
 )
 
 subdir('include/nix/fetchers')
+
+# Generate builtin-flake-registry.json.gen.hh
+subdir('nix-meson-build-support/generate-header')
+
+sources += gen_header.process(
+  'builtin-flake-registry.json',
+)
 
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
@@ -60,11 +69,10 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixfetchers',
   sources,
-  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,
-  prelink : true, # For C++ static initializers
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )

@@ -4,8 +4,6 @@ source common.sh
 
 TODO_NixOS
 
-clearStore
-
 # Test fetching a flat file.
 hash=$(nix-hash --flat --type sha256 ./fetchurl.sh)
 
@@ -71,7 +69,7 @@ echo "$outPath" | grepQuiet 'xyzzy'
 test -x "$outPath/fetchurl.sh"
 test -L "$outPath/symlink"
 
-nix-store --delete "$outPath"
+nix-store --delete "$outPath" --ignore-liveness
 
 # Test unpacking a compressed NAR.
 narxz="$TEST_ROOT/archive.nar.xz"

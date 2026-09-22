@@ -16,6 +16,16 @@
 
       # https://flake.parts/options/git-hooks-nix#options
       pre-commit.settings = {
+        # `self.outPath` from git-hooks-nix's flake-module is not path-normalized,
+        # so when this flake is evaluated via `packaging/secure-packages` (whose
+        # `inputs.nix.url = "../.."`), it expands to `.../source/packaging/secure-packages/../..`,
+        # which breaks the stdenv unpackPhase. Use a clean relative path instead.
+        rootSrc = lib.mkForce (
+          builtins.path {
+            name = "source";
+            path = ../.;
+          }
+        );
         hooks = {
           # Conflicts are usually found by other checks, but not those in docs,
           # and potentially other places.
@@ -37,30 +47,17 @@
               fi
             ''}";
           };
-          meson-format =
-            let
-              meson = pkgs.meson.overrideAttrs {
-                doCheck = false;
-                doInstallCheck = false;
-                patches = [
-                  (pkgs.fetchpatch {
-                    url = "https://github.com/mesonbuild/meson/commit/38d29b4dd19698d5cad7b599add2a69b243fd88a.patch";
-                    hash = "sha256-PgPBvGtCISKn1qQQhzBW5XfknUe91i5XGGBcaUK4yeE=";
-                  })
-                ];
-              };
-            in
-            {
-              enable = true;
-              files = "(meson.build|meson.options)$";
-              entry = "${pkgs.writeScript "format-meson" ''
-                #!${pkgs.runtimeShell}
-                for file in "$@"; do
-                  ${lib.getExe meson} format -ic ${../meson.format} "$file"
-                done
-              ''}";
-            };
-          nixfmt-rfc-style = {
+          meson-format = {
+            enable = true;
+            files = "(meson.build|meson.options)$";
+            entry = "${pkgs.writeScript "format-meson" ''
+              #!${pkgs.runtimeShell}
+              for file in "$@"; do
+                ${lib.getExe pkgs.meson} format -ic ${../meson.format} "$file"
+              done
+            ''}";
+          };
+          nixfmt = {
             enable = true;
             excludes = [
               # Invalid
@@ -114,6 +111,7 @@
               # Don't format vendored code
               ''^doc/manual/redirects\.js$''
               ''^doc/manual/theme/highlight\.js$''
+              ''^src/libfetchers/builtin-flake-registry\.json$''
             ];
           };
           shellcheck = {
