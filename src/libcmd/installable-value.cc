@@ -54,8 +54,12 @@ InstallableValue::trySinglePathToDerivedPaths(Value & v, const PosIdx pos, std::
     }
 
     else if (v.type() == nString) {
+        auto path = state->devirtualize(state->coerceToSingleDerivedPath(pos, v, errorCtx));
+        /* The path may still be being written asynchronously (e.g. by
+           `builtins.toFile`). */
+        state->waitForPath(path);
         return {{
-            .path = DerivedPath::fromSingle(state->devirtualize(state->coerceToSingleDerivedPath(pos, v, errorCtx))),
+            .path = DerivedPath::fromSingle(std::move(path)),
             .info = make_ref<ExtraPathInfo>(),
         }};
     }

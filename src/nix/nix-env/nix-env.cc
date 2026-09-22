@@ -243,6 +243,7 @@ static std::strong_ordering comparePriorities(EvalState & state, PackageInfo & d
 static bool isPrebuilt(EvalState & state, PackageInfo & elem)
 {
     auto path = elem.queryOutPath();
+    state.waitForPath(path);
     if (state.store->isValidPath(path))
         return true;
     return state.store->querySubstitutablePaths({path}).count(path);
@@ -502,11 +503,11 @@ static void printMissing(EvalState & state, PackageInfos & elems)
                 .outputs = OutputsSpec::All{},
             };
             targets.emplace_back(std::move(path));
-        } else
-            targets.emplace_back(
-                DerivedPath::Opaque{
-                    .path = i.queryOutPath(),
-                });
+        } else {
+            auto path = i.queryOutPath();
+            state.waitForPath(path);
+            targets.emplace_back(DerivedPath::Opaque{.path = path});
+        }
 
     printMissing(state.store, targets);
 }
@@ -782,6 +783,10 @@ static void opSet(Globals & globals, Strings opFlags, Strings opArgs)
         drv.setName(globals.forceName);
 
     auto drvPath = drv.queryDrvPath();
+    if (drvPath)
+        globals.state->waitForPath(*drvPath);
+    else
+        globals.state->waitForPath(drv.queryOutPath());
     std::vector<DerivedPath> paths{
         drvPath ? (DerivedPath) (DerivedPath::Built{
                       .drvPath = makeConstantStorePathRef(*drvPath),
@@ -1066,6 +1071,10 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
                     lvlTalkative, "skipping derivation named '%s' which gives an assertion failure", i.queryName());
                 i.setFailed();
             }
+        /* The paths may still be being written asynchronously (e.g. by
+           `builtins.toFile`). */
+        for (auto & path : paths)
+            globals.state->waitForPath(path);
         validPaths = store.queryValidPaths(paths);
         substitutablePaths = store.querySubstitutablePaths(paths);
     }
