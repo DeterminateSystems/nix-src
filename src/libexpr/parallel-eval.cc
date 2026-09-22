@@ -6,6 +6,7 @@
 #include <boost/context/fiber.hpp>
 #include <boost/context/protected_fixedsize_stack.hpp>
 
+#include <optional>
 #include <unordered_map>
 
 #if NIX_USE_BOEHMGC
@@ -248,9 +249,21 @@ unsigned int Executor::getEvalCores(const EvalSettings & evalSettings)
                                                                        : evalSettings.evalCores;
 }
 
+unsigned int Executor::getMaxFibers(const EvalSettings & evalSettings, unsigned int evalCores)
+{
+    /* By default, allow three suspended fibers per thread on top of
+       the running ones. This bounds the number of stacks (and thus
+       memory and page faults) without leaving threads idle in typical
+       workloads: e.g. `nix search nixpkgs` on 24 threads peaks at
+       120-220 live fibers when unlimited, and is not measurably slower
+       with 96, while a limit of 48 costs about 5% elapsed time. */
+    return evalSettings.evalMaxFibers == 0U ? 4 * evalCores : evalSettings.evalMaxFibers;
+}
+
 Executor::Executor(const EvalSettings & evalSettings)
     : stackPool(std::make_unique<StackPool>())
     , evalCores(getEvalCores(evalSettings))
+    , maxFibers(getMaxFibers(evalSettings, evalCores))
     , enabled(evalCores > 1)
     , interruptCallback(createInterruptCallback([&]() {
         /* Wake up all waiting fibers and threads so they can observe
@@ -260,7 +273,7 @@ Executor::Executor(const EvalSettings & evalSettings)
         wakeup.notify_all();
     }))
 {
-    debug("executor using %d threads", evalCores);
+    debug("executor using %d threads and at most %d fibers", evalCores, maxFibers);
     auto state(state_.lock());
     // FIXME: create worker threads on demand?
     for (size_t n = 0; n < evalCores; ++n)
@@ -361,7 +374,7 @@ Executor::FiberPtr Executor::makeFiber(Item && item)
     return fiber;
 }
 
-void Executor::runFiber(FiberPtr fiber)
+bool Executor::runFiber(FiberPtr fiber)
 {
     auto fib = fiber.get();
     assert(fib->ctx);
@@ -417,10 +430,12 @@ void Executor::runFiber(FiberPtr fiber)
         domain->mutex.unlock();
         /* `fib` may be resumed by another thread from this point on,
            so don't touch it anymore. */
+        return false;
     } else {
         /* The fiber has finished; its promise has been fulfilled
            inside the fiber. Destroying `fiber` frees the record (the
            stack was already freed on fiber termination). */
+        return true;
     }
 }
 
@@ -431,9 +446,7 @@ void Executor::enqueueFiber(FiberPtr fiber)
     bool doWake;
     {
         auto state(state_.lock());
-        /* Note: key 0 means that resumed fibers run before any fresh
-           work items, so existing work is drained first. */
-        state->queue.emplace(0, std::move(fiber));
+        state->readyFibers.push_back(std::move(fiber));
         doWake = state->nrSleeping > 0;
     }
     if (doWake)
@@ -448,61 +461,108 @@ void Executor::worker()
 
     amWorkerThread = true;
 
+    /* Whether the fiber we ran in the previous iteration finished (as
+       opposed to suspending itself), if any. The fiber accounting for
+       it is done under the state lock at the start of the next
+       iteration. */
+    std::optional<bool> finished;
+
     while (true) {
-        QueueEntry entry;
-        bool gotEntry = false;
+        FiberPtr fiber;
+        std::optional<Item> item;
 
         while (true) {
             auto state(state_.lock());
+
+            if (finished) {
+                if (*finished) {
+                    state->nrLiveFibers--;
+                    /* A fiber slot has become available. Wake up a
+                       worker that may be waiting for one, in case we
+                       don't take it ourselves below (e.g. because we
+                       resume a ready fiber instead). */
+                    if (!state->queue.empty() && state->nrSleeping > 0)
+                        wakeup.notify_one();
+                }
+                finished.reset();
+            }
+
             if (quit)
                 break;
-            if (!state->queue.empty()) {
-                entry = std::move(state->queue.begin()->second);
-                state->queue.erase(state->queue.begin());
-                gotEntry = true;
+
+            /* Resume ready fibers before starting fresh work items, so
+               that existing work is drained first. */
+            if (!state->readyFibers.empty()) {
+                fiber = std::move(state->readyFibers.front());
+                state->readyFibers.pop_front();
                 break;
             }
-            /* Nothing to do; sleep until a producer wakes us up.
-               Note: `nrSleeping` is maintained under the state lock,
-               so a producer either sees our increment (and wakes us),
-               or its work insertion happened before our queue check
-               above — no lost wakeups. */
+
+            if (!state->queue.empty() && canStartFiber(*state)) {
+                item = std::move(state->queue.begin()->second);
+                state->queue.erase(state->queue.begin());
+                state->nrLiveFibers++;
+                if (state->nrLiveFibers > maxLiveFibers)
+                    maxLiveFibers = state->nrLiveFibers;
+                break;
+            }
+
+            /* Nothing to do (or the fiber limit has been reached);
+               sleep until a producer wakes us up. Note: `nrSleeping`
+               is maintained under the state lock, so a producer either
+               sees our increment (and wakes us), or its work insertion
+               happened before our queue check above — no lost
+               wakeups. Likewise, a fiber slot is only freed under the
+               state lock, and the worker freeing it wakes us up. */
             state->nrSleeping++;
             state.wait(wakeup);
             state->nrSleeping--;
         }
 
-        if (!gotEntry) {
+        if (item) {
+            fiber = makeFiber(std::move(*item));
+            if (!fiber) {
+                /* Stack allocation failure; the item's promise has
+                   received the exception. Release the fiber slot. */
+                finished = true;
+                continue;
+            }
+        }
+
+        if (!fiber) {
             drainQueue();
             return;
         }
 
-        if (auto * item = std::get_if<Item>(&entry)) {
-            if (auto fiber = makeFiber(std::move(*item)))
-                runFiber(std::move(fiber));
-        } else
-            runFiber(std::move(std::get<FiberPtr>(entry)));
+        finished = runFiber(std::move(fiber));
     }
 }
 
 void Executor::drainQueue()
 {
+    /* Note: no fiber accounting here, since the fiber limit doesn't
+       apply during shutdown. */
     while (true) {
         /* Keep flushing the wait lists: a fiber resumed below can
            finish thunks, which normally re-enqueues their waiters, but
            late waiters may still be parked. */
         flushWaiters();
 
-        QueueEntry entry;
+        FiberPtr fiber;
+        std::optional<Item> item;
         {
             auto state(state_.lock());
-            if (state->queue.empty())
+            if (!state->readyFibers.empty()) {
+                fiber = std::move(state->readyFibers.front());
+                state->readyFibers.pop_front();
+            } else if (!state->queue.empty()) {
+                item = std::move(state->queue.begin()->second);
+                state->queue.erase(state->queue.begin());
+            } else
                 return;
-            entry = std::move(state->queue.begin()->second);
-            state->queue.erase(state->queue.begin());
         }
 
-        if (auto * item = std::get_if<Item>(&entry))
+        if (item)
             // Set an `Interrupted` exception on work items that
             // haven't started, so we get a nicer error than
             // "std::future_error: Broken promise". Note: a fresh
@@ -513,7 +573,7 @@ void Executor::drainQueue()
                interrupt) and unwind; it cannot suspend again thanks to
                the guard in `waitOnThunk()`. Never destroy a suspended
                fiber. */
-            runFiber(std::move(std::get<FiberPtr>(entry)));
+            runFiber(std::move(fiber));
     }
 }
 
