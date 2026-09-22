@@ -232,7 +232,13 @@ struct TrackingStore : public Store
         const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override
     {
         try {
-            callback(std::make_shared<ValidPathInfo>(*next->queryPathInfo(path)));
+            auto info = std::make_shared<ValidPathInfo>(*next->queryPathInfo(path));
+            /* The evaluator checks whether a path already exists
+               before adding it to the store. So if the underlying
+               store has the path, count it as instantiated, since
+               the evaluator would otherwise have written it. */
+            instantiatedPaths.insert(path);
+            callback(std::move(info));
         } catch (InvalidPath &) {
             callback(nullptr);
         } catch (...) {
