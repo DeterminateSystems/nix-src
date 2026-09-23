@@ -47,7 +47,7 @@ def main [] {
     ^pkg-config --cflags ...$attrs.pkgConfigDeps | str trim | split row -r '\s+' | where { $in != "" }
   }
 
-  (^$env.CXX
+  (exec $env.CXX
     ...$attrs.cxxFlags
     ...$include_flags
     ...$define_flags
