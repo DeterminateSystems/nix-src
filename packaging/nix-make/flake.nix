@@ -6,12 +6,14 @@
   inputs.nixpkgs.follows = "nix/nixpkgs";
   # The built-in flake schemas that ship with Nix.
   inputs.flake-schemas.url = "../../src/libcmd/builtin-flake-schemas";
+  inputs.nix-wasm-module-make.url = "https://flakehub.com/f/DeterminateSystems/nix-wasm-module-make/0";
 
   outputs =
     {
       self,
       nix,
       nixpkgs,
+      nix-wasm-module-make,
       flake-schemas,
     }:
     let
@@ -39,7 +41,7 @@
             }).config;
         in
         pkgs.lib.makeScope pkgs.newScope (self: {
-          nixMake = import ./lib.nix { inherit pkgs config; };
+          nixMake = import ./lib.nix { inherit pkgs config nix-wasm-module-make; };
 
           nix-util = self.callPackage ../../src/libutil/make.nix { };
           nix-store = self.callPackage ../../src/libstore/make.nix { };

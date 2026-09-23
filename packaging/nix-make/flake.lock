@@ -104,6 +104,20 @@
       },
       "parent": []
     },
+    "nix-wasm-module-make": {
+      "locked": {
+        "lastModified": 1790199522,
+        "narHash": "sha256-pSEQ9MB37s6rdiOuz7zrIKpZOOD3uZNLPzHXDpz+o2w=",
+        "rev": "e7db715ec4c8df6b4c215466f7c542e845b2fe12",
+        "revCount": 109,
+        "type": "tarball",
+        "url": "https://api.flakehub.com/f/pinned/DeterminateSystems/nix-wasm-module-make/0.1.109%2Brev-e7db715ec4c8df6b4c215466f7c542e845b2fe12/01a0d038-655f-7f21-a563-523974f35b1b/source.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://flakehub.com/f/DeterminateSystems/nix-wasm-module-make/0"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1787962033,
@@ -154,6 +168,7 @@
       "inputs": {
         "flake-schemas": "flake-schemas",
         "nix": "nix",
+        "nix-wasm-module-make": "nix-wasm-module-make",
         "nixpkgs": [
           "nix",
           "nixpkgs"

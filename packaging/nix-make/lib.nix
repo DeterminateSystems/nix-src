@@ -1,12 +1,16 @@
 # Generic machinery for building C++ components with one derivation per
 # compilation unit.
-{ pkgs, config }:
+{
+  pkgs,
+  config,
+  nix-wasm-module-make,
+}:
 
 let
   inherit (pkgs) lib;
 
   getDeps = builtins.wasm {
-    path = ./scanner.wasm;
+    path = nix-wasm-module-make.nixWasmModules.nix_make;
     function = "getDeps";
   };
 
