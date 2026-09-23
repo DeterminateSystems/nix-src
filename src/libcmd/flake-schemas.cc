@@ -22,7 +22,7 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
 
     accessor->addFile(
         CanonPath("flake.nix"),
-#include "builtin-flake-schemas.nix.gen.hh"
+#include "builtin-flake-schemas/flake.nix.gen.hh"
     );
 
     auto [storePath, narHash] = state.store->computeStorePath("source", {accessor});

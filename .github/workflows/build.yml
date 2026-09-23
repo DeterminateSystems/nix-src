@@ -114,6 +114,20 @@ jobs:
       - uses: DeterminateSystems/flakehub-cache-action@main
       - run: nix flake check --keep-going ${{ inputs.flake }} -L --system ${{ inputs.system }}
 
+  # Run and test the new build system.
+  nix_make:
+    if: ${{ inputs.if && inputs.run_tests && inputs.system == 'x86_64-linux' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/determinate-nix-action@main
+        with:
+          extra-conf: |
+            extra-experimental-features = wasm-builtin
+      - uses: DeterminateSystems/flakehub-cache-action@main
+      - run: nix build ./packaging/nix-make#release.functional-tests -L
+
   vm_tests_smoke:
     if: inputs.run_vm_tests && github.event_name != 'merge_group'
     needs: build
