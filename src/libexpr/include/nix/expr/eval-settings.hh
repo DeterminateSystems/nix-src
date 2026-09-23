@@ -515,6 +515,22 @@ public:
 
           Note that enabling the debugger (`--debugger`) disables multi-threaded evaluation.
         )"};
+
+    Setting<unsigned int> evalMaxFibers{
+        this,
+        0,
+        "eval-max-fibers",
+        R"(
+          The maximum number of fibers that the multi-threaded evaluator keeps in existence at the same time.
+
+          Each work item (e.g. an attribute evaluated by `nix search` or `nix flake show`) runs on its own fiber, which has its own stack.
+          When a fiber blocks on a value that is being evaluated by another thread, it is suspended and its worker thread starts the next work item on a new fiber.
+          This setting limits the number of fibers (and thus stacks) that can accumulate this way: when the limit is reached, worker threads only resume suspended fibers instead of starting new work items.
+          Lower values reduce memory usage and page faults; higher values allow more work to be in progress at the same time.
+          Values below the number of evaluation threads (see `eval-cores`) leave threads idle whenever fibers are suspended.
+
+          The value `0` means four times the number of evaluation threads.
+        )"};
 };
 
 /**
