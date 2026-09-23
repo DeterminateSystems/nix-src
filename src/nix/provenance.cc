@@ -19,7 +19,7 @@
 #include <string>
 #include <nlohmann/json.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
-#include <boost/unordered/unordered_flat_set.hpp>
+#include <boost/unordered/concurrent_flat_set.hpp>
 
 #define TAB "    "
 
@@ -180,7 +180,7 @@ static auto rCmdProvenanceShow = registerCommand2<CmdProvenanceShow>({"provenanc
 struct TrackingStore : public Store
 {
     ref<Store> next;
-    boost::unordered_flat_set<StorePath> instantiatedPaths;
+    boost::concurrent_flat_set<StorePath> instantiatedPaths;
 
     TrackingStore(ref<Store> next)
         : Store(next->config)
@@ -232,7 +232,13 @@ struct TrackingStore : public Store
         const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override
     {
         try {
-            callback(std::make_shared<ValidPathInfo>(*next->queryPathInfo(path)));
+            auto info = std::make_shared<ValidPathInfo>(*next->queryPathInfo(path));
+            /* The evaluator checks whether a path already exists
+               before adding it to the store. So if the underlying
+               store has the path, count it as instantiated, since
+               the evaluator would otherwise have written it. */
+            instantiatedPaths.insert(path);
+            callback(std::move(info));
         } catch (InvalidPath &) {
             callback(nullptr);
         } catch (...) {
