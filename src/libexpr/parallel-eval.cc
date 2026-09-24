@@ -6,6 +6,8 @@
 #include <boost/context/fiber.hpp>
 #include <boost/context/protected_fixedsize_stack.hpp>
 
+#include "nix/util/finally.hh"
+
 #include <optional>
 #include <unordered_map>
 
@@ -20,6 +22,7 @@ namespace nix {
 struct WaiterDomain;
 
 [[gnu::tls_model("initial-exec")]] thread_local bool Executor::amWorkerThread{false};
+[[gnu::tls_model("initial-exec")]] thread_local bool Executor::inSpeculation{false};
 
 static std::atomic<uint32_t> nextEvalThreadId{1};
 [[gnu::tls_model("initial-exec")]] thread_local uint32_t myEvalThreadId(nextEvalThreadId++);
@@ -68,6 +71,11 @@ struct Executor::Fiber
     work_t work;
 
     /**
+     * See `Item::speculative`.
+     */
+    const bool speculative;
+
+    /**
      * The fiber's continuation. Valid while the fiber is queued or
      * suspended; invalid while it's running or after it has finished.
      */
@@ -98,6 +106,7 @@ struct Executor::Fiber
         , evalThreadId(nextEvalThreadId++)
         , promise(std::move(item.promise))
         , work(std::move(item.work))
+        , speculative(item.speculative)
     {
     }
 
@@ -384,9 +393,11 @@ bool Executor::runFiber(FiberPtr fiber)
 
     auto savedThreadId = myEvalThreadId;
     auto savedCallDepth = CallDepth::callDepth;
+    auto savedInSpeculation = inSpeculation;
     currentFiber = fib;
     myEvalThreadId = fib->evalThreadId;
     CallDepth::callDepth = fib->callDepth;
+    inSpeculation = fib->speculative;
     std::swap(EvalState::evalContext, fib->evalContext);
 
 #if NIX_USE_BOEHMGC
@@ -413,6 +424,7 @@ bool Executor::runFiber(FiberPtr fiber)
     myEvalThreadId = savedThreadId;
     fib->callDepth = CallDepth::callDepth;
     CallDepth::callDepth = savedCallDepth;
+    inSpeculation = savedInSpeculation;
     std::swap(EvalState::evalContext, fib->evalContext);
 
     if (fib->ctx) {
@@ -449,6 +461,7 @@ void Executor::enqueueFiber(FiberPtr fiber)
     {
         auto state(state_.lock());
         state->readyFibers.push_back(std::move(fiber));
+        nrReadyFibers++;
         doWake = state->nrSleeping > 0;
     }
     if (doWake)
@@ -497,16 +510,28 @@ void Executor::worker()
             if (!state->readyFibers.empty()) {
                 fiber = std::move(state->readyFibers.front());
                 state->readyFibers.pop_front();
+                nrReadyFibers--;
                 break;
             }
 
             if (!state->queue.empty() && canStartFiber(*state)) {
-                item = std::move(state->queue.begin()->second);
-                state->queue.erase(state->queue.begin());
-                state->nrLiveFibers++;
-                if (state->nrLiveFibers > maxLiveFibers)
-                    maxLiveFibers = state->nrLiveFibers;
-                break;
+                auto & head = state->queue.begin()->second;
+                /* Speculative work may not use the last fiber slots,
+                   which are reserved for demand work: otherwise
+                   suspended speculative fibers could occupy all slots
+                   and keep demand items (which always sort before
+                   speculative ones) from starting. When the reserve is
+                   exhausted, we sleep until a fiber finishes. */
+                if (!head.speculative || state->nrLiveFibers + std::min(evalCores, maxFibers / 2) < maxFibers) {
+                    item = std::move(head);
+                    state->queue.erase(state->queue.begin());
+                    if (!item->speculative)
+                        nrQueuedDemand--;
+                    state->nrLiveFibers++;
+                    if (state->nrLiveFibers > maxLiveFibers)
+                        maxLiveFibers = state->nrLiveFibers;
+                    break;
+                }
             }
 
             /* Nothing to do (or the fiber limit has been reached);
@@ -522,10 +547,13 @@ void Executor::worker()
         }
 
         if (item) {
+            auto speculative = item->speculative;
             fiber = makeFiber(std::move(*item));
             if (!fiber) {
                 /* Stack allocation failure; the item's promise has
                    received the exception. Release the fiber slot. */
+                if (speculative)
+                    nrSpeculativeOutstanding--;
                 finished = true;
                 continue;
             }
@@ -565,9 +593,14 @@ void Executor::drainQueue()
             if (!state->readyFibers.empty()) {
                 fiber = std::move(state->readyFibers.front());
                 state->readyFibers.pop_front();
+                nrReadyFibers--;
             } else if (!state->queue.empty()) {
                 item = std::move(state->queue.begin()->second);
                 state->queue.erase(state->queue.begin());
+                if (item->speculative)
+                    nrSpeculativeOutstanding--;
+                else
+                    nrQueuedDemand--;
             } else
                 return;
         }
@@ -589,12 +622,6 @@ void Executor::drainQueue()
     }
 }
 
-bool Executor::hasBacklog()
-{
-    auto state(state_.lock());
-    return state->queue.size() + state->readyFibers.size() >= evalCores;
-}
-
 std::vector<std::future<void>> Executor::spawn(WorkItems && items)
 {
     if (items.empty())
@@ -611,6 +638,7 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
             static thread_local uint32_t local = 0;
             auto key = (uint64_t(item.second) << 48) | local++;
             state->queue.emplace(key, Item{.promise = std::move(promise), .work = std::move(item.first)});
+            nrQueuedDemand++;
         }
         /* Wake up one worker per item, but only workers that are
            actually asleep. In the steady state (all workers busy),
@@ -622,6 +650,37 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
         wakeup.notify_one();
 
     return futures;
+}
+
+void Executor::spawnSpeculative(work_t && work)
+{
+    auto n = ++nrSpeculativeOutstanding;
+    if (n > maxSpeculativeOutstanding)
+        maxSpeculativeOutstanding = n;
+
+    /* Wrap the work so that the outstanding count is decremented when
+       it finishes, however it finishes. (Items that are dropped
+       without running are handled in `drainQueue()`.) */
+    Item item{
+        .work =
+            [this, work(std::move(work))]() mutable {
+                Finally decr([this]() { nrSpeculativeOutstanding--; });
+                work();
+            },
+        .speculative = true,
+    };
+
+    bool doWake;
+    {
+        auto state(state_.lock());
+        static thread_local uint32_t local = 0;
+        auto key = (uint64_t(speculativePriority) << 48) | local++;
+        state->queue.emplace(key, std::move(item));
+        doWake = state->nrSleeping > 0;
+    }
+
+    if (doWake)
+        wakeup.notify_one();
 }
 
 FutureVector::~FutureVector()
@@ -890,6 +949,89 @@ static RegisterPrimOp r_parallel({
 });
 
 #pragma GCC diagnostic ignored "-Wswitch-enum"
+
+void EvalState::speculate(Value * const * candidates, size_t n, SpeculationSite site)
+{
+    assert(n <= maxSpeculationCandidates);
+
+    /* Speculative work must not spawn speculation of its own, to
+       bound the cascade. */
+    if (Executor::speculating()) {
+        nrSpeculationsRejectedBrake++;
+        return;
+    }
+
+    auto cap = settings.evalSpeculationBacklog.get() * std::max(1U, executor->evalCores - 1);
+    if (executor->nrSpeculativeOutstanding.load(std::memory_order_relaxed) >= cap) {
+        nrSpeculationsRejectedBacklog++;
+        return;
+    }
+
+    /* If the workers already have a backlog of demand work, there is
+       no idle capacity for speculation. */
+    if (executor->hasBacklog()) {
+        nrSpeculationsRejectedBusy++;
+        return;
+    }
+
+    /* Collect the candidates that are actually thunks (e.g. a
+       variable reference may already have been resolved) into a GC
+       list, so that a single root keeps all of them alive while the
+       work item is queued. Note: the candidates are live values that
+       other threads may be forcing concurrently, so `isThunk()` is
+       only a snapshot; test it once per candidate. */
+    Value * thunks[maxSpeculationCandidates];
+    size_t k = 0;
+    for (size_t i = 0; i < n; ++i)
+        if (candidates[i]->isThunk())
+            thunks[k++] = candidates[i];
+    if (!k)
+        return;
+
+    auto list = buildList(k);
+    for (size_t i = 0; i < k; ++i)
+        list.elems[i] = thunks[i];
+    auto vList = allocValue();
+    vList->mkList(list);
+
+    nrThunksSpeculated += k;
+    nrSpeculationItems++;
+    switch (site) {
+    case SpeculationSite::Attrs:
+        nrSpeculatedFromAttrs += k;
+        break;
+    case SpeculationSite::Let:
+        nrSpeculatedFromLet += k;
+        break;
+    case SpeculationSite::List:
+        nrSpeculatedFromList += k;
+        break;
+    case SpeculationSite::Call:
+        nrSpeculatedFromCall += k;
+        break;
+    }
+
+    executor->spawnSpeculative(makeWork([root(RootValue(vList)), this]() {
+        for (auto v : (*root)->listView()) {
+            if (executor->quit)
+                return;
+            if (v->isFinished()) {
+                /* Demand (or another speculation) got there first. */
+                nrSpeculatedAlreadyFinished++;
+                continue;
+            }
+            try {
+                forceValue(*v, noPos);
+            } catch (Interrupted &) {
+                throw;
+            } catch (...) {
+                /* The error has been stored in the thunk and will be
+                   reported if the value is ever demanded. */
+                nrSpeculatedFailed++;
+            }
+        }
+    }));
+}
 
 void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos, bool spawnThunks)
 {

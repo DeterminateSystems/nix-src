@@ -531,6 +531,32 @@ public:
 
           The value `0` means four times the number of evaluation threads.
         )"};
+
+    Setting<unsigned int> evalSpeculationThreshold{
+        this,
+        128,
+        "eval-speculation-threshold",
+        R"(
+          Controls speculative evaluation by the multi-threaded evaluator.
+
+          When an attribute set, list, `let` expression or function call creates thunks (delayed computations), the evaluator can hand the ones whose expressions are large enough to idle worker threads, which then evaluate them ahead of time.
+          If the value is needed later, it is already available; if it is never needed, the work was wasted.
+          This setting is the minimum size of an expression, measured in syntax tree nodes (not counting nested lambdas, attribute values and list elements, which are delayed computations of their own), for its thunk to be evaluated speculatively.
+
+          The value `0` disables speculative evaluation.
+          Lower values speculate more aggressively: e.g. on a typical NixOS configuration evaluated with 24 threads, the default of `128` reduced the evaluation time by about 20% at a few percent more CPU time, while `64` reduced it by about 30% at 35% more CPU time, but also slowed down workloads that already keep all threads busy (such as `nix search`).
+          This setting has no effect unless `eval-cores` is greater than 1.
+        )"};
+
+    Setting<unsigned int> evalSpeculationBacklog{
+        this,
+        128,
+        "eval-speculation-backlog",
+        R"(
+          The maximum number of speculative work items (see `eval-speculation-threshold`) per evaluation thread that may be waiting to be evaluated or being evaluated at the same time.
+          When this limit is reached, no further thunks are evaluated speculatively until some of the outstanding work has finished.
+          Higher values allow the evaluator to run further ahead of demand, at the cost of memory and possibly wasted work.
+        )"};
 };
 
 /**

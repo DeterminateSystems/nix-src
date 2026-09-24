@@ -360,9 +360,13 @@ void ExprSelect::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv>
     e->bindVars(es, env);
     if (def)
         def->bindVars(es, env);
+    uint64_t n = 1 + e->size + (def ? def->size : 0);
     for (auto & i : getAttrPath())
-        if (!i.symbol)
+        if (!i.symbol) {
             i.expr->bindVars(es, env);
+            n += i.expr->size;
+        }
+    size = std::min<uint64_t>(n, std::numeric_limits<uint32_t>::max());
 }
 
 void ExprOpHasAttr::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)
@@ -371,9 +375,13 @@ void ExprOpHasAttr::bindVars(EvalState & es, const std::shared_ptr<const StaticE
         es.exprEnvs.insert(std::make_pair(this, env));
 
     e->bindVars(es, env);
+    uint64_t n = 1 + e->size;
     for (auto & i : attrPath)
-        if (!i.symbol)
+        if (!i.symbol) {
             i.expr->bindVars(es, env);
+            n += i.expr->size;
+        }
+    size = std::min<uint64_t>(n, std::numeric_limits<uint32_t>::max());
 }
 
 std::shared_ptr<const StaticEnv>
@@ -445,6 +453,32 @@ void ExprAttrs::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> 
             i.valueExpr->bindVars(es, env);
         }
     }
+
+    computeSize(es);
+}
+
+void ExprAttrs::computeSize(EvalState & es)
+{
+    /* Evaluating an attrset to WHNF creates a thunk per attribute and
+       evaluates the dynamic attribute names and the `inherit (...)`
+       sources. The attribute values themselves become thunks. */
+    uint64_t n = 1;
+    if (inheritFromExprs)
+        for (auto from : *inheritFromExprs)
+            n += from->size;
+    for (auto & i : *dynamicAttrs)
+        n += i.nameExpr->size;
+    size = std::min<uint64_t>(n, std::numeric_limits<uint32_t>::max());
+
+    speculable = false;
+    if (auto threshold = es.speculationThreshold) {
+        for (auto & i : *attrs)
+            if (i.second.kind == AttrDef::Kind::Plain && i.second.e->size >= threshold)
+                speculable = true;
+        for (auto & i : *dynamicAttrs)
+            if (i.valueExpr->size >= threshold)
+                speculable = true;
+    }
 }
 
 void ExprList::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)
@@ -452,8 +486,14 @@ void ExprList::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> &
     if (es.debugRepl)
         es.exprEnvs.insert(std::make_pair(this, env));
 
-    for (auto & i : elems)
+    speculable = false;
+    auto threshold = es.speculationThreshold;
+    for (auto & i : elems) {
         i->bindVars(es, env);
+        if (threshold && i->size >= threshold)
+            speculable = true;
+    }
+    /* The elements become thunks, so `size` stays 1. */
 }
 
 void ExprLambda::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)
@@ -496,8 +536,18 @@ void ExprCall::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> &
         es.exprEnvs.insert(std::make_pair(this, env));
 
     fun->bindVars(es, env);
-    for (auto e : *args)
+    speculable = false;
+    auto threshold = es.speculationThreshold;
+    uint64_t n = 1 + fun->size;
+    for (auto e : *args) {
         e->bindVars(es, env);
+        /* The arguments become thunks, but their creation is per-call
+           work, and calls are the only static cost signal we have. */
+        n += e->size;
+        if (threshold && e->size >= threshold)
+            speculable = true;
+    }
+    size = std::min<uint64_t>(n, std::numeric_limits<uint32_t>::max());
 }
 
 void ExprLet::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)
@@ -518,10 +568,15 @@ void ExprLet::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & 
     for (auto & i : *attrs->attrs)
         i.second.e->bindVars(es, i.second.chooseByKind(newEnv, env, inheritFromEnv));
 
+    /* Note: `attrs` is not bound via `ExprAttrs::bindVars()`, so
+       compute its size and `speculable` flag here. */
+    attrs->computeSize(es);
+
     if (es.debugRepl)
         es.exprEnvs.insert(std::make_pair(this, newEnv));
 
     body->bindVars(es, newEnv);
+    setSize({attrs, body});
 }
 
 void ExprWith::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)
@@ -549,6 +604,7 @@ void ExprWith::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> &
     attrs->bindVars(es, env);
     auto newEnv = std::make_shared<StaticEnv>(this, env);
     body->bindVars(es, newEnv);
+    setSize({attrs, body});
 }
 
 void ExprIf::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)
@@ -559,6 +615,7 @@ void ExprIf::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & e
     cond->bindVars(es, env);
     then->bindVars(es, env);
     else_->bindVars(es, env);
+    setSize({cond, then, else_});
 }
 
 void ExprAssert::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)
@@ -568,6 +625,7 @@ void ExprAssert::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv>
 
     cond->bindVars(es, env);
     body->bindVars(es, env);
+    setSize({cond, body});
 }
 
 void ExprOpNot::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)
@@ -576,6 +634,7 @@ void ExprOpNot::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> 
         es.exprEnvs.insert(std::make_pair(this, env));
 
     e->bindVars(es, env);
+    setSize({e});
 }
 
 void ExprConcatStrings::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)
@@ -583,8 +642,12 @@ void ExprConcatStrings::bindVars(EvalState & es, const std::shared_ptr<const Sta
     if (es.debugRepl)
         es.exprEnvs.insert(std::make_pair(this, env));
 
-    for (auto & i : this->es)
+    uint64_t n = 1;
+    for (auto & i : this->es) {
         i.second->bindVars(es, env);
+        n += i.second->size;
+    }
+    size = std::min<uint64_t>(n, std::numeric_limits<uint32_t>::max());
 }
 
 void ExprPos::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)

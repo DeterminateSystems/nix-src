@@ -7,6 +7,8 @@
 #include <vector>
 #include <memory_resource>
 #include <algorithm>
+#include <initializer_list>
+#include <limits>
 
 #include "nix/expr/value.hh"
 #include "nix/expr/symbol-table.hh"
@@ -102,9 +104,31 @@ struct Expr
 
     static Counter nrExprs;
 
+    /**
+     * An estimate of the cost of reducing this expression to weak head
+     * normal form, in AST nodes. Lambda bodies, attribute values and
+     * list elements are not counted, since those become thunks of
+     * their own. Computed bottom-up by `bindVars()`. Used to decide
+     * whether a thunk is worth evaluating speculatively (see
+     * `EvalState::speculate()`).
+     */
+    uint32_t size = 1;
+
     Expr()
     {
         nrExprs++;
+    }
+
+    /**
+     * Compute `size` from the sizes of the given children (saturating).
+     */
+    void setSize(std::initializer_list<const Expr *> children)
+    {
+        uint64_t n = 1;
+        for (auto child : children)
+            if (child)
+                n += child->size;
+        size = std::min<uint64_t>(n, std::numeric_limits<uint32_t>::max());
     }
 
     virtual ~Expr() {};
@@ -347,6 +371,14 @@ struct ExprOpHasAttr : Expr
 struct ExprAttrs : Expr
 {
     bool recursive;
+
+    /**
+     * Whether at least one attribute value is substantial enough to
+     * be evaluated speculatively (see `EvalState::speculate()`).
+     * Computed by `bindVars()`.
+     */
+    bool speculable = false;
+
     PosIdx pos;
 
     struct AttrDef
@@ -427,12 +459,25 @@ struct ExprAttrs : Expr
 
     std::shared_ptr<const StaticEnv> bindInheritSources(EvalState & es, const std::shared_ptr<const StaticEnv> & env);
     Env * buildInheritFromEnv(EvalState & state, Env & up);
+
+    /**
+     * Compute `size` and `speculable` from the already-bound
+     * children. Called by `bindVars()` and by `ExprLet::bindVars()`.
+     */
+    void computeSize(EvalState & es);
     void showBindings(const SymbolTable & symbols, std::ostream & str) const;
     void moveDataToAllocator(std::pmr::polymorphic_allocator<char> & alloc);
 };
 
 struct ExprList : Expr
 {
+    /**
+     * Whether at least one element is substantial enough to be
+     * evaluated speculatively (see `EvalState::speculate()`).
+     * Computed by `bindVars()`.
+     */
+    bool speculable = false;
+
     std::span<Expr *> elems;
 
     ExprList(std::pmr::polymorphic_allocator<char> & alloc, std::span<Expr *> exprs)
@@ -590,6 +635,13 @@ struct ExprCall : Expr
     PosIdx pos;
     std::optional<PosIdx> cursedOrEndPos; // used during parsing to warn about https://github.com/NixOS/nix/issues/11118
 
+    /**
+     * Whether at least one argument is substantial enough to be
+     * evaluated speculatively (see `EvalState::speculate()`).
+     * Computed by `bindVars()`.
+     */
+    bool speculable = false;
+
     ExprCall(const PosIdx & pos, Expr * fun, std::pmr::vector<Expr *> && args)
         : fun(fun)
         , args(args)
@@ -717,6 +769,7 @@ struct ExprOpNot : Expr
     {                                                                                    \
         e1->bindVars(es, env);                                                           \
         e2->bindVars(es, env);                                                           \
+        setSize({e1, e2});                                                               \
     }                                                                                    \
     void eval(EvalState & state, Env & env, Value & v) override;                         \
     PosIdx getPos() const override                                                       \

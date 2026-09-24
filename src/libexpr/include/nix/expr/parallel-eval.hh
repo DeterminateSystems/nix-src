@@ -25,7 +25,21 @@ struct Executor
     {
         std::promise<void> promise;
         work_t work;
+
+        /**
+         * Whether this is speculative work (see
+         * `EvalState::speculate()`): work that runs at the lowest
+         * priority, is not counted as backlog, may not start
+         * speculation of its own, and is subject to the fiber reserve
+         * for demand work.
+         */
+        bool speculative = false;
     };
+
+    /**
+     * The priority of speculative work items, i.e. the lowest one.
+     */
+    static constexpr uint8_t speculativePriority = 255;
 
     /**
      * A work item running on its own stack. Defined in
@@ -102,6 +116,21 @@ struct Executor
     std::atomic<uint64_t> maxLiveFibers{0};
     std::atomic<uint64_t> nrFiberStacksAllocated{0};
 
+    /**
+     * The number of queued, non-speculative work items, and the
+     * number of ready fibers. Maintained outside the state lock so
+     * that `hasBacklog()` is lock-free.
+     */
+    std::atomic<uint32_t> nrQueuedDemand{0};
+    std::atomic<uint32_t> nrReadyFibers{0};
+
+    /**
+     * The number of speculative work items that have been submitted
+     * but not yet finished (or dropped), and its high-water mark.
+     */
+    std::atomic<uint32_t> nrSpeculativeOutstanding{0};
+    std::atomic<uint32_t> maxSpeculativeOutstanding{0};
+
     static unsigned int getEvalCores(const EvalSettings & evalSettings);
 
     static unsigned int getMaxFibers(const EvalSettings & evalSettings, unsigned int evalCores);
@@ -168,15 +197,43 @@ struct Executor
     std::vector<std::future<void>> spawn(WorkItems && items);
 
     /**
-     * Whether there is already at least one queued work item or ready
-     * fiber per worker thread. Optional background work (such as the
-     * speculative instantiation of dependencies in
+     * Submit a speculative work item (see `Item::speculative`). Its
+     * result is not awaited by anyone, so exceptions other than
+     * `Interrupted` are discarded.
+     */
+    void spawnSpeculative(work_t && work);
+
+    /**
+     * Whether there is already at least one queued non-speculative
+     * work item or ready fiber per worker thread. Optional background
+     * work (such as the speculative instantiation of dependencies in
      * `derivationStrict`) should be skipped in that case: it cannot
      * add parallelism, only scheduling overhead.
      */
-    bool hasBacklog();
+    bool hasBacklog() const
+    {
+        return nrQueuedDemand.load(std::memory_order_relaxed) + nrReadyFibers.load(std::memory_order_relaxed)
+               >= evalCores;
+    }
+
+    /**
+     * Whether the current execution context is running speculative
+     * work. Speculative work must not spawn speculation of its own
+     * (to bound the cascade), and later this will also be the
+     * predicate for bailing out of side effects.
+     */
+    static bool speculating()
+    {
+        return inSpeculation;
+    }
 
     [[gnu::tls_model("initial-exec")]] static thread_local bool amWorkerThread;
+
+    /**
+     * Whether the fiber running on this thread is speculative.
+     * Swapped by `runFiber()` on every switch-in/out.
+     */
+    [[gnu::tls_model("initial-exec")]] static thread_local bool inSpeculation;
 };
 
 struct FutureVector

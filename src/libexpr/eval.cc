@@ -348,6 +348,7 @@ EvalState::EvalState(
     , functionCalls(make_ref<decltype(functionCalls)::element_type>())
     , attrSelects(make_ref<decltype(attrSelects)::element_type>())
     , executor{make_ref<Executor>(settings)}
+    , speculationThreshold(executor->enabled ? settings.evalSpeculationThreshold.get() : 0)
 {
 #ifndef _WIN32
     static std::once_flag stackSizeBumped;
@@ -1309,6 +1310,13 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
     auto dynamicEnv = &env;
     bool sort = false;
 
+    /* Candidates for speculative evaluation (see
+       `EvalState::speculate()`). These are only submitted at the end,
+       when the environment they capture is fully initialised. */
+    auto threshold = speculable ? state.speculationThreshold : 0;
+    Value * cands[EvalState::maxSpeculationCandidates];
+    size_t nCands = 0;
+
     if (recursive) {
         /* Create a new environment that contains the attributes in
            this `rec'. */
@@ -1333,6 +1341,9 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
                 vAttr = i.second.e->maybeThunk(state, *i.second.chooseByKind(&env2, &env, inheritEnv));
             env2.values[displ++] = vAttr;
             bindings.insert(i.first, vAttr, i.second.pos);
+            if (threshold && nCands < EvalState::maxSpeculationCandidates && i.second.kind == AttrDef::Kind::Plain
+                && i.second.e->size >= threshold)
+                cands[nCands++] = vAttr;
         }
 
         /* If the rec contains an attribute called `__overrides', then
@@ -1359,14 +1370,21 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
                     bindings.push_back(i);
             }
             sort = true;
+            /* The overrides may have replaced some of the candidate
+               thunks, so don't speculate on them. */
+            nCands = 0;
         }
     }
 
     else {
         Env * inheritEnv = inheritFromExprs ? buildInheritFromEnv(state, env) : nullptr;
-        for (auto & i : *attrs)
-            bindings.insert(
-                i.first, i.second.e->maybeThunk(state, *i.second.chooseByKind(&env, &env, inheritEnv)), i.second.pos);
+        for (auto & i : *attrs) {
+            auto vAttr = i.second.e->maybeThunk(state, *i.second.chooseByKind(&env, &env, inheritEnv));
+            bindings.insert(i.first, vAttr, i.second.pos);
+            if (threshold && nCands < EvalState::maxSpeculationCandidates && i.second.kind == AttrDef::Kind::Plain
+                && i.second.e->size >= threshold)
+                cands[nCands++] = vAttr;
+        }
     }
 
     /* Dynamic attrs apply *after* rec and __overrides. */
@@ -1391,9 +1409,15 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
 
         i.valueExpr->setName(nameSym);
         /* Keep sorted order so find can catch duplicates */
-        bindings.insert(nameSym, i.valueExpr->maybeThunk(state, *dynamicEnv), i.pos);
+        auto vAttr = i.valueExpr->maybeThunk(state, *dynamicEnv);
+        bindings.insert(nameSym, vAttr, i.pos);
         sort = true;
+        if (threshold && nCands < EvalState::maxSpeculationCandidates && i.valueExpr->size >= threshold)
+            cands[nCands++] = vAttr;
     }
+
+    if (nCands) [[unlikely]]
+        state.speculate(cands, nCands, EvalState::SpeculationSite::Attrs);
 
     /* Empty attrsets share the static Bindings::emptyBindings, which we
        must not write to: apart from being a data race, it causes false
@@ -1417,10 +1441,22 @@ void ExprLet::eval(EvalState & state, Env & env, Value & v)
     /* The recursive attributes are evaluated in the new environment,
        while the inherited attributes are evaluated in the original
        environment. */
+    auto threshold = attrs->speculable ? state.speculationThreshold : 0;
+    Value * cands[EvalState::maxSpeculationCandidates];
+    size_t nCands = 0;
     Displacement displ = 0;
     for (auto & i : *attrs->attrs) {
-        env2.values[displ++] = i.second.e->maybeThunk(state, *i.second.chooseByKind(&env2, &env, inheritEnv));
+        auto vAttr = i.second.e->maybeThunk(state, *i.second.chooseByKind(&env2, &env, inheritEnv));
+        env2.values[displ++] = vAttr;
+        if (threshold && nCands < EvalState::maxSpeculationCandidates
+            && i.second.kind == ExprAttrs::AttrDef::Kind::Plain && i.second.e->size >= threshold)
+            cands[nCands++] = vAttr;
     }
+
+    /* Note: only now that `env2` is fully initialised may the thunks
+       be evaluated speculatively. */
+    if (nCands) [[unlikely]]
+        state.speculate(cands, nCands, EvalState::SpeculationSite::Let);
 
     if (state.debugRepl) {
         auto dts = makeDebugTraceStacker(state, *this, env2, getPos(), "while evaluating a '%1%' expression", "let");
@@ -1433,9 +1469,17 @@ void ExprLet::eval(EvalState & state, Env & env, Value & v)
 void ExprList::eval(EvalState & state, Env & env, Value & v)
 {
     auto list = state.buildList(elems.size());
-    for (const auto & [n, v2] : enumerate(list))
+    auto threshold = speculable ? state.speculationThreshold : 0;
+    Value * cands[EvalState::maxSpeculationCandidates];
+    size_t nCands = 0;
+    for (const auto & [n, v2] : enumerate(list)) {
         v2 = elems[n]->maybeThunk(state, env);
+        if (threshold && nCands < EvalState::maxSpeculationCandidates && elems[n]->size >= threshold)
+            cands[nCands++] = v2;
+    }
     v.mkList(list);
+    if (nCands) [[unlikely]]
+        state.speculate(cands, nCands, EvalState::SpeculationSite::List);
 }
 
 Value * ExprList::maybeThunk(EvalState & state, Env & env)
@@ -1849,6 +1893,17 @@ void ExprCall::eval(EvalState & state, Env & env, Value & v)
     SmallValueVector<4> vArgs(args->size());
     for (size_t i = 0; i < args->size(); ++i)
         vArgs[i] = (*args)[i]->maybeThunk(state, env);
+
+    if (speculable) [[unlikely]] {
+        auto threshold = state.speculationThreshold;
+        Value * cands[EvalState::maxSpeculationCandidates];
+        size_t nCands = 0;
+        for (size_t i = 0; i < args->size() && nCands < EvalState::maxSpeculationCandidates; ++i)
+            if ((*args)[i]->size >= threshold)
+                cands[nCands++] = vArgs[i];
+        if (nCands)
+            state.speculate(cands, nCands, EvalState::SpeculationSite::Call);
+    }
 
     state.callFunction(vFun, vArgs, v, pos);
 }
@@ -3105,6 +3160,18 @@ void EvalState::printStatistics()
     topObj["maxSuspendedFibers"] = executor->maxSuspendedFibers.load();
     topObj["maxLiveFibers"] = executor->maxLiveFibers.load();
     topObj["nrFiberStacksAllocated"] = executor->nrFiberStacksAllocated.load();
+    topObj["nrThunksSpeculated"] = nrThunksSpeculated.load();
+    topObj["nrSpeculationItems"] = nrSpeculationItems.load();
+    topObj["nrSpeculationsRejectedBrake"] = nrSpeculationsRejectedBrake.load();
+    topObj["nrSpeculationsRejectedBacklog"] = nrSpeculationsRejectedBacklog.load();
+    topObj["nrSpeculationsRejectedBusy"] = nrSpeculationsRejectedBusy.load();
+    topObj["nrSpeculatedAlreadyFinished"] = nrSpeculatedAlreadyFinished.load();
+    topObj["nrSpeculatedFailed"] = nrSpeculatedFailed.load();
+    topObj["nrSpeculatedFromAttrs"] = nrSpeculatedFromAttrs.load();
+    topObj["nrSpeculatedFromLet"] = nrSpeculatedFromLet.load();
+    topObj["nrSpeculatedFromList"] = nrSpeculatedFromList.load();
+    topObj["nrSpeculatedFromCall"] = nrSpeculatedFromCall.load();
+    topObj["maxSpeculativeOutstanding"] = executor->maxSpeculativeOutstanding.load();
     topObj["nrAvoided"] = nrAvoided.load();
     topObj["nrLookups"] = nrLookups.load();
     topObj["nrPrimOpCalls"] = nrPrimOpCalls.load();

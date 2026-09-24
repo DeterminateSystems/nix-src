@@ -1114,6 +1114,19 @@ public:
     Counter maxWaiting;
     Counter nrSpuriousWakeups;
 
+    /* Speculative evaluation statistics (see `speculate()`). */
+    Counter nrThunksSpeculated;
+    Counter nrSpeculationItems;
+    Counter nrSpeculationsRejectedBrake;
+    Counter nrSpeculationsRejectedBacklog;
+    Counter nrSpeculationsRejectedBusy;
+    Counter nrSpeculatedAlreadyFinished;
+    Counter nrSpeculatedFailed;
+    Counter nrSpeculatedFromAttrs;
+    Counter nrSpeculatedFromLet;
+    Counter nrSpeculatedFromList;
+    Counter nrSpeculatedFromCall;
+
 private:
     const bool countCalls;
 
@@ -1195,6 +1208,34 @@ public:
     }
 
     /**
+     * The kind of expression that created the thunks passed to
+     * `speculate()`, for statistics.
+     */
+    enum class SpeculationSite { Attrs, Let, List, Call };
+
+    /**
+     * The maximum number of candidates per `speculate()` call.
+     */
+    static constexpr size_t maxSpeculationCandidates = 32;
+
+    /**
+     * Submit the thunks among `candidates` (at most
+     * `maxSpeculationCandidates`, already filtered by the caller on
+     * `Expr::size >= speculationThreshold`) as a single lowest-priority
+     * work item that forces them to weak head normal form, so that
+     * idle worker threads evaluate them ahead of demand. Does nothing
+     * if the current execution context is itself speculative, or if
+     * the executor is busy. Errors during the speculative evaluation
+     * are left in the thunks and reported when (if) they are demanded.
+     * Never throws.
+     *
+     * Callers must ensure that the environments captured by the thunks
+     * are fully initialised (e.g. `rec` attrsets and `let` bindings
+     * must call this only after all their thunks have been created).
+     */
+    [[gnu::noinline]] void speculate(Value * const * candidates, size_t n, SpeculationSite site);
+
+    /**
      * Worker threads manager.
      *
      * Note: keep this last to ensure that it's destroyed first, so we
@@ -1203,6 +1244,13 @@ public:
      * `EvalState`.
      */
     ref<Executor> executor;
+
+    /**
+     * The `eval-speculation-threshold` setting if parallel evaluation
+     * is enabled, 0 otherwise. Read by `bindVars()` to precompute the
+     * `speculable` flags of attrset, list and call expressions.
+     */
+    const uint32_t speculationThreshold;
 };
 
 struct DebugTraceStacker
