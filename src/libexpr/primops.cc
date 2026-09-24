@@ -17,6 +17,7 @@
 #include "nix/expr/value-to-json.hh"
 #include "nix/expr/value-to-xml.hh"
 #include "nix/expr/primops.hh"
+#include "nix/expr/parallel-eval.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/sort.hh"
 #include "nix/util/mounted-source-accessor.hh"
@@ -1421,8 +1422,17 @@ static void prim_derivationStrictGeneric(EvalState & state, const PosIdx pos, Va
 
     auto attrs = args[0]->attrs();
 
-    /* If parallel eval is enabled, then start evaluating the entire drv graph in the background. */
-    state.forceValueDeepParallel(*args[0], noPos);
+    /* If parallel eval is enabled, then start instantiating the
+       dependencies of this derivation in the background: a single
+       work item walks the attributes (forcing them itself, since
+       they're typically cheap) and spawns the instantiation of every
+       derivation it finds, which in turn does the same for *its*
+       dependencies. */
+    if (state.executor->enabled) {
+        Executor::WorkItems work;
+        state.addWork(work, 0, [v(RootValue(args[0])), &state]() { state.forceValueDeepParallel(**v, noPos, false); });
+        state.executor->spawn(std::move(work));
+    }
 
     /* Figure out the name first (for stack backtraces). */
     auto nameAttr =
