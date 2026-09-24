@@ -681,9 +681,10 @@ public:
     void forceValueDeep(Value & v);
 
     /**
-     * Force a value, then recursively force list elements and attributes in parallel. For derivations, only `drvPath`
-     * is forced (which instantiates them, recursively spawning their inputs); no other attributes (e.g. `meta` and
-     * `passthru`) are evaluated.
+     * Force a value, then recursively force list elements and attributes in parallel. For attribute sets that are
+     * coercible to a string via `outPath` (e.g. derivations and flake input source trees), only `outPath` is forced
+     * (which for derivations instantiates them, recursively spawning their inputs); no other attributes (e.g. `meta`,
+     * `passthru` or a flake input's `inputs`) are evaluated.
      *
      * This function does nothing if parallel evaluation is disabled.
      */
