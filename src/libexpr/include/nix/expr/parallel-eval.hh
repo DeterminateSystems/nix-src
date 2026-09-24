@@ -17,6 +17,16 @@
 
 namespace nix {
 
+/**
+ * The two kinds of speculative work, each with its own budget of
+ * outstanding items: the speculative evaluation of substantial thunks
+ * (`EvalState::speculate()`), and the speculative instantiation of the
+ * dependencies of a derivation (the `derivationStrict` hook). The
+ * latter recurses through the dependency graph, so it is not subject
+ * to the brake that keeps the former from cascading.
+ */
+enum class SpeculationKind { Thunk, Instantiation };
+
 struct Executor
 {
     using work_t = MoveOnlyFunction<void()>;
@@ -28,12 +38,18 @@ struct Executor
 
         /**
          * Whether this is speculative work (see
-         * `EvalState::speculate()`): work that runs at the lowest
-         * priority, is not counted as backlog, may not start
-         * speculation of its own, and is subject to the fiber reserve
-         * for demand work.
+         * `EvalState::speculate()` and the `derivationStrict` hook):
+         * work that runs at the lowest priority, is not counted as
+         * backlog, may not start thunk speculation of its own, and is
+         * subject to the fiber reserve for demand work.
          */
         bool speculative = false;
+
+        /**
+         * For speculative work: which budget it is charged to (see
+         * `SpeculationKind`).
+         */
+        bool instantiation = false;
     };
 
     /**
@@ -125,11 +141,19 @@ struct Executor
     std::atomic<uint32_t> nrReadyFibers{0};
 
     /**
-     * The number of speculative work items that have been submitted
-     * but not yet finished (or dropped), and its high-water mark.
+     * The number of speculative work items of each kind that have
+     * been submitted but not yet finished (or dropped), and their
+     * high-water marks.
      */
     std::atomic<uint32_t> nrSpeculativeOutstanding{0};
     std::atomic<uint32_t> maxSpeculativeOutstanding{0};
+    std::atomic<uint32_t> nrInstantiationsOutstanding{0};
+    std::atomic<uint32_t> maxInstantiationsOutstanding{0};
+
+    std::atomic<uint32_t> & outstanding(SpeculationKind kind)
+    {
+        return kind == SpeculationKind::Thunk ? nrSpeculativeOutstanding : nrInstantiationsOutstanding;
+    }
 
     static unsigned int getEvalCores(const EvalSettings & evalSettings);
 
@@ -197,11 +221,12 @@ struct Executor
     std::vector<std::future<void>> spawn(WorkItems && items);
 
     /**
-     * Submit a speculative work item (see `Item::speculative`). Its
-     * result is not awaited by anyone, so exceptions other than
-     * `Interrupted` are discarded.
+     * Submit a speculative work item (see `Item::speculative`) of the
+     * given kind. Its result is not awaited by anyone, so exceptions
+     * other than `Interrupted` are discarded. The caller is responsible
+     * for checking the kind's budget (`outstanding(kind)`) beforehand.
      */
-    void spawnSpeculative(work_t && work);
+    void spawnSpeculative(work_t && work, SpeculationKind kind);
 
     /**
      * Whether there is already at least one queued non-speculative

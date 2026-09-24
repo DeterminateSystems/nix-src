@@ -1424,18 +1424,19 @@ static void prim_derivationStrictGeneric(EvalState & state, const PosIdx pos, Va
 
     /* If parallel eval is enabled, then start instantiating the
        dependencies of this derivation in the background: a single
-       work item walks the attributes (forcing them itself, since
-       they're typically cheap) and spawns the instantiation of every
-       derivation it finds, which in turn does the same for *its*
-       dependencies. Skip this when the workers already have a backlog
-       (e.g. `nix flake show` on a big flake): the background work
-       would then only compete with the main evaluation for the same
-       thunks and cores. */
-    if (state.executor->enabled && !state.executor->hasBacklog()) {
-        Executor::WorkItems work;
-        state.addWork(work, 0, [v(RootValue(args[0])), &state]() { state.forceValueDeepParallel(**v, noPos, false); });
-        state.executor->spawn(std::move(work));
-    }
+       speculative work item walks the attributes (forcing them itself,
+       since they're typically cheap) and spawns the instantiation of
+       every derivation it finds, which in turn does the same for *its*
+       dependencies. This runs at the lowest priority and within its
+       own budget of outstanding items. Skip it when the workers
+       already have a backlog of demand work (e.g. `nix flake show` on
+       a big flake): the background work would then only compete with
+       the main evaluation for the same thunks and cores. */
+    if (state.executor->enabled && !state.executor->hasBacklog()
+        && state.speculationBudgetAvailable(SpeculationKind::Instantiation))
+        state.executor->spawnSpeculative(
+            state.makeWork([v(RootValue(args[0])), &state]() { state.forceValueDeepParallel(**v, noPos, false); }),
+            SpeculationKind::Instantiation);
 
     /* Figure out the name first (for stack backtraces). */
     auto nameAttr =

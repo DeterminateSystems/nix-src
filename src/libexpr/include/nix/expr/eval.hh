@@ -56,6 +56,7 @@ struct MountedSourceAccessor;
 struct AsyncPathWriter;
 struct Provenance;
 struct Executor;
+enum class SpeculationKind;
 
 namespace eval_cache {
 class EvalCache;
@@ -1234,6 +1235,12 @@ public:
      * must call this only after all their thunks have been created).
      */
     [[gnu::noinline]] void speculate(Value * const * candidates, size_t n, SpeculationSite site);
+
+    /**
+     * Whether fewer than `eval-speculation-backlog` speculative work
+     * items of the given kind per helper thread are outstanding.
+     */
+    bool speculationBudgetAvailable(SpeculationKind kind) const;
 
     /**
      * Worker threads manager.
