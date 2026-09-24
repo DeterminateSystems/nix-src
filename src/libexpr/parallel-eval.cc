@@ -887,13 +887,20 @@ void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos)
 
     Executor::WorkItems work;
 
-    auto recurse = [&](this const auto & recurse, EvalState & state, Value & v, PosIdx pos) -> void {
+    auto recurse = [&](this const auto & recurse, EvalState & state, Value & v, PosIdx pos, bool isRoot) -> void {
         auto type = v.type();
         if (type == nString || type == nPath || type == nNull || type == nInt || type == nFloat || type == nBool
             || type == nFailed || type == nExternal)
             return;
 
-        if (!seen.insert(&v) && &v != &vRoot)
+        /* The root of this walk was typically already added to `seen`
+           by the walk that spawned us (when it was still a thunk), so
+           it must be visited regardless. But that exemption must not
+           apply when the root is reached again *inside* its own
+           subtree (e.g. a nixpkgs package set `pkgs` has an attribute
+           `pkgs` that is the same value), since the walk would then
+           never terminate. */
+        if (!seen.insert(&v) && !isRoot)
             return;
 
         if (type == nThunk) {
@@ -909,25 +916,27 @@ void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos)
             if (state.tryAttrsToString(pos, v, context, false, false))
                 return;
 
-            if (auto aDrvPath = v.attrs()->get(s.drvPath)) {
-                /* This is a derivation. Instantiate it in the
-                   background by forcing its `drvPath`, which is what
-                   the string coercion of this dependency will do
-                   anyway. This calls `derivationStrict` for it, which
-                   in turn recursively spawns *its* inputs. Note that
-                   we must not read any other attribute of the
-                   derivation (such as `drvAttrs`): those are
-                   user-visible and may be overridden with arbitrary
-                   expressions (e.g. nixpkgs's `nodejs` wraps them in
-                   `lib.warn`). */
-                if (!aDrvPath->value->isFinished())
-                    state.addWork(work, 0, [v(RootValue(aDrvPath->value)), pos(aDrvPath->pos), &state]() {
+            if (auto aOutPath = v.attrs()->get(s.outPath)) {
+                /* This attrset is coercible to a string via its
+                   `outPath` (e.g. a derivation or a flake input source
+                   tree), which is all that string coercion and JSON
+                   serialisation ever look at. So only force `outPath`
+                   in the background; for a derivation, that
+                   instantiates it (calling `derivationStrict`, which
+                   in turn recursively spawns *its* inputs). We must
+                   not walk any other attribute: they are user-visible
+                   and may hold arbitrary expressions (e.g. nixpkgs's
+                   `nodejs` wraps its `drvAttrs` in `lib.warn`, and a
+                   flake input's `inputs` leads to entire package
+                   sets). */
+                if (!aOutPath->value->isFinished())
+                    state.addWork(work, 0, [v(RootValue(aOutPath->value)), pos(aOutPath->pos), &state]() {
                         state.forceValue(**v, pos);
                     });
 
             } else {
                 for (auto & a : *v.attrs())
-                    recurse(state, *a.value, a.pos);
+                    recurse(state, *a.value, a.pos, false);
             }
 
             break;
@@ -935,7 +944,7 @@ void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos)
 
         case nList: {
             for (const auto & elem : v.listView())
-                recurse(state, *elem, pos);
+                recurse(state, *elem, pos, false);
             break;
         }
 
@@ -946,7 +955,7 @@ void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos)
 
     forceValue(vRoot, pos);
 
-    recurse(*this, vRoot, pos);
+    recurse(*this, vRoot, pos, true);
 
     if (work.size() == 1)
         // Only one work item, so we may as well do it on the current thread right away.
