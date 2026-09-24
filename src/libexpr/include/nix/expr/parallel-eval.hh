@@ -167,6 +167,15 @@ struct Executor
 
     std::vector<std::future<void>> spawn(WorkItems && items);
 
+    /**
+     * Whether there is already at least one queued work item or ready
+     * fiber per worker thread. Optional background work (such as the
+     * speculative instantiation of dependencies in
+     * `derivationStrict`) should be skipped in that case: it cannot
+     * add parallelism, only scheduling overhead.
+     */
+    bool hasBacklog();
+
     [[gnu::tls_model("initial-exec")]] static thread_local bool amWorkerThread;
 };
 

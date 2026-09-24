@@ -589,6 +589,12 @@ void Executor::drainQueue()
     }
 }
 
+bool Executor::hasBacklog()
+{
+    auto state(state_.lock());
+    return state->queue.size() + state->readyFibers.size() >= evalCores;
+}
+
 std::vector<std::future<void>> Executor::spawn(WorkItems && items)
 {
     if (items.empty())

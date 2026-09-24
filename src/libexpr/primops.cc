@@ -1427,8 +1427,11 @@ static void prim_derivationStrictGeneric(EvalState & state, const PosIdx pos, Va
        work item walks the attributes (forcing them itself, since
        they're typically cheap) and spawns the instantiation of every
        derivation it finds, which in turn does the same for *its*
-       dependencies. */
-    if (state.executor->enabled) {
+       dependencies. Skip this when the workers already have a backlog
+       (e.g. `nix flake show` on a big flake): the background work
+       would then only compete with the main evaluation for the same
+       thunks and cores. */
+    if (state.executor->enabled && !state.executor->hasBacklog()) {
         Executor::WorkItems work;
         state.addWork(work, 0, [v(RootValue(args[0])), &state]() { state.forceValueDeepParallel(**v, noPos, false); });
         state.executor->spawn(std::move(work));
