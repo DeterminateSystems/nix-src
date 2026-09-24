@@ -66,6 +66,13 @@ struct Executor::Fiber
     work_t work;
 
     /**
+     * The number of active `FiberNoSuspend` guards on this fiber.
+     * While non-zero, `waitOnThunk()` blocks the thread instead of
+     * suspending the fiber.
+     */
+    unsigned int noSuspendDepth = 0;
+
+    /**
      * The fiber's continuation. Valid while the fiber is queued or
      * suspended; invalid while it's running or after it has finished.
      */
@@ -606,6 +613,23 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
     return futures;
 }
 
+FiberNoSuspend::FiberNoSuspend()
+    : fiber(currentFiber)
+{
+    if (fiber)
+        fiber->noSuspendDepth++;
+}
+
+FiberNoSuspend::~FiberNoSuspend()
+{
+    /* Note: `fiber` is still the current fiber, since it cannot have
+       been suspended (and thus migrated) while this guard was alive. */
+    if (fiber) {
+        assert(fiber == currentFiber);
+        fiber->noSuspendDepth--;
+    }
+}
+
 FutureVector::~FutureVector()
 {
     try {
@@ -768,7 +792,9 @@ ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer expec
 
     auto now1 = std::chrono::steady_clock::now();
 
-    if (auto fib = currentFiber) {
+    /* Note: a fiber inside a `FiberNoSuspend` region uses the blocking
+       wait below, like a non-fiber thread. */
+    if (auto fib = currentFiber; fib && fib->noSuspendDepth == 0) {
         /* Shutdown guard: `quit`/`_isInterrupted` are always set
            *before* the wait lists are flushed, and flushing takes the
            domain lock that we're currently holding. So either we see

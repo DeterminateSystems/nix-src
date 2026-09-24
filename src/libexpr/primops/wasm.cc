@@ -1,5 +1,6 @@
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval-inline.hh"
+#include "nix/expr/parallel-eval.hh"
 #include "nix/util/users.hh"
 #include "nix/util/file-system.hh"
 
@@ -725,6 +726,13 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
 
     // Second argument is the value to pass to the function
     auto argValue = args[1];
+
+    /* wasmtime keeps a per-thread stack of active Wasm calls, so the
+       host functions below (which may have to wait for values being
+       evaluated by other threads) must not suspend this fiber: another
+       fiber's Wasm call could then be interleaved on this thread, or
+       we could be resumed on another thread. */
+    FiberNoSuspend noSuspend;
 
     try {
         auto instance = pathAttr ? instantiateWasm(state, state.realisePath(pos, *pathAttr->value))
