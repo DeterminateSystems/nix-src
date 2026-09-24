@@ -503,13 +503,14 @@ public:
         1,
         "eval-cores",
         R"(
-          The number of threads used to evaluate Nix expressions. This currently affects the following commands:
+          The number of threads used to evaluate Nix expressions. This currently affects:
 
           * `nix search`
           * `nix flake check`
           * `nix flake show`
           * `nix eval --json`
-          * Any evaluation that uses `builtins.parallel`
+          * `builtins.parallel`
+          * `builtins.concatStringsSep` and string coercion of lists
 
           The value `0` causes Nix to use all available CPU cores in the system.
 
