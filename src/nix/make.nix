@@ -83,9 +83,9 @@ nixMake.mkComponent {
     "nix-store"
   ];
 
-  # A nushell snippet.
+  # A Python snippet, with `out` bound.
   postInstall = ''
-    mkdir $"($env.out)/libexec/nix"
-    ln -s ../../bin/nix $"($env.out)/libexec/nix/build-remote"
+    os.makedirs(f"{out}/libexec/nix")
+    os.symlink("../../bin/nix", f"{out}/libexec/nix/build-remote")
   '';
 }

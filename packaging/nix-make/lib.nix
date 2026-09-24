@@ -101,7 +101,7 @@ let
   # The `dev` outputs, as `stdenv.mkDerivation` would pick for `buildInputs`.
   depPackages = deps: map lib.getDev (lib.concatMap (d: lib.toList d.pkg) deps);
 
-  # A minimal derivation running a nushell build script, which (unlike
+  # A minimal derivation running a Python build script, which (unlike
   # bash) can read the typed JSON of the structured attributes
   # (`$NIX_ATTRS_JSON_FILE`). A bash prelude sources the stdenv setup
   # script first, which provides the C++ compiler and handles
@@ -109,8 +109,8 @@ let
   # `stdenv.mkDerivation`, which is significant for hundreds of
   # derivations, and unlike `runCommand` it does not set
   # `preferLocalBuild`, so units can be built remotely.
-  mkNuDerivation =
-    attrs: nuScript:
+  mkPythonDerivation =
+    attrs: script:
     derivation (
       {
         system = stdenv.hostPlatform.system;
@@ -122,7 +122,7 @@ let
             if [ -e "$NIX_ATTRS_SH_FILE" ]; then . "$NIX_ATTRS_SH_FILE"; fi
             # The setup script prints "structuredAttrs is enabled" on stdout.
             source $stdenv/setup >/dev/null
-            exec nu --no-config-file ${nuScript}
+            exec python3 ${script}
           '')
         ];
         inherit stdenv;
@@ -130,7 +130,7 @@ let
       }
       // attrs
       // {
-        nativeBuildInputs = attrs.nativeBuildInputs or [ ] ++ [ pkgs.nushell ];
+        nativeBuildInputs = attrs.nativeBuildInputs or [ ] ++ [ pkgs.python3 ];
       }
     );
 
@@ -167,7 +167,7 @@ let
     let
       deps = component.externalDepsFor unit.externalIncludes;
     in
-    mkNuDerivation {
+    mkPythonDerivation {
       name = "${baseNameOf unit.path}.o";
       # The config macros this unit is sensitive to (see `configHeaders`),
       # as reported by the scanner; `null` means undefined. The builder
@@ -191,7 +191,7 @@ let
       buildInputs = depPackages deps;
       nativeBuildInputs = [ pkgs.pkg-config ];
       NIX_HARDENING_ENABLE = hardeningFlags;
-    } ./compile.nu;
+    } ./compile.py;
 
   # Link the objects into a shared library or an executable.
   link =
@@ -200,7 +200,7 @@ let
       # Link against every external dependency used by any unit.
       deps = component.externalDepsFor component.allExternalIncludes;
     in
-    mkNuDerivation {
+    mkPythonDerivation {
       name = "${component.name}-${component.version}";
       # Instantiate the objects and the dependencies in parallel.
       objects = parallel (map (d: d.drvPath) component.allDeps ++ map (o: o.drvPath) objects) objects;
@@ -220,7 +220,7 @@ let
         ++ commonLinkLibs;
       buildInputs = component.allDeps ++ depPackages deps;
       nativeBuildInputs = [ pkgs.pkg-config ];
-    } ./link.nu
+    } ./link.py
     // {
       inherit objects;
       inherit (component) units;
@@ -237,7 +237,7 @@ let
     - `libName`: library name without `lib` prefix (e.g. `nixutil`).
     - `exeName`: executable name; defaults to `name`.
     - `binSymlinks`: names of symlinks to the executable to create in `bin/`.
-    - `postInstall`: nushell snippet run after linking, with `$env.out` set.
+    - `postInstall`: Python snippet run after linking, with `out` (and `os`) bound.
     - `deps`: other components this one depends on. Their public headers
       are made available under `_deps/<name>/` and their libraries are linked.
       Dependencies are transitive.
@@ -258,7 +258,7 @@ let
     - `configHeaders`: generated config headers, as an attribute set from
       path in the root namespace to the `#define`s. The header itself is an
       empty stub; each unit gets the macros it uses, and the builder
-      (compile.nu) turns them into `-D` flags. Their macros are also used
+      (compile.py) turns them into `-D` flags. Their macros are also used
       to evaluate preprocessor conditionals.
     - `defines`, `undefines`: further macros known to be defined (with
       value) or undefined when evaluating preprocessor conditionals, on
