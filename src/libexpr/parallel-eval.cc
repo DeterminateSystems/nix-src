@@ -903,7 +903,18 @@ void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos, bool spawnThun
 
     Executor::WorkItems work;
 
-    auto recurse = [&](this const auto & recurse, EvalState & state, Value & v, PosIdx pos, bool isRoot) -> void {
+    /* Bound the recursion depth of the walk: deeply nested values
+       (e.g. a 100000-element linked list of attrsets) would otherwise
+       overflow the C++ stack, and the walk is best-effort anyway. The
+       demand path will report a proper `max-call-depth` error for
+       such values. */
+    constexpr size_t maxDepth = 1024;
+
+    auto recurse =
+        [&](this const auto & recurse, EvalState & state, Value & v, PosIdx pos, bool isRoot, size_t depth) -> void {
+        if (depth > maxDepth)
+            return;
+
         auto type = v.type();
         if (type == nString || type == nPath || type == nNull || type == nInt || type == nFloat || type == nBool
             || type == nFailed || type == nExternal)
@@ -971,7 +982,7 @@ void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos, bool spawnThun
 
             } else {
                 for (auto & a : *v.attrs())
-                    recurse(state, *a.value, a.pos, false);
+                    recurse(state, *a.value, a.pos, false, depth + 1);
             }
 
             break;
@@ -979,7 +990,7 @@ void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos, bool spawnThun
 
         case nList: {
             for (const auto & elem : v.listView())
-                recurse(state, *elem, pos, false);
+                recurse(state, *elem, pos, false, depth + 1);
             break;
         }
 
@@ -990,7 +1001,7 @@ void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos, bool spawnThun
 
     forceValue(vRoot, pos);
 
-    recurse(*this, vRoot, pos, true);
+    recurse(*this, vRoot, pos, true, 0);
 
     if (work.size() == 1)
         // Only one work item, so we may as well do it on the current thread right away.
