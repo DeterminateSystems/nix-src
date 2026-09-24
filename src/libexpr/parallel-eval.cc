@@ -607,6 +607,15 @@ void Executor::worker(Worker & self)
     }
 }
 
+bool Executor::hasBacklog()
+{
+    auto state(state_.lock());
+    auto n = state->queue.size();
+    for (auto & worker : workers)
+        n += worker->readyFibers.size();
+    return n >= evalCores;
+}
+
 std::vector<std::future<void>> Executor::spawn(WorkItems && items)
 {
     if (items.empty())
