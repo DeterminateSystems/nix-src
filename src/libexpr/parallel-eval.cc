@@ -92,6 +92,7 @@ struct Executor::Fiber
      * See `Item::speculative`.
      */
     const bool speculative;
+    const bool instantiation;
 
     /**
      * The fiber's continuation. Valid while the fiber is queued or
@@ -128,6 +129,7 @@ struct Executor::Fiber
         , promise(std::move(item.promise))
         , work(std::move(item.work))
         , speculative(item.speculative)
+        , instantiation(item.instantiation)
     {
     }
 
@@ -532,7 +534,7 @@ void Executor::failItems(std::multimap<uint64_t, Item> && items)
 {
     for (auto & [_, item] : items) {
         if (item.speculative)
-            nrSpeculativeOutstanding--;
+            outstanding(item.instantiation ? SpeculationKind::Instantiation : SpeculationKind::Thunk)--;
         else
             nrQueuedDemand--;
         item.promise.set_exception(std::make_exception_ptr(Interrupted("interrupted by the user")));
@@ -620,12 +622,13 @@ void Executor::worker(Worker & self)
 
         if (item) {
             auto speculative = item->speculative;
+            auto kind = item->instantiation ? SpeculationKind::Instantiation : SpeculationKind::Thunk;
             fiber = makeFiber(self, std::move(*item));
             if (!fiber) {
                 /* Stack allocation failure; the item's promise has
                    received the exception. Release the fiber slot. */
                 if (speculative)
-                    nrSpeculativeOutstanding--;
+                    outstanding(kind)--;
                 finished = true;
                 continue;
             }
@@ -679,22 +682,25 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
     return futures;
 }
 
-void Executor::spawnSpeculative(work_t && work)
+void Executor::spawnSpeculative(work_t && work, SpeculationKind kind)
 {
-    auto n = ++nrSpeculativeOutstanding;
-    if (n > maxSpeculativeOutstanding)
-        maxSpeculativeOutstanding = n;
+    auto & counter = outstanding(kind);
+    auto & max = kind == SpeculationKind::Thunk ? maxSpeculativeOutstanding : maxInstantiationsOutstanding;
+    auto n = ++counter;
+    if (n > max)
+        max = n;
 
     /* Wrap the work so that the outstanding count is decremented when
        it finishes, however it finishes. (Items that are dropped
        without running are handled in `failItems()`.) */
     Item item{
         .work =
-            [this, work(std::move(work))]() mutable {
-                Finally decr([this]() { nrSpeculativeOutstanding--; });
+            [&counter, work(std::move(work))]() mutable {
+                Finally decr([&counter]() { counter--; });
                 work();
             },
         .speculative = true,
+        .instantiation = kind == SpeculationKind::Instantiation,
     };
 
     auto state(state_.lock());
@@ -702,7 +708,7 @@ void Executor::spawnSpeculative(work_t && work)
     /* The workers may have exited already, so nobody would ever pick
        up this item. Nobody awaits it, so just drop it. */
     if (quit) {
-        nrSpeculativeOutstanding--;
+        counter--;
         return;
     }
 
@@ -1014,8 +1020,7 @@ void EvalState::speculate(Value * const * candidates, size_t n, SpeculationSite 
         return;
     }
 
-    auto cap = settings.evalSpeculationBacklog.get() * std::max(1U, executor->evalCores - 1);
-    if (executor->nrSpeculativeOutstanding.load(std::memory_order_relaxed) >= cap) {
+    if (!speculationBudgetAvailable(SpeculationKind::Thunk)) {
         nrSpeculationsRejectedBacklog++;
         return;
     }
@@ -1064,26 +1069,34 @@ void EvalState::speculate(Value * const * candidates, size_t n, SpeculationSite 
         break;
     }
 
-    executor->spawnSpeculative(makeWork([root(RootValue(vList)), this]() {
-        for (auto v : (*root)->listView()) {
-            if (executor->quit)
-                return;
-            if (v->isFinished()) {
-                /* Demand (or another speculation) got there first. */
-                nrSpeculatedAlreadyFinished++;
-                continue;
+    executor->spawnSpeculative(
+        makeWork([root(RootValue(vList)), this]() {
+            for (auto v : (*root)->listView()) {
+                if (executor->quit)
+                    return;
+                if (v->isFinished()) {
+                    /* Demand (or another speculation) got there first. */
+                    nrSpeculatedAlreadyFinished++;
+                    continue;
+                }
+                try {
+                    forceValue(*v, noPos);
+                } catch (Interrupted &) {
+                    throw;
+                } catch (...) {
+                    /* The error has been stored in the thunk and will be
+                       reported if the value is ever demanded. */
+                    nrSpeculatedFailed++;
+                }
             }
-            try {
-                forceValue(*v, noPos);
-            } catch (Interrupted &) {
-                throw;
-            } catch (...) {
-                /* The error has been stored in the thunk and will be
-                   reported if the value is ever demanded. */
-                nrSpeculatedFailed++;
-            }
-        }
-    }));
+        }),
+        SpeculationKind::Thunk);
+}
+
+bool EvalState::speculationBudgetAvailable(SpeculationKind kind) const
+{
+    auto cap = settings.evalSpeculationBacklog.get() * std::max(1U, executor->evalCores - 1);
+    return executor->outstanding(kind).load(std::memory_order_relaxed) < cap;
 }
 
 void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos, bool spawnThunks)

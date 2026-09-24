@@ -3184,6 +3184,7 @@ void EvalState::printStatistics()
     topObj["nrSpeculatedFromList"] = nrSpeculatedFromList.load();
     topObj["nrSpeculatedFromCall"] = nrSpeculatedFromCall.load();
     topObj["maxSpeculativeOutstanding"] = executor->maxSpeculativeOutstanding.load();
+    topObj["maxInstantiationsOutstanding"] = executor->maxInstantiationsOutstanding.load();
     topObj["nrAvoided"] = nrAvoided.load();
     topObj["nrLookups"] = nrLookups.load();
     topObj["nrPrimOpCalls"] = nrPrimOpCalls.load();
