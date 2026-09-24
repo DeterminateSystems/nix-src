@@ -544,11 +544,19 @@ void Executor::drainQueue()
 {
     /* Note: no fiber accounting here, since the fiber limit doesn't
        apply during shutdown. */
+    bool flush = true;
     while (true) {
-        /* Keep flushing the wait lists: a fiber resumed below can
-           finish thunks, which normally re-enqueues their waiters, but
-           late waiters may still be parked. */
-        flushWaiters();
+        /* Flush the wait lists initially and after every resumed
+           fiber: a resumed fiber can finish thunks, which normally
+           re-enqueues their waiters, but late waiters may still be
+           parked. Don't flush for every dropped work item, though:
+           there can be hundreds of thousands of those (background
+           evaluation that was still queued when the main evaluation
+           finished), and flushing locks all waiter domains. */
+        if (flush) {
+            flushWaiters();
+            flush = false;
+        }
 
         FiberPtr fiber;
         std::optional<Item> item;
@@ -570,12 +578,14 @@ void Executor::drainQueue()
             // "std::future_error: Broken promise". Note: a fresh
             // exception per item, not a shared one.
             item->promise.set_exception(std::make_exception_ptr(Interrupted("interrupted by the user")));
-        else
+        else {
             /* Resume the fiber so it can observe `quit` (or the
                interrupt) and unwind; it cannot suspend again thanks to
                the guard in `waitOnThunk()`. Never destroy a suspended
                fiber. */
             runFiber(std::move(fiber));
+            flush = true;
+        }
     }
 }
 
