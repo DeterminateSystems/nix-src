@@ -478,6 +478,14 @@ struct ExprList : Expr
      */
     bool speculable = false;
 
+    /**
+     * Whether this list consists (largely) of path literals, like a
+     * NixOS module list, whose files are worth parsing and evaluating
+     * ahead of time (see `EvalState::prefetchImports()`). Computed by
+     * `bindVars()`.
+     */
+    bool prefetchImports = false;
+
     std::span<Expr *> elems;
 
     ExprList(std::pmr::polymorphic_allocator<char> & alloc, std::span<Expr *> exprs)
@@ -641,6 +649,13 @@ struct ExprCall : Expr
      * Computed by `bindVars()`.
      */
     bool speculable = false;
+
+    /**
+     * Whether this is a call of `import` on a path literal, whose file
+     * is worth parsing and evaluating ahead of time (see
+     * `EvalState::prefetchImports()`). Computed by `bindVars()`.
+     */
+    bool prefetchImport = false;
 
     ExprCall(const PosIdx & pos, Expr * fun, std::pmr::vector<Expr *> && args)
         : fun(fun)

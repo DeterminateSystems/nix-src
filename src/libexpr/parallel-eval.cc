@@ -1040,6 +1040,63 @@ void EvalState::speculate(Value * const * candidates, size_t n, SpeculationSite 
         SpeculationKind::Thunk);
 }
 
+void EvalState::prefetchImports(std::span<Expr * const> exprs)
+{
+    if (Executor::speculating() || executor->hasBacklog()) {
+        nrImportPrefetchesRejected++;
+        return;
+    }
+
+    std::vector<ExprPath *> paths;
+    for (auto e : exprs)
+        if (auto p = dynamic_cast<ExprPath *>(e))
+            paths.push_back(p);
+
+    /* Parse several files per work item, since parsing a file is much
+       cheaper than a fiber switch. */
+    constexpr size_t batchSize = 64;
+
+    for (size_t start = 0; start < paths.size(); start += batchSize) {
+        if (!speculationBudgetAvailable(SpeculationKind::Thunk)) {
+            nrImportPrefetchesRejected++;
+            return;
+        }
+
+        std::vector<ExprPath *> batch(paths.begin() + start, paths.begin() + std::min(paths.size(), start + batchSize));
+        nrImportPrefetchItems++;
+        nrImportsPrefetched += batch.size();
+
+        /* Note: `Expr`s are never freed and not GC-allocated, so the
+           batch needs no rooting. */
+        executor->spawnSpeculative(
+            makeWork([batch(std::move(batch)), this]() {
+                for (auto p : batch) {
+                    if (executor->quit)
+                        return;
+                    try {
+                        /* Only prefetch Nix files (or directories
+                           containing a `default.nix`), not e.g. data
+                           files. The path is context-free, so this
+                           resolves and caches exactly like `import`. */
+                        auto path = p->v.path();
+                        if (!hasSuffix(resolveExprPath(path).path.abs(), ".nix"))
+                            continue;
+                        Value v;
+                        evalFile(path, v);
+                    } catch (Interrupted &) {
+                        throw;
+                    } catch (...) {
+                        /* E.g. a non-existent file or a parse error.
+                           Demand will report it if it ever imports the
+                           file. */
+                        nrImportsPrefetchFailed++;
+                    }
+                }
+            }),
+            SpeculationKind::Thunk);
+    }
+}
+
 bool EvalState::speculationBudgetAvailable(SpeculationKind kind) const
 {
     auto cap = settings.evalSpeculationBacklog.get() * std::max(1U, executor->evalCores - 1);

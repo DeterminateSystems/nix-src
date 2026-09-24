@@ -1480,6 +1480,8 @@ void ExprList::eval(EvalState & state, Env & env, Value & v)
     v.mkList(list);
     if (nCands) [[unlikely]]
         state.speculate(cands, nCands, EvalState::SpeculationSite::List);
+    if (prefetchImports) [[unlikely]]
+        state.prefetchImports(elems);
 }
 
 Value * ExprList::maybeThunk(EvalState & state, Env & env)
@@ -1904,6 +1906,9 @@ void ExprCall::eval(EvalState & state, Env & env, Value & v)
         if (nCands)
             state.speculate(cands, nCands, EvalState::SpeculationSite::Call);
     }
+
+    if (prefetchImport) [[unlikely]]
+        state.prefetchImports({args->data(), args->size()});
 
     state.callFunction(vFun, vArgs, v, pos);
 }
@@ -3173,6 +3178,10 @@ void EvalState::printStatistics()
     topObj["nrSpeculatedFromCall"] = nrSpeculatedFromCall.load();
     topObj["maxSpeculativeOutstanding"] = executor->maxSpeculativeOutstanding.load();
     topObj["maxInstantiationsOutstanding"] = executor->maxInstantiationsOutstanding.load();
+    topObj["nrImportsPrefetched"] = nrImportsPrefetched.load();
+    topObj["nrImportPrefetchItems"] = nrImportPrefetchItems.load();
+    topObj["nrImportPrefetchesRejected"] = nrImportPrefetchesRejected.load();
+    topObj["nrImportsPrefetchFailed"] = nrImportsPrefetchFailed.load();
     topObj["nrAvoided"] = nrAvoided.load();
     topObj["nrLookups"] = nrLookups.load();
     topObj["nrPrimOpCalls"] = nrPrimOpCalls.load();

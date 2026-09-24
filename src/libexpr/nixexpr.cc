@@ -488,12 +488,22 @@ void ExprList::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> &
 
     speculable = false;
     auto threshold = es.speculationThreshold;
+    size_t nrPaths = 0;
     for (auto & i : elems) {
         i->bindVars(es, env);
         if (threshold && i->size >= threshold)
             speculable = true;
+        if (dynamic_cast<ExprPath *>(i))
+            nrPaths++;
     }
     /* The elements become thunks, so `size` stays 1. */
+
+    /* A list of path literals is most likely a list of files to be
+       imported (e.g. a NixOS module list). Note: bare path literals
+       elsewhere (e.g. `callPackage ../foo { }`) deliberately don't
+       qualify, since those are typically imported right away by
+       demand anyway, and there are thousands of them in nixpkgs. */
+    prefetchImports = threshold && nrPaths >= EvalState::minPrefetchImports;
 }
 
 void ExprLambda::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env)
@@ -538,6 +548,12 @@ void ExprCall::bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> &
     fun->bindVars(es, env);
     speculable = false;
     auto threshold = es.speculationThreshold;
+
+    /* `import ./some/path`: worth parsing ahead of time. */
+    if (threshold && args->size() == 1 && dynamic_cast<ExprPath *>((*args)[0]))
+        if (auto var = dynamic_cast<ExprVar *>(fun); var && !var->fromWith && es.symbols[var->name] == "import")
+            prefetchImport = true;
+
     uint64_t n = 1 + fun->size;
     for (auto e : *args) {
         e->bindVars(es, env);

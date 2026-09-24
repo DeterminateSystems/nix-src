@@ -42,6 +42,26 @@ in
 NIX_SHOW_STATS=1 NIX_SHOW_STATS_PATH="$TEST_ROOT/stats0.json" nix eval --eval-cores 4 --eval-speculation-threshold 0 --expr "$expr" > /dev/null
 [[ "$(jq .nrThunksSpeculated "$TEST_ROOT/stats0.json")" = 0 ]]
 
+# Import prefetching: a list of path literals (like a NixOS module
+# list) gets its files parsed and evaluated ahead of time. Non-existent
+# and non-Nix files in the list must be harmless.
+mkdir -p "$TEST_ROOT/mods"
+for i in $(seq 0 9); do
+    echo "{ x }: x + $i" > "$TEST_ROOT/mods/m$i.nix"
+done
+echo "not nix" > "$TEST_ROOT/mods/data.txt"
+cat > "$TEST_ROOT/mods/default.nix" <<EOF
+let
+  mods = [ ./m0.nix ./m1.nix ./m2.nix ./m3.nix ./m4.nix ./m5.nix ./m6.nix ./m7.nix ./m8.nix ./m9.nix ./data.txt ./does-not-exist.nix ];
+  imported = builtins.filter builtins.isFunction (map (m: if builtins.pathExists m && builtins.match ".*[.]nix" (toString m) != null then import m else null) mods);
+in
+  builtins.foldl' (a: f: f { x = a; }) 0 imported
+EOF
+expected=$(nix eval --eval-cores 1 --file "$TEST_ROOT/mods")
+actual=$(NIX_SHOW_STATS=1 NIX_SHOW_STATS_PATH="$TEST_ROOT/stats2.json" nix eval --eval-cores 4 --eval-speculation-threshold 1 --file "$TEST_ROOT/mods")
+[[ "$actual" = "$expected" ]]
+[[ "$(jq .nrImportsPrefetched "$TEST_ROOT/stats2.json")" -ge 10 ]]
+
 # It has no effect in single-threaded mode.
 NIX_SHOW_STATS=1 NIX_SHOW_STATS_PATH="$TEST_ROOT/stats1.json" nix eval --eval-cores 1 --eval-speculation-threshold 1 --expr "$expr" > /dev/null
 [[ "$(jq .nrThunksSpeculated "$TEST_ROOT/stats1.json")" = 0 ]]

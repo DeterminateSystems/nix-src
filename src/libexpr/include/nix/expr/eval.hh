@@ -1127,6 +1127,10 @@ public:
     Counter nrSpeculatedFromLet;
     Counter nrSpeculatedFromList;
     Counter nrSpeculatedFromCall;
+    Counter nrImportsPrefetched;
+    Counter nrImportPrefetchItems;
+    Counter nrImportPrefetchesRejected;
+    Counter nrImportsPrefetchFailed;
 
 private:
     const bool countCalls;
@@ -1241,6 +1245,23 @@ public:
      * items of the given kind per helper thread are outstanding.
      */
     bool speculationBudgetAvailable(SpeculationKind kind) const;
+
+    /**
+     * The minimum number of path literals in a list for it to qualify
+     * for `prefetchImports()`.
+     */
+    static constexpr size_t minPrefetchImports = 8;
+
+    /**
+     * Parse and evaluate (to weak head normal form) the files denoted
+     * by the path literals among `exprs` in the background, so that
+     * later `import`s of them find them in the file evaluation cache.
+     * Used for lists of path literals (e.g. NixOS module lists) and
+     * `import ./path` calls, which would otherwise be parsed one after
+     * another on the critical path. Subject to the same gates and
+     * budget as `speculate()`. Never throws.
+     */
+    [[gnu::noinline]] void prefetchImports(std::span<Expr * const> exprs);
 
     /**
      * Worker threads manager.
