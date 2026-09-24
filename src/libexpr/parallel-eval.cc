@@ -945,11 +945,20 @@ void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos)
                 return;
 
             if (auto aDrvPath = v.attrs()->get(s.drvPath)) {
-                if (aDrvPath->value->isFinished())
-                    return;
-
-                if (auto aDrvAttrs = v.attrs()->get(s.drvAttrs))
-                    recurse(state, *aDrvAttrs->value, aDrvAttrs->pos);
+                /* This is a derivation. Instantiate it in the
+                   background by forcing its `drvPath`, which is what
+                   the string coercion of this dependency will do
+                   anyway. This calls `derivationStrict` for it, which
+                   in turn recursively spawns *its* inputs. Note that
+                   we must not read any other attribute of the
+                   derivation (such as `drvAttrs`): those are
+                   user-visible and may be overridden with arbitrary
+                   expressions (e.g. nixpkgs's `nodejs` wraps them in
+                   `lib.warn`). */
+                if (!aDrvPath->value->isFinished())
+                    state.addWork(work, 0, [v(RootValue(aDrvPath->value)), pos(aDrvPath->pos), &state]() {
+                        state.forceValue(**v, pos);
+                    });
 
             } else {
                 for (auto & a : *v.attrs())
