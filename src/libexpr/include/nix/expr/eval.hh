@@ -686,9 +686,12 @@ public:
      * (which for derivations instantiates them, recursively spawning their inputs); no other attributes (e.g. `meta`,
      * `passthru` or a flake input's `inputs`) are evaluated.
      *
+     * If `spawnThunks` is set, every thunk encountered is forced (and walked) by a separate work item; otherwise
+     * thunks are forced by the caller and only the `outPath` attributes of derivations are forced by work items.
+     *
      * This function does nothing if parallel evaluation is disabled.
      */
-    void forceValueDeepParallel(Value & v, PosIdx pos);
+    void forceValueDeepParallel(Value & v, PosIdx pos, bool spawnThunks = true);
 
     /**
      * Force `v`, and then verify that it has the expected type.

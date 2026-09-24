@@ -910,7 +910,7 @@ static RegisterPrimOp r_parallel({
 
 #pragma GCC diagnostic ignored "-Wswitch-enum"
 
-void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos)
+void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos, bool spawnThunks)
 {
     if (!executor->enabled)
         return;
@@ -939,8 +939,27 @@ void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos)
             return;
 
         if (type == nThunk) {
-            state.addWork(work, 0, [v(RootValue(&v)), pos, &state]() { state.forceValueDeepParallel(**v, pos); });
-            return;
+            if (spawnThunks) {
+                state.addWork(work, 0, [v(RootValue(&v)), pos, &state]() { state.forceValueDeepParallel(**v, pos); });
+                return;
+            }
+            /* Force the thunk right here. Most thunks are cheap (e.g.
+               the attributes of a derivation), so a work item per
+               thunk would cost far more in scheduling than it gains
+               in parallelism. Errors are left to whoever needs this
+               value (e.g. `derivationStrict`), which will report them
+               with the proper context. */
+            try {
+                state.forceValue(v, pos);
+            } catch (Interrupted &) {
+                throw;
+            } catch (Error &) {
+                return;
+            }
+            type = v.type();
+            if (type == nString || type == nPath || type == nNull || type == nInt || type == nFloat || type == nBool
+                || type == nFailed || type == nExternal)
+                return;
         }
 
         switch (v.type()) {
