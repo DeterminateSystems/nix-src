@@ -12,8 +12,8 @@ Building and testing Nix:
 
 * Build Nix using `nix build ./packaging/nix-make#release.nix`. The result is in `./result`.
 
-* Run the functional tests in `tests/functional` using `nix build ./packaging/nix-make#release.functional-tests`.
+* Run the functional tests in `tests/functional` using `nix build -L ./packaging/nix-make#release.functional-tests`.
 
 * Individual tests can be executed by doing `nix build ./packaging/nix-make#release.nix && nix run ./packaging/nix-make#test-runner -- --nix-bin-dir ./result/bin $TEST_NAMES`, where `TEST_NAMES` are the file names inside `tests/functional` (without the `.sh` suffix), e.g. `simple` or `flakes/relative-paths`.
 
-* If you don't need an optimized build (e.g. you're not benchmarking), then instead of `release` you can use `debug`, e.g. `nix build ./packaging/nix-make#debug.nix`.
+* If you don't need an optimized build (e.g. you're not benchmarking), then instead of `release` you can use `debug-fast` (clang with -O0), e.g. `nix build -L ./packaging/nix-make#debug-fast.nix`.
