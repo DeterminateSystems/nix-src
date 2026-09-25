@@ -181,6 +181,17 @@ struct CmdFlakeLock : FlakeCommand
 
 struct CmdFlakeMetadata : FlakeCommand, MixJSON
 {
+    bool transitive = false;
+
+    CmdFlakeMetadata()
+    {
+        addFlag({
+            .longName = "transitive",
+            .description = "Show all transitive inputs, not just the immediate inputs of the flake.",
+            .handler = {&transitive, true},
+        });
+    }
+
     std::string description() override
     {
         return "show flake metadata";
@@ -256,7 +267,9 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                     ANSI_BOLD "Fingerprint:" ANSI_NORMAL "   %s", fingerprint->to_string(HashFormat::Base16, false));
 
             /* Gather the inputs into a tree, since we need to know
-               the children of a node before we can print it. */
+               the children of a node before we can print it. Unless
+               `--transitive` is given, only the immediate inputs are
+               shown, so we don't recurse into them. */
             struct TreeNode
             {
                 std::optional<std::variant<flake::LockedFlake::InputInfo, flake::InputAttrPath>> input;
@@ -266,13 +279,13 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
             TreeNode root;
 
             lockedFlake->visit(*getEvalState(), [&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
-                if (!inputAttrPath.empty()) {
-                    auto * node = &root;
-                    for (auto & elem : inputAttrPath)
-                        node = &node->children[elem];
-                    node->input = input;
-                }
-                return true;
+                if (inputAttrPath.empty())
+                    return true;
+                auto * node = &root;
+                for (auto & elem : inputAttrPath)
+                    node = &node->children[elem];
+                node->input = input;
+                return transitive;
             });
 
             if (!root.children.empty())
