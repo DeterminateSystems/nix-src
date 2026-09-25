@@ -245,6 +245,13 @@ git -C "$flake3Dir" add flake.lock
 
 git -C "$flake3Dir" commit -m 'Add lockfile'
 
+# 'nix flake metadata' only shows the immediate inputs, unless
+# '--transitive' is given.
+nix flake metadata "$flake3Dir" | grepQuiet '^├───.*flake1.*: '
+nix flake metadata "$flake3Dir" | grepQuiet '^└───.*flake2.*: '
+nix flake metadata "$flake3Dir" | grepQuietInverse '^    └───.*flake1.*: '
+nix flake metadata "$flake3Dir" --transitive | grepQuiet '^    └───.*flake1.*: '
+
 # Test whether registry caching works.
 nix registry list --flake-registry "file://$registry" | grepQuiet flake3
 mv "$registry" "$registry.tmp"
