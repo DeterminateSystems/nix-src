@@ -29,9 +29,22 @@ static std::atomic<uint32_t> nextEvalThreadId{1};
  */
 [[gnu::tls_model("initial-exec")]] static thread_local Executor::Fiber * currentFiber{nullptr};
 
+/**
+ * The worker whose scheduler loop is running on this thread, or null
+ * on non-worker threads. Only used to assert that fibers are resumed
+ * by their owner.
+ */
+[[gnu::tls_model("initial-exec")]] static thread_local Executor::Worker * currentWorker{nullptr};
+
 struct Executor::Fiber
 {
     Executor & executor;
+
+    /**
+     * The worker that created this fiber, which is the only thread
+     * that ever runs it (see `Executor::Worker`).
+     */
+    Worker & owner;
 
     /**
      * The value of `myEvalThreadId` while this fiber is running. Each
@@ -45,9 +58,8 @@ struct Executor::Fiber
     /**
      * This fiber's Nix call stack depth while it's not running.
      * `runFiber()` swaps it with the thread-local counter (see
-     * `CallDepth`) on every switch-in/out, so that the depth
-     * accounting survives the fiber being suspended mid-call-chain
-     * and resumed on a different thread.
+     * `CallDepth`) on every switch-in/out, since several fibers, each
+     * with their own call chain, are interleaved on the same thread.
      */
     size_t callDepth = 0;
 
@@ -55,9 +67,8 @@ struct Executor::Fiber
      * This fiber's evaluation context while it's not running.
      * `runFiber()` swaps it with the thread-local
      * `EvalState::evalContext` on every switch-in/out (a mere pointer
-     * exchange), so that the context travels with the fiber across
-     * threads, while this slot holds the resuming thread's own context
-     * in the meantime.
+     * exchange), while this slot holds the thread's own context in the
+     * meantime.
      */
     EvalState::EvalContext evalContext;
 
@@ -91,8 +102,9 @@ struct Executor::Fiber
     struct GC_stack * gcStack = nullptr;
 #endif
 
-    Fiber(Executor & executor, Item && item)
+    Fiber(Executor & executor, Worker & owner, Item && item)
         : executor(executor)
+        , owner(owner)
         , evalThreadId(nextEvalThreadId++)
         , promise(std::move(item.promise))
         , work(std::move(item.work))
@@ -219,7 +231,7 @@ static std::array<WaiterDomain, 128> waiterDomains;
 
 /**
  * Move all suspended fibers out of the wait lists and back onto their
- * executor's ready queue, and wake up all non-fiber waiters. Called on
+ * owner's ready queue, and wake up all non-fiber waiters. Called on
  * interrupt and shutdown so that waiting fibers/threads can observe
  * the interrupt/`quit` flag and unwind.
  */
@@ -249,36 +261,36 @@ unsigned int Executor::getEvalCores(const EvalSettings & evalSettings)
                                                                        : evalSettings.evalCores;
 }
 
-unsigned int Executor::getMaxFibers(const EvalSettings & evalSettings, unsigned int evalCores)
+unsigned int Executor::getMaxFibersPerWorker(const EvalSettings & evalSettings, unsigned int evalCores)
 {
     /* By default, allow three suspended fibers per thread on top of
-       the running ones. This bounds the number of stacks (and thus
+       the running one. This bounds the number of stacks (and thus
        memory and page faults) without leaving threads idle in typical
        workloads: e.g. `nix search nixpkgs` on 24 threads peaks at
        120-220 live fibers when unlimited, and is not measurably slower
-       with 96, while a limit of 48 costs about 5% elapsed time. */
-    return evalSettings.evalMaxFibers == 0U ? 4 * evalCores : evalSettings.evalMaxFibers;
+       with 96 (4 per thread), while a limit of 48 costs about 5%
+       elapsed time. */
+    return evalSettings.evalMaxFibers == 0U ? 4 : std::max(1U, evalSettings.evalMaxFibers / evalCores);
 }
 
 Executor::Executor(const EvalSettings & evalSettings)
     : stackPool(std::make_unique<StackPool>())
     , evalCores(getEvalCores(evalSettings))
-    , maxFibers(getMaxFibers(evalSettings, evalCores))
+    , maxFibersPerWorker(getMaxFibersPerWorker(evalSettings, evalCores))
     , enabled(evalCores > 1)
     , interruptCallback(createInterruptCallback([&]() {
         /* Wake up all waiting fibers and threads so they can observe
            the interrupt and unwind. Note: `_isInterrupted` has already
            been set at this point. */
         flushWaiters();
-        wakeup.notify_all();
+        wakeupAllWorkers();
     }))
 {
-    debug("executor using %d threads and at most %d fibers", evalCores, maxFibers);
-    auto state(state_.lock());
+    debug("executor using %d threads and at most %d fibers per thread", evalCores, maxFibersPerWorker);
     // FIXME: create worker threads on demand?
     for (size_t n = 0; n < evalCores; ++n)
         try {
-            createWorker(*state);
+            createWorker();
         } catch (std::system_error & e) {
             if (n == 0)
                 throw Error("could not create any evaluator worker threads: %s", e.what());
@@ -289,35 +301,65 @@ Executor::Executor(const EvalSettings & evalSettings)
 
 Executor::~Executor()
 {
-    std::vector<std::thread> threads;
     {
         auto state(state_.lock());
         quit = true;
-        std::swap(threads, state->threads);
         debug("executor shutting down with %d items left", state->queue.size());
     }
 
-    /* Wake up suspended fibers and idle workers so they can wind
-       down. */
+    /* Hand suspended fibers back to their owners and wake up idle
+       workers so they can wind down. Note: the shutdown guard in
+       `waitOnThunk()` ensures that no fiber registers in a wait list
+       after this flush. */
     flushWaiters();
-    wakeup.notify_all();
+    wakeupAllWorkers();
 
-    for (auto & thr : threads)
-        thr.join();
+    for (auto & worker : workers)
+        worker->thread.join();
 
-    /* Handle any stragglers, e.g. fibers that were re-enqueued by
-       `notifyWaiters()` on the main thread after the workers already
-       exited. No fiber stack may outlive this destructor. */
-    flushWaiters();
-    drainQueue();
+    /* A worker doesn't exit while it owns fibers, so no fiber stack
+       can outlive this destructor. */
+    for (auto & worker : workers) {
+        assert(worker->readyFibers.empty());
+        assert(worker->nrLiveFibers == 0);
+    }
+
+    /* Fail any work items that were queued after the workers exited. */
+    failQueuedItems();
 }
 
-void Executor::createWorker(State & state)
+/**
+ * Wake up `worker` if it's asleep. Must be called with the state lock
+ * held. Clears `sleeping` right away, so that producers running before
+ * the worker has reacquired the lock don't notify it again (and, in
+ * `spawn()`, don't spend their wake budget on a worker that is already
+ * being woken). The worker re-checks all its conditions after waking
+ * up, so one pending notification is enough.
+ */
+static bool wakeWorker(Executor::Worker & worker)
 {
+    if (!worker.sleeping)
+        return false;
+    worker.sleeping = false;
+    worker.wakeup.notify_one();
+    return true;
+}
+
+void Executor::wakeupAllWorkers()
+{
+    auto state(state_.lock());
+    for (auto & worker : workers)
+        wakeWorker(*worker);
+}
+
+void Executor::createWorker()
+{
+    auto worker = std::make_unique<Worker>();
+    auto w = worker.get();
     /* Note: worker threads can have a small (default-sized) stack,
        since they only run the scheduler loop; the actual evaluation
        happens on fibers, which have their own stacks. */
-    state.threads.push_back(std::thread([&]() {
+    worker->thread = std::thread([this, w]() {
 #if NIX_USE_BOEHMGC
         /* Register the worker thread with the garbage collector. This
            is not for the sake of the worker stack (which holds no GC
@@ -330,16 +372,23 @@ void Executor::createWorker(State & state)
         GC_get_stack_base(&sb);
         GC_register_my_thread(&sb);
 #endif
-        worker();
+        this->worker(*w);
 #if NIX_USE_BOEHMGC
         GC_unregister_my_thread();
 #endif
-    }));
+    });
+    /* Only register the worker once its thread exists, so that a
+       failure to create the thread doesn't leave a thread-less worker
+       behind. Note: `workers` is read under the state lock by
+       `spawn()` and `wakeupAllWorkers()`, which the interrupt
+       callback can invoke concurrently. */
+    auto state(state_.lock());
+    workers.push_back(std::move(worker));
 }
 
-Executor::FiberPtr Executor::makeFiber(Item && item)
+Executor::FiberPtr Executor::makeFiber(Worker & owner, Item && item)
 {
-    auto fiber = std::make_unique<Fiber>(*this, std::move(item));
+    auto fiber = std::make_unique<Fiber>(*this, owner, std::move(item));
     auto fib = fiber.get();
     try {
         fiber->ctx = boost::context::fiber(
@@ -379,6 +428,9 @@ bool Executor::runFiber(FiberPtr fiber)
     auto fib = fiber.get();
     assert(fib->ctx);
     assert(!currentFiber);
+    /* Fibers must only ever run on their owner thread, see
+       `Executor::Worker`. */
+    assert(currentWorker == &fib->owner);
 
     auto savedThreadId = myEvalThreadId;
     auto savedCallDepth = CallDepth::callDepth;
@@ -389,10 +441,9 @@ bool Executor::runFiber(FiberPtr fiber)
 
 #if NIX_USE_BOEHMGC
     /* Make this thread's stack scannable by the GC while the fiber
-       runs (its frames may reference GC values in non-worker callers,
-       e.g. when draining the queue from the main thread), and make the
-       fiber's stack the current one. The fiber clears its own
-       `saved_sp` after it has been resumed (see `suspendFiber()`). */
+       runs, and make the fiber's stack the current one. The fiber
+       clears its own `saved_sp` after it has been resumed (see
+       `suspendFiber()`). */
     auto prevStack = GC_current_stack;
     if (prevStack)
         prevStack->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
@@ -428,8 +479,9 @@ bool Executor::runFiber(FiberPtr fiber)
             maxSuspendedFibers = n;
         domain->waiters[fib->waitingOn].push_back(std::move(fiber));
         domain->mutex.unlock();
-        /* `fib` may be resumed by another thread from this point on,
-           so don't touch it anymore. */
+        /* Ownership of `fib` has passed to the wait list; it may be
+           moved back onto our ready queue by another thread from this
+           point on, so don't touch it anymore. */
         return false;
     } else {
         /* The fiber has finished; its promise has been fulfilled
@@ -443,23 +495,39 @@ void Executor::enqueueFiber(FiberPtr fiber)
 {
     nrFiberWakeups++;
     currentSuspendedFibers--;
-    bool doWake;
-    {
-        auto state(state_.lock());
-        state->readyFibers.push_back(std::move(fiber));
-        doWake = state->nrSleeping > 0;
-    }
-    if (doWake)
-        wakeup.notify_one();
+    auto & owner = fiber->owner;
+    auto state(state_.lock());
+    owner.readyFibers.push_back(std::move(fiber));
+    /* Note: `sleeping` is maintained under the state lock, so the
+       owner either sees our push in its queue check, or is already
+       blocked on `wakeup` and gets notified — no lost wakeups. */
+    wakeWorker(owner);
 }
 
-void Executor::worker()
+/**
+ * Fail work items that haven't started with an `Interrupted`
+ * exception, so we get a nicer error than "std::future_error: Broken
+ * promise". Note: a fresh exception per item, not a shared one.
+ */
+static void failItems(std::multimap<uint64_t, Executor::Item> && items)
+{
+    for (auto & [_, item] : items)
+        item.promise.set_exception(std::make_exception_ptr(Interrupted("interrupted by the user")));
+}
+
+void Executor::failQueuedItems()
+{
+    failItems(std::exchange(state_.lock()->queue, {}));
+}
+
+void Executor::worker(Worker & self)
 {
     ReceiveInterrupts receiveInterrupts;
 
     unix::interruptCheck = [&]() { return (bool) quit; };
 
     amWorkerThread = true;
+    currentWorker = &self;
 
     /* Whether the fiber we ran in the previous iteration finished (as
        opposed to suspending itself), if any. The fiber accounting for
@@ -476,51 +544,55 @@ void Executor::worker()
 
             if (finished) {
                 if (*finished) {
+                    self.nrLiveFibers--;
                     state->nrLiveFibers--;
-                    /* A fiber slot has become available. Wake up a
-                       worker that may be waiting for one, in case we
-                       don't take it ourselves below (e.g. because we
-                       resume a ready fiber instead). */
-                    if (!state->queue.empty() && state->nrSleeping > 0)
-                        wakeup.notify_one();
                 }
                 finished.reset();
             }
 
-            if (quit)
-                break;
-
-            /* Resume ready fibers before starting fresh work items, so
-               that existing work is drained first. */
-            if (!state->readyFibers.empty()) {
-                fiber = std::move(state->readyFibers.front());
-                state->readyFibers.pop_front();
+            /* Resume ready fibers before anything else, so that
+               existing work is drained first. This includes shutdown:
+               a suspended fiber can only be resumed by its owner
+               (i.e. us), and it has to be resumed so that it can
+               observe `quit` and unwind its stack. */
+            if (!self.readyFibers.empty()) {
+                fiber = std::move(self.readyFibers.front());
+                self.readyFibers.pop_front();
                 break;
             }
 
-            if (!state->queue.empty() && canStartFiber(*state)) {
+            if (quit) {
+                /* Fail queued work items that haven't started, so that
+                   threads blocked on their futures are unblocked
+                   promptly. */
+                failItems(std::exchange(state->queue, {}));
+                /* Don't exit while we still own fibers: they're
+                   suspended in a wait list and will be handed back to
+                   us by `flushWaiters()`. */
+                if (self.nrLiveFibers == 0)
+                    return;
+            } else if (!state->queue.empty() && canStartFiber(self)) {
                 item = std::move(state->queue.begin()->second);
                 state->queue.erase(state->queue.begin());
+                self.nrLiveFibers++;
                 state->nrLiveFibers++;
                 if (state->nrLiveFibers > maxLiveFibers)
                     maxLiveFibers = state->nrLiveFibers;
                 break;
             }
 
-            /* Nothing to do (or the fiber limit has been reached);
-               sleep until a producer wakes us up. Note: `nrSleeping`
-               is maintained under the state lock, so a producer either
-               sees our increment (and wakes us), or its work insertion
-               happened before our queue check above — no lost
-               wakeups. Likewise, a fiber slot is only freed under the
-               state lock, and the worker freeing it wakes us up. */
-            state->nrSleeping++;
-            state.wait(wakeup);
-            state->nrSleeping--;
+            /* Nothing to do (or our fiber limit has been reached);
+               sleep until a producer wakes us up. Note: `sleeping` is
+               maintained under the state lock, so a producer either
+               sees it (and wakes us), or its insertion happened before
+               our checks above — no lost wakeups. */
+            self.sleeping = true;
+            state.wait(self.wakeup);
+            self.sleeping = false;
         }
 
         if (item) {
-            fiber = makeFiber(std::move(*item));
+            fiber = makeFiber(self, std::move(*item));
             if (!fiber) {
                 /* Stack allocation failure; the item's promise has
                    received the exception. Release the fiber slot. */
@@ -529,51 +601,7 @@ void Executor::worker()
             }
         }
 
-        if (!fiber) {
-            drainQueue();
-            return;
-        }
-
         finished = runFiber(std::move(fiber));
-    }
-}
-
-void Executor::drainQueue()
-{
-    /* Note: no fiber accounting here, since the fiber limit doesn't
-       apply during shutdown. */
-    while (true) {
-        /* Keep flushing the wait lists: a fiber resumed below can
-           finish thunks, which normally re-enqueues their waiters, but
-           late waiters may still be parked. */
-        flushWaiters();
-
-        FiberPtr fiber;
-        std::optional<Item> item;
-        {
-            auto state(state_.lock());
-            if (!state->readyFibers.empty()) {
-                fiber = std::move(state->readyFibers.front());
-                state->readyFibers.pop_front();
-            } else if (!state->queue.empty()) {
-                item = std::move(state->queue.begin()->second);
-                state->queue.erase(state->queue.begin());
-            } else
-                return;
-        }
-
-        if (item)
-            // Set an `Interrupted` exception on work items that
-            // haven't started, so we get a nicer error than
-            // "std::future_error: Broken promise". Note: a fresh
-            // exception per item, not a shared one.
-            item->promise.set_exception(std::make_exception_ptr(Interrupted("interrupted by the user")));
-        else
-            /* Resume the fiber so it can observe `quit` (or the
-               interrupt) and unwind; it cannot suspend again thanks to
-               the guard in `waitOnThunk()`. Never destroy a suspended
-               fiber. */
-            runFiber(std::move(fiber));
     }
 }
 
@@ -584,24 +612,38 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
 
     std::vector<std::future<void>> futures;
 
-    size_t toWake;
-    {
-        auto state(state_.lock());
-        for (auto & item : items) {
+    auto state(state_.lock());
+
+    if (quit) {
+        /* The workers may have exited already, so nobody would ever
+           pick up these items. */
+        for (auto & _ : items) {
             std::promise<void> promise;
             futures.push_back(promise.get_future());
-            static thread_local uint32_t local = 0;
-            auto key = (uint64_t(item.second) << 48) | local++;
-            state->queue.emplace(key, Item{.promise = std::move(promise), .work = std::move(item.first)});
+            promise.set_exception(std::make_exception_ptr(Interrupted("interrupted by the user")));
         }
-        /* Wake up one worker per item, but only workers that are
-           actually asleep. In the steady state (all workers busy),
-           this does no futex calls at all. */
-        toWake = std::min(items.size(), state->nrSleeping);
+        return futures;
     }
 
-    for (size_t n = 0; n < toWake; ++n)
-        wakeup.notify_one();
+    for (auto & item : items) {
+        std::promise<void> promise;
+        futures.push_back(promise.get_future());
+        static thread_local uint32_t local = 0;
+        auto key = (uint64_t(item.second) << 48) | local++;
+        state->queue.emplace(key, Item{.promise = std::move(promise), .work = std::move(item.first)});
+    }
+
+    /* Wake up one worker per item, but only workers that are asleep
+       and can actually start a fresh item (a worker at its fiber
+       limit would just go back to sleep). In the steady state (all
+       workers busy), this does no futex calls at all. */
+    auto toWake = items.size();
+    for (auto & worker : workers) {
+        if (toWake == 0)
+            break;
+        if (canStartFiber(*worker) && wakeWorker(*worker))
+            toWake--;
+    }
 
     return futures;
 }
@@ -659,12 +701,8 @@ static WaiterDomain & getWaiterDomain(detail::ValueBase & v)
 /**
  * Suspend the current fiber until `v` is finished. Must be called with
  * `lk` holding the domain's mutex and `v` in the "awaited" state. On
- * return, the fiber has been resumed (possibly on a different thread)
- * and the lock has been released.
- *
- * Note: `noinline` so that the compiler doesn't move TLS accesses of
- * the caller across the context switch (the fiber may wake up on
- * another thread).
+ * return, the fiber has been resumed (by its owner thread, after other
+ * fibers may have run on it) and the lock has been released.
  */
 [[gnu::noinline]] static void
 suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::ValueBase & v)
@@ -673,17 +711,15 @@ suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::V
     assert(fib);
     /* A fiber must not suspend while an exception is being handled or
        unwound: the C++ exception state lives in thread-local storage,
-       so it wouldn't survive being resumed on another thread. */
+       so it would get mixed up with that of the other fibers that run
+       on this thread in the meantime. */
     assert(!std::current_exception() && !std::uncaught_exceptions());
     fib->waitingOn = &v;
     fib->suspendDomain = &domain;
     /* Hand ownership of the domain mutex over to the scheduler, which
        will unlock it (via `domain.mutex`) after registering us in the
-       wait list. We must not let the scheduler unlock through `lk`:
-       `unique_lock::unlock()` releases the mutex *before* clearing its
-       owns-flag, and the moment the mutex is released, this fiber can
-       be resumed on another thread, which would then read the flag on
-       this stack concurrently with the scheduler's write. */
+       wait list. `lk` lives on this stack, so it must not be
+       considered owning anymore once we've switched away. */
     lk.release();
 #if NIX_USE_BOEHMGC
     /* Publish the used portion of our stack, so that the garbage
@@ -703,8 +739,8 @@ suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::V
        half-suspended fiber. */
     fib->schedCtx = std::move(fib->schedCtx).resume();
 #if NIX_USE_BOEHMGC
-    /* We're running again (possibly on another thread), so our stack
-       is scanned as that thread's active stack from here on. */
+    /* We're running again, so our stack is scanned as the thread's
+       active stack from here on. */
     fib->gcStack->saved_sp = nullptr;
 #endif
     /* We've been resumed because the value was finished (or because
@@ -784,9 +820,8 @@ ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer expec
            when the value is finished. */
         suspendFiber(domain, lk, *this);
 
-        /* Note: use the `fib` captured before the suspension rather
-           than TLS variables, since we may have been resumed on a
-           different thread. */
+        /* Note: `currentFiber` has been restored to `fib` by
+           `runFiber()`, but the captured `fib` is cheaper. */
         if (fib->executor.quit)
             throw Interrupted("interrupted by the user");
         checkInterrupt();

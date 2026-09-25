@@ -71,8 +71,8 @@ public:
      * Current Nix call stack depth, used with `max-call-depth`
      * setting to throw stack overflow hopefully before we run out of
      * system stack. The fiber scheduler saves/restores this on fiber
-     * switches, since a fiber suspended mid-call-chain carries its
-     * depth to whatever thread resumes it.
+     * switches, since several fibers, each with their own call chain,
+     * are interleaved on the same thread.
      */
     [[gnu::tls_model("initial-exec")]] thread_local static size_t callDepth;
 

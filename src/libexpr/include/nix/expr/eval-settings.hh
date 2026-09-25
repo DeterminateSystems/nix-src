@@ -525,11 +525,10 @@ public:
 
           Each work item (e.g. an attribute evaluated by `nix search` or `nix flake show`) runs on its own fiber, which has its own stack.
           When a fiber blocks on a value that is being evaluated by another thread, it is suspended and its worker thread starts the next work item on a new fiber.
-          This setting limits the number of fibers (and thus stacks) that can accumulate this way: when the limit is reached, worker threads only resume suspended fibers instead of starting new work items.
+          A suspended fiber is always resumed by the thread that started it, so this limit is applied per evaluation thread (see `eval-cores`): each thread may keep at most `eval-max-fibers / eval-cores` fibers (but at least one) in existence, and when it reaches that limit, it only resumes its suspended fibers instead of starting new work items.
           Lower values reduce memory usage and page faults; higher values allow more work to be in progress at the same time.
-          Values below the number of evaluation threads (see `eval-cores`) leave threads idle whenever fibers are suspended.
 
-          The value `0` means four times the number of evaluation threads.
+          The value `0` means four fibers per evaluation thread.
         )"};
 };
 
