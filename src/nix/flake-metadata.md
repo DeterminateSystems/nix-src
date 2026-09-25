@@ -14,6 +14,16 @@ R""(
   Last modified: 2021-01-21 15:41:26
   Inputs:
   ├───nix: github:NixOS/nix/6254b1f5d298ff73127d7b0f0da48f142bdc753c
+  └───nixpkgs follows input 'nix/nixpkgs'
+  ```
+
+* Also show the transitive inputs of `dwarffs`:
+
+  ```console
+  # nix flake metadata dwarffs --transitive
+  ...
+  Inputs:
+  ├───nix: github:NixOS/nix/6254b1f5d298ff73127d7b0f0da48f142bdc753c
   │   ├───lowdown-src: github:kristapsdz/lowdown/1705b4a26fbf065d9574dce47a94e8c7c79e052f
   │   └───nixpkgs: github:NixOS/nixpkgs/ad0d20345219790533ebe06571f82ed6b034db31
   └───nixpkgs follows input 'nix/nixpkgs'
@@ -81,8 +91,11 @@ data. This includes:
   time of the commit of the locked flake; for tarball flakes, it's the
   most recent timestamp of any file inside the tarball.
 
-* `Inputs`: The flake inputs with their corresponding lock file
-  entries.
+* `Inputs`: The immediate inputs of the flake with their corresponding
+  lock file entries. With `--transitive`, the inputs of those inputs
+  are shown as well, recursively. Note that with version 8 lock files,
+  this may require fetching the inputs in order to read their lock
+  files.
 
 With `--json`, the output is a JSON object with the following fields:
 
