@@ -147,6 +147,7 @@ suites = [
       'optimise-store.sh',
       'otel.sh',
       'output-normalization.sh',
+      'parallel-eval.sh',
       'pass-as-file.sh',
       'path-from-hash-part.sh',
       'path-info.sh',
