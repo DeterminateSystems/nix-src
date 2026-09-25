@@ -187,7 +187,8 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
     {
         addFlag({
             .longName = "transitive",
-            .description = "Show all transitive inputs, not just the immediate inputs of the flake.",
+            .description = "Show all transitive inputs, fetching the lock files of inputs as needed. "
+                           "By default, only the inputs recorded in the flake's own lock file are shown.",
             .handler = {&transitive, true},
         });
     }
@@ -267,51 +268,103 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                     ANSI_BOLD "Fingerprint:" ANSI_NORMAL "   %s", fingerprint->to_string(HashFormat::Base16, false));
 
             /* Gather the inputs into a tree, since we need to know
-               the children of a node before we can print it. Unless
-               `--transitive` is given, only the immediate inputs are
-               shown, so we don't recurse into them. */
+               the children of a node before we can print it. */
+            using InputEntry = std::variant<flake::LockedFlake::InputInfo, flake::InputAttrPath>;
+
             struct TreeNode
             {
-                std::optional<std::variant<flake::LockedFlake::InputInfo, flake::InputAttrPath>> input;
+                /* Absent for intermediate path elements that have no
+                   entry of their own, e.g. `foo/bar` if the lock file
+                   only has an override for `foo/bar/nixpkgs`. */
+                std::optional<InputEntry> input;
                 std::map<FlakeId, TreeNode> children;
             };
 
             TreeNode root;
 
-            lockedFlake->visit(*getEvalState(), [&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
-                if (inputAttrPath.empty())
-                    return true;
+            auto addNode = [&](const flake::InputAttrPath & inputAttrPath, InputEntry input, bool overwrite) {
                 auto * node = &root;
                 for (auto & elem : inputAttrPath)
                     node = &node->children[elem];
-                node->input = input;
+                if (overwrite || !node->input)
+                    node->input = std::move(input);
+            };
+
+            auto & state = *getEvalState();
+
+            /* The immediate inputs (which never requires fetching
+               anything), or, with `--transitive`, all transitive
+               inputs (which for version 8 lock files requires fetching
+               the inputs to read their lock files). */
+            lockedFlake->visit(state, [&](const flake::InputAttrPath & inputAttrPath, const auto & input) {
+                if (inputAttrPath.empty())
+                    return true;
+                addNode(inputAttrPath, input, true);
                 return transitive;
             });
 
+            if (!transitive) {
+                /* Everything else recorded in the flake's own lock
+                   file: for version 7, that's all transitive inputs;
+                   for version 8, overrides of transitive inputs and
+                   the locks of inputs that don't have a lock file of
+                   their own. */
+                for (auto & [inputAttrPath, entry] : lockedFlake->getAllLockEntries(false))
+                    addNode(
+                        inputAttrPath,
+                        std::visit(
+                            overloaded{
+                                [](const FlakeRef & lockedRef) -> InputEntry {
+                                    return flake::LockedFlake::InputInfo{.lockedRef = lockedRef};
+                                },
+                                [](const flake::InputAttrPath & follows) -> InputEntry { return follows; },
+                            },
+                            entry),
+                        false);
+
+                /* The 'follows' overrides of transitive inputs
+                   declared in flake.nix, which version 8 lock files
+                   don't store. */
+                [&](this const auto & recurse,
+                    const flake::InputAttrPath & prefix,
+                    const flake::FlakeInputs & inputs) -> void {
+                    for (auto & [id, input] : inputs) {
+                        auto inputAttrPath(prefix);
+                        inputAttrPath.push_back(id);
+                        if (input.follows)
+                            addNode(inputAttrPath, *input.follows, false);
+                        recurse(inputAttrPath, input.overrides);
+                    }
+                }({}, flake.inputs);
+            }
+
             if (!root.children.empty())
-                logger->cout(ANSI_BOLD "Inputs:" ANSI_NORMAL);
+                logger->cout(
+                    ANSI_BOLD "Inputs:" ANSI_NORMAL "%s",
+                    transitive ? "" : ANSI_ITALIC " (use --transitive to show all locks)" ANSI_NORMAL);
 
             [&](this const auto & recurse, const TreeNode & node, const std::string & prefix) -> void {
                 for (const auto & [last, child] : markLast(node.children)) {
-                    if (auto inputInfo = std::get_if<flake::LockedFlake::InputInfo>(&*child.second.input)) {
-                        std::string lastModifiedStr = "";
-                        if (auto lastModified = inputInfo->lockedRef.input.getLastModified())
-                            lastModifiedStr = fmt(" (%s)", std::put_time(std::gmtime(&*lastModified), "%F %T"));
-                        logger->cout(
-                            "%s" ANSI_BOLD "%s" ANSI_NORMAL ": %s%s",
-                            prefix + (last ? treeLast : treeConn),
-                            child.first,
-                            inputInfo->lockedRef.to_string(true),
-                            lastModifiedStr);
+                    std::string info;
+                    if (child.second.input)
+                        info = std::visit(
+                            overloaded{
+                                [](const flake::LockedFlake::InputInfo & inputInfo) {
+                                    auto s = fmt(": %s", inputInfo.lockedRef.to_string(true));
+                                    if (auto lastModified = inputInfo.lockedRef.input.getLastModified())
+                                        s += fmt(" (%s)", std::put_time(std::gmtime(&*lastModified), "%F %T"));
+                                    return s;
+                                },
+                                [](const flake::InputAttrPath & follows) {
+                                    return fmt(" follows input '%s'", flake::printInputAttrPath(follows));
+                                },
+                            },
+                            *child.second.input);
 
-                        recurse(child.second, prefix + (last ? treeNull : treeLine));
-                    } else if (auto follows = std::get_if<flake::InputAttrPath>(&*child.second.input)) {
-                        logger->cout(
-                            "%s" ANSI_BOLD "%s" ANSI_NORMAL " follows input '%s'",
-                            prefix + (last ? treeLast : treeConn),
-                            child.first,
-                            flake::printInputAttrPath(*follows));
-                    }
+                    logger->cout(
+                        "%s" ANSI_BOLD "%s" ANSI_NORMAL "%s", prefix + (last ? treeLast : treeConn), child.first, info);
+
+                    recurse(child.second, prefix + (last ? treeNull : treeLine));
                 }
             }(root, "");
         }
