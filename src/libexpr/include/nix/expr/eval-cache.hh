@@ -45,10 +45,22 @@ public:
 
     std::function<AttrPath(AttrPath &&)> cleanupAttrPath = [](AttrPath && attrPath) { return std::move(attrPath); };
 
-private:
+public:
     typedef fun<Value *()> RootLoader;
-    RootLoader rootLoader;
-    Sync<RootValue> value;
+
+private:
+
+    /**
+     * The expression that calls the root loader (see
+     * `ExprRootLoader`), and the thunk that evaluates it. Forcing
+     * the thunk goes through the evaluator's regular thunk machinery,
+     * so concurrent requests for the root value are deduplicated
+     * without holding a mutex across the evaluation, which could
+     * deadlock the fiber scheduler (fibers are pinned to their
+     * thread, see `Executor::Worker`).
+     */
+    std::unique_ptr<Expr> rootLoaderExpr;
+    RootValue rootValue;
 
     Value * getRootValue();
 
