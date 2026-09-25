@@ -1022,20 +1022,32 @@ static RegisterPrimOp primop_throw(
 
 static void prim_addErrorContext(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
+    std::exception_ptr error;
     try {
         state.forceValue(*args[1], pos);
         v = *args[1];
+        return;
+    } catch (Error &) {
+        error = std::current_exception();
+    }
+
+    /* Evaluate the message outside of the catch handler: it may force
+       thunks and thereby suspend the current fiber, which is not
+       allowed while an exception is being handled. */
+    NixStringContext context;
+    auto message = state
+                       .coerceToString(
+                           pos,
+                           *args[0],
+                           context,
+                           "while evaluating the error message passed to builtins.addErrorContext",
+                           false,
+                           false)
+                       .toOwned();
+
+    try {
+        std::rethrow_exception(error);
     } catch (Error & e) {
-        NixStringContext context;
-        auto message = state
-                           .coerceToString(
-                               pos,
-                               *args[0],
-                               context,
-                               "while evaluating the error message passed to builtins.addErrorContext",
-                               false,
-                               false)
-                           .toOwned();
         e.addTrace(nullptr, HintFmt(message), TracePrint::Always);
         throw;
     }
