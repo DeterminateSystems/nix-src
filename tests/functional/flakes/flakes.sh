@@ -245,11 +245,17 @@ git -C "$flake3Dir" add flake.lock
 
 git -C "$flake3Dir" commit -m 'Add lockfile'
 
-# 'nix flake metadata' only shows the immediate inputs, unless
-# '--transitive' is given.
+# Without '--transitive', 'nix flake metadata' only shows the inputs
+# recorded in the flake's own lock file.
 nix flake metadata "$flake3Dir" | grepQuiet '^├───.*flake1.*: '
 nix flake metadata "$flake3Dir" | grepQuiet '^└───.*flake2.*: '
-nix flake metadata "$flake3Dir" | grepQuietInverse '^    └───.*flake1.*: '
+if [[ $lockFileFormat = 8 ]]; then
+    # flake2's inputs are locked by flake2's own lock file, which is
+    # not fetched.
+    nix flake metadata "$flake3Dir" | grepQuietInverse '^    └───.*flake1.*: '
+else
+    nix flake metadata "$flake3Dir" | grepQuiet '^    └───.*flake1.*: '
+fi
 nix flake metadata "$flake3Dir" --transitive | grepQuiet '^    └───.*flake1.*: '
 
 # Test whether registry caching works.
@@ -404,6 +410,9 @@ else
     [[ $(jq .nodes.flake1.locked.url "$flake3Dir/flake.lock") =~ flake7 ]]
 fi
 
+# The override is shown by 'nix flake metadata' even without '--transitive'.
+nix flake metadata "$flake3Dir" | grepQuiet '^    └───.*flake1.*: .*flake7'
+
 cat > "$flake3Dir/flake.nix" <<EOF
 {
   inputs.flake2.inputs.flake1.follows = "foo";
@@ -423,6 +432,10 @@ else
     [[ $(jq -c .nodes.flake2.inputs.flake1 "$flake3Dir/flake.lock") =~ '["foo"]' ]]
     [[ $(jq .nodes.foo.locked.url "$flake3Dir/flake.lock") =~ flake7 ]]
 fi
+
+# The 'follows' override is shown by 'nix flake metadata' even without
+# '--transitive'.
+nix flake metadata "$flake3Dir" | grepQuiet "^│   └───.*flake1.* follows input 'foo'"
 
 # Test git+file with bare repo.
 rm -rf "$flakeGitBare"
@@ -462,6 +475,7 @@ if [[ $lockFileFormat = 8 ]]; then
 
     # ...but it can still be applied without writing the lock file.
     nix flake metadata --json "$flake3Dir" --no-write-lock-file --override-input flake2/flake1 flake1/master/"$hash1" | jq -r '.locks.locks."flake2/flake1".locked.rev' | grepQuiet "$hash1"
+    nix flake metadata "$flake3Dir" --no-write-lock-file --override-input flake2/flake1 flake1/master/"$hash1" | grepQuiet "^    └───.*flake1.*: .*$hash1"
 else
     nix flake lock "$flake3Dir" --override-input flake2/flake1 file://"$TEST_ROOT"/flake.tar.gz -vvvvv
     [[ $(jq .nodes.flake1_2.locked.url "$flake3Dir/flake.lock") =~ flake.tar.gz ]]
