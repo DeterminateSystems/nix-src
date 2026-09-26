@@ -3,9 +3,11 @@
 
 #include "nix/util/types.hh"
 #include "nix/flake/flakeref.hh"
-#include "nix/flake/lockfile.hh"
+#include "nix/flake/input-attr-path.hh"
 #include "nix/expr/value.hh"
 #include "nix/expr/eval-cache.hh"
+
+#include <functional>
 
 namespace nix {
 
@@ -86,7 +88,8 @@ struct Flake
     FlakeRef resolvedRef;
 
     /**
-     * the specific local store result of invoking the fetcher
+     * The flakeref returned by the fetcher. Note that this is a misnomer and it might not actually be locked (e.g. a
+     * dirty Git repo).
      */
     FlakeRef lockedRef;
 
@@ -131,6 +134,13 @@ struct Flake
 Flake getFlake(
     EvalState & state, const FlakeRef & flakeRef, fetchers::UseRegistries useRegistries, bool requireLockable = true);
 
+Flake getFlake(
+    EvalState & state,
+    const FlakeRef & originalRef,
+    fetchers::UseRegistries useRegistries,
+    const InputAttrPath & lockRootAttrPath,
+    bool requireLockable);
+
 /**
  * Fingerprint of a locked flake; used as a cache key.
  */
@@ -139,17 +149,149 @@ typedef Hash Fingerprint;
 struct LockedFlake
 {
     Flake flake;
-    LockFile lockFile;
+
+    LockedFlake(Flake && flake)
+        : flake(std::move(flake))
+    {
+    }
+
+    virtual ~LockedFlake();
 
     /**
-     * Source tree accessors for nodes that have been fetched in
-     * lockFlake(); in particular, the root node and the overridden
-     * inputs.
+     * For the input denoted by `prefix` (or the top-level flake if
+     * `prefix` is empty), return a map from the names of its inputs
+     * to the target of that input: for a regular input, std::nullopt;
+     * for a "follows" input, the input attribute path (relative to
+     * the top-level flake) of the immediate target of the
+     * "follows". Note that the target may itself denote a "follows"
+     * input. `prefix` must be fully resolved (see
+     * `resolveFollows()`). Throws an error if `prefix` does not
+     * denote an existing input.
      */
-    std::map<ref<Node>, SourcePath> nodePaths;
+    virtual std::map<FlakeId, std::optional<InputAttrPath>>
+    getInputTargets(EvalState & state, const InputAttrPath & prefix) const = 0;
+
+    /**
+     * Return the names of the inputs of the input denoted by
+     * `prefix`, or of the top-level flake if `prefix` is empty.
+     * `prefix` must be fully resolved (see `resolveFollows()`).
+     */
+    std::vector<FlakeId> getInputNames(EvalState & state, const InputAttrPath & prefix) const;
+
+    /**
+     * Resolve any "follows" indirections in `path`, returning an
+     * input attribute path that denotes the same input but does not
+     * pass through any "follows" input. Such a *fully resolved* path
+     * is required by methods like `getInputTargets()`, `findInput()`
+     * and `getSourcePath()`. Path elements that do not denote
+     * existing inputs are returned unchanged.
+     */
+    InputAttrPath resolveFollows(EvalState & state, const InputAttrPath & path) const;
+
+    /**
+     * Information about a locked input.
+     */
+    struct InputInfo
+    {
+        FlakeRef lockedRef;
+        bool isFlake = true;
+        bool buildTime = false;
+
+        /**
+         * For relative path inputs (e.g. 'path:./foo'), the input
+         * attribute path, relative to the top-level flake, of the
+         * flake against whose source tree the path is resolved. This
+         * is the flake whose `flake.nix` *declares* the relative
+         * path: for an overridden input, that's the flake that
+         * declares the override, not necessarily the input's parent.
+         */
+        std::optional<InputAttrPath> parentInputAttrPath;
+    };
+
+    /**
+     * Return information about the input denoted by `path`, which
+     * must be fully resolved (see `resolveFollows()`); an error is
+     * thrown if it passes through a "follows" input. Returns
+     * std::nullopt if the input does not exist.
+     */
+    virtual std::optional<InputInfo> findInput(EvalState & state, const InputAttrPath & path) const = 0;
+
+    /**
+     * Return the source path of the input denoted by `inputAttrPath`
+     * (or of the top-level flake if `inputAttrPath` is empty),
+     * fetching it if necessary. `inputAttrPath` must be fully
+     * resolved (see `resolveFollows()`). Note: the returned path is
+     * backed by `EvalState::rootFS` (i.e. it's a store path, possibly
+     * a virtual one that has the input's accessor mounted on it if
+     * lazy trees are enabled), not by the input's original accessor.
+     */
+    virtual SourcePath getSourcePath(EvalState & state, const InputAttrPath & inputAttrPath) const = 0;
+
+    /**
+     * Callback for `visit()`. The second argument is either an
+     * `InputInfo` for locked inputs, or, for "follows" inputs, the
+     * input attribute path of the target of the "follows" (relative
+     * to the top-level flake). The return value denotes whether
+     * `visit()` should recurse into the inputs of this input.
+     */
+    using VisitCallback =
+        std::function<bool(const InputAttrPath & inputAttrPath, const std::variant<InputInfo, InputAttrPath> & input)>;
+
+    /**
+     * Call `callback` for every transitive input of this flake,
+     * including the root (which has the empty input attribute
+     * path). Inputs are visited in depth-first order, parents before
+     * children. If the callback returns false, we do not recurse into
+     * the inputs of that input. We never recurse into "follows"
+     * inputs; their targets are visited under their own paths.
+     */
+    void visit(EvalState & state, VisitCallback callback) const;
 
     std::optional<Fingerprint> getFingerprint(Store & store, const fetchers::Settings & fetchSettings) const;
+
+    /**
+     * Check whether the lock file has any unlocked or non-final
+     * inputs. If so, return one.
+     */
+    virtual std::optional<FlakeRef> isUnlocked(const fetchers::Settings & fetchSettings) const = 0;
+
+    /**
+     * Return the version of this lock file's format (e.g. 7 or 8).
+     */
+    virtual unsigned int version() const = 0;
+
+    /**
+     * A lock file entry: either the locked flakeref of an input, or,
+     * for "follows" inputs, the input attribute path of the target of
+     * the "follows" (relative to the top-level flake).
+     */
+    using LockEntry = std::variant<FlakeRef, InputAttrPath>;
+
+    /**
+     * Return the contents of this lock file as a map from input
+     * attribute paths to lock entries. If `fetchTransitive` is true,
+     * inputs that have a lock file of their own may be fetched in
+     * order to include their transitive locks; otherwise only the
+     * locks contained in this lock file are returned.
+     */
+    virtual std::map<InputAttrPath, LockEntry> getAllLockEntries(bool fetchTransitive) const = 0;
+
+    virtual nlohmann::json toJSON() const = 0;
+
+    std::string to_string() const;
 };
+
+std::ostream & operator<<(std::ostream & stream, const LockedFlake & lockedFlake);
+
+/**
+ * Return a human-readable description of the differences between two
+ * locked flakes (which may use different lock file versions), e.g.
+ * between the old and new version of a lock file written by
+ * `lockFlake()`. If `fetchTransitive` is true, transitive lock files
+ * may be fetched (see `LockedFlake::getAllLockEntries()`).
+ */
+std::string
+diffLockedFlakes(const LockedFlake & oldLockedFlake, const LockedFlake & newLockedFlake, bool fetchTransitive);
 
 struct LockFlags
 {
@@ -222,9 +364,10 @@ struct LockFlags
 
     /**
      * Flake inputs to be updated. This means that any existing lock
-     * for those inputs will be ignored.
+     * for those inputs will be ignored. `std::nullopt` means that
+     * *all* inputs will be updated.
      */
-    std::set<NonEmptyInputAttrPath> inputUpdates;
+    std::optional<std::set<NonEmptyInputAttrPath>> inputUpdates = std::set<NonEmptyInputAttrPath>();
 
     /**
      * Whether to require a locked input.
@@ -244,20 +387,93 @@ Flake readFlake(
     const SourcePath & rootDir,
     const InputAttrPath & lockRootPath);
 
+/**
+ * The result of functions like `lockFlakeV7()` that compute a lock
+ * file for a flake.
+ */
+struct LockFlakeResult
+{
+    std::unique_ptr<LockedFlake> lockedFlake;
+
+    /**
+     * The elements of `LockFlags::inputOverrides` that matched an
+     * input of the flake.
+     */
+    std::set<NonEmptyInputAttrPath> overridesUsed;
+
+    /**
+     * The elements of `LockFlags::inputUpdates` that matched an input
+     * of the flake.
+     */
+    std::set<InputAttrPath> updatesUsed;
+};
+
 /*
  * Compute an in-memory lock file for the specified top-level flake, and optionally write it to file, if the flake is
  * writable.
  */
-LockedFlake
+std::unique_ptr<LockedFlake>
 lockFlake(const Settings & settings, EvalState & state, const FlakeRef & flakeRef, const LockFlags & lockFlags);
 
-LockedFlake lockFlake(
+std::unique_ptr<LockedFlake> lockFlake(
     const Settings & settings, EvalState & state, const FlakeRef & topRef, const LockFlags & lockFlags, Flake flake);
 
-LockedFlake
+std::unique_ptr<LockedFlake>
 lockFlake(const Settings & settings, EvalState & state, const SourcePath & flakeDir, const LockFlags & lockFlags);
 
-void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & v);
+/**
+ * Parse a lock file, dispatching on the version of its JSON
+ * representation. `json` must be null if the lock file doesn't exist,
+ * in which case an empty lock file of version `versionIfMissing` is
+ * returned.
+ */
+std::unique_ptr<LockedFlake> parseLockFile(
+    const fetchers::Settings & fetchSettings,
+    Flake flake,
+    const nlohmann::json & json,
+    std::string_view path,
+    unsigned int versionIfMissing = 7);
+
+/**
+ * Parse a lock file in the old graph-based format (versions 5-7).
+ * `json` must be null if the lock file doesn't exist.
+ */
+std::unique_ptr<LockedFlake> parseLockFileV7(
+    const fetchers::Settings & fetchSettings, Flake flake, const nlohmann::json & json, std::string_view path);
+
+/**
+ * Compute a version 7 lock file for `flake`, reusing entries from
+ * `oldLockFile` (which must have been produced by `parseLockFileV7()`)
+ * where possible. Note: this does not write the new lock file.
+ */
+LockFlakeResult lockFlakeV7(
+    const Settings & settings,
+    EvalState & state,
+    const LockFlags & lockFlags,
+    Flake flake,
+    const LockedFlake & oldLockFile);
+
+/**
+ * Parse a lock file in the sparse format (version 8). `json` must be
+ * null if the lock file doesn't exist.
+ */
+std::unique_ptr<LockedFlake> parseLockFileV8(
+    const fetchers::Settings & fetchSettings, Flake flake, const nlohmann::json & json, std::string_view path);
+
+/**
+ * Compute a version 8 lock file for `flake`, reusing entries from
+ * `oldLockFile` where possible. If `oldLockFile` was not produced by
+ * `parseLockFileV8()`, it is ignored. Note: this does not write the
+ * new lock file.
+ */
+LockFlakeResult lockFlakeV8(
+    const Settings & settings,
+    EvalState & state,
+    const LockFlags & lockFlags,
+    Flake flake,
+    const LockedFlake & oldLockFile);
+
+void callFlake(EvalState & state, std::shared_ptr<const LockedFlake> lockedFlake, Value & v);
 
 } // namespace flake
 
