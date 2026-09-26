@@ -219,6 +219,26 @@ struct Executor
     [[gnu::tls_model("initial-exec")]] static thread_local bool amWorkerThread;
 };
 
+/**
+ * RAII guard that prevents the current fiber (if any) from being
+ * suspended while the guard is alive: if it has to wait for a value
+ * that is being evaluated by another thread, it blocks its worker
+ * thread instead of yielding it to other fibers. This is needed around
+ * code that keeps per-thread state which must not be interleaved with
+ * or migrated to other threads, such as wasmtime's stack of active
+ * Wasm calls. Nesting is allowed.
+ */
+struct FiberNoSuspend
+{
+    FiberNoSuspend();
+    ~FiberNoSuspend();
+    FiberNoSuspend(const FiberNoSuspend &) = delete;
+    FiberNoSuspend & operator=(const FiberNoSuspend &) = delete;
+
+private:
+    Executor::Fiber * fiber;
+};
+
 struct FutureVector
 {
     Executor & executor;
