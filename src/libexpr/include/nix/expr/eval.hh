@@ -681,6 +681,19 @@ public:
     void forceValueDeep(Value & v);
 
     /**
+     * Force a value, then recursively force list elements and attributes in parallel. For attribute sets that are
+     * coercible to a string via `outPath` (e.g. derivations and flake input source trees), only `outPath` is forced
+     * (which for derivations instantiates them, recursively spawning their inputs); no other attributes (e.g. `meta`,
+     * `passthru` or a flake input's `inputs`) are evaluated.
+     *
+     * If `spawnThunks` is set, every thunk encountered is forced (and walked) by a separate work item; otherwise
+     * thunks are forced by the caller and only the `outPath` attributes of derivations are forced by work items.
+     *
+     * This function does nothing if parallel evaluation is disabled.
+     */
+    void forceValueDeepParallel(Value & v, PosIdx pos, bool spawnThunks = true);
+
+    /**
      * Force `v`, and then verify that it has the expected type.
      */
     NixInt forceInt(Value & v, const PosIdx pos, std::string_view errorCtx);
