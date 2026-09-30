@@ -48,15 +48,8 @@ static std::string getString(Source & source, int n)
     return v;
 }
 
-void parseBlob(
-    FileSystemObjectSink & sink,
-    const CanonPath & sinkPath,
-    Source & source,
-    BlobMode blobMode,
-    const ExperimentalFeatureSettings & xpSettings)
+void parseBlob(FileSystemObjectSink & sink, const CanonPath & sinkPath, Source & source, BlobMode blobMode)
 {
-    xpSettings.require(Xp::GitHashing);
-
     const unsigned long long size = std::stoi(getStringUntil(source, 0));
 
     auto doRegularFile = [&](bool executable) {
@@ -103,8 +96,7 @@ void parseTree(
     const CanonPath & sinkPath,
     Source & source,
     HashAlgorithm hashAlgo,
-    fun<SinkHook> hook,
-    const ExperimentalFeatureSettings & xpSettings)
+    fun<SinkHook> hook)
 {
     const unsigned long long size = std::stoi(getStringUntil(source, 0));
     unsigned long long left = size;
@@ -146,10 +138,8 @@ void parseTree(
     }
 }
 
-ObjectType parseObjectType(Source & source, const ExperimentalFeatureSettings & xpSettings)
+ObjectType parseObjectType(Source & source)
 {
-    xpSettings.require(Xp::GitHashing);
-
     auto type = getString(source, 5);
 
     if (type == "blob ") {
@@ -166,19 +156,16 @@ void parse(
     Source & source,
     BlobMode rootModeIfBlob,
     HashAlgorithm hashAlgo,
-    fun<SinkHook> hook,
-    const ExperimentalFeatureSettings & xpSettings)
+    fun<SinkHook> hook)
 {
-    xpSettings.require(Xp::GitHashing);
-
-    auto type = parseObjectType(source, xpSettings);
+    auto type = parseObjectType(source);
 
     switch (type) {
     case ObjectType::Blob:
-        parseBlob(sink, sinkPath, source, rootModeIfBlob, xpSettings);
+        parseBlob(sink, sinkPath, source, rootModeIfBlob);
         break;
     case ObjectType::Tree:
-        parseTree(sink, sinkPath, source, hashAlgo, hook, xpSettings);
+        parseTree(sink, sinkPath, source, hashAlgo, hook);
         break;
     default:
         assert(false);
@@ -228,17 +215,14 @@ void restore(FileSystemObjectSink & sink, Source & source, HashAlgorithm hashAlg
     });
 }
 
-void dumpBlobPrefix(uint64_t size, Sink & sink, const ExperimentalFeatureSettings & xpSettings)
+void dumpBlobPrefix(uint64_t size, Sink & sink)
 {
-    xpSettings.require(Xp::GitHashing);
     auto s = fmt("blob %d\0"s, std::to_string(size));
     sink(s);
 }
 
-void dumpTree(const Tree & entries, Sink & sink, const ExperimentalFeatureSettings & xpSettings)
+void dumpTree(const Tree & entries, Sink & sink)
 {
-    xpSettings.require(Xp::GitHashing);
-
     std::string v1;
 
     for (auto & [name, entry] : entries) {
@@ -260,18 +244,13 @@ void dumpTree(const Tree & entries, Sink & sink, const ExperimentalFeatureSettin
     sink(v1);
 }
 
-Mode dump(
-    const SourcePath & path,
-    Sink & sink,
-    fun<DumpHook> hook,
-    PathFilter & filter,
-    const ExperimentalFeatureSettings & xpSettings)
+Mode dump(const SourcePath & path, Sink & sink, fun<DumpHook> hook, PathFilter & filter)
 {
     auto st = path.lstat();
 
     switch (st.type) {
     case SourceAccessor::tRegular: {
-        path.readFile(sink, [&](uint64_t size) { dumpBlobPrefix(size, sink, xpSettings); });
+        path.readFile(sink, [&](uint64_t size) { dumpBlobPrefix(size, sink); });
         return st.isExecutable ? Mode::Executable : Mode::Regular;
     }
 
@@ -290,13 +269,13 @@ Mode dump(
 
             entries.insert_or_assign(std::move(name2), std::move(entry));
         }
-        dumpTree(entries, sink, xpSettings);
+        dumpTree(entries, sink);
         return Mode::Directory;
     }
 
     case SourceAccessor::tSymlink: {
         auto target = path.readLink();
-        dumpBlobPrefix(target.size(), sink, xpSettings);
+        dumpBlobPrefix(target.size(), sink);
         sink(target);
         return Mode::Symlink;
     }
