@@ -9,6 +9,7 @@
 #include "nix/fetchers/tarball.hh"
 #include "nix/util/tarfile.hh"
 #include "nix/fetchers/git-utils.hh"
+#include "nix/fetchers/tarball-cache.hh"
 
 #include <optional>
 #include <nlohmann/json.hpp>
@@ -287,7 +288,7 @@ struct GitArchiveInputScheme : InputScheme
             if (auto lastModifiedAttrs = cache->lookup(lastModifiedKey)) {
                 auto treeHash = getRevAttr(*treeHashAttrs, "treeHash");
                 auto lastModified = getIntAttr(*lastModifiedAttrs, "lastModified");
-                if (settings.getTarballCache()->hasObject(treeHash))
+                if (settings.getTarballCache()->hasTree(treeHash))
                     return {
                         {std::move(input), TarballInfo{.treeHash = treeHash, .lastModified = (time_t) lastModified}}};
                 else
@@ -308,7 +309,7 @@ struct GitArchiveInputScheme : InputScheme
         });
 
         auto act = std::make_unique<Activity>(
-            *logger, lvlInfo, actUnknown, fmt("unpacking '%s' into the Git cache", input.to_string()));
+            *logger, lvlInfo, actUnknown, fmt("unpacking '%s' into the tarball cache", input.to_string()));
 
         TarArchive archive{*source};
         auto tarballCache = settings.getTarballCache();
@@ -351,7 +352,7 @@ struct GitArchiveInputScheme : InputScheme
         input.attrs.insert_or_assign("lastModified", uint64_t(tarballInfo.lastModified));
 
         auto accessor =
-            settings.getTarballCache()->getAccessor(tarballInfo.treeHash, {}, "«" + input.to_string(true) + "»");
+            settings.getTarballCache()->getAccessor(tarballInfo.treeHash, "«" + input.to_string(true) + "»");
 
         if (!settings.trustTarballsFromGitForges)
             // FIXME: computing the NAR hash here is wasteful if
