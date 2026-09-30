@@ -8,6 +8,7 @@
 #include "nix/util/types.hh"
 #include "nix/store/store-api.hh"
 #include "nix/fetchers/git-utils.hh"
+#include "nix/fetchers/tarball-cache.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/fetchers/provenance.hh"
 
@@ -152,11 +153,11 @@ static std::optional<DownloadTarballResult> downloadTarball_(
             .treeHash = treeHash,
             .lastModified = (time_t) getIntAttr(infoAttrs, "lastModified"),
             .immutableUrl = maybeGetStrAttr(infoAttrs, "immutableUrl"),
-            .accessor = settings.getTarballCache()->getAccessor(treeHash, {}, displayPrefix),
+            .accessor = settings.getTarballCache()->getAccessor(treeHash, displayPrefix),
         };
     };
 
-    if (cached && !settings.getTarballCache()->hasObject(getRevAttr(cached->value, "treeHash")))
+    if (cached && !settings.getTarballCache()->hasTree(getRevAttr(cached->value, "treeHash")))
         cached.reset();
 
     if (cached && !cached->expired)
@@ -177,7 +178,8 @@ static std::optional<DownloadTarballResult> downloadTarball_(
 
     // TODO: fall back to cached value if download fails.
 
-    auto act = std::make_unique<Activity>(*logger, lvlInfo, actUnknown, fmt("unpacking '%s' into the Git cache", url));
+    auto act =
+        std::make_unique<Activity>(*logger, lvlInfo, actUnknown, fmt("unpacking '%s' into the tarball cache", url));
 
     AutoDelete cleanupTemp;
 
