@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.22.5.<!-- differences -->
+This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.23.0.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -238,3 +238,39 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 <!-- Determinate Nix version 3.22.4 -->
 
 <!-- Determinate Nix version 3.22.5 -->
+
+<!-- Determinate Nix version 3.23.0 -->
+
+* Add OpenTelemetry support by @edolstra in [DeterminateSystems/nix-src#615](https://github.com/DeterminateSystems/nix-src/pull/615)
+
+* builtins.wasm improvements and wasmtime 48.0.2 by @edolstra in [DeterminateSystems/nix-src#633](https://github.com/DeterminateSystems/nix-src/pull/633)
+
+* builtins.wasm: Bounds-check guest memory accesses, packed read_file_v2 result by @edolstra in [DeterminateSystems/nix-src#634](https://github.com/DeterminateSystems/nix-src/pull/634)
+
+* Add `nix flake bake` command by @edolstra in [DeterminateSystems/nix-src#450](https://github.com/DeterminateSystems/nix-src/pull/450)
+
+* Use fibers for parallel eval by @edolstra in [DeterminateSystems/nix-src#597](https://github.com/DeterminateSystems/nix-src/pull/597)
+
+* Build mimalloc without MADV_HUGEPAGE hints on its arenas by @edolstra in [DeterminateSystems/nix-src#635](https://github.com/DeterminateSystems/nix-src/pull/635)
+
+* Write builtins.toFile paths via AsyncPathWriter by @edolstra in [DeterminateSystems/nix-src#638](https://github.com/DeterminateSystems/nix-src/pull/638)
+
+* Async path writer speedup by @edolstra in [DeterminateSystems/nix-src#637](https://github.com/DeterminateSystems/nix-src/pull/637)
+
+* Limit the number of live fibers in the parallel evaluator by @edolstra in [DeterminateSystems/nix-src#636](https://github.com/DeterminateSystems/nix-src/pull/636)
+
+* Build Nix with Nix as the C/C++ build system by @edolstra in [DeterminateSystems/nix-src#632](https://github.com/DeterminateSystems/nix-src/pull/632)
+
+* packaging/nix-make: exec the compiler from compile.nu by @edolstra in [DeterminateSystems/nix-src#640](https://github.com/DeterminateSystems/nix-src/pull/640)
+
+* Rename CLAUDE.md -> AGENTS.md by @edolstra in [DeterminateSystems/nix-src#639](https://github.com/DeterminateSystems/nix-src/pull/639)
+
+* packaging/nix-make: Rewrite the nushell builders in Python by @edolstra in [DeterminateSystems/nix-src#642](https://github.com/DeterminateSystems/nix-src/pull/642)
+
+* addErrorContext: Don't force the message inside the exception handler by @edolstra in [DeterminateSystems/nix-src#643](https://github.com/DeterminateSystems/nix-src/pull/643)
+
+* Pin fibers to the worker thread that created them by @edolstra in [DeterminateSystems/nix-src#644](https://github.com/DeterminateSystems/nix-src/pull/644)
+
+* builtins.wasm: Don't suspend the fiber during a Wasm call by @edolstra in [DeterminateSystems/nix-src#641](https://github.com/DeterminateSystems/nix-src/pull/641)
+
+* builtins.wasm: Add get_attrset host function by @edolstra in [DeterminateSystems/nix-src#647](https://github.com/DeterminateSystems/nix-src/pull/647)
