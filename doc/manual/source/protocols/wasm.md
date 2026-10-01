@@ -42,7 +42,7 @@ Every Wasm module used in non-WASI mode must export:
 
 ### Guest Allocator
 
-Some host functions (such as `read_file_v2`) return data in a buffer that the host allocates inside the Wasm memory. Modules (WASI or non-WASI) that call these functions must export:
+Some host functions return data in a buffer that the host allocates inside the Wasm memory. Modules (WASI or non-WASI) that call these functions must export:
 
 - `nix_wasm_alloc(size: u32, align: u32) -> u32`, a function that allocates `size` bytes with alignment `align` (a power of two) and returns a pointer to them.
 
@@ -286,7 +286,32 @@ struct Attr {
 
 Each `Attr` element is 12 bytes (3 × 4 bytes).
 
+#### `get_attrset(value: ValueId, ptr: u32, len: u32) -> u64`
+
+Copies the attribute names and value IDs of a Nix attribute set into Wasm memory in a single call.
+
+**Parameters:**
+- `value` - ID of a Nix attribute set value
+- `ptr` - Pointer to buffer in Wasm memory
+- `len` - Size of the buffer in bytes
+
+**Returns:** The pointer to the buffer that was written in the low 32 bits, and the number of bytes written in the high 32 bits.
+
+**Note:** If the data fits in the `len` bytes at `ptr`, that buffer is used and `ptr` is returned. Otherwise, the host allocates a buffer of exactly the required size by calling `nix_wasm_alloc(size, 4)` (see [Guest Allocator](#guest-allocator)), and returns a pointer to that buffer instead. The module is responsible for freeing it. It is an error if the buffer is too small and the module does not export `nix_wasm_alloc`.
+
+**Output format:**
+
+- A `u32` specifying the number of attributes `n`.
+- `n` `ValueId`s (4 bytes each) of the attribute values, in lexicographically sorted order of the attribute names.
+- The `n` attribute names in the same order, each terminated by a null byte.
+
+The buffer is aligned to 4 bytes, so `ptr` must be a multiple of 4.
+
 #### `copy_attrset(value: ValueId, ptr: u32, max_len: u32) -> u32`
+
+> **Warning**
+>
+> This function is deprecated. Use `get_attrset` instead.
 
 Copies a Nix attribute set into Wasm memory as an array of attribute structures.
 
@@ -310,6 +335,10 @@ struct Attr {
 Each attribute is 8 bytes (2 × 4 bytes). Use `copy_attrname` to retrieve attribute names.
 
 #### `copy_attrname(value: ValueId, attr_idx: u32, ptr: u32, len: u32)`
+
+> **Warning**
+>
+> This function is deprecated. Use `get_attrset` instead.
 
 Copies an attribute name into Wasm memory.
 

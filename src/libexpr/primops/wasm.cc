@@ -437,6 +437,10 @@ struct NixWasmInstance
         return valueId;
     }
 
+    /**
+     * Deprecated: requires a `copy_attrname` call per attribute and does not return the attributes in
+     * lexicographically sorted order. Use `get_attrset`.
+     */
     uint32_t copy_attrset(ValueId valueId, uint32_t ptr, uint32_t maxLen)
     {
         auto & value = getValue(valueId);
@@ -452,7 +456,6 @@ struct NixWasmInstance
 
             auto buf = guestSpan<Attr>(ptr, maxLen);
 
-            // FIXME: for determinism, we should return attributes in lexicographically sorted order.
             for (const auto & [n, attr] : enumerate(*value.attrs())) {
                 buf[n].value = addValue(attr.value);
                 buf[n].nameLen = state.symbols[attr.name].size();
@@ -476,10 +479,9 @@ struct NixWasmInstance
            bindings (e.g. the result of `//`), so iterate instead. This
            has to match the iteration order used by `copy_attrset`.
 
-           TODO: Since this function is called once per attribute, copying
-           an attrset is O(n^2) (and n host calls). Come up with a more
-           efficient interface, e.g. a `copy_attrnames` function that copies
-           all names in one go. */
+           Deprecated: since this function is called once per attribute,
+           copying an attrset is O(n^2) (and n host calls). Use
+           `get_attrset`. */
         std::string_view name = state.symbols[std::next(attrs.begin(), attrIdx)->name];
 
         if ((size_t) len != name.size())
@@ -488,6 +490,55 @@ struct NixWasmInstance
         memcpy(guestSpan(ptr, len).data(), name.data(), name.size());
 
         return {};
+    }
+
+    /**
+     * Copy an attrset into Wasm memory in one go. The buffer consists of the number of attributes `n` (a `u32`), the
+     * `n` `ValueId`s of the attributes in lexicographically sorted order of their names, and the `n` attribute names
+     * in the same order, each terminated by a null byte. The buffer is aligned to 4 bytes.
+     *
+     * If this fits in the `len` bytes at `ptr`, that buffer is used; otherwise a buffer is allocated in the guest via
+     * `nix_wasm_alloc`. Returns the pointer of the buffer that was used in the low 32 bits and the number of bytes
+     * written in the high 32 bits (see `read_file_v2`).
+     */
+    uint64_t get_attrset(ValueId valueId, uint32_t ptr, uint32_t len)
+    {
+        if (ptr % alignof(uint32_t))
+            throw Error("get_attrset: buffer is not aligned to %d bytes", alignof(uint32_t));
+
+        auto & value = getValue(valueId);
+        state.forceAttrs(value, noPos, "while copying an attrset into Wasm");
+
+        auto attrs = value.attrs()->lexicographicOrder(state.symbols);
+
+        size_t namesOffset = (1 + attrs.size()) * sizeof(uint32_t);
+        size_t size = namesOffset;
+        for (auto attr : attrs)
+            size += state.symbols[attr->name].size() + 1;
+
+        if (size > std::numeric_limits<uint32_t>::max())
+            throw Error("attrset is too large to process in Wasm (size: %d)", size);
+
+        auto bufPtr = size <= len ? ptr : allocInGuest(size, alignof(uint32_t));
+
+        // Note: the allocation may have grown the memory; `guestSpan` fetches it afresh.
+        auto buf = guestSpan(bufPtr, size);
+
+        // FIXME: endianness.
+        auto ints = guestSpan<uint32_t>(bufPtr, 1 + attrs.size());
+        ints[0] = attrs.size();
+        for (const auto & [n, attr] : enumerate(attrs))
+            ints[n + 1] = addValue(attr->value);
+
+        auto out = buf.data() + namesOffset;
+        for (auto attr : attrs) {
+            std::string_view name = state.symbols[attr->name];
+            memcpy(out, name.data(), name.size());
+            out += name.size();
+            *out++ = 0;
+        }
+
+        return ((uint64_t) size << 32) | bufPtr;
     }
 
     ValueId get_attr(ValueId valueId, uint32_t ptr, uint32_t len)
@@ -642,6 +693,7 @@ static void regFuns(Linker & linker, bool useWasi)
     regFun(linker, "make_attrset", &NixWasmInstance::make_attrset);
     regFun(linker, "copy_attrset", &NixWasmInstance::copy_attrset);
     regFun(linker, "copy_attrname", &NixWasmInstance::copy_attrname);
+    regFun(linker, "get_attrset", &NixWasmInstance::get_attrset);
     regFun(linker, "get_attr", &NixWasmInstance::get_attr);
     regFun(linker, "call_function", &NixWasmInstance::call_function);
     regFun(linker, "make_app", &NixWasmInstance::make_app);
