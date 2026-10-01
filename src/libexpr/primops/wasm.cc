@@ -183,6 +183,11 @@ struct NixWasmInstance
             auto fun = std::get_if<Func>(&*ext);
             if (!fun)
                 throw Error("export 'nix_wasm_alloc' of Wasm module '%s' is not a function", pre->name);
+            auto type = fun->type(wasmCtx);
+            if (type->params().size() != 2 || type->results().size() != 1)
+                throw Error(
+                    "export 'nix_wasm_alloc' of Wasm module '%s' does not have type '(size: i32, align: i32) -> i32'",
+                    pre->name);
             allocFn = *fun;
         }
 
@@ -534,19 +539,23 @@ struct NixWasmInstance
     }
 
     /**
-     * Allocate `size` bytes in the guest by calling its `nix_wasm_alloc` export. The guest is responsible for freeing
-     * the buffer (e.g. by reconstructing a `Vec` from it).
+     * Allocate `size` bytes with alignment `align` (a power of two) in the guest by calling its `nix_wasm_alloc`
+     * export. The guest is responsible for freeing the buffer (e.g. by reconstructing a `Vec` with that size and
+     * alignment from it).
      */
-    uint32_t allocInGuest(uint32_t size)
+    uint32_t allocInGuest(uint32_t size, uint32_t align)
     {
         if (!allocFn)
             throw Error("Wasm module '%s' does not export 'nix_wasm_alloc'", pre->name);
-        auto res = unwrap(allocFn->call(wasmCtx, {(int32_t) size}));
+        auto res = unwrap(allocFn->call(wasmCtx, {(int32_t) size, (int32_t) align}));
         if (res.size() != 1 || res[0].kind() != ValKind::I32)
             throw Error("'nix_wasm_alloc' of Wasm module '%s' did not return an i32", pre->name);
+        auto ptr = (uint32_t) res[0].i32();
+        if (ptr % align)
+            throw Error("'nix_wasm_alloc' of Wasm module '%s' returned a misaligned pointer", pre->name);
         state.nrWasmGuestAllocs++;
         state.wasmGuestAllocBytes += size;
-        return (uint32_t) res[0].i32();
+        return ptr;
     }
 
     /**
@@ -588,7 +597,7 @@ struct NixWasmInstance
         if (contents.size() > std::numeric_limits<uint32_t>::max())
             throw Error("file '%s' is too large to process in Wasm (size: %d)", path, contents.size());
 
-        auto ptr = allocInGuest(contents.size());
+        auto ptr = allocInGuest(contents.size(), 1);
 
         // Note: the allocation may have grown the memory; `guestSpan` fetches it afresh.
         memcpy(guestSpan(ptr, contents.size()).data(), contents.data(), contents.size());

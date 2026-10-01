@@ -40,6 +40,14 @@ Every Wasm module used in non-WASI mode must export:
 - `nix_wasm_init_v1()`, a function that is called once when the module is instantiated.
 - The entry point function, whose name is specified by the `function` attribute. It takes a single `ValueId` and returns a single `ValueId` (i.e. it has type `fn(arg: u32) -> u32`).
 
+### Guest Allocator
+
+Some host functions (such as `read_file_v2`) return data in a buffer that the host allocates inside the Wasm memory. Modules (WASI or non-WASI) that call these functions must export:
+
+- `nix_wasm_alloc(size: u32, align: u32) -> u32`, a function that allocates `size` bytes with alignment `align` (a power of two) and returns a pointer to them.
+
+The module owns the returned buffer and is responsible for freeing it.
+
 ### WASI Mode
 
 WASI mode is automatically used when the module imports a `wasi_snapshot_preview1` function.
@@ -360,6 +368,17 @@ Returns a result value to the Nix evaluator from a WASI module. This function is
 **Note:** Calling this function immediately terminates the WASI module's execution. The module must call `return_to_nix` before finishing; otherwise, an error is raised.
 
 ### File I/O
+
+#### `read_file_v2(path: ValueId) -> u64`
+
+Reads a file into a buffer in Wasm memory allocated by the host.
+
+**Parameters:**
+- `path` - Value ID of a Nix path value
+
+**Returns:** The pointer to the buffer in the low 32 bits, and the file size in bytes in the high 32 bits.
+
+**Note:** The buffer is allocated by calling `nix_wasm_alloc(n, 1)` (see [Guest Allocator](#guest-allocator)), and the module is responsible for freeing it.
 
 ## Example Usage
 
