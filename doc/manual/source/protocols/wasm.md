@@ -361,19 +361,6 @@ Returns a result value to the Nix evaluator from a WASI module. This function is
 
 ### File I/O
 
-#### `read_file(path: ValueId, ptr: u32, len: u32) -> u32`
-
-Reads a file into Wasm memory.
-
-**Parameters:**
-- `path` - Value ID of a Nix path value
-- `ptr` - Pointer to buffer in Wasm memory
-- `len` - Maximum number of bytes to read
-
-**Returns:** The actual file size in bytes
-
-**Note:** Similar to `builtins.readFile`, but can handle files that cannot be represented as Nix strings (in particular, files containing NUL bytes). If the returned size is greater than `len`, no data is copied.
-
 ## Example Usage
 
 For Rust bindings to this interface and several examples, see https://github.com/DeterminateSystems/nix-wasm-rust/.
