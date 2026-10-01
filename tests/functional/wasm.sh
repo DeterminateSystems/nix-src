@@ -36,3 +36,10 @@ for function in attrs_inline attrs_alloc; do
         --extra-experimental-features wasm-builtin \
         --expr "builtins.wasm { wat = builtins.readFile ./attrset.wat; function = \"$function\"; } { }") = '[]' ]]
 done
+
+# A `nix_wasm_alloc` export that doesn't have type `(i32, i32) -> i32` must
+# be rejected.
+expectStderr 1 nix eval --impure \
+    --extra-experimental-features wasm-builtin \
+    --expr "builtins.wasm { wat = builtins.readFile ./bad-alloc.wat; function = \"id\"; } 0" \
+    | grepQuiet "does not have type '(size: i32, align: i32) -> i32'"

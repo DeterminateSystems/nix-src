@@ -184,7 +184,12 @@ struct NixWasmInstance
             if (!fun)
                 throw Error("export 'nix_wasm_alloc' of Wasm module '%s' is not a function", pre->name);
             auto type = fun->type(wasmCtx);
-            if (type->params().size() != 2 || type->results().size() != 1)
+            auto params = type->params().begin();
+            auto results = type->results().begin();
+            auto i32Type = ValType::i32();
+            ValType::Ref i32(i32Type);
+            if (type->params().size() != 2 || type->results().size() != 1 || params[0] != i32 || params[1] != i32
+                || results[0] != i32)
                 throw Error(
                     "export 'nix_wasm_alloc' of Wasm module '%s' does not have type '(size: i32, align: i32) -> i32'",
                     pre->name);
