@@ -43,6 +43,7 @@ enum struct ExperimentalFeature {
     Provenance,
     CNSA,
     BakedDerivations,
+    LockFileV8,
 };
 
 extern std::set<std::string> stabilizedFeatures;

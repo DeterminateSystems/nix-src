@@ -48,19 +48,9 @@ MixFlakeOptions::MixFlakeOptions()
 
     addFlag({
         .longName = "recreate-lock-file",
-        .description = R"(
-    Recreate the flake's lock file from scratch.
-
-    > **DEPRECATED**
-    >
-    > Use [`nix flake update`](@docroot@/command-ref/new-cli/nix3-flake-update.md) instead.
-        )",
+        .description = "Recreate the flake's lock file from scratch.",
         .category = category,
-        .handler = {[&]() {
-            lockFlags.recreateLockFile = true;
-            warn(
-                "'--recreate-lock-file' is deprecated and will be removed in a future version; use 'nix flake update' instead.");
-        }},
+        .handler = {&lockFlags.recreateLockFile, true},
     });
 
     addFlag({
@@ -117,7 +107,7 @@ MixFlakeOptions::MixFlakeOptions()
             if (!path)
                 throw UsageError(
                     "--update-input was passed a zero-length input path, which would refer to the flake itself, not an input");
-            lockFlags.inputUpdates.insert(*path);
+            lockFlags.inputUpdates->insert(*path);
         }},
         .completer = {[&](AddCompletions & completions, size_t, std::string_view prefix) {
             completeFlakeInputAttrPath(completions, getEvalState(), getFlakeRefsForCompletion(), prefix);
@@ -175,23 +165,24 @@ MixFlakeOptions::MixFlakeOptions()
         .labels = {"flake-url"},
         .handler = {[&](std::string flakeRef) {
             auto evalState = getEvalState();
-            auto flake = flake::lockFlake(
+            auto lockedFlake = flake::lockFlake(
                 flakeSettings,
                 *evalState,
                 parseFlakeRef(fetchSettings, flakeRef, absPath(getCommandBaseDir()).string()),
                 {.writeLockFile = false});
-            for (auto & [inputName, input] : flake.lockFile.root->inputs) {
-                auto input2 = flake.lockFile.findInput({inputName}); // resolve 'follows' nodes
-                if (auto input3 = std::dynamic_pointer_cast<const flake::LockedNode>(input2)) {
+
+            for (auto & inputName : lockedFlake->getInputNames(*evalState, {})) {
+                if (auto input =
+                        lockedFlake->findInput(*evalState, lockedFlake->resolveFollows(*evalState, {inputName}))) {
                     fetchers::Attrs extraAttrs;
 
-                    if (!input3->lockedRef.subdir.empty()) {
-                        extraAttrs["dir"] = input3->lockedRef.subdir;
+                    if (!input->lockedRef.subdir.empty()) {
+                        extraAttrs["dir"] = input->lockedRef.subdir;
                     }
 
                     overrideRegistry(
                         fetchers::Input::fromAttrs(fetchSettings, {{"type", "indirect"}, {"id", inputName}}),
-                        input3->lockedRef.input,
+                        input->lockedRef.input,
                         extraAttrs);
                 }
             }

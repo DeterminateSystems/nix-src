@@ -17,7 +17,7 @@ public:
 
     FlakeRef getFlakeRef();
 
-    flake::LockedFlake lockFlake();
+    std::unique_ptr<flake::LockedFlake> lockFlake();
 
     std::vector<FlakeRef> getFlakeRefsForCompletion() override;
 };

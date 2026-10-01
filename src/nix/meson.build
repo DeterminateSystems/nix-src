@@ -119,7 +119,7 @@ nix_sources = [ config_priv_h ] + files(
   'env.cc',
   'eval.cc',
   'flake-bake.cc',
-  'flake-prefetch-inputs.cc',
+  'flake-diff-locks.cc',
   'flake-prefetch-inputs.cc',
   'flake.cc',
   'formatter.cc',

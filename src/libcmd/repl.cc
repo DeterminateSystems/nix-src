@@ -20,7 +20,6 @@
 #include "nix/store/outputs-query.hh"
 #include "nix/store/globals.hh"
 #include "nix/flake/flake.hh"
-#include "nix/flake/lockfile.hh"
 #include "nix/util/users.hh"
 #include "nix/cmd/editor-for.hh"
 #include "nix/util/finally.hh"

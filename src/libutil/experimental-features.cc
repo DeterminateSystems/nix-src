@@ -27,7 +27,7 @@ void MissingExperimentalFeature::anchor() {}
  * feature, we either have no issue at all if few features are not added
  * at the end of the list, or a proper merge conflict if they are.
  */
-constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::BakedDerivations);
+constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::LockFileV8);
 
 constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails = {{
     {
@@ -325,6 +325,17 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
             `builtin:substitute` that are never built, but whose outputs are
             obtained by substitution. This enables the `builtins.bakedDerivation`
             function and the `nix flake bake` command.
+        )",
+        .trackingUrl = "",
+    },
+    {
+        .tag = Xp::LockFileV8,
+        .name = "lock-file-v8",
+        .description = R"(
+            Enable support for version 8 ("sparse") flake lock files, which
+            only store the locks of a flake's immediate inputs. Use the
+            [`lock-file-format`](@docroot@/command-ref/conf-file.md#conf-lock-file-format)
+            setting to create version 8 lock files.
         )",
         .trackingUrl = "",
     },
