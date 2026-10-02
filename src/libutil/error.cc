@@ -448,13 +448,13 @@ static void writeErr(std::string_view buf)
 #ifdef _WIN32
         DWORD n;
         if (!WriteFile(fd, buf.data(), buf.size(), &n, NULL))
-            abort();
+            return;
 #else
         auto n = ::write(fd, buf.data(), buf.size());
         if (n < 0) {
             if (errno == EINTR)
                 continue;
-            abort();
+            return;
         }
 #endif
         buf = buf.substr(n);
