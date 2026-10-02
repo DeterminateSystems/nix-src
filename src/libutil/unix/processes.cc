@@ -14,6 +14,7 @@
 #include <future>
 #include <iostream>
 #include <atomic>
+#include <thread>
 using namespace std::chrono_literals;
 
 #include <grp.h>
@@ -81,6 +82,17 @@ int Pid::kill(bool allowInterrupts)
 
     std::atomic<bool> killed = false;
 
+    std::thread killThread;
+
+    /* Make sure that the thread is joined even if `wait()` throws
+       an exception. */
+    Finally joinKillThread([&]() {
+        if (killThread.joinable()) {
+            killed = true;
+            killThread.join();
+        }
+    });
+
     if (killTimeout > 0ms && killSignal != SIGKILL)
         killThread = std::thread([&]() {
             auto elapsed = 0ms;
@@ -106,12 +118,7 @@ int Pid::kill(bool allowInterrupts)
             logError(SysError("killing process %d", pid).info());
     }
 
-    int ret = wait(allowInterrupts);
-    if (killThread.joinable()) {
-        killed = true;
-        killThread.join();
-    }
-    return ret;
+    return wait(allowInterrupts);
 }
 
 int Pid::wait(bool allowInterrupts)
