@@ -22,6 +22,7 @@ nix-build --max-silent-time 60 -o "$TEST_ROOT/result" -E "
     name = \"nix-ps-test\";
     buildCommand = ''
       sleep 600 > /dev/null 2>&1 &
+      sleep 1
       echo started > $started
       read line < $finish
       mkdir \$out
