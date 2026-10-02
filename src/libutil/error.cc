@@ -448,13 +448,13 @@ static void writeErr(std::string_view buf)
 #ifdef _WIN32
         DWORD n;
         if (!WriteFile(fd, buf.data(), buf.size(), &n, NULL))
-            abort();
+            return;
 #else
         auto n = ::write(fd, buf.data(), buf.size());
         if (n < 0) {
             if (errno == EINTR)
                 continue;
-            abort();
+            return;
         }
 #endif
         buf = buf.substr(n);
@@ -472,7 +472,11 @@ void panic(std::string_view msg)
 
 void outOfMemory()
 {
-    panic("ran out of memory");
+    /* Running out of memory is not a bug, so don't treat it as a
+       crash. Use `_exit()` since the process may not be in a state
+       where destructors and `atexit` handlers can run. */
+    writeErr("\n" ANSI_RED "error:" ANSI_NORMAL " ran out of memory\n");
+    _exit(outOfMemoryExitStatus);
 }
 
 void unreachable(std::source_location loc)
