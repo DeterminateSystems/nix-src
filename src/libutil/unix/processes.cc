@@ -40,6 +40,7 @@ Pid::Pid(Pid && other) noexcept
     : pid(other.pid)
     , separatePG(other.separatePG)
     , killSignal(other.killSignal)
+    , killTimeout(other.killTimeout)
 {
     other.release();
 }

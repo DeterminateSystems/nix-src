@@ -36,7 +36,7 @@ class Pid
     pid_t pid = -1;
     bool separatePG = false;
     int killSignal = SIGKILL;
-    std::chrono::milliseconds killTimeout;
+    std::chrono::milliseconds killTimeout{0};
     std::thread killThread;
 #else
     AutoCloseFD pid = INVALID_DESCRIPTOR;
@@ -81,6 +81,7 @@ public:
         swap(lhs.pid, rhs.pid);
         swap(lhs.separatePG, rhs.separatePG);
         swap(lhs.killSignal, rhs.killSignal);
+        swap(lhs.killTimeout, rhs.killTimeout);
 #else
         swap(lhs.pid, rhs.pid);
 #endif
