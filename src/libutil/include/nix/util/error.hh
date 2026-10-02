@@ -471,11 +471,17 @@ void throwExceptionSelfCheck();
 void panic(std::string_view msg);
 
 /**
- * Print an error message and std::terminate(). Installed as the
- * `std::new_handler` so that failing memory allocations produce a
- * clear "out of memory" error instead of an opaque abort (in
- * particular when `operator new` is overridden by mimalloc, which
- * cannot throw `std::bad_alloc`).
+ * The exit status of the process when it runs out of memory. This is
+ * the value of `ENOMEM` on Linux.
+ */
+constexpr int outOfMemoryExitStatus = 12;
+
+/**
+ * Print an error message and exit with status
+ * `outOfMemoryExitStatus`. Installed as the `std::new_handler` so
+ * that failing memory allocations produce a clear "out of memory"
+ * error instead of an opaque abort (in particular when `operator new`
+ * is overridden by mimalloc, which cannot throw `std::bad_alloc`).
  */
 [[noreturn]]
 void outOfMemory();
