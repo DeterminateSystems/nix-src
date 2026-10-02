@@ -1,6 +1,6 @@
 ---
 name: upstream
-description: Upstream a Determinate Nix change (a commit rev or a DeterminateSystems/nix-src PR number) to upstream Nix (NixOS/nix). Creates a branch and worktree from origin/master, cherry-picks the commits, builds and tests, drafts a PR description for the user to review, and only after approval pushes the branch and opens the PR. Use when the user asks to upstream, cherry-pick to upstream, or open an upstream PR for a Determinate Nix change.
+description: Upstreams a Determinate Nix change (a commit rev or a DeterminateSystems/nix-src PR number) to upstream Nix (NixOS/nix). Creates a branch and worktree from origin/master, cherry-picks the commits, builds and tests, drafts a PR description for the user to review, and only after approval pushes the branch and opens the PR. Use when the user asks to upstream, cherry-pick to upstream, or open an upstream PR for a Determinate Nix change.
 argument-hint: <commit-rev | nix-src PR number> [more revs/PRs...] [branch-name]
 user-invocable: true
 ---
@@ -10,6 +10,19 @@ user-invocable: true
 Arguments: `$ARGUMENTS`
 
 Each argument is either a commit rev (SHA, tag, branch) in Determinate Nix, or a pull request number of https://github.com/DeterminateSystems/nix-src. Several may be given; they are cherry-picked in the order given. An argument that is neither a rev nor a number is used as the branch name.
+
+Copy this checklist and check off items as you complete them:
+
+```
+- [ ] Verify and fetch the remotes
+- [ ] Step 1: Determine the commits to cherry-pick
+- [ ] Step 2: Create the branch and worktree
+- [ ] Step 3: Cherry-pick
+- [ ] Step 4: Format and test
+- [ ] Step 5: Draft the PR description and report
+- [ ] STOP: wait for the user to approve the draft
+- [ ] Step 6: Push and create the PR
+```
 
 ## Remotes
 
@@ -38,7 +51,7 @@ Then pick the commits depending on how the PR was merged (nix-src allows merge c
 * `state` is `OPEN`: `git fetch detsys refs/pull/N/head`, then use `git rev-list --reverse --no-merges $(git merge-base detsys/main FETCH_HEAD)..FETCH_HEAD`.
 * `state` is `CLOSED` (not merged): tell the user and stop.
 
-Print the resulting list with `git log --oneline --no-walk <commits>` and check it for commits that make no sense upstream: bumps of `.version-determinate`, edits under `doc/manual/source/release-notes-determinate/`, generated Determinate release notes, or merges. Leave those out and say so in the final report. If a commit is only partly Determinate-specific (for example a code change plus a Determinate release-note file), keep it; the Determinate-only hunks are dealt with during the cherry-pick.
+Print the resulting list with `git log --oneline --no-walk <commits>` and check it for commits that make no sense upstream: bumps of `.version-determinate`, edits under `doc/manual/source/release-notes-determinate/`, generated Determinate release notes, or merges. Leave those out and say so in the Step 5 report. If a commit is only partly Determinate-specific (for example a code change plus a Determinate release-note file), keep it; the Determinate-only hunks are dealt with during the cherry-pick.
 
 ## Step 2: Create the branch and worktree
 
@@ -48,16 +61,19 @@ Create the worktree as a sibling of the main checkout, named `nix-<branch>`:
 
 ```
 main=$(git worktree list --porcelain | head -n1 | cut -d' ' -f2-)
-dir=$(dirname "$main")/nix-<branch>
-git worktree add -b <branch> "$dir" origin/master
+worktree=$(dirname "$main")/nix-<branch>
+git worktree add -b <branch> "$worktree" origin/master
+echo "$worktree"
 ```
 
-If the directory or branch already exists, pick a different name rather than reusing or deleting anything. Run every later command in that worktree, using `git -C "$dir"` for git and `cd "$dir" && ...` for everything else. Never touch the worktree the skill was started from.
+If the directory or branch already exists, pick a different name rather than reusing or deleting anything.
+
+Shell variables do not persist between commands, so note the absolute path printed above and substitute it for `<worktree>` in every later command. Run every later command in that worktree, using `git -C <worktree>` for git and `cd <worktree> && ...` for everything else. Never touch the worktree the skill was started from.
 
 ## Step 3: Cherry-pick
 
 ```
-git -C "$dir" cherry-pick <commits...>
+git -C <worktree> cherry-pick <commits...>
 ```
 
 Do not pass `-x`: Determinate commit hashes mean nothing in the upstream repository; the PR description links to the Determinate PR instead. Keep the original author, message and trailers. In particular keep any `Assisted-by:` trailers, which upstream's contributing guidelines require for AI-assisted commits. Do not add trailers of your own.
@@ -71,7 +87,7 @@ Resolve and continue (`git add` the files, then `git cherry-pick --continue`, ke
 * Hunks touching Determinate-only files, such as `doc/manual/source/release-notes-determinate/` or `.version-determinate`. Drop those hunks. If the change is user-visible and deserves a release note upstream, add one under `doc/manual/rl-next/` instead, in the format used by the existing files there.
 * Trivial API differences that need a one- or two-line adaptation whose correctness is obvious.
 
-After resolving, rebuild the relevant part if practical, and mention every hand-resolved conflict in the final report.
+After resolving, rebuild the relevant part if practical, and mention every hand-resolved conflict in the Step 5 report.
 
 ### Bigger conflicts: stop and ask
 
@@ -88,19 +104,19 @@ In that case leave the cherry-pick in its conflicted state (do not abort) and re
 Review the result:
 
 ```
-git -C "$dir" log --oneline origin/master..HEAD
-git -C "$dir" diff --stat origin/master..HEAD
-git -C "$dir" diff origin/master..HEAD | grep -n -i 'determinate\|version-determinate'
+git -C <worktree> log --oneline origin/master..HEAD
+git -C <worktree> diff --stat origin/master..HEAD
+git -C <worktree> diff origin/master..HEAD | grep -n -i 'determinate\|version-determinate'
 ```
 
-Anything Determinate-specific that leaked through has to be removed with a fixup to the commit that introduced it. Use `git -C "$dir" commit --fixup <sha>` followed by `GIT_SEQUENCE_EDITOR=true git -C "$dir" rebase -i --autosquash origin/master`.
+Anything Determinate-specific that leaked through has to be removed with a fixup to the commit that introduced it. Use `git -C <worktree> commit --fixup <sha>` followed by `GIT_SEQUENCE_EDITOR=true git -C <worktree> rebase -i --autosquash origin/master`.
 
 ## Step 4: Format and test
 
 Run the formatter from the dev shell, which is how upstream CI checks formatting:
 
 ```
-cd "$dir" && nix develop -c ./maintainers/format.sh
+cd <worktree> && nix develop -c ./maintainers/format.sh
 ```
 
 If it changed files, fold them into the commit that introduced them with the fixup and autosquash procedure above.
@@ -108,10 +124,10 @@ If it changed files, fold them into the commit that introduced them with the fix
 Then build and test. Build the default package, which runs the unit tests and functional tests as part of its build:
 
 ```
-cd "$dir" && nix build -L .
+cd <worktree> && nix build -L .
 ```
 
-This takes a long time. Run it in the background with a generous timeout and wait for it to finish; do not poll. If the change adds or modifies tests, confirm from the build log that they ran. If something fails, decide whether it is caused by the cherry-picked change (fix it, with a fixup into the right commit, and rebuild) or is a pre-existing failure on `origin/master` (check by looking at the failing test on `origin/master`; if it fails there too, say so in the report and carry on).
+This takes a long time. Run it in the background with a generous timeout and wait for it to finish; do not poll. If the change adds or modifies tests, confirm from the build log that they ran. If something fails, decide whether it is caused by the cherry-picked change (fix it, with a fixup into the right commit, and rebuild) or is a pre-existing failure on `origin/master` (check by looking at the failing test on `origin/master`; if it fails there too, say so in the Step 5 report and carry on).
 
 ## Step 5: Draft the PR description, then stop for review
 
@@ -134,8 +150,8 @@ Now report to the user and stop. The report must contain: the branch name and wo
 Re-read the draft file first, since the user may have edited it. Then:
 
 ```
-git -C "$dir" push -u origin <branch>
+git -C <worktree> push -u origin <branch>
 gh pr create --repo NixOS/nix --base master --head <branch> --title "<title>" --body-file <body-file>
 ```
 
-Report the PR URL. Leave the worktree in place and mention that it can be removed later with `git worktree remove "$dir"`.
+Report the PR URL. Leave the worktree in place and mention that it can be removed later with `git worktree remove <worktree>`.
