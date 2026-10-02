@@ -215,12 +215,21 @@ PosIdx Value::determinePos(const PosIdx pos) const
 template<>
 bool ValueStorage<sizeof(void *)>::isTrivial() const
 {
-    auto p1_ = p1; // must acquire before reading p0, since thunks can change
     auto p0_ = p0.load(std::memory_order_acquire);
 
     auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
 
-    if (pd == pdThunk || pd == pdPending || pd == pdAwaited) {
+    if (pd == pdThunk) {
+        auto p1_ = p1;
+
+        /* `p1` is only valid as a thunk payload if no other thread
+           has started forcing the thunk in the meantime, since
+           `finish()` overwrites `p1` before it updates `p0`. So check
+           that the value is still a thunk. */
+        if (p0.load(std::memory_order_acquire) != p0_)
+            /* The thunk is now pending, awaited or finished. */
+            return true;
+
         bool isApp = p1_ & discriminatorMask;
         if (isApp)
             return false;
@@ -230,6 +239,9 @@ bool ValueStorage<sizeof(void *)>::isTrivial() const
     }
 
     else
+        /* Note: if the value is pending or awaited, we can't safely
+           inspect its expression, so treat it as trivial (i.e. the
+           caller will wait for the thread that is forcing it). */
         return true;
 }
 
