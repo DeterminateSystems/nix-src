@@ -13,6 +13,8 @@
 #  include <gc.h>
 #endif
 
+#include <boost/unordered/concurrent_flat_set.hpp>
+
 namespace nix {
 
 struct WaiterDomain;
@@ -612,6 +614,15 @@ void Executor::worker(Worker & self)
     }
 }
 
+bool Executor::hasBacklog()
+{
+    auto state(state_.lock());
+    auto n = state->queue.size();
+    for (auto & worker : workers)
+        n += worker->readyFibers.size();
+    return n >= evalCores;
+}
+
 std::vector<std::future<void>> Executor::spawn(WorkItems && items)
 {
     if (items.empty())
@@ -931,5 +942,126 @@ static RegisterPrimOp r_parallel({
     .impl = prim_parallel,
     .experimentalFeature = Xp::ParallelEval,
 });
+
+#pragma GCC diagnostic ignored "-Wswitch-enum"
+
+void EvalState::forceValueDeepParallel(Value & vRoot, PosIdx pos, bool spawnThunks)
+{
+    if (!executor->enabled)
+        return;
+
+    // FIXME: the pointers in this set can refer to values that been GCed and then reallocated. That's not a problem for
+    // correctness, since at worst it prevents background evaluation of some values. But we should probably register a
+    // GC hook to clear this set at GC time.
+    static boost::concurrent_flat_set<Value *> seen;
+
+    Executor::WorkItems work;
+
+    /* Bound the recursion depth of the walk: deeply nested values
+       (e.g. a 100000-element linked list of attrsets) would otherwise
+       overflow the C++ stack, and the walk is best-effort anyway. The
+       demand path will report a proper `max-call-depth` error for
+       such values. */
+    constexpr size_t maxDepth = 1024;
+
+    auto recurse =
+        [&](this const auto & recurse, EvalState & state, Value & v, PosIdx pos, bool isRoot, size_t depth) -> void {
+        if (depth > maxDepth)
+            return;
+
+        auto type = v.type();
+        if (type == nString || type == nPath || type == nNull || type == nInt || type == nFloat || type == nBool
+            || type == nFailed || type == nExternal)
+            return;
+
+        /* The root of this walk was typically already added to `seen`
+           by the walk that spawned us (when it was still a thunk), so
+           it must be visited regardless. But that exemption must not
+           apply when the root is reached again *inside* its own
+           subtree (e.g. a nixpkgs package set `pkgs` has an attribute
+           `pkgs` that is the same value), since the walk would then
+           never terminate. */
+        if (!seen.insert(&v) && !isRoot)
+            return;
+
+        if (type == nThunk) {
+            if (spawnThunks) {
+                state.addWork(work, 0, [v(RootValue(&v)), pos, &state]() { state.forceValueDeepParallel(**v, pos); });
+                return;
+            }
+            /* Force the thunk right here. Most thunks are cheap (e.g.
+               the attributes of a derivation), so a work item per
+               thunk would cost far more in scheduling than it gains
+               in parallelism. Errors are left to whoever needs this
+               value (e.g. `derivationStrict`), which will report them
+               with the proper context. */
+            try {
+                state.forceValue(v, pos);
+            } catch (Interrupted &) {
+                throw;
+            } catch (Error &) {
+                return;
+            }
+            type = v.type();
+            if (type == nString || type == nPath || type == nNull || type == nInt || type == nFloat || type == nBool
+                || type == nFailed || type == nExternal)
+                return;
+        }
+
+        switch (v.type()) {
+
+        case nAttrs: {
+
+            NixStringContext context;
+            if (state.tryAttrsToString(pos, v, context, false, false))
+                return;
+
+            if (auto aOutPath = v.attrs()->get(s.outPath)) {
+                /* This attrset is coercible to a string via its
+                   `outPath` (e.g. a derivation or a flake input source
+                   tree), which is all that string coercion and JSON
+                   serialisation ever look at. So only force `outPath`
+                   in the background; for a derivation, that
+                   instantiates it (calling `derivationStrict`, which
+                   in turn recursively spawns *its* inputs). We must
+                   not walk any other attribute: they are user-visible
+                   and may hold arbitrary expressions (e.g. nixpkgs's
+                   `nodejs` wraps its `drvAttrs` in `lib.warn`, and a
+                   flake input's `inputs` leads to entire package
+                   sets). */
+                if (!aOutPath->value->isFinished())
+                    state.addWork(work, 0, [v(RootValue(aOutPath->value)), pos(aOutPath->pos), &state]() {
+                        state.forceValue(**v, pos);
+                    });
+
+            } else {
+                for (auto & a : *v.attrs())
+                    recurse(state, *a.value, a.pos, false, depth + 1);
+            }
+
+            break;
+        }
+
+        case nList: {
+            for (const auto & elem : v.listView())
+                recurse(state, *elem, pos, false, depth + 1);
+            break;
+        }
+
+        default:
+            break;
+        }
+    };
+
+    forceValue(vRoot, pos);
+
+    recurse(*this, vRoot, pos, true, 0);
+
+    if (work.size() == 1)
+        // Only one work item, so we may as well do it on the current thread right away.
+        work[0].first();
+    else
+        executor->spawn(std::move(work));
+}
 
 } // namespace nix
