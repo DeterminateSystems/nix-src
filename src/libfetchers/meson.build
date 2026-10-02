@@ -31,6 +31,9 @@ deps_public += nlohmann_json
 libgit2 = dependency('libgit2', version : '>= 1.9')
 deps_private += libgit2
 
+zstd = dependency('libzstd', version : '>= 1.4.0')
+deps_private += zstd
+
 subdir('nix-meson-build-support/common')
 
 sources = files(
@@ -51,6 +54,7 @@ sources = files(
   'path.cc',
   'provenance.cc',
   'registry.cc',
+  'tarball-cache.cc',
   'tarball.cc',
 )
 

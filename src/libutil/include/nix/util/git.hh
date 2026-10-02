@@ -72,8 +72,7 @@ using SinkHook = void(const CanonPath & name, TreeEntry entry);
  *
  * @throws if prefix not recognized
  */
-ObjectType
-parseObjectType(Source & source, const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
+ObjectType parseObjectType(Source & source);
 
 /**
  * These 3 modes are represented by blob objects.
@@ -87,12 +86,7 @@ enum struct BlobMode : RawMode {
     Symlink = static_cast<RawMode>(Mode::Symlink),
 };
 
-void parseBlob(
-    FileSystemObjectSink & sink,
-    const CanonPath & sinkPath,
-    Source & source,
-    BlobMode blobMode,
-    const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
+void parseBlob(FileSystemObjectSink & sink, const CanonPath & sinkPath, Source & source, BlobMode blobMode);
 
 /**
  * @param hashAlgo must be `HashAlgo::SHA1` or `HashAlgo::SHA256` for now.
@@ -102,8 +96,7 @@ void parseTree(
     const CanonPath & sinkPath,
     Source & source,
     HashAlgorithm hashAlgo,
-    fun<SinkHook> hook,
-    const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
+    fun<SinkHook> hook);
 
 /**
  * Helper putting the previous three `parse*` functions together.
@@ -120,8 +113,7 @@ void parse(
     Source & source,
     BlobMode rootModeIfBlob,
     HashAlgorithm hashAlgo,
-    fun<SinkHook> hook,
-    const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
+    fun<SinkHook> hook);
 
 /**
  * Assists with writing a `SinkHook` step (2).
@@ -145,17 +137,13 @@ void restore(FileSystemObjectSink & sink, Source & source, HashAlgorithm hashAlg
 
 /**
  * Dumps a single file to a sink
- *
- * @param xpSettings for testing purposes
  */
-void dumpBlobPrefix(
-    uint64_t size, Sink & sink, const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
+void dumpBlobPrefix(uint64_t size, Sink & sink);
 
 /**
  * Dumps a representation of a git tree to a sink
  */
-void dumpTree(
-    const Tree & entries, Sink & sink, const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
+void dumpTree(const Tree & entries, Sink & sink);
 
 /**
  * Callback for processing a child with `dump`
@@ -168,12 +156,7 @@ void dumpTree(
  */
 using DumpHook = TreeEntry(const SourcePath & path);
 
-Mode dump(
-    const SourcePath & path,
-    Sink & sink,
-    fun<DumpHook> hook,
-    PathFilter & filter = defaultPathFilter,
-    const ExperimentalFeatureSettings & xpSettings = experimentalFeatureSettings);
+Mode dump(const SourcePath & path, Sink & sink, fun<DumpHook> hook, PathFilter & filter = defaultPathFilter);
 
 /**
  * Recursively dumps path, hashing as we go.
