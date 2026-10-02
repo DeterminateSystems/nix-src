@@ -62,7 +62,7 @@ Create the worktree as a sibling of the main checkout, named `nix-<branch>`:
 ```
 main=$(git worktree list --porcelain | head -n1 | cut -d' ' -f2-)
 worktree=$(dirname "$main")/nix-<branch>
-git worktree add -b <branch> "$worktree" origin/master
+git worktree add --no-track -b <branch> "$worktree" origin/master
 echo "$worktree"
 ```
 
@@ -150,7 +150,7 @@ Now report to the user and stop. The report must contain: the branch name and wo
 Re-read the draft file first, since the user may have edited it. Then:
 
 ```
-git -C <worktree> push -u origin <branch>
+git -C <worktree> push -u origin <branch>:refs/heads/<branch>
 gh pr create --repo NixOS/nix --base master --head <branch> --title "<title>" --body-file <body-file>
 ```
 
