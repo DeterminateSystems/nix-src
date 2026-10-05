@@ -298,16 +298,29 @@ struct CmdFlakeInfo : CmdFlakeMetadata
 };
 
 /**
- * Log the current exception, after forcing cached evaluation errors.
+ * Log the exception `error`, after forcing cached evaluation errors.
+ *
+ * Note: this must not be called from inside a catch handler.
+ * `CachedEvalError::force()` evaluates the original attribute, which
+ * may have to wait on a thunk owned by another fiber, and a fiber
+ * must not suspend while an exception is being handled.
  */
-static void logEvalError()
+static void logEvalError(std::exception_ptr error)
 {
+    std::optional<eval_cache::CachedEvalError> cached;
     try {
-        try {
-            throw;
-        } catch (eval_cache::CachedEvalError & e) {
-            e.force();
-        }
+        std::rethrow_exception(error);
+    } catch (eval_cache::CachedEvalError & e) {
+        cached.emplace(e);
+    } catch (Error & e) {
+        logError(e.info());
+        return;
+    }
+
+    assert(!std::current_exception());
+
+    try {
+        cached->force();
     } catch (Error & e) {
         logError(e.info());
     }
@@ -397,6 +410,10 @@ struct CmdFlakeCheck : FlakeCommand, MixPrintOutPaths, MixOutLinkBase, MixFlakeS
                 flake->flake.provenance,
 
                 [&](const flake_schemas::Leaf & leaf) {
+                    /* Set if the check failed and we're in `--keep-going`
+                       mode. Logged below, outside the catch handler. */
+                    std::exception_ptr error;
+
                     try {
                         bool done = true;
                         bool buildSkipped = false;
@@ -448,11 +465,14 @@ struct CmdFlakeCheck : FlakeCommand, MixPrintOutPaths, MixOutLinkBase, MixFlakeS
                     } catch (Error & e) {
                         printError("❌ " ANSI_RED "%s" ANSI_NORMAL, leaf.node->getAttrPathStr());
                         if (settings.getWorkerSettings().keepGoing) {
-                            logEvalError();
+                            error = std::current_exception();
                             hasErrors = true;
                         } else
                             throw;
                     }
+
+                    if (error)
+                        logEvalError(error);
                 },
 
                 [&](std::function<void(flake_schemas::ForEachChild)> forEachChild) {
