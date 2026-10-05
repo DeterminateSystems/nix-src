@@ -104,7 +104,9 @@ struct Executor::Fiber
 
 #if NIX_USE_BOEHMGC
     /**
-     * The registered GC descriptor of this fiber's stack.
+     * The registered GC descriptor of the stack that this fiber's
+     * continuation lives on: initially its own stack; after a
+     * suspension, the stack it suspended on (see `suspendFiber()`).
      */
     struct GC_stack * gcStack = nullptr;
 #endif
@@ -448,12 +450,12 @@ bool Executor::runFiber(FiberPtr fiber)
 
 #if NIX_USE_BOEHMGC
     /* Make this thread's stack scannable by the GC while the fiber
-       runs, and make the fiber's stack the current one. The fiber
-       clears its own `saved_sp` after it has been resumed (see
-       `suspendFiber()`). */
+       runs, and make the stack the fiber continues on the current
+       one. The fiber clears that stack's `saved_sp` after it has been
+       resumed (see `suspendFiber()`). */
     auto prevStack = GC_current_stack;
     if (prevStack)
-        prevStack->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+        gcSaveStackPointer(prevStack);
     GC_current_stack = fib->gcStack;
 #endif
 
@@ -746,14 +748,22 @@ suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::V
        considered owning anymore once we've switched away. */
     lk.release();
 #if NIX_USE_BOEHMGC
-    /* Publish the used portion of our stack, so that the garbage
-       collector will scan it while we're suspended (see
+    /* Publish the used portion of the stack we're running on, so that
+       the garbage collector will scan it while we're suspended (see
        `gcStackSwitchSlack` for why the approximation is lowered).
-       Note: from this point until we clear `saved_sp` after being
-       resumed, the GC may see the stack both as some thread's active
-       stack and as a suspended one; it scans it only once (from the
-       lower stack pointer). */
-    fib->gcStack->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+       This is the fiber's own stack unless we're suspending from
+       inside a coroutine body, in which case it's the coroutine's
+       stack (the fiber's own stack then already has a `saved_sp`,
+       recorded when it switched onto the coroutine). Either way,
+       `runFiber()` makes it the current stack again when we're
+       resumed. Note: from this point until we clear `saved_sp` after
+       being resumed, the GC may see the stack both as some thread's
+       active stack and as a suspended one; it scans it only once
+       (from the lower stack pointer). */
+    auto stk = GC_current_stack;
+    assert(stk);
+    gcSaveStackPointer(stk);
+    fib->gcStack = stk;
 #endif
     /* Switch back to the scheduler (`Executor::runFiber()`), which
        will register us in the domain's wait list and then release the
@@ -765,7 +775,7 @@ suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::V
 #if NIX_USE_BOEHMGC
     /* We're running again, so our stack is scanned as the thread's
        active stack from here on. */
-    fib->gcStack->saved_sp = nullptr;
+    stk->saved_sp = nullptr;
 #endif
     /* We've been resumed because the value was finished (or because
        we're shutting down); the scheduler released the lock long
