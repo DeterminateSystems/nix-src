@@ -2,6 +2,7 @@
 #include "nix/util/users.hh"
 #include "nix/util/sync.hh"
 #include "nix/store/sqlite.hh"
+#include "nix/store/pathlocks.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/provenance.hh"
 
@@ -43,6 +44,11 @@ create table if not exists NARs (
     foreign key (cache) references BinaryCaches(id) on delete cascade
 );
 
+-- Used by the periodic purge of expired entries. Without it, the
+-- purge is a full table scan, which on a multi-GiB cache can hold the
+-- SQLite write lock for minutes.
+create index if not exists NARsExpiry on NARs(present, timestamp);
+
 create table if not exists BuildTrace (
     cache integer not null,
 
@@ -73,6 +79,12 @@ public:
     /* How often to purge expired entries from the cache. */
     const int purgeInterval = 24 * 3600;
 
+    /* How many expired entries to delete per transaction when
+       purging. Each chunk is committed separately so that the SQLite
+       write lock is never held for long and progress is not lost if
+       the process is killed. */
+    const int purgeChunkSize = 1000;
+
     struct Cache
     {
         std::string storeDir;
@@ -92,7 +104,7 @@ public:
     NarInfoDiskCacheImpl(
         const Settings & settings,
         SQLiteSettings sqliteSettings,
-        std::filesystem::path dbPath = getCacheDir() / "binary-cache-detsys-v3.sqlite")
+        std::filesystem::path dbPath = getCacheDir() / "binary-cache-detsys-v4.sqlite")
         : NarInfoDiskCache{settings}
     {
         auto state(_state.lock());
@@ -148,31 +160,64 @@ public:
             )");
 
         /* Periodically purge expired entries from the database. */
-        retrySQLite<void>([&]() {
-            auto now = time(nullptr);
+        auto now = time(nullptr);
 
+        auto purgeDue = retrySQLite<bool>([&]() {
             SQLiteStmt queryLastPurge(state->db, "select value from LastPurge");
             auto queryLastPurge_(queryLastPurge.use());
-
-            if (!queryLastPurge_.next() || queryLastPurge_.getInt(0) < now - purgeInterval) {
-                SQLiteStmt(
-                    state->db,
-                    "delete from NARs where ((present = 0 and timestamp < ?) or (present = 1 and timestamp < ?))")
-                    .use()
-                    // Use a minimum TTL to prevent --refresh from
-                    // nuking the entire disk cache.
-                    .apply(now - std::max(settings.ttlNegative.get(), 3600U))
-                    .apply(now - std::max(settings.ttlPositive.get(), 30 * 24 * 3600U))
-                    .exec();
-
-                debug("deleted %d entries from the NAR info disk cache", sqlite3_changes(state->db));
-
-                SQLiteStmt(state->db, "insert or replace into LastPurge(dummy, value) values ('', ?)")
-                    .use()
-                    .apply(now)
-                    .exec();
-            }
+            return !queryLastPurge_.next() || queryLastPurge_.getInt(0) < now - purgeInterval;
         });
+
+        if (purgeDue) {
+            /* Processes that start around the same time will all
+               find the purge due, so take a lock to ensure only one
+               of them does it. The others skip the purge. Since
+               LastPurge is only updated once the purge completes, if
+               the purging process is killed, the next process to open
+               the cache will take over. */
+            auto purgeLock = openLockFile(dbPath.string() + ".purge-lock", true);
+            if (!lockFile(purgeLock.get(), ltWrite, false)) {
+                debug("skipping purge of the NAR info disk cache because another process is doing it");
+            } else {
+                /* Delete in chunks, each in its own autocommit
+                   transaction, so that the write lock is released
+                   between chunks and concurrent processes are only
+                   ever blocked for the duration of one chunk. If this
+                   process is killed, the chunks already committed stay
+                   deleted and the next purge continues where we left
+                   off. */
+                SQLiteStmt purge(
+                    state->db,
+                    "delete from NARs where rowid in (select rowid from NARs where ((present = 0 and timestamp < ?) or (present = 1 and timestamp < ?)) limit ?)");
+
+                uint64_t deleted = 0;
+                while (true) {
+                    auto n = retrySQLite<int>([&]() {
+                        purge
+                            .use()
+                            // Use a minimum TTL to prevent --refresh from
+                            // nuking the entire disk cache.
+                            .apply(now - std::max(settings.ttlNegative.get(), 3600U))
+                            .apply(now - std::max(settings.ttlPositive.get(), 30 * 24 * 3600U))
+                            .apply(purgeChunkSize)
+                            .exec();
+                        return sqlite3_changes(state->db);
+                    });
+                    deleted += n;
+                    if (n < purgeChunkSize)
+                        break;
+                }
+
+                debug("deleted %d entries from the NAR info disk cache", deleted);
+
+                retrySQLite<void>([&]() {
+                    SQLiteStmt(state->db, "insert or replace into LastPurge(dummy, value) values ('', ?)")
+                        .use()
+                        .apply(now)
+                        .exec();
+                });
+            }
+        }
     }
 
     Cache & getCache(State & state, const std::string & uri)
