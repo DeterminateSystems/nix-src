@@ -1,4 +1,5 @@
 #include "nix/util/environment-variables.hh"
+#include "nix/util/processes.hh"
 #include "nix/expr/eval-settings.hh"
 #include "nix/util/config-global.hh"
 #include "nix/expr/eval-gc.hh"
@@ -166,6 +167,30 @@ static void coroResumeImpl(void * handle)
     if (cur)
         cur->saved_sp = nullptr;
 }
+
+/**
+ * A forked child process (e.g. a builtin builder, or an in-process
+ * build sandbox running on a `clone()` stack) inherits the parent
+ * thread's `GC_current_stack` and registered stacks, but it is not
+ * executing on the stack that `GC_current_stack` refers to (if it
+ * inherited the main thread's, it may be running on an entirely
+ * different one) and it never runs the collector, so the stack
+ * bookkeeping must not be done there: at best it is useless, at worst
+ * it trips the consistency check in `gcSaveStackPointer()` or takes
+ * the collector's lock, which may have been held by another thread of
+ * the parent at the time of the fork. So disable the hooks in the
+ * child.
+ */
+static RegisterForkCallback disableCoroutineGCHooks([]() {
+    coroStackRegister = nullptr;
+    coroStackUnregister = nullptr;
+    coroSwitchTo = nullptr;
+    coroSwitchBack = nullptr;
+    coroEnter = nullptr;
+    coroYield = nullptr;
+    coroResume = nullptr;
+    GC_current_stack = nullptr;
+});
 
 static inline void initGCReal()
 {

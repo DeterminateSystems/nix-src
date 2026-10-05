@@ -61,6 +61,12 @@ namespace nix {
  *
  * All hooks are invoked with the corresponding stack switches
  * strictly balanced.
+ *
+ * The hooks may be reset to null at any time, in particular in a
+ * forked child process (which inherits the parent's bookkeeping but
+ * doesn't execute on the stack it describes and never runs the
+ * collector), so every use must check for null, including the
+ * "closing" half of a pair whose "opening" half did run.
  */
 extern void * (*coroStackRegister)(void * base, size_t size);
 extern void (*coroStackUnregister)(void * cookie);

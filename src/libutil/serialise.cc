@@ -405,10 +405,11 @@ struct GCTrackedStackAllocator
 
     void deallocate(boost::context::stack_context & sctx)
     {
-        if (*cookie) {
+        /* Note: the hooks may have been reset to null since the
+           allocation (see `coroutine-gc.hh`). */
+        if (*cookie && coroStackUnregister)
             coroStackUnregister(*cookie);
-            *cookie = nullptr;
-        }
+        *cookie = nullptr;
         boost::coroutines2::protected_fixedsize_stack(defaultCoroutineStackSize).deallocate(sctx);
     }
 };
@@ -436,7 +437,7 @@ struct CoroutineGuard
 
     ~CoroutineGuard()
     {
-        if (active)
+        if (active && coroSwitchBack)
             coroSwitchBack(prev);
     }
 };
@@ -466,7 +467,7 @@ struct CoroutineYieldGuard
 
     ~CoroutineYieldGuard()
     {
-        if (active)
+        if (active && coroResume)
             coroResume(handle);
     }
 };
