@@ -1,4 +1,5 @@
 #include "nix/expr/value.hh"
+#include "nix/expr/nixexpr.hh"
 #include "nix/expr/static-string-data.hh"
 
 #include "nix/store/tests/libstore.hh"
@@ -37,6 +38,17 @@ TEST_F(ValueTest, staticString)
 
     // The strings should also be backed by the same (static) allocation
     ASSERT_EQ(&sd1, &sd2);
+}
+
+/* Finishing a value that holds a thunk indicates that two writers own
+   the same `Value`; it must abort with a diagnostic identifying the
+   thunk. */
+TEST_F(ValueTest, finishThunkPanics)
+{
+    ExprInt expr{42};
+    Value v;
+    v.mkThunk(nullptr, &expr);
+    EXPECT_DEATH(v.mkInt(1), "finished value written into a Value that holds a thunk.*thunk of expression");
 }
 
 } // namespace nix

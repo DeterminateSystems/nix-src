@@ -29,15 +29,18 @@
 #include "nix/util/current-process.hh"
 #include "nix/store/async-path-writer.hh"
 #include "nix/expr/parallel-eval.hh"
+#include "nix/util/sentry.hh"
 
 #include "parser-tab.hh"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <sstream>
+#include <typeinfo>
 #include <cstring>
 #include <optional>
 #include <unistd.h>
@@ -266,6 +269,45 @@ EvalMemory::EvalMemory()
 
 [[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext EvalState::evalContext;
 
+/**
+ * The most recently constructed `EvalState`, used only to resolve
+ * symbols and source positions in crash diagnostics (see
+ * `panicThunkOverwritten()`).
+ */
+static std::atomic<EvalState *> diagnosticsEvalState{nullptr};
+
+void panicThunkOverwritten(
+    const void * value, std::uintptr_t oldP0, std::uintptr_t oldP1, std::uintptr_t newP0, std::uintptr_t newP1)
+{
+    constexpr std::uintptr_t mask = (std::uintptr_t(1) << discriminatorBits) - 1;
+
+    auto raw = fmt("value %p, old words 0x%x 0x%x, new words 0x%x 0x%x", value, oldP0, oldP1, newP0, newP1);
+
+    /* Record the raw words before decoding the thunk, since the latter
+       dereferences pointers that may be bogus. */
+    setSentryTag("thunk_overwrite_raw", raw.c_str());
+
+    auto msg = fmt("finished value written into a Value that holds a thunk (%s): ", raw);
+
+    if (oldP1 & mask) {
+        msg += fmt("application of %p to %p", (void *) (oldP0 & ~mask), (void *) (oldP1 & ~mask));
+    } else {
+        auto env = (void *) (oldP0 & ~mask);
+        auto expr = reinterpret_cast<const Expr *>(oldP1 & ~mask);
+        msg += fmt("thunk of expression %p (%s) in environment %p", (const void *) expr, typeid(*expr).name(), env);
+        if (auto state = diagnosticsEvalState.load()) {
+            std::ostringstream str;
+            expr->show(state->symbols, str);
+            auto shown = str.str();
+            if (shown.size() > 256)
+                shown = shown.substr(0, 256) + "...";
+            msg += fmt(" at %s: %s", state->positions[expr->getPos()], shown);
+        }
+    }
+
+    panic(msg);
+}
+
 EvalState::EvalState(
     const LookupPath & lookupPathFromArguments,
     ref<Store> store,
@@ -418,9 +460,15 @@ EvalState::EvalState(
     case EvalProfilerMode::disabled:
         break;
     }
+
+    diagnosticsEvalState.store(this);
 }
 
-EvalState::~EvalState() {}
+EvalState::~EvalState()
+{
+    auto self = this;
+    diagnosticsEvalState.compare_exchange_strong(self, nullptr);
+}
 
 void EvalState::allowPathLegacy(const std::string & path)
 {

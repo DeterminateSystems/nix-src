@@ -574,6 +574,18 @@ inline constexpr bool useBitPackedValueStorage = (ptrSize == 8) && (__STDCPP_DEF
 } // namespace detail
 
 /**
+ * Report (and abort on) a finished value being written into a `Value`
+ * that currently holds a thunk. The thunk state machine only allows a
+ * value to be finished from the pending/awaited states, so this means
+ * that two writers believe they own the same `Value` (e.g. because the
+ * cell was handed out twice by the allocator or collected while still
+ * in use). Decodes the thunk (its expression and source position, or
+ * the function application) to identify the other owner.
+ */
+[[noreturn, gnu::cold, gnu::noinline]] void panicThunkOverwritten(
+    const void * value, std::uintptr_t oldP0, std::uintptr_t oldP1, std::uintptr_t newP0, std::uintptr_t newP1);
+
+/**
  * Value storage that is optimized for 64 bit systems.
  * Packs discriminator bits into the pointer alignment niches.
  */
@@ -682,10 +694,11 @@ class alignas(16)
     void finish(PackedPointer p0_, PackedPointer p1_)
     {
         // Note: p1 *must* be updated before p0.
+        auto oldP1 = p1;
         p1 = p1_;
-        p0_ = p0.exchange(p0_, std::memory_order_release);
+        auto oldP0 = p0.exchange(p0_, std::memory_order_release);
 
-        auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
+        auto pd = static_cast<PrimaryDiscriminator>(oldP0 & discriminatorMask);
         if (pd == pdPending)
             // Nothing to do; no thread is waiting on this thunk.
             ;
@@ -694,7 +707,9 @@ class alignas(16)
             // thunk.
             notifyWaiters();
         else if (pd == pdThunk)
-            unreachable();
+            // Only a pending or awaited value may be finished. A thunk
+            // here means another writer owns this `Value` as well.
+            panicThunkOverwritten(this, oldP0, oldP1, p0_, p1_);
     }
 
     template<InternalType type>
