@@ -78,6 +78,12 @@ public:
     /* How often to purge expired entries from the cache. */
     const int purgeInterval = 24 * 3600;
 
+    /* How many expired entries to delete per transaction when
+       purging. Each chunk is committed separately so that the SQLite
+       write lock is never held for long and progress is not lost if
+       the process is killed. */
+    const int purgeChunkSize = 1000;
+
     struct Cache
     {
         std::string storeDir;
@@ -153,31 +159,55 @@ public:
             )");
 
         /* Periodically purge expired entries from the database. */
-        retrySQLite<void>([&]() {
-            auto now = time(nullptr);
+        auto now = time(nullptr);
 
+        auto purgeDue = retrySQLite<bool>([&]() {
             SQLiteStmt queryLastPurge(state->db, "select value from LastPurge");
             auto queryLastPurge_(queryLastPurge.use());
+            return !queryLastPurge_.next() || queryLastPurge_.getInt(0) < now - purgeInterval;
+        });
 
-            if (!queryLastPurge_.next() || queryLastPurge_.getInt(0) < now - purgeInterval) {
-                SQLiteStmt(
-                    state->db,
-                    "delete from NARs where ((present = 0 and timestamp < ?) or (present = 1 and timestamp < ?))")
-                    .use()
-                    // Use a minimum TTL to prevent --refresh from
-                    // nuking the entire disk cache.
-                    .apply(now - std::max(settings.ttlNegative.get(), 3600U))
-                    .apply(now - std::max(settings.ttlPositive.get(), 30 * 24 * 3600U))
-                    .exec();
+        if (purgeDue) {
+            /* Delete in chunks, each in its own autocommit
+               transaction, so that the write lock is released between
+               chunks and concurrent processes are only ever blocked
+               for the duration of one chunk. If this process is
+               killed, the chunks already committed stay deleted, and
+               since LastPurge is only updated once no expired entries
+               remain, the next process to open the cache continues
+               where we left off. Concurrent processes that find the
+               purge due simply delete chunks cooperatively. */
+            SQLiteStmt purge(
+                state->db,
+                "delete from NARs where rowid in (select rowid from NARs where ((present = 0 and timestamp < ?) or (present = 1 and timestamp < ?)) limit ?)");
 
-                debug("deleted %d entries from the NAR info disk cache", sqlite3_changes(state->db));
+            uint64_t deleted = 0;
+            while (true) {
+                auto n = retrySQLite<int>([&]() {
+                    purge
+                        .use()
+                        // Use a minimum TTL to prevent --refresh from
+                        // nuking the entire disk cache.
+                        .apply(now - std::max(settings.ttlNegative.get(), 3600U))
+                        .apply(now - std::max(settings.ttlPositive.get(), 30 * 24 * 3600U))
+                        .apply(purgeChunkSize)
+                        .exec();
+                    return sqlite3_changes(state->db);
+                });
+                deleted += n;
+                if (n < purgeChunkSize)
+                    break;
+            }
 
+            debug("deleted %d entries from the NAR info disk cache", deleted);
+
+            retrySQLite<void>([&]() {
                 SQLiteStmt(state->db, "insert or replace into LastPurge(dummy, value) values ('', ?)")
                     .use()
                     .apply(now)
                     .exec();
-            }
-        });
+            });
+        }
     }
 
     Cache & getCache(State & state, const std::string & uri)
