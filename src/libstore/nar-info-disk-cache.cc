@@ -2,6 +2,7 @@
 #include "nix/util/users.hh"
 #include "nix/util/sync.hh"
 #include "nix/store/sqlite.hh"
+#include "nix/store/pathlocks.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/provenance.hh"
 
@@ -168,45 +169,54 @@ public:
         });
 
         if (purgeDue) {
-            /* Delete in chunks, each in its own autocommit
-               transaction, so that the write lock is released between
-               chunks and concurrent processes are only ever blocked
-               for the duration of one chunk. If this process is
-               killed, the chunks already committed stay deleted, and
-               since LastPurge is only updated once no expired entries
-               remain, the next process to open the cache continues
-               where we left off. Concurrent processes that find the
-               purge due simply delete chunks cooperatively. */
-            SQLiteStmt purge(
-                state->db,
-                "delete from NARs where rowid in (select rowid from NARs where ((present = 0 and timestamp < ?) or (present = 1 and timestamp < ?)) limit ?)");
+            /* Processes that start around the same time will all
+               find the purge due, so take a lock to ensure only one
+               of them does it. The others skip the purge. Since
+               LastPurge is only updated once the purge completes, if
+               the purging process is killed, the next process to open
+               the cache will take over. */
+            auto purgeLock = openLockFile(dbPath.string() + ".purge-lock", true);
+            if (!lockFile(purgeLock.get(), ltWrite, false)) {
+                debug("skipping purge of the NAR info disk cache because another process is doing it");
+            } else {
+                /* Delete in chunks, each in its own autocommit
+                   transaction, so that the write lock is released
+                   between chunks and concurrent processes are only
+                   ever blocked for the duration of one chunk. If this
+                   process is killed, the chunks already committed stay
+                   deleted and the next purge continues where we left
+                   off. */
+                SQLiteStmt purge(
+                    state->db,
+                    "delete from NARs where rowid in (select rowid from NARs where ((present = 0 and timestamp < ?) or (present = 1 and timestamp < ?)) limit ?)");
 
-            uint64_t deleted = 0;
-            while (true) {
-                auto n = retrySQLite<int>([&]() {
-                    purge
+                uint64_t deleted = 0;
+                while (true) {
+                    auto n = retrySQLite<int>([&]() {
+                        purge
+                            .use()
+                            // Use a minimum TTL to prevent --refresh from
+                            // nuking the entire disk cache.
+                            .apply(now - std::max(settings.ttlNegative.get(), 3600U))
+                            .apply(now - std::max(settings.ttlPositive.get(), 30 * 24 * 3600U))
+                            .apply(purgeChunkSize)
+                            .exec();
+                        return sqlite3_changes(state->db);
+                    });
+                    deleted += n;
+                    if (n < purgeChunkSize)
+                        break;
+                }
+
+                debug("deleted %d entries from the NAR info disk cache", deleted);
+
+                retrySQLite<void>([&]() {
+                    SQLiteStmt(state->db, "insert or replace into LastPurge(dummy, value) values ('', ?)")
                         .use()
-                        // Use a minimum TTL to prevent --refresh from
-                        // nuking the entire disk cache.
-                        .apply(now - std::max(settings.ttlNegative.get(), 3600U))
-                        .apply(now - std::max(settings.ttlPositive.get(), 30 * 24 * 3600U))
-                        .apply(purgeChunkSize)
+                        .apply(now)
                         .exec();
-                    return sqlite3_changes(state->db);
                 });
-                deleted += n;
-                if (n < purgeChunkSize)
-                    break;
             }
-
-            debug("deleted %d entries from the NAR info disk cache", deleted);
-
-            retrySQLite<void>([&]() {
-                SQLiteStmt(state->db, "insert or replace into LastPurge(dummy, value) values ('', ?)")
-                    .use()
-                    .apply(now)
-                    .exec();
-            });
         }
     }
 
