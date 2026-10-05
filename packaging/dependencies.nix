@@ -74,6 +74,16 @@ scope: {
             [
               "-DINITIAL_MARK_STACK_SIZE=1048576"
               "-DGC_MANY_BLOCKS_DEFAULT=64"
+              # Disable black-listing (avoiding allocation on pages that
+              # false pointers refer to). The black lists are hash
+              # tables covering 8 GiB of address space; on larger heaps
+              # they alias and saturate, at which point the allocator
+              # cannot find any usable block for pointer-containing
+              # objects and aborts with "Too many retries in
+              # GC_allocobj" (bdwgc issues #691, #726). Nix doesn't
+              # benefit much from black-listing since interior pointers
+              # are disabled.
+              "-DNO_BLACK_LISTING"
               # Serve allocations up to 1520 bytes (95 granules) from
               # the per-thread freelists instead of taking the global
               # allocation lock. The default (25, i.e. <= 384 bytes) is
