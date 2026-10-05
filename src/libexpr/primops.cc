@@ -5748,8 +5748,9 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
                   Create a derivation with metadata.
                   `derivationWithMeta` takes the same attributes as [`derivation`](@docroot@/language/derivations.md) plus an optional `__meta` attribute set.
 
-                  Nix records `__meta` as JSON in the [provenance](@docroot@/development/experimental-features.md#xp-feature-provenance) of the derivation and its outputs, while [`nix provenance show`](@docroot@/command-ref/new-cli/nix3-provenance-show.md) displays it.
+                  Nix records `__meta` as JSON in the [provenance](@docroot@/development/experimental-features.md#xp-feature-provenance) of the derivation and of any outputs that Nix builds from it, while [`nix provenance show`](@docroot@/command-ref/new-cli/nix3-provenance-show.md) displays it.
                   `__meta` doesn't affect the derivation's store path and Nix doesn't pass it to the builder.
+                  Nix doesn't update the provenance of outputs that already exist, such as outputs that were built earlier or substituted.
 
                   ```nix
                   builtins.derivationWithMeta {

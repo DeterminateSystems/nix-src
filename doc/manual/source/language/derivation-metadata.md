@@ -5,7 +5,7 @@
 > This feature is only available if the [`provenance` experimental feature](@docroot@/development/experimental-features.md#xp-feature-provenance) is enabled.
 
 [`builtins.derivationWithMeta`](./builtins.md#builtins-derivationWithMeta) works like [`derivation`](./derivations.md) but with the important difference that it accepts an extra `__meta` attribute.
-Nix stores the contents of `__meta` in the provenance of the derivation and its outputs.
+Nix stores the contents of `__meta` in the provenance of the derivation and of any outputs that Nix builds from it.
 You can use it to record information such as a package's description, license, or maintainers alongside the store paths it produces, without changing things like the derivation's hash or the output store path.
 
 ## Example
@@ -46,6 +46,8 @@ The metadata also appears under the `provenance` field in the output of [`nix pa
   Nix doesn't pass it to the builder, and it has no effect on the derivation's store path, so changing the metadata doesn't cause a rebuild.
 - Two derivations that differ only in `__meta` are considered the same derivation.
   Nix keeps the metadata from whichever one it records first.
+- Nix records metadata in an output's provenance only when it builds that output.
+  It doesn't update the provenance of outputs that already exist, such as outputs that were built earlier or substituted from a binary cache.
 - Nix evaluates `__meta` in full when it instantiates the derivation.
   Every value inside it must evaluate without errors, even ones nothing else uses.
 - `__meta` can't contain [string context](./string-context.md).
