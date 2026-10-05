@@ -589,6 +589,7 @@ void mainWrapped(int argc, char ** argv)
             Xp::DynamicDerivations,
             Xp::FetchTree,
             Xp::BakedDerivations,
+            Xp::Provenance,
         };
         evalSettings.pureEval = false;
         auto statePtr = std::make_shared<EvalState>(
@@ -620,6 +621,8 @@ void mainWrapped(int argc, char ** argv)
             b["type"] = showType(info.type, false);
             if (info.impureOnly)
                 b["impure-only"] = true;
+            if (info.experimentalFeature)
+                b["experimental-feature"] = info.experimentalFeature;
             builtinsJson[name] = std::move(b);
         }
         logger->cout("%s", builtinsJson);

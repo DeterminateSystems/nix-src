@@ -5744,6 +5744,29 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
             vDerivationWithMeta,
             {
                 .type = nFunction,
+                .doc = R"(
+                  Create a derivation with metadata.
+                  `derivationWithMeta` takes the same attributes as [`derivation`](@docroot@/language/derivations.md) plus an optional `__meta` attribute set.
+
+                  Nix records `__meta` as JSON in the [provenance](@docroot@/development/experimental-features.md#xp-feature-provenance) of the derivation and its outputs, while [`nix provenance show`](@docroot@/command-ref/new-cli/nix3-provenance-show.md) displays it.
+                  `__meta` doesn't affect the derivation's store path and Nix doesn't pass it to the builder.
+
+                  ```nix
+                  builtins.derivationWithMeta {
+                    name = "hello";
+                    system = builtins.currentSystem;
+                    builder = "/bin/sh";
+                    args = [ "-c" "echo hello > $out" ];
+                    __meta = {
+                      description = "Prints a greeting";
+                      license = "MIT";
+                    };
+                  }
+                  ```
+
+                  See [Derivation metadata](@docroot@/language/derivation-metadata.md) for details.
+                )",
+                .experimentalFeature = Xp::Provenance,
             });
     }
 

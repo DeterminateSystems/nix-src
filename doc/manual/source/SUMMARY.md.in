@@ -44,6 +44,7 @@
   - [Built-ins](language/builtins.md)
     - [Derivations](language/derivations.md)
       - [Advanced Attributes](language/advanced-attributes.md)
+      - [Derivation metadata](language/derivation-metadata.md)
       - [Import From Derivation](language/import-from-derivation.md)
 - [Package Management](package-management/index.md)
   - [Profiles](package-management/profiles.md)
