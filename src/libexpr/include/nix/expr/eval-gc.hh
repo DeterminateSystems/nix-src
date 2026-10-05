@@ -70,6 +70,21 @@ size_t getGCCycles();
  * of (mapped) stack below the true stack pointer.
  */
 constexpr size_t gcStackSwitchSlack = 512;
+
+/**
+ * Record the current stack pointer (lowered by `gcStackSwitchSlack`)
+ * as the saved stack pointer of `stk`, which must be the registered
+ * stack that the current thread is executing on and about to switch
+ * away from. Call this from the function performing the switch.
+ *
+ * Panics if the current stack pointer does not lie within `stk`:
+ * recording it anyway would make the collector scan from one stack up
+ * to the base of another (crashing on the guard page in between, or
+ * silently dropping roots), so it's better to fail right here, where
+ * the backtrace shows which stack switch went wrong. See
+ * `coroutine-gc.hh` for how such a mismatch can come about.
+ */
+void gcSaveStackPointer(struct GC_stack * stk);
 #endif
 
 } // namespace nix

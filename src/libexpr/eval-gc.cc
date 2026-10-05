@@ -91,6 +91,22 @@ static size_t getFreeMem()
  * into guard pages and unrelated mappings along the way.
  */
 
+void gcSaveStackPointer(struct GC_stack * stk)
+{
+    auto sp = (char *) GC_get_approx_sp();
+    /* Check the stack pointer before lowering it by the slack, so that
+       a stack that is nearly exhausted (but whose guard page is not
+       included in `limit`, as for thread stacks) doesn't trip the
+       check. */
+    if (!(sp < (char *) stk->base && (!stk->limit || sp >= (char *) stk->limit)))
+        panic(
+            fmt("stack pointer %p is not within the stack [%p, %p) that is being switched away from",
+                (void *) sp,
+                stk->limit,
+                stk->base));
+    stk->saved_sp = sp - gcStackSwitchSlack;
+}
+
 static void * coroStackRegisterImpl(void * base, size_t size)
 {
     auto stk = new GC_stack{};
@@ -113,7 +129,7 @@ static void * coroSwitchToImpl(void * cookie)
     /* `prev` is null on threads not registered with the GC; such
        threads hold no GC roots and need no scanning. */
     if (prev)
-        prev->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+        gcSaveStackPointer(prev);
     /* Provisional: the resumed coroutine may actually continue on
        another stack, in which case `coroResumeImpl()` corrects this
        right after the switch. The body start (`coroEnterImpl()`)
@@ -139,7 +155,7 @@ static void * coroYieldImpl()
 {
     auto cur = GC_current_stack;
     if (cur)
-        cur->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+        gcSaveStackPointer(cur);
     return cur;
 }
 

@@ -455,7 +455,7 @@ bool Executor::runFiber(FiberPtr fiber)
        resumed (see `suspendFiber()`). */
     auto prevStack = GC_current_stack;
     if (prevStack)
-        prevStack->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+        gcSaveStackPointer(prevStack);
     GC_current_stack = fib->gcStack;
 #endif
 
@@ -762,7 +762,7 @@ suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::V
        (from the lower stack pointer). */
     auto stk = GC_current_stack;
     assert(stk);
-    stk->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+    gcSaveStackPointer(stk);
     fib->gcStack = stk;
 #endif
     /* Switch back to the scheduler (`Executor::runFiber()`), which
