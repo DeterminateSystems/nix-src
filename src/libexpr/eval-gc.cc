@@ -78,6 +78,17 @@ static size_t getFreeMem()
  * automatically), fiber stacks and coroutine stacks — scannable by
  * the collector, including the frames of a fiber that has switched
  * onto a coroutine stack.
+ *
+ * The invariant maintained here is that `GC_current_stack` is the
+ * registered stack the thread is executing on, and that every other
+ * stack holding live frames has a `saved_sp` that lies *within* that
+ * stack. So the stack pointer is always recorded into
+ * `GC_current_stack` (the stack actually being left), never into a
+ * stack named by the caller: as explained in `coroutine-gc.hh`, a
+ * coroutine may yield from another coroutine's stack, and recording
+ * such a yield into the coroutine's own stack would make the
+ * collector scan from one stack up to the base of another, running
+ * into guard pages and unrelated mappings along the way.
  */
 
 static void * coroStackRegisterImpl(void * base, size_t size)
@@ -103,6 +114,10 @@ static void * coroSwitchToImpl(void * cookie)
        threads hold no GC roots and need no scanning. */
     if (prev)
         prev->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+    /* Provisional: the resumed coroutine may actually continue on
+       another stack, in which case `coroResumeImpl()` corrects this
+       right after the switch. The body start (`coroEnterImpl()`)
+       corrects the null cookie of a coroutine that is being started. */
     GC_current_stack = (struct GC_stack *) cookie;
     return prev;
 }
@@ -115,16 +130,25 @@ static void coroSwitchBackImpl(void * prevHandle)
         prev->saved_sp = nullptr;
 }
 
-static void coroMarkSuspendedImpl(void * cookie)
+static void coroEnterImpl(void * cookie)
 {
-    if (cookie)
-        ((struct GC_stack *) cookie)->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+    GC_current_stack = (struct GC_stack *) cookie;
 }
 
-static void coroMarkActiveImpl(void * cookie)
+static void * coroYieldImpl()
 {
-    if (cookie)
-        ((struct GC_stack *) cookie)->saved_sp = nullptr;
+    auto cur = GC_current_stack;
+    if (cur)
+        cur->saved_sp = (char *) GC_get_approx_sp() - gcStackSwitchSlack;
+    return cur;
+}
+
+static void coroResumeImpl(void * handle)
+{
+    auto cur = (struct GC_stack *) handle;
+    GC_current_stack = cur;
+    if (cur)
+        cur->saved_sp = nullptr;
 }
 
 static inline void initGCReal()
@@ -164,8 +188,9 @@ static inline void initGCReal()
     coroStackUnregister = coroStackUnregisterImpl;
     coroSwitchTo = coroSwitchToImpl;
     coroSwitchBack = coroSwitchBackImpl;
-    coroMarkSuspended = coroMarkSuspendedImpl;
-    coroMarkActive = coroMarkActiveImpl;
+    coroEnter = coroEnterImpl;
+    coroYield = coroYieldImpl;
+    coroResume = coroResumeImpl;
 
     /* Funnel boehm warnings into debug logs. */
     GC_set_warn_proc([](const char * msg, GC_word word) noexcept {

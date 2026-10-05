@@ -381,8 +381,9 @@ void * (*coroStackRegister)(void * base, size_t size) = nullptr;
 void (*coroStackUnregister)(void * cookie) = nullptr;
 void * (*coroSwitchTo)(void * cookie) = nullptr;
 void (*coroSwitchBack)(void * prevHandle) = nullptr;
-void (*coroMarkSuspended)(void * cookie) = nullptr;
-void (*coroMarkActive)(void * cookie) = nullptr;
+void (*coroEnter)(void * cookie) = nullptr;
+void * (*coroYield)() = nullptr;
+void (*coroResume)(void * handle) = nullptr;
 
 namespace {
 
@@ -440,6 +441,36 @@ struct CoroutineGuard
     }
 };
 
+/**
+ * Notify the GC hooks that the current thread is about to yield from
+ * a coroutine (and, on destruction, that the yield has returned).
+ * Construct just before calling the coroutine's `yield`, in the same
+ * scope, so that the destructor also runs when the yield throws
+ * (e.g. `forced_unwind` when a suspended coroutine is destroyed).
+ * Note that this deliberately doesn't refer to the coroutine's own
+ * stack: the yield may be executed on another coroutine's stack (see
+ * `coroutine-gc.hh`).
+ */
+struct CoroutineYieldGuard
+{
+    void * handle = nullptr;
+    bool active = false;
+
+    CoroutineYieldGuard()
+    {
+        if (coroYield) {
+            handle = coroYield();
+            active = true;
+        }
+    }
+
+    ~CoroutineYieldGuard()
+    {
+        if (active)
+            coroResume(handle);
+    }
+};
+
 } // namespace
 
 std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
@@ -478,13 +509,16 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
 
             if (!coro) {
                 coro = coro_t::push_type(GCTrackedStackAllocator{&stackCookie}, [&](coro_t::pull_type & yield) {
+                    /* Note: `stackCookie` has been set by the stack
+                       allocator before the body started. */
+                    if (coroEnter)
+                        coroEnter(stackCookie);
                     LambdaSource source([&](char * out, size_t out_len) {
                         if (cur.empty()) {
-                            if (coroMarkSuspended)
-                                coroMarkSuspended(stackCookie);
-                            yield();
-                            if (coroMarkActive)
-                                coroMarkActive(stackCookie);
+                            {
+                                CoroutineYieldGuard guard;
+                                yield();
+                            }
                             if (yield.get())
                                 throw EndOfFile("coroutine has finished");
                         }
@@ -551,6 +585,11 @@ std::unique_ptr<Source> sinkToSource(fun<void(Sink &)> writer, fun<void()> eof)
             bool hasCoro = coro.has_value();
             if (!hasCoro) {
                 coro = coro_t::pull_type(GCTrackedStackAllocator{&stackCookie}, [&](coro_t::push_type & yield) {
+                    /* Note: `stackCookie` has been set by the stack
+                       allocator before the body started. */
+                    if (coroEnter)
+                        coroEnter(stackCookie);
+
                     /* Feed the consumer in chunks, instead of on each write
                        to avoid excessive context switching. parseDump does
                        lots of small writes to the sink, which we should
@@ -558,25 +597,24 @@ std::unique_ptr<Source> sinkToSource(fun<void(Sink &)> writer, fun<void()> eof)
                     struct CoroBufferedSink : BufferedSink
                     {
                         coro_t::push_type & yield;
-                        void * stackCookie;
 
+                        /* Note: `writer()` may hand this sink to a
+                           nested coroutine (e.g. a `sourceToSink`
+                           decompressor), in which case this runs, and
+                           yields, on that coroutine's stack. */
                         void writeUnbuffered(std::string_view data) override
                         {
-                            if (coroMarkSuspended)
-                                coroMarkSuspended(stackCookie);
+                            CoroutineYieldGuard guard;
                             yield(data);
-                            if (coroMarkActive)
-                                coroMarkActive(stackCookie);
                         }
 
-                        CoroBufferedSink(coro_t::push_type & yield, void * stackCookie)
+                        CoroBufferedSink(coro_t::push_type & yield)
                             : yield(yield)
-                            , stackCookie(stackCookie)
                         {
                         }
                     };
 
-                    CoroBufferedSink sink(yield, stackCookie);
+                    CoroBufferedSink sink(yield);
                     writer(sink);
                     sink.flush();
                 });
