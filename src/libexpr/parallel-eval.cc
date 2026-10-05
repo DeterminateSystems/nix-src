@@ -2,6 +2,7 @@
 #include "nix/expr/parallel-eval.hh"
 #include "nix/store/globals.hh"
 #include "nix/expr/primops.hh"
+#include "nix/util/sentry.hh"
 
 #include <boost/context/fiber.hpp>
 #include <boost/context/protected_fixedsize_stack.hpp>
@@ -294,6 +295,9 @@ Executor::Executor(const EvalSettings & evalSettings)
     }))
 {
     debug("executor using %d threads and at most %d fibers per thread", evalCores, maxFibersPerWorker);
+    /* Record the number of evaluation threads in crash reports, so we
+       can tell whether parallel evaluation was in use. */
+    setSentryTag("eval_cores", std::to_string(evalCores).c_str());
     // FIXME: create worker threads on demand?
     for (size_t n = 0; n < evalCores; ++n)
         try {
