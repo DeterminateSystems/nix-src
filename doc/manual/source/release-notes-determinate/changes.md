@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.23.0.<!-- differences -->
+This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.23.1.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -244,3 +244,42 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 * Determinate Nix has support for OpenTelemetry. [DeterminateSystems/nix-src#615](https://github.com/DeterminateSystems/nix-src/pull/615)
 
 * Determinate Nix has an experimental command `nix flake bake` for creating pre-evaluated flakes from existing flakes. [DeterminateSystems/nix-src#450](https://github.com/DeterminateSystems/nix-src/pull/450)
+
+<!-- Determinate Nix version 3.23.1 -->
+
+* buildStarted(): Don't fsync the active build info file by @Jesssullivan in [DeterminateSystems/nix-src#650](https://github.com/DeterminateSystems/nix-src/pull/650)
+
+* Make the `nix ps` test more robust by @edolstra in [DeterminateSystems/nix-src#654](https://github.com/DeterminateSystems/nix-src/pull/654)
+
+* Don't crash if printing completions fails during unwinding by @edolstra in [DeterminateSystems/nix-src#651](https://github.com/DeterminateSystems/nix-src/pull/651)
+
+* Don't treat running out of memory as a crash by @edolstra in [DeterminateSystems/nix-src#653](https://github.com/DeterminateSystems/nix-src/pull/653)
+
+* daemon: delegate cgroup controllers so builds expose memory/io stats by @edolstra in [DeterminateSystems/nix-src#655](https://github.com/DeterminateSystems/nix-src/pull/655)
+
+* packaging/nix-make/flake.lock: Update nix-wasm-module-make by @edolstra in [DeterminateSystems/nix-src#656](https://github.com/DeterminateSystems/nix-src/pull/656)
+
+* Use boost::regex for parsing flakerefs by @edolstra in [DeterminateSystems/nix-src#652](https://github.com/DeterminateSystems/nix-src/pull/652)
+
+* Fix a data race in Value::isTrivial() by @edolstra in [DeterminateSystems/nix-src#657](https://github.com/DeterminateSystems/nix-src/pull/657)
+
+* Fix crash and other issues in Pid::kill() by @edolstra in [DeterminateSystems/nix-src#658](https://github.com/DeterminateSystems/nix-src/pull/658)
+
+* nix flake check: Don't force cached eval errors inside a catch handler by @edolstra in [DeterminateSystems/nix-src#660](https://github.com/DeterminateSystems/nix-src/pull/660)
+
+* Disable bdwgc black-listing by @edolstra in [DeterminateSystems/nix-src#663](https://github.com/DeterminateSystems/nix-src/pull/663)
+
+* SQLite: Only apply the ZFS -shm workaround on the first open of a database by @edolstra in [DeterminateSystems/nix-src#664](https://github.com/DeterminateSystems/nix-src/pull/664)
+
+* Fix GC stack scanning when a coroutine yields from another coroutine's stack by @edolstra in [DeterminateSystems/nix-src#662](https://github.com/DeterminateSystems/nix-src/pull/662)
+
+* nix profile history: Show store path changes with the same version by @edolstra in [DeterminateSystems/nix-src#665](https://github.com/DeterminateSystems/nix-src/pull/665)
+
+* Sync with upstream 2.35-maintenance by @edolstra in [DeterminateSystems/nix-src#666](https://github.com/DeterminateSystems/nix-src/pull/666)
+
+* Make purging the narinfo disk cache cheap and non-blocking by @edolstra in [DeterminateSystems/nix-src#667](https://github.com/DeterminateSystems/nix-src/pull/667)
+
+* Add derivation metadata documentation to the Determinate Nix manual by @lucperkins in [DeterminateSystems/nix-src#668](https://github.com/DeterminateSystems/nix-src/pull/668)
+
+
+* @Jesssullivan made their first contribution in [DeterminateSystems/nix-src#650](https://github.com/DeterminateSystems/nix-src/pull/650)
