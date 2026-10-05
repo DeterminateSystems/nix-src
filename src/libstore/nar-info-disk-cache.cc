@@ -43,6 +43,11 @@ create table if not exists NARs (
     foreign key (cache) references BinaryCaches(id) on delete cascade
 );
 
+-- Used by the periodic purge of expired entries. Without it, the
+-- purge is a full table scan, which on a multi-GiB cache can hold the
+-- SQLite write lock for minutes.
+create index if not exists NARsExpiry on NARs(present, timestamp);
+
 create table if not exists BuildTrace (
     cache integer not null,
 
@@ -92,7 +97,7 @@ public:
     NarInfoDiskCacheImpl(
         const Settings & settings,
         SQLiteSettings sqliteSettings,
-        std::filesystem::path dbPath = getCacheDir() / "binary-cache-detsys-v3.sqlite")
+        std::filesystem::path dbPath = getCacheDir() / "binary-cache-detsys-v4.sqlite")
         : NarInfoDiskCache{settings}
     {
         auto state(_state.lock());
