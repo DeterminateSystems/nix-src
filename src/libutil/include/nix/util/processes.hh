@@ -23,7 +23,7 @@
 #include <map>
 #include <sstream>
 #include <optional>
-#include <thread>
+#include <chrono>
 
 namespace nix {
 
@@ -36,8 +36,7 @@ class Pid
     pid_t pid = -1;
     bool separatePG = false;
     int killSignal = SIGKILL;
-    std::chrono::milliseconds killTimeout;
-    std::thread killThread;
+    std::chrono::milliseconds killTimeout{0};
 #else
     AutoCloseFD pid = INVALID_DESCRIPTOR;
 #endif
@@ -81,6 +80,7 @@ public:
         swap(lhs.pid, rhs.pid);
         swap(lhs.separatePG, rhs.separatePG);
         swap(lhs.killSignal, rhs.killSignal);
+        swap(lhs.killTimeout, rhs.killTimeout);
 #else
         swap(lhs.pid, rhs.pid);
 #endif

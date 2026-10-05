@@ -106,7 +106,10 @@ HookInstance::~HookInstance()
     try {
         toHook.writeSide = -1;
         if (pid != -1) {
-            pid.kill();
+            /* Don't allow interrupts, since otherwise `~Pid()` would
+               call `kill()` a second time while the kill timeout
+               thread is still running. */
+            pid.kill(/*allowInterrupts=*/false);
             if (onKillChild)
                 onKillChild();
         }
