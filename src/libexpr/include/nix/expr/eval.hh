@@ -173,6 +173,13 @@ struct Constant
      * Whether the constant is impure, and not available in pure mode.
      */
     bool impureOnly = false;
+
+    /**
+     * Experimental feature required to use this constant, if any.
+     * Only used for documentation; the caller is responsible for
+     * not adding the constant when the feature is disabled.
+     */
+    std::optional<ExperimentalFeature> experimentalFeature;
 };
 
 typedef std::map<std::string, RootValue> ValMap;
