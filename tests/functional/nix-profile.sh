@@ -94,6 +94,24 @@ echo "$completion_output" | grep -q "^normal$"
 echo "$completion_output" | grep -q "^flake1"
 echo "$completion_output" | grep -q "^foo"
 
+# Test upgrading a package to a different store path with the same
+# version. With --show-source, the locked flake reference change
+# (from a clean to a dirty tree) should be shown.
+printf Nix > "$flake1Dir"/who
+nix profile upgrade flake1
+[[ $("$TEST_HOME"/.nix-profile/bin/hello) = "Hello Nix" ]]
+nix profile history | grep "packages.$system.default: 1.0, 1.0-man changed$"
+nix profile history --show-source | grep "packages.$system.default: 1.0, 1.0-man changed (git+file://.*rev=[0-9a-f]* -> git+file://.*flake1)"
+nix profile history --show-source | grep "packages.$system.default: 1.0, 1.0-man added (git+file://.*rev=[0-9a-f]*)"
+
+# Same, but now the locked flake reference doesn't change (the tree is
+# still dirty), so the same reference should be shown twice.
+printf Nixers > "$flake1Dir"/who
+nix profile upgrade flake1
+[[ $("$TEST_HOME"/.nix-profile/bin/hello) = "Hello Nixers" ]]
+nix profile history | grep "packages.$system.default: 1.0, 1.0-man changed$"
+nix profile history --show-source | grep "packages.$system.default: 1.0, 1.0-man changed (git+file://[^ ]*flake1 -> git+file://[^ ]*flake1)$"
+
 # Test upgrading a package.
 printf NixOS > "$flake1Dir"/who
 printf 2.0 > "$flake1Dir"/version
