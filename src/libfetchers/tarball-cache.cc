@@ -3,10 +3,12 @@
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/sqlite.hh"
+#include "nix/util/file-descriptor.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/git.hh"
 #include "nix/util/pool.hh"
+#include "nix/util/serialise.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/thread-pool.hh"
@@ -22,17 +24,28 @@
 #include <mutex>
 #include <thread>
 
+#include <unistd.h>
+
 namespace nix::fetchers {
 
 namespace {
 
 const char * schema = R"sql(
 
+-- A blob is stored as a sequence of chunks of at most `chunkSize` bytes, each compressed independently. The `Blobs`
+-- row is written after all of its chunks, so its existence implies that the blob is complete.
 create table if not exists Blobs (
-    oid         blob primary key not null,
+    oid  blob primary key not null,
+    size integer not null
+);
+
+create table if not exists BlobChunks (
+    oid         blob not null,
+    seq         integer not null,
     size        integer not null,
     compression integer not null,
-    data        blob not null
+    data        blob not null,
+    primary key (oid, seq)
 );
 
 create table if not exists Trees (
@@ -50,12 +63,18 @@ create table if not exists TreeEntries (
 )sql";
 
 /**
- * Values of the `Blobs.compression` column.
+ * Values of the `BlobChunks.compression` column.
  */
 enum struct Compression : int64_t {
     None = 0,
     Zstd = 1,
 };
+
+/**
+ * The maximum (uncompressed) size of a blob chunk. Files larger than this are spilled to a temporary file during
+ * import, so this bounds the memory used per file.
+ */
+constexpr size_t chunkSize = 1024 * 1024;
 
 Hash toOid(std::string_view s)
 {
@@ -133,7 +152,7 @@ using Dir = std::map<std::string, Entry>;
 struct Connection
 {
     SQLite db;
-    SQLiteStmt hasTree, queryEntries, hasBlob, queryBlob, insertBlob, insertTree, insertEntry;
+    SQLiteStmt hasTree, queryEntries, hasBlob, queryBlob, insertBlob, insertChunk, insertTree, insertEntry;
 
     Connection(const std::filesystem::path & dbPath)
     {
@@ -143,23 +162,80 @@ struct Connection
         hasTree.create(db, "select 1 from Trees where oid = ?");
         queryEntries.create(db, "select name, mode, child from TreeEntries where tree = ?");
         hasBlob.create(db, "select 1 from Blobs where oid = ?");
-        queryBlob.create(db, "select size, compression, data from Blobs where oid = ?");
-        insertBlob.create(db, "insert or ignore into Blobs(oid, size, compression, data) values (?, ?, ?, ?)");
+        queryBlob.create(
+            db,
+            "select b.size, c.seq, c.size, c.compression, c.data from Blobs b join BlobChunks c on c.oid = b.oid "
+            "where b.oid = ? order by c.seq");
+        insertBlob.create(db, "insert or ignore into Blobs(oid, size) values (?, ?)");
+        insertChunk.create(
+            db, "insert or ignore into BlobChunks(oid, seq, size, compression, data) values (?, ?, ?, ?, ?)");
         insertTree.create(db, "insert or ignore into Trees(oid) values (?)");
         insertEntry.create(db, "insert or ignore into TreeEntries(tree, name, mode, child) values (?, ?, ?, ?)");
     }
 };
 
 /**
- * A blob that is ready to be written to the database.
+ * A blob chunk that is ready to be written to the database.
+ */
+struct PendingChunk
+{
+    Hash oid;
+    uint64_t seq;
+    uint64_t size;
+    Compression compression;
+    std::string data;
+};
+
+/**
+ * A blob whose chunks have all been queued for writing.
  */
 struct PendingBlob
 {
     Hash oid;
     uint64_t size;
-    Compression compression;
-    std::string data;
 };
+
+/**
+ * Rows waiting to be written to the database in a single transaction. Chunks are written before blobs, so a blob
+ * must be added after its chunks.
+ */
+struct Pending
+{
+    std::vector<PendingChunk> chunks;
+    std::vector<PendingBlob> blobs;
+
+    /** Total size of `chunks[*].data`. */
+    size_t size = 0;
+
+    void addChunk(PendingChunk && chunk)
+    {
+        size += chunk.data.size();
+        chunks.push_back(std::move(chunk));
+    }
+
+    void clear()
+    {
+        chunks.clear();
+        blobs.clear();
+        size = 0;
+    }
+};
+
+/**
+ * Compress `contents` into a chunk of a blob.
+ */
+PendingChunk makeChunk(const Hash & oid, uint64_t seq, std::string_view contents)
+{
+    PendingChunk chunk{.oid = oid, .seq = seq, .size = contents.size()};
+    if (auto compressed = compress(contents)) {
+        chunk.compression = Compression::Zstd;
+        chunk.data = std::move(*compressed);
+    } else {
+        chunk.compression = Compression::None;
+        chunk.data = contents;
+    }
+    return chunk;
+}
 
 struct TarballCacheImpl : TarballCache, std::enable_shared_from_this<TarballCacheImpl>
 {
@@ -214,45 +290,71 @@ struct TarballCacheImpl : TarballCache, std::enable_shared_from_this<TarballCach
     {
         auto conn(pool.get());
         auto stmt(conn->queryBlob.use().apply(oid.hash, oid.hashSize));
-        if (!stmt.next())
+
+        auto corrupt = [&](std::string_view what) {
+            throw Error("blob '%s' in the tarball cache is corrupt: %s", oid.gitRev(), what);
+        };
+
+        uint64_t size = 0, seq = 0, bytesRead = 0;
+
+        while (stmt.next()) {
+            if (seq == 0) {
+                size = stmt.getInt(0);
+                sizeCallback(size);
+            }
+
+            if ((uint64_t) stmt.getInt(1) != seq)
+                corrupt(fmt("chunk %d is missing", seq));
+
+            uint64_t chunkSize = stmt.getInt(2);
+            auto compression = (Compression) stmt.getInt(3);
+            auto data = stmt.getBlob(4);
+
+            switch (compression) {
+            case Compression::None:
+                if (data.size() != chunkSize)
+                    corrupt(fmt("chunk %d has size %d, expected %d", seq, data.size(), chunkSize));
+                sink(data);
+                break;
+            case Compression::Zstd:
+                sink(decompress(data, chunkSize));
+                break;
+            default:
+                corrupt(fmt("unknown compression type %d", (int64_t) compression));
+            }
+
+            bytesRead += chunkSize;
+            seq++;
+        }
+
+        if (seq == 0)
             throw Error("blob '%s' is missing from the tarball cache", oid.gitRev());
 
-        uint64_t size = stmt.getInt(0);
-        auto compression = (Compression) stmt.getInt(1);
-        auto data = stmt.getBlob(2);
-
-        switch (compression) {
-        case Compression::None:
-            sizeCallback(size);
-            sink(data);
-            break;
-        case Compression::Zstd: {
-            auto contents = decompress(data, size);
-            sizeCallback(size);
-            sink(contents);
-            break;
-        }
-        default:
-            throw Error(
-                "blob '%s' in the tarball cache has unknown compression type %d", oid.gitRev(), (int64_t) compression);
-        }
+        if (bytesRead != size)
+            corrupt(fmt("expected %d bytes, got %d", size, bytesRead));
     }
 
-    void writeBlobs(const std::vector<PendingBlob> & blobs)
+    /**
+     * Write the chunks and blobs in `pending` to the database in a single transaction.
+     */
+    void writePending(const Pending & pending)
     {
-        if (blobs.empty())
+        if (pending.chunks.empty() && pending.blobs.empty())
             return;
         std::lock_guard lock(writeMutex);
         auto conn(pool.get());
         retrySQLite<void>([&]() {
             SQLiteTxn txn(conn->db);
-            for (auto & blob : blobs)
-                conn->insertBlob.use()
-                    .apply(blob.oid.hash, blob.oid.hashSize)
-                    .apply((int64_t) blob.size)
-                    .apply((int64_t) blob.compression)
-                    .apply((const unsigned char *) blob.data.data(), blob.data.size())
+            for (auto & chunk : pending.chunks)
+                conn->insertChunk.use()
+                    .apply(chunk.oid.hash, chunk.oid.hashSize)
+                    .apply((int64_t) chunk.seq)
+                    .apply((int64_t) chunk.size)
+                    .apply((int64_t) chunk.compression)
+                    .apply((const unsigned char *) chunk.data.data(), chunk.data.size())
                     .exec();
+            for (auto & blob : pending.blobs)
+                conn->insertBlob.use().apply(blob.oid.hash, blob.oid.hashSize).apply((int64_t) blob.size).exec();
             txn.commit();
         });
     }
@@ -488,13 +590,7 @@ struct TarballCacheSink : GitFileSystemObjectSink
 
     Sync<State> _state;
 
-    struct Pending
-    {
-        std::vector<PendingBlob> blobs;
-        size_t size = 0;
-    };
-
-    /** Blobs waiting to be written to the database. */
+    /** Rows waiting to be written to the database. */
     Sync<Pending> _pending;
 
     /** The blobs that have already been seen during this import. */
@@ -534,44 +630,104 @@ struct TarballCacheSink : GitFileSystemObjectSink
     }
 
     /**
+     * Queue a chunk for writing, and write the queued rows if there are enough of them.
+     */
+    void queueChunk(PendingChunk && chunk)
+    {
+        Pending batch;
+
+        {
+            auto pending(_pending.lock());
+            pending->addChunk(std::move(chunk));
+            if (pending->size < maxBatchSize)
+                return;
+            batch = std::move(*pending);
+            pending->clear();
+        }
+
+        cache->writePending(batch);
+    }
+
+    /**
+     * Return whether the blob `oid` still needs to be written, i.e. it's not in the cache and hasn't been queued
+     * during this import.
+     */
+    bool needBlob(const Hash & oid)
+    {
+        if (!_seen.lock()->insert(oid).second)
+            return false;
+
+        auto conn(cache->pool.get());
+        return !conn->hasBlob.use().apply(oid.hash, oid.hashSize).next();
+    }
+
+    /**
      * Add a blob to the cache, unless it's already there. Returns its Git hash.
      */
     Hash addBlob(std::string_view contents)
     {
+        assert(contents.size() <= chunkSize);
+
         auto oid = hashBlob(contents);
 
-        if (!_seen.lock()->insert(oid).second)
+        if (!needBlob(oid))
             return oid;
 
-        {
-            auto conn(cache->pool.get());
-            if (conn->hasBlob.use().apply(oid.hash, oid.hashSize).next())
-                return oid;
-        }
+        auto chunk = makeChunk(oid, 0, contents);
 
-        PendingBlob blob{.oid = oid, .size = contents.size()};
-        if (auto compressed = compress(contents)) {
-            blob.compression = Compression::Zstd;
-            blob.data = std::move(*compressed);
-        } else {
-            blob.compression = Compression::None;
-            blob.data = contents;
-        }
-
-        std::vector<PendingBlob> batch;
+        Pending batch;
 
         {
             auto pending(_pending.lock());
-            pending->size += blob.data.size();
-            pending->blobs.push_back(std::move(blob));
+            pending->addChunk(std::move(chunk));
+            pending->blobs.push_back({.oid = oid, .size = contents.size()});
             if (pending->size < maxBatchSize)
                 return oid;
-            batch = std::move(pending->blobs);
-            pending->blobs.clear();
-            pending->size = 0;
+            batch = std::move(*pending);
+            pending->clear();
         }
 
-        cache->writeBlobs(batch);
+        cache->writePending(batch);
+
+        return oid;
+    }
+
+    /**
+     * Add a blob that was spilled to a temporary file to the cache, unless it's already there. Returns its Git hash.
+     */
+    Hash addBlobFromFile(Descriptor fd, uint64_t size)
+    {
+        auto rewind = [&]() {
+            if (lseek(fd, 0, SEEK_SET) == -1)
+                throw SysError("seeking in temporary file");
+        };
+
+        /* First pass: compute the Git hash. */
+        auto oid = [&]() {
+            rewind();
+            HashSink hashSink(HashAlgorithm::SHA1);
+            git::dumpBlobPrefix(size, hashSink);
+            FdSource source(fd);
+            source.drainInto(hashSink);
+            return hashSink.finish().hash;
+        }();
+
+        if (!needBlob(oid))
+            return oid;
+
+        /* Second pass: compress and queue the chunks. */
+        rewind();
+        FdSource source(fd);
+        std::string buf;
+        uint64_t seq = 0, left = size;
+        do {
+            buf.resize(std::min<uint64_t>(chunkSize, left));
+            source(buf.data(), buf.size());
+            left -= buf.size();
+            queueChunk(makeChunk(oid, seq++, buf));
+        } while (left);
+
+        _pending.lock()->blobs.push_back({.oid = oid, .size = size});
 
         return oid;
     }
@@ -602,14 +758,36 @@ struct TarballCacheSink : GitFileSystemObjectSink
     {
         checkInterrupt();
 
+        /* The contents are buffered in memory up to `chunkSize` bytes. Beyond that, they're spilled to a temporary
+           file, which is processed after the whole file has been received. */
         struct CRF : CreateRegularFileSink
         {
             std::string contents;
             bool executable = false;
 
+            AutoCloseFD tempFd;
+            AutoDelete tempDel;
+            uint64_t size = 0;
+
             void operator()(std::string_view data) override
             {
-                contents.append(data);
+                size += data.size();
+
+                if (!tempFd) {
+                    if (contents.size() + data.size() <= chunkSize) {
+                        contents.append(data);
+                        return;
+                    }
+
+                    auto [fd, path] = createTempFile("nix-tarball-cache");
+                    tempFd = std::move(fd);
+                    tempDel = AutoDelete(path, /*recursive=*/false);
+                    writeFull(tempFd.get(), contents);
+                    contents.clear();
+                    contents.shrink_to_fit();
+                }
+
+                writeFull(tempFd.get(), data);
             }
 
             void isExecutable() override
@@ -619,16 +797,27 @@ struct TarballCacheSink : GitFileSystemObjectSink
 
             void preallocateContents(uint64_t size) override
             {
-                contents.reserve(size);
+                if (size <= chunkSize)
+                    contents.reserve(size);
             }
         };
 
-        CRF crf;
+        auto crf = std::make_shared<CRF>();
 
-        func(crf);
+        func(*crf);
 
-        addBlobNode(
-            path, crf.executable ? git::Mode::Executable : git::Mode::Regular, std::move(crf.contents), nextId++);
+        auto mode = crf->executable ? git::Mode::Executable : git::Mode::Regular;
+        auto id = nextId++;
+
+        if (!crf->tempFd) {
+            addBlobNode(path, mode, std::move(crf->contents), id);
+            return;
+        }
+
+        workers.enqueue([this, path, mode, crf, id]() {
+            auto oid = addBlobFromFile(crf->tempFd.get(), crf->size);
+            addNode(*_state.lock(), path, Child{mode, oid, id});
+        });
     }
 
     void createDirectory(const CanonPath & path) override
@@ -676,12 +865,11 @@ struct TarballCacheSink : GitFileSystemObjectSink
     {
         workers.process();
 
-        // Write the remaining blobs.
+        // Write the remaining chunks and blobs.
         {
             auto pending(_pending.lock());
-            cache->writeBlobs(pending->blobs);
-            pending->blobs.clear();
-            pending->size = 0;
+            cache->writePending(*pending);
+            pending->clear();
         }
 
         auto state(_state.lock());
