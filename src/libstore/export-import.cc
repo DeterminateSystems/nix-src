@@ -9,6 +9,7 @@
 #include "nix/store/names.hh"
 #include "nix/util/thread-pool.hh"
 #include "nix/util/zstd-patch.hh"
+#include "nix/util/compression.hh"
 
 #include <cctype>
 
@@ -22,6 +23,7 @@ static const uint64_t narioTagEnd = 0;
 static const uint64_t narioTagFull = 1;
 static const uint64_t narioTagDiff = 2;
 static const uint64_t narioTagPresent = 3;
+static const uint64_t narioTagCompressed = 4;
 
 /* Binary diff generation parameters. */
 
@@ -203,7 +205,12 @@ static std::optional<NarioDiff> makeDiff(Store & store, const StorePath & path, 
 }
 
 void exportPaths(
-    Store & store, const StorePathSet & paths, Sink & sink, unsigned int version, const StorePathSet & basePaths)
+    Store & store,
+    const StorePathSet & paths,
+    Sink & sink,
+    unsigned int version,
+    const StorePathSet & basePaths,
+    CompressionAlgo compression)
 {
     auto sorted = store.topoSortPaths(paths);
     std::reverse(sorted.begin(), sorted.end());
@@ -211,7 +218,10 @@ void exportPaths(
     if (!basePaths.empty() && version != 2)
         throw Error("binary diffs are only supported in nario version 2");
 
-    auto dumpNar = [&](const ValidPathInfo & info) {
+    if (compression != CompressionAlgo::none && version != 2)
+        throw Error("compression is only supported in nario version 2");
+
+    auto dumpNar = [&](const ValidPathInfo & info, Sink & sink) {
         HashSink hashSink(HashAlgorithm::SHA256);
         TeeSink teeSink(sink, hashSink);
 
@@ -226,7 +236,7 @@ void exportPaths(
         for (auto & path : sorted) {
             sink << 1;
             auto info = store.queryPathInfo(path);
-            dumpNar(*info);
+            dumpNar(*info, sink);
             sink << exportMagicV1 << store.printStorePath(path);
             CommonProto::write(store, CommonProto::WriteConn{.to = sink}, info->references);
             sink << (info->deriver ? store.printStorePath(*info->deriver) : "") << 0;
@@ -277,10 +287,24 @@ void exportPaths(
                 continue;
             }
 
+            if (compression != CompressionAlgo::none) {
+                /* We need to know the size of the compressed NAR
+                   before writing it, so buffer it in memory. */
+                StringSink compressed;
+                auto compressionSink = makeCompressionSink(compression, compressed, true);
+                dumpNar(*info, *compressionSink);
+                compressionSink->finish();
+
+                sink << narioTagCompressed;
+                WorkerProto::write(store, conn, *info);
+                sink << showCompressionAlgo(compression) << compressed.s;
+                continue;
+            }
+
             sink << narioTagFull;
             // FIXME: move to CommonProto?
             WorkerProto::write(store, conn, *info);
-            dumpNar(*info);
+            dumpNar(*info, sink);
         }
 
         sink << narioTagEnd;
@@ -343,7 +367,7 @@ void parseNario(Store & store, Source & source, NarioVisitor & visitor)
 
             // Can't use underlying source, which would have been exhausted.
             auto source2 = StringSource(saved.s);
-            visitor.fullPath(info, source2);
+            visitor.fullPath(info, source2, std::nullopt);
 
             auto n = readNum<uint64_t>(source);
             if (n == 0)
@@ -362,14 +386,40 @@ void parseNario(Store & store, Source & source, NarioVisitor & visitor)
             if (tag == narioTagEnd)
                 break;
 
-            if (tag != narioTagFull && tag != narioTagDiff && tag != narioTagPresent)
+            if (tag != narioTagFull && tag != narioTagDiff && tag != narioTagPresent && tag != narioTagCompressed)
                 throw Error("input doesn't look like a nario");
 
             auto info = WorkerProto::Serialise<ValidPathInfo>::read(store, conn);
 
             if (tag == narioTagFull) {
                 EnsureRead wrapper{source, info.narSize};
-                visitor.fullPath(info, wrapper);
+                visitor.fullPath(info, wrapper, std::nullopt);
+            }
+
+            else if (tag == narioTagCompressed) {
+                auto algo = parseCompressionAlgo(readString(source));
+                auto size = readNum<uint64_t>(source);
+
+                /* Stream the compressed data through a decompressor,
+                   keeping track of how much is left so we can skip
+                   it if the visitor doesn't read the whole NAR. */
+                uint64_t remaining = size;
+                {
+                    auto nar = sinkToSource([&](Sink & sink) {
+                        auto decompressionSink = makeDecompressionSink(algo, sink);
+                        std::vector<char> buf(65536);
+                        while (remaining) {
+                            auto n = std::min<uint64_t>(remaining, buf.size());
+                            source(buf.data(), n);
+                            remaining -= n;
+                            (*decompressionSink)({buf.data(), n});
+                        }
+                        decompressionSink->finish();
+                    });
+                    visitor.fullPath(info, *nar, NarioCompression{.algo = algo, .size = size});
+                }
+                source.skip(remaining);
+                readPadding(size, source);
             }
 
             else if (tag == narioTagDiff) {
@@ -405,7 +455,7 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
         {
         }
 
-        void fullPath(const ValidPathInfo & info, Source & nar) override
+        void fullPath(const ValidPathInfo & info, Source & nar, std::optional<NarioCompression> compression) override
         {
             if (!store.isValidPath(info.path)) {
                 Activity act(

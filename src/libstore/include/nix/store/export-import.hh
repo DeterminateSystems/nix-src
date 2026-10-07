@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nix/store/store-api.hh"
+#include "nix/util/compression-algo.hh"
 
 namespace nix {
 
@@ -13,9 +14,30 @@ namespace nix {
  * that closure are not exported (but recorded as being expected to
  * be present), and other paths are exported as binary diffs against
  * a path in that closure if a suitable one is found.
+ *
+ * If `compression` is not `none` (only supported for version 2),
+ * NARs that are not exported as binary diffs are compressed.
  */
 void exportPaths(
-    Store & store, const StorePathSet & paths, Sink & sink, unsigned int version, const StorePathSet & basePaths = {});
+    Store & store,
+    const StorePathSet & paths,
+    Sink & sink,
+    unsigned int version,
+    const StorePathSet & basePaths = {},
+    CompressionAlgo compression = CompressionAlgo::none);
+
+/**
+ * How a NAR is compressed inside a nario.
+ */
+struct NarioCompression
+{
+    CompressionAlgo algo;
+
+    /**
+     * Size of the compressed NAR.
+     */
+    uint64_t size;
+};
 
 /**
  * Callbacks for the entries in a nario, used by `parseNario()`.
@@ -26,9 +48,11 @@ struct NarioVisitor
 
     /**
      * A path whose NAR is contained in the nario. The visitor must
-     * read exactly `info.narSize` bytes from `nar`.
+     * read exactly `info.narSize` bytes from `nar`. If the NAR is
+     * stored in compressed form, `compression` describes how; `nar`
+     * returns the decompressed NAR in any case.
      */
-    virtual void fullPath(const ValidPathInfo & info, Source & nar) = 0;
+    virtual void fullPath(const ValidPathInfo & info, Source & nar, std::optional<NarioCompression> compression) = 0;
 
     /**
      * A path whose NAR is given as a binary diff (see

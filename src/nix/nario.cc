@@ -36,6 +36,7 @@ struct CmdNarioExport : StorePathsCommand
 {
     unsigned int version = 0;
     std::vector<std::string> baseArgs;
+    CompressionAlgo compression = CompressionAlgo::none;
 
     CmdNarioExport()
     {
@@ -54,6 +55,14 @@ struct CmdNarioExport : StorePathsCommand
             .labels = {"installable"},
             .handler = {[this](std::string s) { baseArgs.push_back(s); }},
             .completer = getCompleteInstallable(),
+        });
+
+        addFlag({
+            .longName = "compression",
+            .description =
+                "Compression method (e.g. `zstd`) to use for NARs that are not exported as binary diffs. The default is `none`. Requires nario format 2.",
+            .labels = {"method"},
+            .handler = {[this](std::string s) { compression = parseCompressionAlgo(s, true); }},
         });
     }
 
@@ -81,7 +90,7 @@ struct CmdNarioExport : StorePathsCommand
             basePaths = Installable::toStorePathSet(
                 getEvalStore(), store, Realise::Outputs, operateOn, parseInstallables(store, baseArgs));
 
-        exportPaths(*store, StorePathSet(storePaths.begin(), storePaths.end()), sink, version, basePaths);
+        exportPaths(*store, StorePathSet(storePaths.begin(), storePaths.end()), sink, version, basePaths, compression);
     }
 };
 
@@ -355,7 +364,8 @@ struct CmdNarioList : Command, MixJSON, MixLongListing
                 json->emplace(store.printStorePath(info.path), std::move(obj));
             }
 
-            void fullPath(const ValidPathInfo & info, Source & nar) override
+            void
+            fullPath(const ValidPathInfo & info, Source & nar, std::optional<NarioCompression> compression) override
             {
                 std::optional<nlohmann::json> contents;
                 if (cmd.listContents)
@@ -366,11 +376,26 @@ struct CmdNarioList : Command, MixJSON, MixLongListing
                 if (!json) {
                     if (contents)
                         renderNarListing(CanonPath(store.printStorePath(info.path)), *contents, cmd.longListing);
+                    else if (compression)
+                        logger->cout(
+                            fmt("%s: %d bytes, %s-compressed (%d bytes)",
+                                store.printStorePath(info.path),
+                                info.narSize,
+                                showCompressionAlgo(compression->algo),
+                                compression->size));
                     else
                         logger->cout(fmt("%s: %d bytes", store.printStorePath(info.path), info.narSize));
                 }
 
-                add(info, std::move(contents));
+                add(info, std::move(contents), [&](nlohmann::json & obj) {
+                    if (compression)
+                        obj.emplace(
+                            "compression",
+                            nlohmann::json{
+                                {"method", showCompressionAlgo(compression->algo)},
+                                {"size", compression->size},
+                            });
+                });
             }
 
             void diffPath(

@@ -43,4 +43,14 @@ The `--base` flag specifies one or more *installables* whose closure (the *base 
 
 Binary diffs require nario format 2. Narios that contain binary diffs cannot be imported by versions of Nix that don't support them.
 
+# Compression
+
+By default, the NARs in a nario are not compressed. The `--compression` flag specifies a compression method (such as `zstd` or `xz`) for NARs that are not exported as binary diffs. (Binary diffs are always compressed.) This is preferable to compressing the nario as a whole, since compressing binary diffs a second time is a waste of time. For example:
+
+```console
+# nix nario export --format 2 --compression zstd -r /nix/store/6i6xl6bmcpxqd51m8nlva40d5c1bhndx-hello-2.12.3 > hello.nario
+```
+
+Compression requires nario format 2. Narios that contain compressed NARs cannot be imported by versions of Nix that don't support them.
+
 )""

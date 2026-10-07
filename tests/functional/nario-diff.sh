@@ -25,6 +25,26 @@ nix nario export --format 2 -r "$new" --base "$old" > "$TEST_ROOT"/diff.nario
 # The diff should be much smaller than the full export.
 (( $(stat -c %s "$TEST_ROOT"/diff.nario) * 4 < $(stat -c %s "$TEST_ROOT"/full.nario) ))
 
+# Test compression of full NARs.
+expectStderr 1 nix nario export --format 1 --compression zstd -r "$new" | grepQuiet "compression is only supported in nario version 2"
+expectStderr 1 nix nario export --format 2 --compression foo -r "$new" | grepQuiet "unknown compression method 'foo'"
+
+for method in zstd xz; do
+    nix nario export --format 2 --compression "$method" -r "$new" > "$TEST_ROOT/full-$method.nario"
+    (( $(stat -c %s "$TEST_ROOT/full-$method.nario") < $(stat -c %s "$TEST_ROOT"/full.nario) ))
+    nix nario list < "$TEST_ROOT/full-$method.nario" | grepQuiet "^$extra: [0-9]* bytes, $method-compressed ([0-9]* bytes)$"
+    nix nario list -R < "$TEST_ROOT/full-$method.nario" | grepQuiet "^$extra/data$"
+    nix nario list -R < "$TEST_ROOT/full-$method.nario" | grepQuiet "^$new/data$"
+    json=$(nix nario list --json < "$TEST_ROOT/full-$method.nario")
+    [[ $(printf "%s" "$json" | jq -r ".paths.\"$new\".compression.method") = "$method" ]]
+    (( $(printf "%s" "$json" | jq -r ".paths.\"$new\".compression.size") < $(printf "%s" "$json" | jq -r ".paths.\"$new\".narSize") ))
+done
+
+nix nario export --format 2 --compression zstd -r "$new" --base "$old" > "$TEST_ROOT"/diff-zstd.nario
+(( $(stat -c %s "$TEST_ROOT"/diff-zstd.nario) < $(stat -c %s "$TEST_ROOT"/diff.nario) ))
+nix nario list < "$TEST_ROOT"/diff-zstd.nario | grepQuiet "^$new: [0-9]* bytes, diff against $old ([0-9]* bytes)$"
+nix nario list < "$TEST_ROOT"/diff-zstd.nario | grepQuiet "^$extra: [0-9]* bytes, zstd-compressed ([0-9]* bytes)$"
+
 # Test `nix nario list`.
 nix nario list < "$TEST_ROOT"/diff.nario | grepQuiet "^$new: [0-9]* bytes, diff against $old ([0-9]* bytes)$"
 nix nario list < "$TEST_ROOT"/diff.nario | grepQuiet "^$shared: expected to be present$"
@@ -59,6 +79,19 @@ grepQuiet "^2$" "$new/data"
 
 # Importing again is a no-op.
 nix nario import --no-check-sigs < "$TEST_ROOT"/diff.nario
+
+# Import compressed narios.
+for method in zstd xz; do
+    clearStore
+    nix nario import --no-check-sigs < "$TEST_ROOT/full-$method.nario"
+    nix store verify --no-trust -r "$new"
+    [[ $(nix path-info --json "$new" | jq -r .[].signatures[]) =~ my-key: ]]
+done
+
+clearStore
+nix nario import --no-check-sigs < "$TEST_ROOT"/old.nario
+nix nario import --no-check-sigs < "$TEST_ROOT"/diff-zstd.nario
+nix store verify --no-trust -r "$new"
 
 # Importing fails if the base has a different NAR hash.
 clearStore
