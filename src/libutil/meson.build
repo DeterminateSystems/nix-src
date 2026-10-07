@@ -201,6 +201,7 @@ sources = [ config_priv_h ] + files(
   'users.cc',
   'util.cc',
   'xml-writer.cc',
+  'zstd-patch.cc',
 )
 
 subdir('include/nix/util')

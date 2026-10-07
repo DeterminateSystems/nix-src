@@ -102,6 +102,7 @@ sources = files(
   'url.cc',
   'util.cc',
   'xml-writer.cc',
+  'zstd-patch.cc',
 )
 
 if have_cxa_throw

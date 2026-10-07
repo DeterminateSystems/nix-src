@@ -109,4 +109,5 @@ headers = [ config_pub_h ] + files(
   'util.hh',
   'variant-wrapper.hh',
   'xml-writer.hh',
+  'zstd-patch.hh',
 )
