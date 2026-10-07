@@ -44,6 +44,14 @@ std::string makeZstdPatch(std::string_view base, std::string_view target, int le
         windowLog = std::clamp(windowLog, bounds.lowerBound, bounds.upperBound);
         checkZstd(ZSTD_CCtx_setParameter(cctx.get(), ZSTD_c_windowLog, windowLog));
         checkZstd(ZSTD_CCtx_setParameter(cctx.get(), ZSTD_c_enableLongDistanceMatching, 1));
+        /* Use the multi-threaded compressor (even with a single
+           worker), since the single-threaded one makes poor use of
+           the prefix at high compression levels (e.g. a 13 MB patch
+           vs 6 KB between two identical 65 MB inputs at level 19).
+           Don't checkZstd(): if libzstd was built without
+           ZSTD_MULTITHREAD this returns an error, but compression
+           still works. */
+        ZSTD_CCtx_setParameter(cctx.get(), ZSTD_c_nbWorkers, 1);
         checkZstd(ZSTD_CCtx_refPrefix(cctx.get(), base.data(), base.size()));
     }
 
