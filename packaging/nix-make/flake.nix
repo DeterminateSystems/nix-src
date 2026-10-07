@@ -52,13 +52,32 @@
           nix-cmd = self.callPackage ../../src/libcmd/make.nix { };
           nix = self.callPackage ../../src/nix/make.nix { };
 
+          # The unit tests: the test executables and derivations running them.
+          nix-util-c = self.callPackage ../../src/libutil-c/make.nix { };
+          nix-util-test-support = self.callPackage ../../src/libutil-test-support/make.nix { };
+          nix-util-tests = self.callPackage ../../src/libutil-tests/make.nix { };
+          nix-util-tests-run = self.nix-util-tests.tests.run;
+          nix-util-tests-run-without-new-syscalls = self.nix-util-tests.tests.run-without-new-syscalls;
+
           test-runner = self.callPackage ../../tests/functional/test-runner.nix { };
           functional-tests = self.callPackage ../../tests/functional/make.nix { };
+
+          # Everything that runs tests; building it runs them all.
+          nix-all-tests = pkgs.linkFarmFromDrvs "nix-all-tests" [
+            self.nix-util-tests-run
+            self.nix-util-tests-run-without-new-syscalls
+            self.functional-tests
+          ];
         });
     in
     rec {
       packages.${system} = {
         inherit (make.${system}.release) test-runner;
+      };
+
+      # `nix flake check` runs all tests against the release variant.
+      checks.${system} = {
+        inherit (make.${system}.release) nix-all-tests;
       };
 
       devShells.${system}.default = pkgs.mkShell {
@@ -100,6 +119,7 @@
         inherit (flake-schemas.schemas)
           schemas
           packages
+          checks
           devShells
           ;
 

@@ -134,6 +134,25 @@ let
       }
     );
 
+  # A derivation that runs a test program (e.g. a gtest executable) with
+  # `env` added to the environment, and succeeds if it does. Its output is
+  # empty; the program's output is in the build log.
+  runTest =
+    {
+      name,
+      command,
+      env ? { },
+      nativeBuildInputs ? [ ],
+    }:
+    mkPythonDerivation {
+      inherit
+        name
+        command
+        env
+        nativeBuildInputs
+        ;
+    } ./run-test.py;
+
   # The stdenv's default hardening flags, except that `_FORTIFY_SOURCE`
   # warns on every unit when not optimizing, so it is disabled then (like
   # `hardeningDisable = [ "fortify" ]` in `stdenv.mkDerivation`).
@@ -493,6 +512,7 @@ in
     weakVtablesFlags
     mkStringHeader
     mkComponent
+    runTest
     commonSupportFiles
     ;
 }
