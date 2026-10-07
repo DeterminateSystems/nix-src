@@ -52,13 +52,50 @@
           nix-cmd = self.callPackage ../../src/libcmd/make.nix { };
           nix = self.callPackage ../../src/nix/make.nix { };
 
+          # The unit tests: the test executables and derivations running them.
+          nix-util-c = self.callPackage ../../src/libutil-c/make.nix { };
+          nix-util-test-support = self.callPackage ../../src/libutil-test-support/make.nix { };
+          nix-util-tests = self.callPackage ../../src/libutil-tests/make.nix { };
+          nix-util-tests-run = self.nix-util-tests.tests.run;
+          nix-util-tests-run-without-new-syscalls = self.nix-util-tests.tests.run-without-new-syscalls;
+          nix-store-c = self.callPackage ../../src/libstore-c/make.nix { };
+          nix-store-test-support = self.callPackage ../../src/libstore-test-support/make.nix { };
+          nix-store-tests = self.callPackage ../../src/libstore-tests/make.nix { };
+          nix-store-tests-run = self.nix-store-tests.tests.run;
+          nix-fetchers-c = self.callPackage ../../src/libfetchers-c/make.nix { };
+          nix-fetchers-tests = self.callPackage ../../src/libfetchers-tests/make.nix { };
+          nix-fetchers-tests-run = self.nix-fetchers-tests.tests.run;
+          nix-expr-c = self.callPackage ../../src/libexpr-c/make.nix { };
+          nix-expr-test-support = self.callPackage ../../src/libexpr-test-support/make.nix { };
+          nix-expr-tests = self.callPackage ../../src/libexpr-tests/make.nix { };
+          nix-expr-tests-run = self.nix-expr-tests.tests.run;
+          nix-flake-c = self.callPackage ../../src/libflake-c/make.nix { };
+          nix-flake-tests = self.callPackage ../../src/libflake-tests/make.nix { };
+          nix-flake-tests-run = self.nix-flake-tests.tests.run;
+
           test-runner = self.callPackage ../../tests/functional/test-runner.nix { };
           functional-tests = self.callPackage ../../tests/functional/make.nix { };
+
+          # Everything that runs tests; building it runs them all.
+          nix-all-tests = pkgs.linkFarmFromDrvs "nix-all-tests" [
+            self.nix-util-tests-run
+            self.nix-util-tests-run-without-new-syscalls
+            self.nix-store-tests-run
+            self.nix-fetchers-tests-run
+            self.nix-expr-tests-run
+            self.nix-flake-tests-run
+            self.functional-tests
+          ];
         });
     in
     rec {
       packages.${system} = {
         inherit (make.${system}.release) test-runner;
+      };
+
+      # `nix flake check` runs all tests against the release variant.
+      checks.${system} = {
+        inherit (make.${system}.release) nix-all-tests;
       };
 
       devShells.${system}.default = pkgs.mkShell {
@@ -100,6 +137,7 @@
         inherit (flake-schemas.schemas)
           schemas
           packages
+          checks
           devShells
           ;
 

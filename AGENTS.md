@@ -18,7 +18,7 @@ Building and testing Nix:
 
 * Build Nix using `nix build ./packaging/nix-make#release.nix`. The result is in `./result`.
 
-* Run the functional tests in `tests/functional` using `nix build -L ./packaging/nix-make#release.functional-tests`.
+* Run all tests using `nix build -L ./packaging/nix-make#release.nix-all-tests`. This covers the unit tests (e.g. `release.nix-util-tests-run`, which runs `src/libutil-tests`) and the functional tests in `tests/functional` (`release.functional-tests`); each can also be built on its own.
 
 * Individual tests can be executed by doing `nix build ./packaging/nix-make#release.nix && nix run ./packaging/nix-make#test-runner -- --nix-bin-dir ./result/bin $TEST_NAMES`, where `TEST_NAMES` are the file names inside `tests/functional` (without the `.sh` suffix), e.g. `simple` or `flakes/relative-paths`.
 
