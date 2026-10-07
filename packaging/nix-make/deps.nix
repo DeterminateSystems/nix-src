@@ -212,7 +212,8 @@ in
     pkgconfig = [ "libeditline" ];
   }
   {
-    prefix = "git2/";
+    # Matches both <git2.h> and <git2/...>.
+    prefix = "git2";
     pkg = deps.libgit2;
     pkgconfig = [ "libgit2" ];
   }

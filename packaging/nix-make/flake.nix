@@ -62,6 +62,9 @@
           nix-store-test-support = self.callPackage ../../src/libstore-test-support/make.nix { };
           nix-store-tests = self.callPackage ../../src/libstore-tests/make.nix { };
           nix-store-tests-run = self.nix-store-tests.tests.run;
+          nix-fetchers-c = self.callPackage ../../src/libfetchers-c/make.nix { };
+          nix-fetchers-tests = self.callPackage ../../src/libfetchers-tests/make.nix { };
+          nix-fetchers-tests-run = self.nix-fetchers-tests.tests.run;
 
           test-runner = self.callPackage ../../tests/functional/test-runner.nix { };
           functional-tests = self.callPackage ../../tests/functional/make.nix { };
@@ -71,6 +74,7 @@
             self.nix-util-tests-run
             self.nix-util-tests-run-without-new-syscalls
             self.nix-store-tests-run
+            self.nix-fetchers-tests-run
             self.functional-tests
           ];
         });
