@@ -11,7 +11,15 @@ def main():
     with open(os.environ["NIX_ATTRS_JSON_FILE"]) as f:
         attrs = json.load(f)
 
-    subprocess.run(attrs["command"], env={**os.environ, **attrs["env"]}, check=True)
+    # A writable home directory, for tests that keep state (e.g. a store)
+    # there. The values in `env` may refer to it as `$HOME`.
+    os.environ["HOME"] = os.path.join(os.environ["TMPDIR"], "home")
+    os.mkdir(os.environ["HOME"])
+    env = dict(os.environ)
+    for name, value in attrs["env"].items():
+        env[name] = os.path.expandvars(value)
+
+    subprocess.run(attrs["command"], env=env, check=True)
     os.mkdir(os.environ["out"])
 
 

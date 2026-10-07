@@ -58,6 +58,10 @@
           nix-util-tests = self.callPackage ../../src/libutil-tests/make.nix { };
           nix-util-tests-run = self.nix-util-tests.tests.run;
           nix-util-tests-run-without-new-syscalls = self.nix-util-tests.tests.run-without-new-syscalls;
+          nix-store-c = self.callPackage ../../src/libstore-c/make.nix { };
+          nix-store-test-support = self.callPackage ../../src/libstore-test-support/make.nix { };
+          nix-store-tests = self.callPackage ../../src/libstore-tests/make.nix { };
+          nix-store-tests-run = self.nix-store-tests.tests.run;
 
           test-runner = self.callPackage ../../tests/functional/test-runner.nix { };
           functional-tests = self.callPackage ../../tests/functional/make.nix { };
@@ -66,6 +70,7 @@
           nix-all-tests = pkgs.linkFarmFromDrvs "nix-all-tests" [
             self.nix-util-tests-run
             self.nix-util-tests-run-without-new-syscalls
+            self.nix-store-tests-run
             self.functional-tests
           ];
         });

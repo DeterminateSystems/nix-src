@@ -136,7 +136,8 @@ let
 
   # A derivation that runs a test program (e.g. a gtest executable) with
   # `env` added to the environment, and succeeds if it does. Its output is
-  # empty; the program's output is in the build log.
+  # empty; the program's output is in the build log. `HOME` is a writable
+  # directory, which the values in `env` may refer to as `$HOME`.
   runTest =
     {
       name,
