@@ -69,6 +69,9 @@
           nix-expr-test-support = self.callPackage ../../src/libexpr-test-support/make.nix { };
           nix-expr-tests = self.callPackage ../../src/libexpr-tests/make.nix { };
           nix-expr-tests-run = self.nix-expr-tests.tests.run;
+          nix-flake-c = self.callPackage ../../src/libflake-c/make.nix { };
+          nix-flake-tests = self.callPackage ../../src/libflake-tests/make.nix { };
+          nix-flake-tests-run = self.nix-flake-tests.tests.run;
 
           test-runner = self.callPackage ../../tests/functional/test-runner.nix { };
           functional-tests = self.callPackage ../../tests/functional/make.nix { };
@@ -80,6 +83,7 @@
             self.nix-store-tests-run
             self.nix-fetchers-tests-run
             self.nix-expr-tests-run
+            self.nix-flake-tests-run
             self.functional-tests
           ];
         });
