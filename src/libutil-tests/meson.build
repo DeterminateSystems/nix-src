@@ -95,6 +95,7 @@ sources = files(
   'sort.cc',
   'source-accessor.cc',
   'spawn.cc',
+  'spilling-sink.cc',
   'strings.cc',
   'suggestions.cc',
   'terminal.cc',

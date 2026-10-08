@@ -10,6 +10,7 @@
 #include "nix/util/thread-pool.hh"
 #include "nix/util/zstd-patch.hh"
 #include "nix/util/compression.hh"
+#include "nix/util/spilling-sink.hh"
 
 #include <cctype>
 
@@ -46,6 +47,10 @@ static const int diffCompressionLevel = 19;
    decide whether a diff is worth it if full NARs are not compressed
    using zstd. */
 static const int defaultZstdCompressionLevel = 9;
+
+/* Compressed NARs larger than this are buffered on disk rather than
+   in memory. */
+static const size_t maxInMemoryCompressedNarSize = 32 * 1024 * 1024;
 
 static WorkerProto::Version exportProtoVersion{
     .number =
@@ -368,15 +373,18 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
 
             if (compression != CompressionAlgo::none) {
                 /* We need to know the size of the compressed NAR
-                   before writing it, so buffer it in memory. */
-                StringSink compressed;
+                   before writing it, so buffer it in memory or on
+                   disk. */
+                SpillingStringSink compressed(maxInMemoryCompressedNarSize);
                 auto compressionSink = makeCompressionSink(compression, compressed, true, compressionLevel);
                 dumpNar(*info, *compressionSink);
                 compressionSink->finish();
 
                 sink << narioTagCompressed;
                 WorkerProto::write(store, conn, *info);
-                sink << showCompressionAlgo(compression) << compressed.s;
+                sink << showCompressionAlgo(compression) << compressed.size();
+                compressed.getSource()->drainInto(sink);
+                writePadding(compressed.size(), sink);
                 continue;
             }
 
