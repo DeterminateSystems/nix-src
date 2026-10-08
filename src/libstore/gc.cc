@@ -635,6 +635,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
        GCLimitReached if we've deleted enough garbage. */
     auto deleteFromStore = [&](std::string_view baseName, bool isKnownPath) {
         assert(!std::filesystem::path(baseName).is_absolute());
+
         /* Using `std::string` since this is the logical store dir. Hopefully that is the right choice. */
         std::string path = storeDir + "/" + std::string(baseName);
         auto realPath = config->realStoreDir.get() / std::string(baseName);
@@ -952,7 +953,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
                         if (auto storePath = maybeParseStorePath(storeDir + "/" + name))
                             maybeDeleteReferrersClosure(*storePath);
-                        else
+                        else if (shouldDelete)
                             deleteFromStore(name, false);
                     }
                 },
