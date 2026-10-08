@@ -52,6 +52,11 @@ static const int defaultZstdCompressionLevel = 9;
    in memory. */
 static const size_t maxInMemoryCompressedNarSize = 32 * 1024 * 1024;
 
+/* When exporting in parallel, don't start new diffs or compressions
+   while the entries that have been computed but not yet written
+   exceed this size. */
+static const size_t maxBufferedEntriesSize = 1024 * 1024 * 1024;
+
 static WorkerProto::Version exportProtoVersion{
     .number =
         {
@@ -347,9 +352,9 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
         };
 
         /* The indices in `sorted` of the paths that need expensive
-           work. Only these are processed by the thread pool, so that
-           cheap entries (e.g. paths in the base closure) don't take
-           up room in its window. */
+           work. Only these are processed by the thread pool; cheap
+           entries (e.g. paths in the base closure) are written in
+           between. */
         std::vector<size_t> jobs;
         for (size_t i = 0; i < sorted.size(); ++i)
             if (!baseClosure.contains(sorted[i])
@@ -433,7 +438,11 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
                 writeCheapEntries(jobs[j]);
                 writeEntry(jobs[j], std::move(entry));
                 nextToWrite++;
-            });
+            },
+            [](const ExportEntry & entry) -> size_t {
+                return entry.diff ? entry.diff->patch.size() : entry.compressed ? entry.compressed->size() : 0;
+            },
+            maxBufferedEntriesSize);
 
         writeCheapEntries(sorted.size());
 
