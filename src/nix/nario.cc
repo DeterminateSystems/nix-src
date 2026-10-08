@@ -35,6 +35,10 @@ static auto rCmdNario = registerCommand<CmdNario>("nario");
 struct CmdNarioExport : StorePathsCommand
 {
     unsigned int version = 0;
+    std::vector<std::string> baseArgs;
+    BaseSelectionMethod baseSelectionMethod = BaseSelectionMethod::byName;
+    CompressionAlgo compression = CompressionAlgo::none;
+    std::optional<int> compressionLevel;
 
     CmdNarioExport()
     {
@@ -44,6 +48,46 @@ struct CmdNarioExport : StorePathsCommand
             .labels = {"nario-format"},
             .handler = {&version},
             .required = true,
+        });
+
+        addFlag({
+            .longName = "base",
+            .description =
+                "Assume that the closure of *installable* is already present at the destination. Paths in this closure are not exported, and other paths are exported as binary diffs against paths in this closure where possible. Can be specified multiple times.",
+            .labels = {"installable"},
+            .handler = {[this](std::string s) { baseArgs.push_back(s); }},
+            .completer = getCompleteInstallable(),
+        });
+
+        addFlag({
+            .longName = "base-selection-method",
+            .description =
+                "How to select the path in the base closure against which to diff a path. Currently the only method is `by-name` (select a path with the same name, ignoring the version), which is the default.",
+            .labels = {"method"},
+            .handler = {[this](std::string s) { baseSelectionMethod = parseBaseSelectionMethod(s); }},
+            .completer = {[](AddCompletions & completions, size_t, std::string_view prefix) {
+                for (auto method : {BaseSelectionMethod::byName}) {
+                    auto s = showBaseSelectionMethod(method);
+                    if (s.starts_with(prefix))
+                        completions.add(s);
+                }
+            }},
+        });
+
+        addFlag({
+            .longName = "compression",
+            .description =
+                "Compression method (e.g. `zstd`) to use for NARs that are not exported as binary diffs. The default is `none`. Requires nario format 2.",
+            .labels = {"method"},
+            .handler = {[this](std::string s) { compression = parseCompressionAlgo(s, true); }},
+        });
+
+        addFlag({
+            .longName = "compression-level",
+            .description =
+                "Compression level to use for the method specified by `--compression`. The default is 9 for `zstd`, and the compression method's own default for other methods.",
+            .labels = {"level"},
+            .handler = {&compressionLevel},
         });
     }
 
@@ -65,7 +109,19 @@ struct CmdNarioExport : StorePathsCommand
         if (isatty(fd))
             throw UsageError("refusing to write nario to a terminal");
         FdSink sink(std::move(fd));
-        exportPaths(*store, StorePathSet(storePaths.begin(), storePaths.end()), sink, version);
+
+        NarioExportOptions options{
+            .version = version,
+            .baseSelectionMethod = baseSelectionMethod,
+            .compression = compression,
+            .compressionLevel = compressionLevel,
+        };
+
+        if (!baseArgs.empty())
+            options.basePaths = Installable::toStorePathSet(
+                getEvalStore(), store, Realise::Outputs, operateOn, parseInstallables(store, baseArgs));
+
+        exportPaths(*store, StorePathSet(storePaths.begin(), storePaths.end()), sink, options);
     }
 };
 
@@ -242,12 +298,8 @@ struct CmdNarioList : Command, MixJSON, MixLongListing
 
         struct ListingStore : Store
         {
-            std::optional<nlohmann::json> json;
-            CmdNarioList & cmd;
-
-            ListingStore(ref<const Config> config, CmdNarioList & cmd)
+            ListingStore(ref<const Config> config)
                 : Store{*config}
-                , cmd(cmd)
             {
             }
 
@@ -270,24 +322,7 @@ struct CmdNarioList : Command, MixJSON, MixLongListing
             void
             addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override
             {
-                std::optional<nlohmann::json> contents;
-                if (cmd.listContents)
-                    contents = listNar(source);
-                else
-                    source.skip(info.narSize);
-
-                if (json) {
-                    // FIXME: make the JSON format configurable.
-                    auto obj = info.toJSON(this, true, PathInfoJsonFormat::V1);
-                    if (contents)
-                        obj.emplace("contents", *contents);
-                    json->emplace(printStorePath(info.path), std::move(obj));
-                } else {
-                    if (contents)
-                        renderNarListing(CanonPath(printStorePath(info.path)), *contents, cmd.longListing);
-                    else
-                        logger->cout(fmt("%s: %d bytes", printStorePath(info.path), info.narSize));
-                }
+                unsupported("addToStore");
             }
 
             StorePath addToStoreFromDump(
@@ -332,12 +367,112 @@ struct CmdNarioList : Command, MixJSON, MixLongListing
             void anchor() override {}
         };
 
+        struct Lister : NarioVisitor
+        {
+            Store & store;
+            CmdNarioList & cmd;
+            std::optional<nlohmann::json> json;
+
+            Lister(Store & store, CmdNarioList & cmd)
+                : store(store)
+                , cmd(cmd)
+            {
+            }
+
+            void
+            add(const ValidPathInfo & info,
+                std::optional<nlohmann::json> contents,
+                std::function<void(nlohmann::json &)> extendJSON = {})
+            {
+                if (!json)
+                    return;
+                // FIXME: make the JSON format configurable.
+                auto obj = info.toJSON(&store, true, PathInfoJsonFormat::V1);
+                if (contents)
+                    obj.emplace("contents", std::move(*contents));
+                if (extendJSON)
+                    extendJSON(obj);
+                json->emplace(store.printStorePath(info.path), std::move(obj));
+            }
+
+            void
+            fullPath(const ValidPathInfo & info, Source & nar, std::optional<NarioCompression> compression) override
+            {
+                std::optional<nlohmann::json> contents;
+                if (cmd.listContents)
+                    contents = listNar(nar);
+                else
+                    nar.skip(info.narSize);
+
+                if (!json) {
+                    if (contents)
+                        renderNarListing(CanonPath(store.printStorePath(info.path)), *contents, cmd.longListing);
+                    else if (compression)
+                        logger->cout(
+                            fmt("%s: %d bytes, %s-compressed (%d bytes)",
+                                store.printStorePath(info.path),
+                                info.narSize,
+                                showCompressionAlgo(compression->algo),
+                                compression->size));
+                    else
+                        logger->cout(fmt("%s: %d bytes", store.printStorePath(info.path), info.narSize));
+                }
+
+                add(info, std::move(contents), [&](nlohmann::json & obj) {
+                    if (compression)
+                        obj.emplace(
+                            "compression",
+                            nlohmann::json{
+                                {"method", showCompressionAlgo(compression->algo)},
+                                {"size", compression->size},
+                            });
+                });
+            }
+
+            void diffPath(
+                const ValidPathInfo & info,
+                NarioDiffAlgo algo,
+                const StorePath & basePath,
+                const Hash & baseNarHash,
+                std::string_view patch) override
+            {
+                if (!json)
+                    logger->cout(
+                        fmt("%s: %d bytes, %s diff against %s (%d bytes)",
+                            store.printStorePath(info.path),
+                            info.narSize,
+                            showNarioDiffAlgo(algo),
+                            store.printStorePath(basePath),
+                            patch.size()));
+
+                add(info, std::nullopt, [&](nlohmann::json & obj) {
+                    obj.emplace(
+                        "diff",
+                        nlohmann::json{
+                            {"algorithm", showNarioDiffAlgo(algo)},
+                            {"base", store.printStorePath(basePath)},
+                            {"baseNarHash", baseNarHash.to_string(HashFormat::SRI, true)},
+                            {"size", patch.size()},
+                        });
+                });
+            }
+
+            void presentPath(const ValidPathInfo & info) override
+            {
+                if (!json)
+                    logger->cout(fmt("%s: expected to be present", store.printStorePath(info.path)));
+
+                add(info, std::nullopt, [](nlohmann::json & obj) { obj.emplace("present", true); });
+            }
+        };
+
         auto source{getNarioSource()};
         auto config = make_ref<Config>(StoreConfig::Params());
-        ListingStore lister(config, *this);
+        ListingStore store(config);
+        Lister lister(store, *this);
         if (json)
             lister.json = nlohmann::json::object();
-        importPaths(lister, source, NoCheckSigs);
+        parseNario(store, source, lister);
         if (json) {
             auto j = nlohmann::json::object();
             j["version"] = 1;

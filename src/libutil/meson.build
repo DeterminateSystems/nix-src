@@ -188,6 +188,7 @@ sources = [ config_priv_h ] + files(
   'signature/signer.cc',
   'source-accessor.cc',
   'source-path.cc',
+  'spilling-sink.cc',
   'strings.cc',
   'suggestions.cc',
   'table.cc',
@@ -201,6 +202,7 @@ sources = [ config_priv_h ] + files(
   'users.cc',
   'util.cc',
   'xml-writer.cc',
+  'zstd-patch.cc',
 )
 
 subdir('include/nix/util')

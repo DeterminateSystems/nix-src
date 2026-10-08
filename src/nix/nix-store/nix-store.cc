@@ -773,7 +773,7 @@ static void opExport(Strings opFlags, Strings opArgs)
         paths.insert(store->followLinksToStorePath(i));
 
     FdSink sink(getStandardOutput());
-    exportPaths(*store, paths, sink, 1);
+    exportPaths(*store, paths, sink, {.version = 1});
     sink.flush();
 }
 

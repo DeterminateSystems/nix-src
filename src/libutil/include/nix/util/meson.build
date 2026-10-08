@@ -90,6 +90,7 @@ headers = [ config_pub_h ] + files(
   'sort.hh',
   'source-accessor.hh',
   'source-path.hh',
+  'spilling-sink.hh',
   'split.hh',
   'std-hash.hh',
   'strings-inline.hh',
@@ -109,4 +110,5 @@ headers = [ config_pub_h ] + files(
   'util.hh',
   'variant-wrapper.hh',
   'xml-writer.hh',
+  'zstd-patch.hh',
 )

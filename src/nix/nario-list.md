@@ -40,4 +40,8 @@ R""(
 
 This command lists the contents of a nario file read from standard input.
 
+For narios created with `nix nario export --base`, paths that are stored as a binary diff are shown with the diff algorithm (currently always `zstd`), the base path of the diff and the size of the diff. Their file contents are not shown by `--recursive`, since that would require the base path. Paths that are expected to already be present at the destination are shown as such. In the JSON output, these have a `diff` or `present` attribute, respectively.
+
+For narios created with `nix nario export --compression`, the compression method and compressed size of each NAR are shown. In the JSON output, these are in the `compression` attribute.
+
 )""

@@ -95,13 +95,16 @@ sources = files(
   'sort.cc',
   'source-accessor.cc',
   'spawn.cc',
+  'spilling-sink.cc',
   'strings.cc',
   'suggestions.cc',
   'terminal.cc',
+  'thread-pool.cc',
   'topo-sort.cc',
   'url.cc',
   'util.cc',
   'xml-writer.cc',
+  'zstd-patch.cc',
 )
 
 if have_cxa_throw
