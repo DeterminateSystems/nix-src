@@ -13,13 +13,16 @@
 #include "nix/util/util.hh"
 #include "nix/util/thread-pool.hh"
 #include "nix/util/pool.hh"
+#include "nix/util/executable-path.hh"
 #include "nix/util/deleter.hh"
 
+#include <git2/version.h>
 #include <git2/attr.h>
 #include <git2/blob.h>
 #include <git2/branch.h>
 #include <git2/commit.h>
 #include <git2/config.h>
+#include <git2/sys/config.h>
 #include <git2/describe.h>
 #include <git2/errors.h>
 #include <git2/global.h>
@@ -114,6 +117,11 @@ typedef std::unique_ptr<git_describe_result, Deleter<git_describe_result_free>> 
 typedef std::unique_ptr<git_status_list, Deleter<git_status_list_free>> StatusList;
 typedef std::unique_ptr<git_remote, Deleter<git_remote_free>> Remote;
 typedef std::unique_ptr<git_config, Deleter<git_config_free>> GitConfig;
+typedef std::unique_ptr<git_config_backend, decltype([](git_config_backend * backend) {
+                            if (backend)
+                                backend->free(backend);
+                        })>
+    GitConfigBackend;
 typedef std::unique_ptr<git_config_iterator, Deleter<git_config_iterator_free>> ConfigIterator;
 typedef std::unique_ptr<git_odb, Deleter<git_odb_free>> ObjectDb;
 typedef std::unique_ptr<git_packbuilder, Deleter<git_packbuilder_free>> PackBuilder;
@@ -122,10 +130,22 @@ typedef std::unique_ptr<git_index, Deleter<git_index_free>> Index;
 
 static Hash toHash(const git_oid & oid)
 {
-#ifdef GIT_EXPERIMENTAL_SHA256
-    assert(oid.type == GIT_OID_SHA1);
+    HashAlgorithm algo;
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+    switch (oid.type) {
+    case GIT_OID_SHA1:
+        algo = HashAlgorithm::SHA1;
+        break;
+    case GIT_OID_SHA256:
+        algo = HashAlgorithm::SHA256;
+        break;
+    default:
+        unreachable();
+    }
+#else
+    algo = HashAlgorithm::SHA1;
 #endif
-    Hash hash(HashAlgorithm::SHA1);
+    Hash hash(algo);
     memcpy(hash.hash, oid.id, hash.hashSize);
     return hash;
 }
@@ -136,14 +156,41 @@ static void initLibGit2()
     std::call_once(initialized, []() {
         if (git_libgit2_init() < 0)
             throw GitError("initialising libgit2");
+
+        /* Nuke the "hashing on all reads" behavior, since that can lead to bad
+           performance https://github.com/libgit2/libgit2/issues/4951. It's a
+           compromise of course, but one that is mostly in line with git cli and
+           like how we don't recalculate narHash when reading from a store. */
+        git_libgit2_opts(GIT_OPT_ENABLE_STRICT_HASH_VERIFICATION, 0);
     });
 }
 
 static git_oid hashToOID(const Hash & hash)
 {
     git_oid oid;
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+    git_oid_t t;
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wswitch-enum"
+    switch (hash.algo) {
+    case HashAlgorithm::SHA1:
+        t = GIT_OID_SHA1;
+        break;
+    case HashAlgorithm::SHA256:
+        t = GIT_OID_SHA256;
+        break;
+    default:
+        throw Error("unsupported hash algorithm for Git: %s", printHashAlgo(hash.algo));
+    }
+#  pragma GCC diagnostic pop
+    if (git_oid_from_raw(&oid, hash.hash, t))
+        /* This can really never happen, since libgit2 just reads out our raw bytes.
+           The only failure mode is us specifying an invalid `type` parameter. */
+        unreachable();
+#else
     if (git_oid_fromstr(&oid, hash.gitRev().c_str()))
         throw GitError("cannot convert '%s' to a Git OID", hash.gitRev());
+#endif
     return oid;
 }
 
@@ -296,6 +343,28 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
         if (git_repository_open(Setter(repo), path.string().c_str()))
             throw GitError("opening Git repository %s", PathFmt(path));
 
+        GitConfig config;
+        if (git_repository_config(Setter(config), *this))
+            throw GitError("getting Git repository config");
+
+        /* Create an in-memory configuration so that we can set config options without modifying the
+           config file on-disk. */
+        git_config_backend_memory_options configOpts = GIT_CONFIG_BACKEND_MEMORY_OPTIONS_INIT;
+        configOpts.backend_type = "nix";
+
+        std::vector<const char *> configValues;
+        if (options.dontFindDeltas)
+            configValues.push_back("pack.window=0");
+
+        GitConfigBackend memBackend;
+        if (git_config_backend_from_values(Setter(memBackend), configValues.data(), configValues.size(), &configOpts))
+            throw GitError("creating an in-memory Git config");
+
+        if (git_config_add_backend(config.get(), memBackend.get(), GIT_CONFIG_LEVEL_APP, *this, /*force=*/false))
+            throw GitError("adding the in-memory Git configuration backend");
+
+        memBackend.release();
+
         ObjectDb odb;
         if (options.packfilesOnly) {
             /* Create a fresh object database because by default the repo also
@@ -309,7 +378,16 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
             if (git_odb_new(Setter(odb)))
                 throw GitError("creating Git object database");
 
-            if (git_odb_backend_pack(&packBackend, (path / "objects").string().c_str()))
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+            git_odb_backend_pack_options packOpts = GIT_ODB_OPTIONS_INIT;
+#endif
+            if (git_odb_backend_pack(
+                    &packBackend,
+                    (path / "objects").string().c_str()
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+                        , &packOpts // NOFORMAT
+#endif
+                    ))
                 throw GitError("creating pack backend");
 
             if (git_odb_add_backend(odb.get(), packBackend, 1))
@@ -367,7 +445,20 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
         //                     (synchronously on the git_packbuilder_write_buf thread)
         Indexer indexer;
         git_indexer_progress stats;
-        if (git_indexer_new(Setter(indexer), pack_dir_path.c_str(), 0, nullptr, nullptr))
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+        git_indexer_options indexerOpts = GIT_INDEXER_OPTIONS_INIT;
+#endif
+        if (git_indexer_new(
+                Setter(indexer),
+                pack_dir_path.c_str(),
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+                &indexerOpts
+#else
+                0,
+                nullptr,
+                nullptr
+#endif
+                ))
             throw GitError("creating git packfile indexer");
 
         // TODO: provide index callback for checkInterrupt() termination
@@ -432,7 +523,7 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
 
         ThreadPool pool;
 
-        auto process = [&done, &pool, &repoPool](this const auto & process, const git_oid & oid) -> void {
+        auto process = [&done, &pool, &repoPool](this auto const & process, const git_oid & oid) -> void {
             auto repo(repoPool.get());
 
             auto _commit = lookupObject(*repo, oid, GIT_OBJECT_COMMIT);
@@ -659,33 +750,46 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
         // that)
         //       then use code that was removed in this commit (see blame)
 
-        auto dir = this->path;
+        if (ExecutablePath::load().findName("git")) {
+            auto dir = this->path;
 
-        // Remove shallow.lock left behind by a previously interrupted `git fetch`, as it would prevent `git fetch`
-        // from running. Note that we already have a repository-wide `PathLock` (see git.cc), so this is safe.
-        tryUnlink(dir / "shallow.lock");
+            // Remove shallow.lock left behind by a previously interrupted `git fetch`, as it would prevent `git fetch`
+            // from running. Note that we already have a repository-wide `PathLock` (see git.cc), so this is safe.
+            tryUnlink(dir / "shallow.lock");
 
-        OsStrings gitArgs = {
-            OS_STR("-C"),
-            dir.native(),
-            OS_STR("--git-dir"),
-            OS_STR("."),
-            OS_STR("fetch"),
-            OS_STR("--progress"),
-            OS_STR("--force"),
-        };
-        if (shallow) {
-            gitArgs.push_back(OS_STR("--depth"));
-            gitArgs.push_back(OS_STR("1"));
+            OsStrings gitArgs{"-C", dir.native(), "--git-dir", ".", "fetch", "--progress", "--force"};
+            if (shallow) {
+                gitArgs.push_back(OS_STR("--depth"));
+                gitArgs.push_back(OS_STR("1"));
+            }
+            gitArgs.push_back(OS_STR("--"));
+            gitArgs.push_back(string_to_os_string(url));
+            gitArgs.push_back(string_to_os_string(refspec));
+
+            auto status = runProgram(RunOptions{.program = "git", .args = gitArgs, .isInteractive = true}).first;
+
+            if (status > 0)
+                throw Error("Failed to fetch git repository '%s'", url);
+        } else {
+            // Fall back to using libgit2 for fetching. This does not
+            // support SSH very well.
+            Remote remote;
+
+            if (git_remote_create_anonymous(Setter(remote), *this, url.c_str()))
+                throw Error("cannot create Git remote '%s': %s", url, git_error_last()->message);
+
+            char * refspecs[] = {(char *) refspec.c_str()};
+            git_strarray refspecs2{.strings = refspecs, .count = 1};
+
+            git_fetch_options opts = GIT_FETCH_OPTIONS_INIT;
+            // FIXME: for some reason, shallow fetching over ssh barfs
+            // with "could not read from remote repository".
+            opts.depth = shallow && parseURL(url).scheme != "ssh" ? 1 : GIT_FETCH_DEPTH_FULL;
+            opts.callbacks.payload = &act;
+
+            if (git_remote_fetch(remote.get(), &refspecs2, &opts, nullptr))
+                throw Error("fetching '%s' from '%s': %s", refspec, url, git_error_last()->message);
         }
-        gitArgs.push_back(OS_STR("--"));
-        gitArgs.push_back(string_to_os_string(url));
-        gitArgs.push_back(string_to_os_string(refspec));
-
-        auto status = runProgram({.program = "git", .args = gitArgs, .isInteractive = true}).first;
-
-        if (status > 0)
-            throw Error("Failed to fetch git repository '%s'", url);
     }
 
     void verifyCommit(const Hash & rev, const std::vector<fetchers::PublicKey> & publicKeys) override
@@ -801,10 +905,14 @@ ref<GitRepo> GitRepo::openRepo(const std::filesystem::path & path, GitRepo::Opti
     return make_ref<GitRepoImpl>(path, options);
 }
 
+std::string GitAccessorOptions::makeFingerprint(const Hash & rev) const
+{
+    return "git:" + rev.gitRev() + (exportIgnore ? ";e" : "") + (smudgeLfs ? ";l" : "") + (legacy ? ";legacy" : "");
+}
+
 /**
  * Raw git tree input accessor.
  */
-
 struct GitSourceAccessor : SourceAccessor
 {
 private:
@@ -828,6 +936,7 @@ public:
               .options = options,
           }}
     {
+        fingerprint = options.makeFingerprint(rev);
     }
 
     void readBlob(const CanonPath & path, bool symlink, Sink & sink, std::function<void(uint64_t)> sizeCallback)
@@ -987,7 +1096,7 @@ public:
 
             auto path2 = *parent;
             path2.push(entryName);
-            lookupCache.emplace(path2, std::move(copy)).first->second.get();
+            lookupCache.emplace(path2, std::move(copy));
         }
 
         return res;
@@ -1017,7 +1126,7 @@ public:
     {
         auto entry = lookup(state, path);
         if (!entry)
-            throw Error("'%s' does not exist", showPath(path));
+            throw FileNotFound("path '%s' does not exist", showPath(path));
         return entry;
     }
 
@@ -1532,7 +1641,19 @@ ref<GitRepo> Settings::getTarballCache() const
      * for optimal packfiles.
      */
     static auto repoDir = std::filesystem::path(getCacheDir()) / "tarball-cache-v2";
-    return GitRepo::openRepo(repoDir, {.create = true, .bare = true, .packfilesOnly = true});
+    auto tarballCache(_tarballCache.lock());
+    if (!*tarballCache)
+        *tarballCache = GitRepo::openRepo(
+            repoDir,
+            {
+                .create = true,
+                .bare = true,
+                .packfilesOnly = true,
+                /* Tarball unpacking is not expected to benefit from deltas much,
+                   compared to how much CPU times it takes to find. */
+                .dontFindDeltas = true,
+            });
+    return ref<GitRepo>(*tarballCache);
 }
 
 } // namespace fetchers

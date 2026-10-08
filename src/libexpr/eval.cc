@@ -27,6 +27,8 @@
 #include "nix/fetchers/tarball.hh"
 #include "nix/fetchers/input-cache.hh"
 #include "nix/util/current-process.hh"
+#include "nix/store/async-path-writer.hh"
+#include "nix/expr/parallel-eval.hh"
 
 #include "parser-tab.hh"
 
@@ -48,6 +50,11 @@
 #include <nlohmann/json.hpp>
 #include <boost/container/small_vector.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
+#include <boost/unordered/unordered_flat_set.hpp>
+
+#ifndef _WIN32 // TODO use portable implementation
+#  include <sys/resource.h>
+#endif
 
 #include "nix/util/strings-inline.hh"
 
@@ -63,7 +70,7 @@ static char * allocString(size_t size)
     char * t;
     t = (char *) GC_MALLOC_ATOMIC(size);
     if (!t)
-        throw std::bad_alloc();
+        outOfMemory();
     return t;
 }
 
@@ -89,7 +96,7 @@ StringData & StringData::alloc(EvalMemory & mem, size_t size)
 {
     void * t = mem.allocBytes(sizeof(StringData) + size + 1);
     if (!t)
-        throw std::bad_alloc();
+        outOfMemory();
     auto res = new (t) StringData(size);
     return *res;
 }
@@ -102,11 +109,6 @@ const StringData & StringData::make(EvalMemory & mem, std::string_view s)
     std::memcpy(&res.data_, s.data(), s.size());
     res.data_[s.size()] = '\0';
     return res;
-}
-
-RootValue allocRootValue(Value * v)
-{
-    return std::allocate_shared<Value *>(traceable_allocator<Value *>(), v);
 }
 
 // Pretty print types for assertion errors
@@ -199,20 +201,48 @@ PosIdx Value::determinePos(const PosIdx pos) const
         return attrs()->pos;
     case tLambda:
         return lambda().fun->pos;
+#if 0
+    // FIXME: disabled because reading from an app is racy.
     case tApp:
         return app().left->determinePos(pos);
+#endif
     default:
         return pos;
     }
 #pragma GCC diagnostic pop
 }
 
-bool Value::isTrivial() const
+template<>
+bool ValueStorage<sizeof(void *)>::isTrivial() const
 {
-    return !isa<tApp, tPrimOpApp>()
-           && (!isa<tThunk>()
-               || (dynamic_cast<ExprAttrs *>(thunk().expr) && ((ExprAttrs *) thunk().expr)->dynamicAttrs->empty())
-               || dynamic_cast<ExprLambda *>(thunk().expr) || dynamic_cast<ExprList *>(thunk().expr));
+    auto p0_ = p0.load(std::memory_order_acquire);
+
+    auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
+
+    if (pd == pdThunk) {
+        auto p1_ = p1;
+
+        /* `p1` is only valid as a thunk payload if no other thread
+           has started forcing the thunk in the meantime, since
+           `finish()` overwrites `p1` before it updates `p0`. So check
+           that the value is still a thunk. */
+        if (p0.load(std::memory_order_acquire) != p0_)
+            /* The thunk is now pending, awaited or finished. */
+            return true;
+
+        bool isApp = p1_ & discriminatorMask;
+        if (isApp)
+            return false;
+        auto expr = untagPointer<Expr *>(p1_);
+        return (dynamic_cast<ExprAttrs *>(expr) && ((ExprAttrs *) expr)->dynamicAttrs->empty())
+               || dynamic_cast<ExprLambda *>(expr) || dynamic_cast<ExprList *>(expr);
+    }
+
+    else
+        /* Note: if the value is pending or awaited, we can't safely
+           inspect its expression, so treat it as trivial (i.e. the
+           caller will wait for the thread that is forcing it). */
+        return true;
 }
 
 static Symbol getName(const AttrName & name, EvalState & state, Env & env)
@@ -233,6 +263,8 @@ EvalMemory::EvalMemory()
 {
     assertGCInitialized();
 }
+
+[[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext EvalState::evalContext;
 
 EvalState::EvalState(
     const LookupPath & lookupPathFromArguments,
@@ -276,8 +308,10 @@ EvalState::EvalState(
            instance if we're evaluating a file from the physical
            /nix/store while using a chroot store, and also for lazy
            mounted fetchTree. */
-        auto accessor = settings.pureEval ? storeFS.cast<SourceAccessor>()
-                                          : makeUnionSourceAccessor({getFSSourceAccessor(), storeFS});
+        auto accessor = settings.pureEval
+                            ? storeFS.cast<SourceAccessor>()
+                            : makeUnionSourceAccessor({getFSSourceAccessor(), storeFS}, storeFS.cast<SourceAccessor>());
+
         /* Cache positive lstat/readlink results to speed up resolveSymlinks. */
         accessor = makeCachingSourceAccessor(accessor);
 
@@ -308,6 +342,7 @@ EvalState::EvalState(
     , debugRepl(nullptr)
     , debugStop(false)
     , trylevel(0)
+    , asyncPathWriter(AsyncPathWriter::make(store))
     , importResolutionCache(make_ref<decltype(importResolutionCache)::element_type>())
     , fileEvalCache(make_ref<decltype(fileEvalCache)::element_type>())
     , positionToDocComment(make_ref<decltype(positionToDocComment)::element_type>())
@@ -320,6 +355,11 @@ EvalState::EvalState(
     , baseEnv(mem.allocEnv(BASE_ENV_SIZE))
 #endif
     , staticBaseEnv{std::make_shared<StaticEnv>(nullptr, nullptr)}
+    , countCalls(getEnv("NIX_COUNT_CALLS").value_or("0") != "0")
+    , primOpCalls(make_ref<decltype(primOpCalls)::element_type>())
+    , functionCalls(make_ref<decltype(functionCalls)::element_type>())
+    , attrSelects(make_ref<decltype(attrSelects)::element_type>())
+    , executor{make_ref<Executor>(settings)}
 {
 #ifndef _WIN32
     static std::once_flag stackSizeBumped;
@@ -334,8 +374,6 @@ EvalState::EvalState(
 
     corepkgsFS->setPathDisplay("<nix", ">");
     internalFS->setPathDisplay("«nix-internal»", "");
-
-    countCalls = getEnv("NIX_COUNT_CALLS").value_or("0") != "0";
 
     static_assert(sizeof(Env) <= 16, "environment must be <= 16 bytes");
 
@@ -477,7 +515,8 @@ void EvalState::checkURI(const std::string & uri0)
 Value * EvalState::addConstant(const std::string & name, Value & v, Constant info)
 {
     Value * v2 = allocValue();
-    *v2 = v;
+    // Do a raw copy since `operator =` barfs on thunks.
+    memcpy((char *) v2, (char *) &v, sizeof(Value));
     addConstant(name, v2, info);
     return v2;
 }
@@ -493,8 +532,10 @@ void EvalState::addConstant(const std::string & name, Value * v, Constant info)
 
            We might know the type of a thunk in advance, so be allowed
            to just write it down in that case. */
-        if (auto gotType = v->type</*invalidIsThunk=*/true>(); gotType != nThunk)
-            assert(info.type == gotType);
+        if (v->isFinished()) {
+            if (auto gotType = v->type(); gotType != nThunk)
+                assert(info.type == gotType);
+        }
 
         /* Install value the base environment. */
         staticBaseEnv->vars.emplace_back(symbols.create(name), baseEnvDispl);
@@ -564,7 +605,7 @@ Value * EvalState::addPrimOp(PrimOp && primOp)
     v->mkPrimOp(new PrimOp(primOp));
 
     if (primOp.internal)
-        internalPrimOps.emplace(primOp.name, v);
+        internalPrimOps.emplace(primOp.name, RootValue(v));
     else {
         staticBaseEnv->vars.emplace_back(envName, baseEnvDispl);
         baseEnv.values[baseEnvDispl++] = v;
@@ -688,7 +729,7 @@ static void printStaticEnvBindings(const SymbolTable & st, const StaticEnv & se)
 // just for the current level of Env, not the whole chain.
 static void printWithBindings(const SymbolTable & st, const Env & env)
 {
-    if (!env.values[0]->isThunk()) {
+    if (env.values[0]->isFinished()) {
         std::cout << "with: ";
         std::cout << ANSI_MAGENTA;
         auto * bindings = env.values[0]->attrs();
@@ -742,14 +783,14 @@ void mapStaticEnvBindings(const SymbolTable & st, const StaticEnv & se, const En
     if (env.up && se.up) {
         mapStaticEnvBindings(st, *se.up, *env.up, vm);
 
-        if (se.isWith && !env.values[0]->isThunk()) {
+        if (se.isWith && env.values[0]->isFinished()) {
             // add 'with' bindings.
             for (auto & j : *env.values[0]->attrs())
-                vm.insert_or_assign(std::string(st[j.name]), j.value);
+                vm.insert_or_assign(std::string(st[j.name]), RootValue(j.value));
         } else {
             // iterate through staticenv bindings and add them.
             for (auto & i : se.vars)
-                vm.insert_or_assign(std::string(st[i.first]), env.values[i.second]);
+                vm.insert_or_assign(std::string(st[i.first]), RootValue(env.values[i.second]));
         }
     }
 }
@@ -938,7 +979,7 @@ void Value::mkPath(const SourcePath & path, EvalMemory & mem)
         forceAttrs(*env->values[0], fromWith->pos, "while evaluating the first subexpression of a with expression");
         if (auto j = env->values[0]->attrs()->get(var.name)) {
             if (countCalls) [[unlikely]]
-                attrSelects[j->pos]++;
+                attrSelects->try_emplace_or_visit(j->pos, 1, [](auto & i) { i.second++; });
             return j->value;
         }
         if (!fromWith->parentWith) [[unlikely]]
@@ -981,7 +1022,14 @@ void EvalState::mkPos(Value & v, PosIdx p)
     auto origin = positions.originOf(p);
     if (auto path = std::get_if<SourcePath>(&origin)) {
         auto attrs = buildBindings(3);
-        attrs.alloc(s.file).mkString(path->path.abs(), mem);
+        if (path->accessor == rootFS && store->isInStore(path->path.abs()))
+            // FIXME: only do this for virtual store paths?
+            attrs.alloc(s.file).mkString(
+                path->path.abs(),
+                {NixStringContextElem::Path{.storePath = store->toStorePath(path->path.abs()).first}},
+                mem);
+        else
+            attrs.alloc(s.file).mkString(path->path.abs(), mem);
         makePositionThunks(*this, p, attrs.alloc(s.line), attrs.alloc(s.column));
         v.mkAttrs(attrs);
     } else
@@ -1029,6 +1077,7 @@ std::string EvalState::mkSingleDerivedPathStringRaw(const SingleDerivedPath & p)
                 auto optStaticOutputPath = std::visit(
                     overloaded{
                         [&](const SingleDerivedPath::Opaque & o) {
+                            waitForPath(o.path);
                             auto drv = store->readDerivation(o.path);
                             auto i = drv.outputs.find(b.output);
                             if (i == drv.outputs.end())
@@ -1072,7 +1121,7 @@ Value * ExprVar::maybeThunk(EvalState & state, Env & env)
         state.nrAvoided++;
         return v;
     }
-    return Expr::maybeThunk(state, env);
+    [[gnu::musttail]] return Expr::maybeThunk(state, env);
 }
 
 Value * ExprString::maybeThunk(EvalState & state, Env & env)
@@ -1106,10 +1155,9 @@ namespace {
  * from a thunk, ensuring that every file is parsed/evaluated only
  * once (via the thunk stored in `EvalState::fileEvalCache`).
  */
-struct ExprParseFile : Expr, gc
+struct ExprParseFile : Expr
 {
-    // FIXME: make this a reference (see below).
-    SourcePath path;
+    SourcePath & path;
     bool mustBeTrivial;
 
     ExprParseFile(SourcePath & path, bool mustBeTrivial)
@@ -1155,28 +1203,28 @@ void EvalState::evalFile(const SourcePath & path, Value & v, bool mustBeTrivial)
         importResolutionCache->emplace(path, *resolvedPath);
     }
 
-    if (auto v2 = getConcurrent(*fileEvalCache, *resolvedPath)) {
-        forceValue(**v2, noPos);
-        v = **v2;
-        return;
+    {
+        Value * v2 = nullptr;
+        fileEvalCache->cvisit(*resolvedPath, [&](auto & i) { v2 = *i.second; });
+        if (v2) {
+            forceValue(*v2, noPos);
+            v = *v2;
+            return;
+        }
     }
 
     Value * vExpr;
-    // FIXME: put ExprParseFile on the stack instead of the heap once
-    // https://github.com/NixOS/nix/pull/13930 is merged. That will ensure
-    // the post-condition that `expr` is unreachable after
-    // `forceValue()` returns.
-    auto expr = new ExprParseFile{*resolvedPath, mustBeTrivial};
+    ExprParseFile expr{*resolvedPath, mustBeTrivial};
 
     fileEvalCache->try_emplace_and_cvisit(
         *resolvedPath,
-        nullptr,
+        RootValue(nullptr),
         [&](auto & i) {
             vExpr = allocValue();
-            vExpr->mkThunk(&baseEnv, expr);
-            i.second = vExpr;
+            vExpr->mkThunk(&baseEnv, &expr);
+            *i.second = vExpr;
         },
-        [&](auto & i) { vExpr = i.second; });
+        [&](auto & i) { vExpr = *i.second; });
 
     forceValue(*vExpr, noPos);
 
@@ -1359,7 +1407,12 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
         sort = true;
     }
 
-    bindings.bindings->pos = pos;
+    /* Empty attrsets share the static Bindings::emptyBindings, which we
+       must not write to: apart from being a data race, it causes false
+       sharing on emptyBindings' cache line (which may also hold other hot
+       globals such as Counter::enabled) between all evaluator threads. */
+    if (bindings.bindings != &Bindings::emptyBindings)
+        bindings.bindings->pos = pos;
 
     v.mkAttrs(sort ? bindings.finish() : bindings.alreadySorted());
 }
@@ -1381,11 +1434,12 @@ void ExprLet::eval(EvalState & state, Env & env, Value & v)
         env2.values[displ++] = i.second.e->maybeThunk(state, *i.second.chooseByKind(&env2, &env, inheritEnv));
     }
 
-    auto dts = state.debugRepl
-                   ? makeDebugTraceStacker(state, *this, env2, getPos(), "while evaluating a '%1%' expression", "let")
-                   : nullptr;
-
-    body->eval(state, env2, v);
+    if (state.debugRepl) {
+        auto dts = makeDebugTraceStacker(state, *this, env2, getPos(), "while evaluating a '%1%' expression", "let");
+        return body->eval(state, env2, v);
+    } else {
+        [[gnu::musttail]] return body->eval(state, env2, v);
+    }
 }
 
 void ExprList::eval(EvalState & state, Env & env, Value & v)
@@ -1477,10 +1531,10 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
             vAttrs = j->value;
             pos2 = j->pos;
             if (state.countCalls)
-                state.attrSelects[pos2]++;
+                state.attrSelects->try_emplace_or_visit(pos2, 1, [](auto & i) { i.second++; });
         }
 
-        state.forceValue(*vAttrs, (pos2 ? pos2 : this->pos));
+        state.forceValue(*vAttrs, pos2 ? pos2 : this->pos);
 
     } catch (Error & e) {
         if (pos2) {
@@ -1539,6 +1593,8 @@ void ExprLambda::eval(EvalState & state, Env & env, Value & v)
     v.mkLambda(&env, this);
 }
 
+[[gnu::tls_model("initial-exec")]] thread_local size_t CallDepth::callDepth = 0;
+
 void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes, const PosIdx pos)
 {
     auto _level = addCallDepth(pos);
@@ -1554,12 +1610,13 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
     forceValue(fun, pos);
 
-    Value vCur(fun);
+    Value vCur = fun;
 
     auto makeAppChain = [&]() {
         for (auto arg : args) {
             auto fun2 = allocValue();
             *fun2 = vCur;
+            vCur.reset();
             vCur.mkPrimOpApp(fun2, arg);
         }
         vRes = vCur;
@@ -1658,6 +1715,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                                      lambda.name ? concatStrings("'", symbols[lambda.name], "'") : "anonymous lambda")
                                : nullptr;
 
+                vCur.reset();
                 lambda.body->eval(*this, env2, vCur);
             } catch (Error & e) {
                 if (loggerSettings.showTrace.get()) {
@@ -1689,10 +1747,12 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
                 nrPrimOpCalls++;
                 if (countCalls)
-                    primOpCalls[fn->name]++;
+                    primOpCalls->try_emplace_or_visit(fn->name, 1, [](auto & i) { i.second++; });
 
                 try {
-                    fn->impl(*this, vCur.determinePos(noPos), args.data(), vCur);
+                    auto pos = vCur.determinePos(noPos);
+                    vCur.reset();
+                    fn->impl(*this, pos, args.data(), vCur);
                 } catch (Error & e) {
                     if (fn->addTrace)
                         addErrorTrace(e, pos, "while calling the '%1%' builtin", fn->name);
@@ -1714,6 +1774,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
             assert(primOp->isPrimOp());
             auto arity = primOp->primOp()->arity;
             auto argsLeft = arity - argsDone;
+            assert(argsLeft);
 
             if (args.size() < argsLeft) {
                 /* We still don't have enough arguments, so extend the tPrimOpApp chain. */
@@ -1734,7 +1795,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                 auto fn = primOp->primOp();
                 nrPrimOpCalls++;
                 if (countCalls)
-                    primOpCalls[fn->name]++;
+                    primOpCalls->try_emplace_or_visit(fn->name, 1, [](auto & i) { i.second++; });
 
                 try {
                     // TODO:
@@ -1742,7 +1803,9 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                     // 2. Create a fake env (arg1, arg2, etc.) and a fake expr (arg1: arg2: etc: builtins.name arg1 arg2
                     // etc)
                     //    so the debugger allows to inspect the wrong parameters passed to the builtin.
-                    fn->impl(*this, vCur.determinePos(noPos), vArgs, vCur);
+                    auto pos = vCur.determinePos(noPos);
+                    vCur.reset();
+                    fn->impl(*this, pos, vArgs, vCur);
                 } catch (Error & e) {
                     if (fn->addTrace)
                         addErrorTrace(e, pos, "while calling the '%1%' builtin", fn->name);
@@ -1759,6 +1822,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                heap-allocate a copy and use that instead. */
             Value * args2[] = {allocValue(), args[0]};
             *args2[0] = vCur;
+            vCur.reset();
             try {
                 callFunction(*functor->value, args2, vCur, functor->pos);
             } catch (Error & e) {
@@ -1805,7 +1869,7 @@ void ExprCall::eval(EvalState & state, Env & env, Value & v)
 // prevents tail-call optimisation.
 void EvalState::incrFunctionCall(ExprLambda * fun)
 {
-    functionCalls[fun]++;
+    functionCalls->try_emplace_or_visit(fun, 1, [](auto & i) { i.second++; });
 }
 
 void EvalState::autoCallFunction(const Bindings & args, Value & fun, Value & res)
@@ -1820,7 +1884,7 @@ void EvalState::autoCallFunction(const Bindings & args, Value & fun, Value & res
             Value * v = allocValue();
             callFunction(*found->value, fun, *v, pos);
             forceValue(*v, pos);
-            return autoCallFunction(args, *v, res);
+            [[gnu::musttail]] return autoCallFunction(args, *v, res);
         }
     }
 
@@ -1859,7 +1923,7 @@ https://nix.dev/manual/nix/stable/language/syntax.html#functions.)",
         }
     }
 
-    callFunction(fun, allocValue()->mkAttrs(attrs), res, pos);
+    [[gnu::musttail]] return callFunction(fun, allocValue()->mkAttrs(attrs), res, pos);
 }
 
 void ExprWith::eval(EvalState & state, Env & env, Value & v)
@@ -1868,13 +1932,14 @@ void ExprWith::eval(EvalState & state, Env & env, Value & v)
     env2.up = &env;
     env2.values[0] = attrs->maybeThunk(state, env);
 
-    body->eval(state, env2, v);
+    [[gnu::musttail]] return body->eval(state, env2, v);
 }
 
 void ExprIf::eval(EvalState & state, Env & env, Value & v)
 {
     // We cheat in the parser, and pass the position of the condition as the position of the if itself.
-    (state.evalBool(env, cond, pos, "while evaluating a branch condition") ? then : else_)->eval(state, env, v);
+    [[gnu::musttail]] return (state.evalBool(env, cond, pos, "while evaluating a branch condition") ? then : else_)
+        ->eval(state, env, v);
 }
 
 void ExprAssert::eval(EvalState & state, Env & env, Value & v)
@@ -1899,7 +1964,7 @@ void ExprAssert::eval(EvalState & state, Env & env, Value & v)
 
         state.error<AssertionError>("assertion '%1%' failed", exprStr).atPos(pos).withFrame(env, *this).debugThrow();
     }
-    body->eval(state, env, v);
+    [[gnu::musttail]] return body->eval(state, env, v);
 }
 
 void ExprOpNot::eval(EvalState & state, Env & env, Value & v)
@@ -1946,8 +2011,12 @@ void ExprOpImpl::eval(EvalState & state, Env & env, Value & v)
         || state.evalBool(env, e2, pos, "in the right operand of the IMPL (->) operator"));
 }
 
-void ExprOpUpdate::eval(EvalState & state, Value & v, Value & v1, Value & v2)
+void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
 {
+    Value v1, v2;
+    state.evalAttrs(env, e1, v1, pos, "in the left operand of the update (//) operator");
+    state.evalAttrs(env, e2, v2, pos, "in the right operand of the update (//) operator");
+
     state.nrOpUpdates++;
 
     const Bindings & bindings1 = *v1.attrs();
@@ -2019,42 +2088,6 @@ void ExprOpUpdate::eval(EvalState & state, Value & v, Value & v1, Value & v2)
     v.mkAttrs(attrs.alreadySorted());
 
     state.nrOpUpdateValuesCopied += v.attrs()->size();
-}
-
-void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
-{
-    UpdateQueue q;
-    evalForUpdate(state, env, q);
-
-    Value vTmp;
-    vTmp.mkAttrs(&Bindings::emptyBindings);
-
-    for (auto & rhs : std::views::reverse(q)) {
-        /* Remember that queue is sorted rightmost attrset first. */
-        eval(state, /*v=*/vTmp, /*v1=*/vTmp, /*v2=*/rhs);
-    }
-
-    v = vTmp;
-}
-
-void Expr::evalForUpdate(EvalState & state, Env & env, UpdateQueue & q, std::string_view errorCtx)
-{
-    Value v;
-    state.evalAttrs(env, this, v, getPos(), errorCtx);
-    q.push_back(v);
-}
-
-void ExprOpUpdate::evalForUpdate(EvalState & state, Env & env, UpdateQueue & q)
-{
-    /* Output rightmost attrset first to the merge queue as the one
-       with the most priority. */
-    e2->evalForUpdate(state, env, q, "in the right operand of the update (//) operator");
-    e1->evalForUpdate(state, env, q, "in the left operand of the update (//) operator");
-}
-
-void ExprOpUpdate::evalForUpdate(EvalState & state, Env & env, UpdateQueue & q, std::string_view errorCtx)
-{
-    evalForUpdate(state, env, q);
 }
 
 void ExprOpConcatLists::eval(EvalState & state, Env & env, Value & v)
@@ -2176,7 +2209,7 @@ void ExprConcatStrings::eval(EvalState & state, Env & env, Value & v)
     } else if (firstType == nFloat) {
         v.mkFloat(nf);
     } else if (firstType == nPath) {
-        if (!context.empty())
+        if (hasContext(context))
             state.error<EvalError>("a string that refers to a store path cannot be appended to a path")
                 .atPos(pos)
                 .withFrame(env, *this)
@@ -2202,71 +2235,6 @@ void ExprConcatStrings::eval(EvalState & state, Env & env, Value & v)
 void ExprPos::eval(EvalState & state, Env & env, Value & v)
 {
     state.mkPos(v, pos);
-}
-
-void ExprBlackHole::eval(EvalState & state, [[maybe_unused]] Env & env, Value & v)
-{
-    throwInfiniteRecursionError(state, v);
-}
-
-[[gnu::noinline]] [[noreturn]] void ExprBlackHole::throwInfiniteRecursionError(EvalState & state, Value & v)
-{
-    state.error<InfiniteRecursionError>("infinite recursion encountered").atPos(v.determinePos(noPos)).debugThrow();
-}
-
-// always force this to be separate, otherwise forceValue may inline it and take
-// a massive perf hit
-[[gnu::noinline]]
-void EvalState::handleEvalExceptionForThunk(Env * env, Expr * expr, Value & v, const PosIdx pos)
-{
-    if (!env)
-        tryFixupBlackHolePos(v, pos);
-
-    auto e = std::current_exception();
-    Value * recovery = nullptr;
-    try {
-        std::rethrow_exception(e);
-    } catch (const Interrupted & e) {
-        recovery = allocValue();
-    } catch (const RecoverableEvalError & e) {
-        recovery = allocValue();
-    } catch (...) {
-    }
-    if (recovery) {
-        recovery->mkThunk(env, expr);
-    }
-    v.mkFailed(e, recovery);
-}
-
-[[gnu::noinline]]
-void EvalState::handleEvalExceptionForApp(Value & v, const Value & savedApp)
-{
-    auto e = std::current_exception();
-    Value * recovery = nullptr;
-    try {
-        std::rethrow_exception(e);
-    } catch (const Interrupted & e) {
-        recovery = allocValue();
-    } catch (const RecoverableEvalError & e) {
-        recovery = allocValue();
-    } catch (...) {
-    }
-    if (recovery) {
-        *recovery = savedApp;
-    }
-    v.mkFailed(e, recovery);
-}
-
-[[gnu::noinline]]
-void EvalState::handleEvalFailed(Value & v, const PosIdx pos)
-{
-    assert(v.isFailed());
-    if (auto recoveryValue = v.failed().recoveryValue) {
-        v = *recoveryValue;
-        forceValue(v, pos);
-    } else {
-        v.failed().rethrow();
-    }
 }
 
 void EvalState::tryFixupBlackHolePos(Value & v, PosIdx pos)
@@ -2299,6 +2267,7 @@ void EvalState::forceValueDeep(Value & v)
             for (auto & i : *v.attrs())
                 try {
                     // If the value is a thunk, we're evaling. Otherwise no trace necessary.
+                    // FIXME: race, thunk might be updated by another thread
                     auto dts = state.debugRepl && i.value->isThunk() ? makeDebugTraceStacker(
                                                                            state,
                                                                            *i.value->thunk().expr,
@@ -2451,13 +2420,17 @@ std::string_view EvalState::forceStringNoCtx(Value & v, const PosIdx pos, std::s
 {
     auto s = forceString(v, pos, errorCtx);
     if (v.context()) {
-        auto ctxElem = NixStringContextElem::parse((*v.context()->begin())->view());
-        error<EvalError>(
-            "the string '%1%' is not allowed to refer to a store path (such as '%2%')",
-            v.string_view(),
-            ctxElem.display(*store))
-            .withTrace(pos, errorCtx)
-            .debugThrow();
+        NixStringContext context;
+        copyContext(v, context);
+        if (hasContext(context)) {
+            auto ctxElem = NixStringContextElem::parse((*v.context()->begin())->view());
+            error<EvalError>(
+                "the string '%1%' is not allowed to refer to a store path (such as '%2%')",
+                v.string_view(),
+                ctxElem.display(*store))
+                .withTrace(pos, errorCtx)
+                .debugThrow();
+        }
     }
     return s;
 }
@@ -2514,14 +2487,24 @@ BackedStringView EvalState::coerceToString(
     }
 
     if (v.type() == nPath) {
+        // FIXME: instead of copying the path to the store, we could
+        // return a virtual store path that lazily copies the path to
+        // the store in devirtualize().
         if (!canonicalizePath && !copyToStore) {
             // FIXME: hack to preserve path literals that end in a
             // slash, as in /foo/${x}.
             return v.pathStrView();
         } else if (copyToStore) {
-            return store->printStorePath(copyPathToStore(context, v.path()));
+            return store->printStorePath(copyPathToStore(context, v.path(), v.determinePos(pos)));
         } else {
-            return std::string{v.path().path.abs()};
+            auto path = v.path();
+            if (path.accessor == rootFS && store->isInStore(path.path.abs())) {
+                try {
+                    context.insert(NixStringContextElem::Path{.storePath = store->toStorePath(path.path.abs()).first});
+                } catch (Error &) {
+                }
+            }
+            return std::string(path.path.abs());
         }
     }
 
@@ -2593,7 +2576,7 @@ BackedStringView EvalState::coerceToString(
         .debugThrow();
 }
 
-StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePath & path)
+StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePath & path, PosIdx pos)
 {
     if (nix::isDerivation(path.path.abs()))
         error<EvalError>("file names are not allowed to end in '%1%'", drvExtension).debugThrow();
@@ -2603,7 +2586,7 @@ StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePat
         *store,
         path.resolveSymlinks(SymlinkResolution::Ancestors),
         settings.isReadOnly() ? FetchMode::DryRun : FetchMode::Copy,
-        path.baseName(),
+        computeBaseName(path, pos),
         ContentAddressMethod::Raw::NixArchive,
         nullptr,
         repair);
@@ -2651,7 +2634,9 @@ EvalState::coerceToStorePath(const PosIdx pos, Value & v, NixStringContext & con
     auto path = coerceToString(pos, v, context, errorCtx, false, false, true).toOwned();
     if (auto storePath = store->maybeParseStorePath(path))
         return *storePath;
-    error<EvalError>("path '%1%' is not in the Nix store", path).withTrace(pos, errorCtx).debugThrow();
+    error<EvalError>("cannot coerce '%s' to a store path because it is not a subpath of the Nix store", path)
+        .withTrace(pos, errorCtx)
+        .debugThrow();
 }
 
 std::pair<SingleDerivedPath, std::string_view> EvalState::coerceToSingleDerivedPathUnchecked(
@@ -2675,6 +2660,9 @@ std::pair<SingleDerivedPath, std::string_view> EvalState::coerceToSingleDerivedP
                     .debugThrow();
             },
             [&](NixStringContextElem::Built && b) -> SingleDerivedPath { return std::move(b); },
+            [&](NixStringContextElem::Path && p) -> SingleDerivedPath {
+                error<EvalError>("string '%s' has no context", s).withTrace(pos, errorCtx).debugThrow();
+            },
         },
         ((NixStringContextElem &&) *context.begin()).raw);
     return {
@@ -3119,10 +3107,22 @@ void EvalState::printStatistics()
     topObj["nrOpUpdates"] = nrOpUpdates.load();
     topObj["nrOpUpdateValuesCopied"] = nrOpUpdateValuesCopied.load();
     topObj["nrThunks"] = nrThunks.load();
+    topObj["nrThunksAwaited"] = nrThunksAwaited.load();
+    topObj["nrThunksAwaitedSlow"] = nrThunksAwaitedSlow.load();
+    topObj["nrSpuriousWakeups"] = nrSpuriousWakeups.load();
+    topObj["maxWaiting"] = maxWaiting.load();
+    topObj["waitingTime"] = microsecondsWaiting / (double) 1000000;
+    topObj["nrFibersSpawned"] = executor->nrFibersSpawned.load();
+    topObj["nrFiberWakeups"] = executor->nrFiberWakeups.load();
+    topObj["maxSuspendedFibers"] = executor->maxSuspendedFibers.load();
+    topObj["maxLiveFibers"] = executor->maxLiveFibers.load();
+    topObj["nrFiberStacksAllocated"] = executor->nrFiberStacksAllocated.load();
     topObj["nrAvoided"] = nrAvoided.load();
     topObj["nrLookups"] = nrLookups.load();
     topObj["nrPrimOpCalls"] = nrPrimOpCalls.load();
     topObj["nrFunctionCalls"] = nrFunctionCalls.load();
+    topObj["nrWasmGuestAllocs"] = nrWasmGuestAllocs.load();
+    topObj["wasmGuestAllocBytes"] = wasmGuestAllocBytes.load();
 #if NIX_USE_BOEHMGC
     topObj["gc"] = {
         {"heapSize", heapSize},
@@ -3132,11 +3132,16 @@ void EvalState::printStatistics()
 #endif
 
     if (countCalls) {
-        topObj["primops"] = primOpCalls;
+        {
+            auto & obj = topObj["primops"];
+            obj = json::object();
+            primOpCalls->visit_all([&](auto & i) { obj[i.first] = i.second; });
+        }
         {
             auto & list = topObj["functions"];
             list = json::array();
-            for (auto & [fun, count] : functionCalls) {
+            functionCalls->visit_all([&](auto & i) {
+                auto & [fun, count] = i;
                 json obj = json::object();
                 if (fun->name)
                     obj["name"] = (std::string_view) symbols[fun->name];
@@ -3150,12 +3155,12 @@ void EvalState::printStatistics()
                 }
                 obj["count"] = count;
                 list.push_back(obj);
-            }
+            });
         }
         {
-            auto list = topObj["attributes"];
+            auto & list = topObj["attributes"];
             list = json::array();
-            for (auto & i : attrSelects) {
+            attrSelects->visit_all([&](auto & i) {
                 json obj = json::object();
                 if (auto pos = positions[i.first]) {
                     if (auto path = std::get_if<SourcePath>(&pos.origin))
@@ -3165,15 +3170,15 @@ void EvalState::printStatistics()
                 }
                 obj["count"] = i.second;
                 list.push_back(obj);
-            }
+            });
         }
     }
 
     if (getEnv("NIX_SHOW_SYMBOLS").value_or("0") != "0") {
+        auto list = json::array();
+        symbols.dump([&](std::string_view s) { list.emplace_back(std::string(s)); });
         // XXX: overrides earlier assignment
-        topObj["symbols"] = json::array();
-        auto & list = topObj["symbols"];
-        symbols.dump([&](std::string_view s) { list.emplace_back(s); });
+        topObj["symbols"] = std::move(list);
     }
     if (outPath == "-") {
         std::cerr << topObj.dump(2) << std::endl;
@@ -3478,6 +3483,26 @@ void forceNoNullByte(std::string_view s, std::function<Pos()> pos)
         }
         throw std::move(error);
     }
+}
+
+void EvalState::waitForPath(const StorePath & path)
+{
+    asyncPathWriter->waitForPath(path);
+}
+
+void EvalState::waitForPath(const SingleDerivedPath & path)
+{
+    std::visit(
+        overloaded{
+            [&](const DerivedPathOpaque & p) { waitForPath(p.path); },
+            [&](const SingleDerivedPathBuilt & p) { waitForPath(*p.drvPath); },
+        },
+        path.raw());
+}
+
+void EvalState::waitForAllPaths()
+{
+    asyncPathWriter->waitForAllPaths();
 }
 
 } // namespace nix

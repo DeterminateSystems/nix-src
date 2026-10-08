@@ -51,7 +51,7 @@ public:
 
     void requireStoreObject(const StorePath & storePath)
     {
-        if (requireValidPath && !store->isValidPath(storePath))
+        if (requireValidPath && !store->maybeQueryPathInfo(storePath))
             throw InvalidPath("path '%1%' is not a valid store path", store->printStorePath(storePath));
     }
 

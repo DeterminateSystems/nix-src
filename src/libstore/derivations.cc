@@ -7,6 +7,7 @@
 #include "nix/store/common-protocol-impl.hh"
 #include "nix/util/strings-inline.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/store/async-path-writer.hh"
 
 #include <boost/container/small_vector.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
@@ -55,6 +56,7 @@ bool DerivationType::isCA() const
             [](const InputAddressed & ia) { return false; },
             [](const ContentAddressed & ca) { return true; },
             [](const Impure &) { return true; },
+            [](const Substituted &) { return false; },
         },
         raw);
 }
@@ -66,6 +68,7 @@ bool DerivationType::isFixed() const
             [](const InputAddressed & ia) { return false; },
             [](const ContentAddressed & ca) { return ca.fixed; },
             [](const Impure &) { return false; },
+            [](const Substituted &) { return false; },
         },
         raw);
 }
@@ -77,6 +80,7 @@ bool DerivationType::hasKnownOutputPaths() const
             [](const InputAddressed & ia) { return !ia.deferred; },
             [](const ContentAddressed & ca) { return ca.fixed; },
             [](const Impure &) { return false; },
+            [](const Substituted &) { return true; },
         },
         raw);
 }
@@ -88,6 +92,7 @@ bool DerivationType::isSandboxed() const
             [](const InputAddressed & ia) { return true; },
             [](const ContentAddressed & ca) { return ca.sandboxed; },
             [](const Impure &) { return false; },
+            [](const Substituted &) { return true; },
         },
         raw);
 }
@@ -99,6 +104,7 @@ bool DerivationType::isImpure() const
             [](const InputAddressed & ia) { return false; },
             [](const ContentAddressed & ca) { return false; },
             [](const Impure &) { return true; },
+            [](const Substituted &) { return false; },
         },
         raw);
 }
@@ -134,7 +140,8 @@ StorePath computeStorePath(const StoreDirConfig & store, const Derivation & drv)
     return path;
 }
 
-StorePath Store::writeDerivation(const Derivation & drv, RepairFlag repair)
+StorePath
+Store::writeDerivation(const Derivation & drv, RepairFlag repair, std::shared_ptr<const Provenance> provenance)
 {
     auto [suffix, contents, references, path] = infoForDerivation(*this, drv);
 
@@ -155,10 +162,24 @@ StorePath Store::writeDerivation(const Derivation & drv, RepairFlag repair)
         ContentAddressMethod::Raw::Text,
         HashAlgorithm::SHA256,
         references,
-        repair);
+        repair,
+        provenance);
     assert(path2 == path);
 
     return path;
+}
+
+StorePath Store::writeDerivation(
+    AsyncPathWriter & asyncPathWriter,
+    const Derivation & drv,
+    RepairFlag repair,
+    std::shared_ptr<const Provenance> provenance)
+{
+    auto references = drv.inputSrcs;
+    for (auto & i : drv.inputDrvs.map)
+        references.insert(i.first);
+    return asyncPathWriter.addPath(
+        drv.unparse(*this, false), std::string(drv.name) + drvExtension, references, repair, provenance);
 }
 
 namespace {
@@ -856,6 +877,14 @@ DerivationType BasicDerivation::type() const
     if (!ty)
         throw Error("must have at least one output");
 
+    if (builder == "builtin:substitute") {
+        experimentalFeatureSettings.require(Xp::BakedDerivations, "'builtin:substitute' derivation");
+        auto * ia = std::get_if<DerivationType::InputAddressed>(&ty.value().raw);
+        if (!ia || ia->deferred)
+            throw Error("'builtin:substitute' derivation must have input-addressed outputs");
+        return DerivationType::Substituted{};
+    }
+
     return ty.value();
 }
 
@@ -925,7 +954,8 @@ DrvHashModulo hashDerivationModulo(Store & store, const Derivation & drv, bool m
                     assert(!ca.fixed);
                     return true;
                 },
-                [](const DerivationType::Impure &) { return true; }},
+                [](const DerivationType::Impure &) { return true; },
+                [](const DerivationType::Substituted &) { return false; }},
             drv.type().raw)) {
         return DrvHashModulo::DeferredDrv{};
     }
@@ -1139,6 +1169,7 @@ bool Derivation::shouldResolve() const
                            : true;
             },
             [&](const DerivationType::Impure &) { return true; },
+            [&](const DerivationType::Substituted &) { return false; },
         },
         drvType.raw);
 
@@ -1260,6 +1291,20 @@ std::optional<BasicDerivation> Derivation::tryResolve(
 template<bool fillIn>
 static void processDerivationOutputPaths(Store & store, auto && drv, std::string_view drvName)
 {
+    if (drv.builder == "builtin:substitute") {
+        if (drv.platform != "builtin")
+            throw Error("'builtin:substitute' derivation must be a builtin");
+        if (!drv.args.empty())
+            throw Error("'builtin:substitute' derivation must have no arguments");
+        if (!drv.env.empty())
+            throw Error("'builtin:substitute' derivation must have no environment variables");
+        if (!drv.inputSrcs.empty())
+            throw Error("'builtin:substitute' derivation must have no inputs");
+        /* Check the output types (and the experimental feature). */
+        drv.type();
+        return;
+    }
+
     std::optional<DrvHashModulo> hashModulo_;
 
     auto hashModulo = [&]() -> const auto & {

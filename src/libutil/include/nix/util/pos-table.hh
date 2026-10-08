@@ -49,6 +49,9 @@ private:
      */
     using LinesCache = LRUCache<uint32_t, Lines>;
 
+    // FIXME: this could be made lock-free (at least for access) if we
+    // have a data structure where pointers to existing positions are
+    // never invalidated.
     Sync<std::map<uint32_t, Origin>> origins_;
 
     mutable Sync<LinesCache> linesCache;

@@ -22,69 +22,97 @@ SourcePath EvalState::storePath(const StorePath & path)
     return {rootFS, CanonPath{store->printStorePath(path)}};
 }
 
-void EvalState::ensureLazyPathCopied(const StorePath & path)
+StorePath EvalState::devirtualize(const StorePath & path, StringMap * rewrites)
 {
-    if (settings.isReadOnly())
-        return;
+    if (auto mount = storeFS->getMount(CanonPath(store->printStorePath(path)))) {
+        auto storePath = fetchToStore(
+            fetchSettings,
+            *store,
+            SourcePath{ref(mount)},
+            settings.isReadOnly() ? FetchMode::DryRun : FetchMode::Copy,
+            path.name());
+        assert(storePath.name() == path.name());
+        if (rewrites)
+            rewrites->emplace(path.hashPart(), storePath.hashPart());
+        return storePath;
+    } else
+        return path;
+}
 
-    auto mount = storeFS->getMount(CanonPath(store->printStorePath(path)));
-    if (!mount)
-        return;
+SingleDerivedPath EvalState::devirtualize(const SingleDerivedPath & path, StringMap * rewrites)
+{
+    if (auto o = std::get_if<SingleDerivedPath::Opaque>(&path.raw()))
+        return SingleDerivedPath::Opaque{devirtualize(o->path, rewrites)};
+    else
+        return path;
+}
 
-    /* TODO: We could memoise this in-memory if necessary. */
-    auto storePath = fetchToStore(
-        fetchSettings,
-        *store,
-        SourcePath{ref(mount)},
-        /* Force a copy. mountInput does a dryRun to just calculate the storePath and narHash. */
-        FetchMode::Copy,
-        path.name());
+std::string EvalState::devirtualize(std::string_view s, const NixStringContext & context)
+{
+    StringMap rewrites;
 
-    /* This can happen if the source gets modified by another process while we are evaluaing
-       from it. Alternatively, the caching might be unsound and fetcher cache is poisoned somehow.
-       See https://github.com/NixOS/nix/issues/14317. */
-    if (storePath != path) {
-        throw Error(
-            (unsigned int) 102,
-            "store path ('%1%') was hashed to avoid a full copy at first, but upon reading it again, the contents have changed ('%2%'), so we can not proceed. Make sure files do not change during evaluation",
-            store->printStorePath(path),
-            store->printStorePath(storePath));
+    for (auto & c : context)
+        if (auto o = std::get_if<NixStringContextElem::Opaque>(&c.raw))
+            devirtualize(o->path, &rewrites);
+
+    return rewriteStrings(std::string(s), rewrites);
+}
+
+std::string EvalState::computeBaseName(const SourcePath & path, PosIdx pos)
+{
+    if (path.accessor == rootFS) {
+        if (auto storePath = store->maybeParseStorePath(path.path.abs())) {
+            debug(
+                "Copying '%s' to the store again.\n"
+                "You can make Nix evaluate faster and copy fewer files by replacing `./.` with the `self` flake input, "
+                "or `builtins.path { path = ./.; name = \"source\"; }`.\n",
+                path);
+            return std::string(
+                fetchToStore(fetchSettings, *store, path, FetchMode::DryRun, storePath->name()).to_string());
+        }
     }
+    return std::string(path.baseName());
 }
 
-void EvalState::ensureLazyPathsCopied(const NixStringContext & context)
+StorePath EvalState::mountInput(
+    fetchers::Input & input,
+    const fetchers::Input & originalInput,
+    ref<SourceAccessor> accessor,
+    bool requireLockable,
+    bool forceNarHash)
 {
-    for (const auto & c : context)
-        if (auto * o = std::get_if<NixStringContextElem::Opaque>(&c.raw))
-            /* TODO: This could be done in parallel. */
-            ensureLazyPathCopied(o->path);
-}
-
-StorePath
-EvalState::mountInput(fetchers::Input & input, const fetchers::Input & originalInput, ref<SourceAccessor> accessor)
-{
-    /* To mount the input, dryRun is sufficient. We still compute the narHash (to check for mismatches) and the store
-       path to figure out where to mount it. TODO: This could be relaxed in the future by making outPath and narHash
-       lazier. Good code that doesn't do `toString ./.` or otherwise inspects the outPath string and only uses it for
-       doing relative imports does not even require computing the store path. That is a big invasive change though and
-       would require having a special "LazyStorePathString" thunk. narHash also doesn't need to be computed eagerly in
-       case it's not actually specified (like during local development with a dirty tree) - in that case narHash could
-       also become a lazy app/thunk that shares the state with the storePath delayed computation. */
-    auto [storePath, narHash] = fetchToStore2(fetchSettings, *store, accessor, FetchMode::DryRun, input.getName());
+    auto storePath = settings.lazyTrees
+                         ? StorePath::random(input.getName())
+                         : fetchToStore(fetchSettings, *store, accessor, FetchMode::Copy, input.getName());
 
     allowPath(storePath); // FIXME: should just whitelist the entire virtual store
 
+    std::optional<Hash> _narHash;
+
+    auto getNarHash = [&]() {
+        if (!_narHash) {
+            if (store->isValidPath(storePath))
+                _narHash = store->queryPathInfo(storePath)->narHash;
+            else
+                _narHash = fetchToStore2(fetchSettings, *store, accessor, FetchMode::DryRun, input.getName()).second;
+        }
+        return _narHash;
+    };
+
     storeFS->mount(CanonPath(store->printStorePath(storePath)), accessor);
 
-    input.attrs.insert_or_assign("narHash", narHash.to_string(HashFormat::SRI, true));
+    if (forceNarHash
+        || (requireLockable && (!settings.lazyTrees || !settings.lazyLocks || !input.isLocked(fetchSettings))
+            && !input.getNarHash()))
+        input.attrs.insert_or_assign("narHash", getNarHash()->to_string(HashFormat::SRI, true));
 
-    if (originalInput.getNarHash() && narHash != *originalInput.getNarHash())
+    if (originalInput.getNarHash() && *getNarHash() != *originalInput.getNarHash())
         throw Error(
             (unsigned int) 102,
             "NAR hash mismatch in input '%s', expected '%s' but got '%s'",
             originalInput.to_string(),
-            narHash.to_string(HashFormat::SRI, true),
-            originalInput.getNarHash()->to_string(HashFormat::SRI, true));
+            originalInput.getNarHash()->to_string(HashFormat::SRI, true),
+            getNarHash()->to_string(HashFormat::SRI, true));
 
     return storePath;
 }

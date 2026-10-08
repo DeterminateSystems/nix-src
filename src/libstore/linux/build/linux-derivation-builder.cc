@@ -591,7 +591,12 @@ void ChrootLinuxDerivationBuilder::startChild()
     sendPid.writeSide.close();
 
     if (auto status = helper.wait(); !statusOk(status)) {
+        // Ensure the slave side of the pseudoterminal has been opened at least once so that reading from the master
+        // doesn't hang.
+        openSlaveNoDup();
+
         processSandboxSetupMessages();
+
         // Only reached if the child process didn't send an exception.
         throw Error("unable to start build process: %s", statusToString(status));
     }
@@ -984,6 +989,13 @@ void ChrootLinuxDerivationBuilder::addDependencyImpl(const StorePath & path)
     int status = child.wait();
     if (!statusOk(status))
         throw Error("could not add path '%s' to sandbox: %s", store.printStorePath(path), statusToString(status));
+}
+
+ActiveBuild ChrootLinuxDerivationBuilder::getActiveBuild()
+{
+    auto build = DerivationBuilderImpl::getActiveBuild();
+    build.cgroup = cgroup;
+    return build;
 }
 
 } // namespace nix

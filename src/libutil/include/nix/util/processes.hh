@@ -23,7 +23,7 @@
 #include <map>
 #include <sstream>
 #include <optional>
-#include <thread>
+#include <chrono>
 
 namespace nix {
 
@@ -36,8 +36,7 @@ class Pid
     pid_t pid = -1;
     bool separatePG = false;
     int killSignal = SIGKILL;
-    std::chrono::milliseconds killTimeout;
-    std::thread killThread;
+    std::chrono::milliseconds killTimeout{0};
 #else
     AutoCloseFD pid = INVALID_DESCRIPTOR;
 #endif
@@ -61,6 +60,13 @@ public:
 
     // TODO: Implement for Windows
 #ifndef _WIN32
+    /**
+     * Check whether the child process is still running, without
+     * blocking. If it has exited (or was reaped elsewhere), the child
+     * is reaped if necessary and this object is reset so that the
+     * destructor won't kill()/wait() an already-dead process.
+     */
+    bool isAlive();
     void setSeparatePG(bool separatePG);
     void setKillSignal(int signal);
     void setKillTimeout(std::chrono::milliseconds duration);
@@ -74,6 +80,7 @@ public:
         swap(lhs.pid, rhs.pid);
         swap(lhs.separatePG, rhs.separatePG);
         swap(lhs.killSignal, rhs.killSignal);
+        swap(lhs.killTimeout, rhs.killTimeout);
 #else
         swap(lhs.pid, rhs.pid);
 #endif
@@ -102,6 +109,31 @@ struct ProcessOptions
      * use clone() with the specified flags (Linux only)
      */
     int cloneFlags = 0;
+};
+
+/**
+ * Register a callback to be run by `startProcess()` in the forked
+ * child, before the child's main function. This is for state that
+ * doesn't survive a `fork()`, in particular objects owning a thread:
+ * the thread doesn't exist in the child, so such objects can be
+ * neither used nor destroyed there. Typical usage:
+ *
+ *     static RegisterForkCallback resetFoo([]() { ... });
+ *
+ * Note that callbacks are not run for `vfork()`ed children, since
+ * those share the parent's memory. Exceptions thrown by a callback
+ * are ignored, since there's not much the child can do about them.
+ */
+struct RegisterForkCallback
+{
+    typedef std::vector<fun<void()>> Callbacks;
+
+    static Callbacks & callbacks();
+
+    RegisterForkCallback(fun<void()> callback)
+    {
+        callbacks().push_back(std::move(callback));
+    }
 };
 
 #ifndef _WIN32

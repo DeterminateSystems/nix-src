@@ -10,6 +10,7 @@
 namespace nix {
 
 struct Sink;
+struct Provenance;
 
 /**
  * Note there is a decent chance this type soon goes away because the problem is solved another way.
@@ -243,6 +244,13 @@ public:
         return std::nullopt;
     }
 
+    std::shared_ptr<const Provenance> provenance;
+
+    /**
+     * Return the provenance of the specified path, or `nullptr` if not available.
+     */
+    virtual std::shared_ptr<const Provenance> getProvenance(const CanonPath & path);
+
     /**
      * Drop any cached state that could go stale across external filesystem
      * mutation (e.g. cached directory fds).
@@ -302,7 +310,8 @@ ref<SourceAccessor> makeFSSourceAccessor(
  * Construct an accessor that presents a "union" view of a vector of
  * underlying accessors. Earlier accessors take precedence over later.
  */
-ref<SourceAccessor> makeUnionSourceAccessor(std::vector<ref<SourceAccessor>> && accessors);
+ref<SourceAccessor>
+makeUnionSourceAccessor(std::vector<ref<SourceAccessor>> && accessors, std::shared_ptr<SourceAccessor> displayAccessor);
 
 /**
  * Make a wrapper source accessor that caches positive lookup results.

@@ -21,7 +21,7 @@ InstallableAttrPath::InstallableAttrPath(
     ExtendedOutputsSpec extendedOutputsSpec)
     : InstallableValue(state)
     , cmd(cmd)
-    , v(allocRootValue(v))
+    , v(RootValue(v))
     , attrPath(attrPath)
     , extendedOutputsSpec(std::move(extendedOutputsSpec))
 {
@@ -78,7 +78,8 @@ DerivedPathsWithInfo InstallableAttrPath::toDerivedPaths()
     }
 
     DerivedPathsWithInfo res;
-    for (auto & [drvPath, outputs] : byDrvPath)
+    for (auto & [drvPath, outputs] : byDrvPath) {
+        state->waitForPath(drvPath);
         res.push_back({
             .path =
                 DerivedPath::Built{
@@ -91,6 +92,7 @@ DerivedPathsWithInfo InstallableAttrPath::toDerivedPaths()
                    so we can fill in this info. */
             }),
         });
+    }
 
     return res;
 }

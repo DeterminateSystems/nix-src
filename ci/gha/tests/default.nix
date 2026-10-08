@@ -74,13 +74,18 @@ rec {
   */
   topLevel = {
     installerScriptForGHA = hydraJobs.installerScriptForGHA.${system};
-    installTests = hydraJobs.installTests.${system};
     nixpkgsLibTests = hydraJobs.tests.nixpkgsLibTests.${system};
+    nixpkgsLibTestsLazy = hydraJobs.tests.nixpkgsLibTestsLazy.${system};
     filetransfer-retry-backoff = hydraJobs.tests.filetransfer-retry-backoff.${system};
     rl-next = pkgs.buildPackages.runCommand "test-rl-next-release-notes" { } ''
       LANG=C.UTF-8 ${pkgs.changelog-d}/bin/changelog-d ${../../../doc/manual/rl-next} >$out
     '';
     repl-completion = pkgs.callPackage ../../../tests/repl-completion.nix { inherit (packages') nix; };
+
+    lazyTrees = nixComponents.nix-functional-tests.override {
+      pname = "nix-lazy-trees-tests";
+      lazyTrees = true;
+    };
 
     /**
       Checks for our packaging expressions.

@@ -12,12 +12,6 @@ description: |
   [primary (not necessarily resolved) JSON schema](@docroot@/protocols/json/derivation/index.md),
   but actually it is the first version for this format.
 
-  > **Warning**
-  >
-  > This JSON format is currently
-  > [**experimental**](@docroot@/development/experimental-features.md#xp-feature-nix-command)
-  > and subject to change.
-
 type: object
 required:
   - name

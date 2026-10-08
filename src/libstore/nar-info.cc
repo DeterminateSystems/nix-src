@@ -2,6 +2,7 @@
 #include "nix/store/store-dir-config.hh"
 #include "nix/util/strings.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/util/provenance.hh"
 
 namespace nix {
 
@@ -90,7 +91,8 @@ NarInfo::NarInfo(const StoreDirConfig & store, const std::string & s, const std:
                 throw corrupt("extra CA");
             // FIXME: allow blank ca or require skipping field?
             ca = ContentAddress::parseOpt(value);
-        }
+        } else if (name == "Provenance" && experimentalFeatureSettings.isEnabled(Xp::Provenance))
+            provenance = Provenance::from_json_str(value);
 
         pos = eol + 1;
         line += 1;
@@ -137,6 +139,9 @@ std::string NarInfo::to_string(const StoreDirConfig & store) const
 
     if (ca)
         res += "CA: " + renderContentAddress(*ca) + "\n";
+
+    if (provenance && experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        res += "Provenance: " + provenance->to_json_str() + "\n";
 
     return res;
 }

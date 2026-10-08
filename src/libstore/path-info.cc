@@ -5,6 +5,7 @@
 #include "nix/util/json-utils.hh"
 #include "nix/util/comparator.hh"
 #include "nix/util/strings.hh"
+#include "nix/util/provenance.hh"
 
 namespace nix {
 
@@ -224,6 +225,9 @@ UnkeyedValidPathInfo::toJSON(const StoreDirConfig * store, bool includeImpureInf
             for (auto & sig : sigs)
                 sigsObj.push_back(sig.to_string());
         }
+
+        if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+            jsonObject["provenance"] = provenance ? provenance->to_json() : nullptr;
     }
 
     return jsonObject;
@@ -298,6 +302,12 @@ UnkeyedValidPathInfo UnkeyedValidPathInfo::fromJSON(const StoreDirConfig * store
 
     if (auto * rawSignatures = optionalValueAt(json, "signatures"))
         res.sigs = *rawSignatures;
+
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+        auto prov = json.find("provenance");
+        if (prov != json.end() && !prov->second.is_null())
+            res.provenance = Provenance::from_json(prov->second);
+    }
 
     return res;
 }

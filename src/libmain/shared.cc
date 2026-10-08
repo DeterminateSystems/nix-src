@@ -196,6 +196,13 @@ void initNix(bool loadConfig)
     if (sigaction(SIGWINCH, &act, 0))
         throw SysError("handling SIGWINCH");
 
+    /* Same for SIGCONT and SIGTSTP, which are also handled by
+     * signalHandlerThread. */
+    if (sigaction(SIGCONT, &act, 0))
+        throw SysError("handling SIGCONT");
+    if (sigaction(SIGTSTP, &act, 0))
+        throw SysError("handling SIGTSTP");
+
     /* Disable SA_RESTART for interrupts, so that system calls on this thread
      * error with EINTR like they do on Linux.
      * Most signals on BSD systems default to SA_RESTART on, but Nix
@@ -209,8 +216,6 @@ void initNix(bool loadConfig)
         throw SysError("handling SIGHUP");
     if (sigaction(SIGPIPE, &act, 0))
         throw SysError("handling SIGPIPE");
-    if (sigaction(SIGQUIT, &act, 0))
-        throw SysError("handling SIGQUIT");
     if (sigaction(SIGTRAP, &act, 0))
         throw SysError("handling SIGTRAP");
 #endif
@@ -336,9 +341,14 @@ void parseCmdLine(
     LegacyArgs(programName, parseArg).parseCmdline(args);
 }
 
+std::string version()
+{
+    return fmt("(Determinate Nix %s) %s", determinateNixVersion, nixVersion);
+}
+
 void printVersion(const std::string & programName)
 {
-    std::cout << fmt("%1% (Nix) %2%", programName, nixVersion) << std::endl;
+    std::cout << fmt("%s %s", programName, version()) << std::endl;
     if (verbosity > lvlInfo) {
         Strings cfg;
 #if NIX_USE_BOEHMGC

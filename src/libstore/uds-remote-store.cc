@@ -106,7 +106,8 @@ ref<RemoteStore::Connection> UDSRemoteStore::openConnection()
 void UDSRemoteStore::addIndirectRoot(const std::filesystem::path & path)
 {
     auto conn(getConnection());
-    conn->to << WorkerProto::Op::AddIndirectRoot << path.string();
+    conn->startOp(WorkerProto::Op::AddIndirectRoot);
+    conn->to << path.string();
     conn.processStderr();
     readInt(conn->from);
 }

@@ -2,7 +2,7 @@
 
 namespace nix {
 
-BuildLog::BuildLog(size_t maxTailLines, std::unique_ptr<Activity> act)
+BuildLog::BuildLog(size_t maxTailLines, ref<Activity> act)
     : maxTailLines(maxTailLines)
     , act(std::move(act))
 {

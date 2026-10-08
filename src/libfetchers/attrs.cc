@@ -38,6 +38,9 @@ nlohmann::json attrsToJSON(const Attrs & attrs)
 {
     nlohmann::json json;
     for (auto & attr : attrs) {
+        /* The __final attribute is purely internal, so never serialize it. */
+        if (attr.first == "__final")
+            continue;
         auto resolved = forceAttr(attr.second);
         if (auto v = std::get_if<uint64_t>(&resolved)) {
             json[attr.first] = *v;

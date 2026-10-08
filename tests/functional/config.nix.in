@@ -5,6 +5,10 @@ let
     outputHashMode = "recursive";
     outputHashAlgo = "sha256";
   } else {};
+
+  optional = cond: elem: if cond then [ elem ] else [];
+  optionalAttrs = cond: attrs: if cond then attrs else {};
+
 in
 
 rec {
@@ -22,7 +26,7 @@ rec {
   testSalt = builtins.hashFile "sha256" __curPos.file;
 
   mkDerivation = args:
-    derivation ({
+    (if builtins ? derivationWithMeta then builtins.derivationWithMeta else builtins.derivation) ({
       inherit system testSalt;
       builder = shell;
       args = ["-e" args.builder or (builtins.toFile "builder-${args.name}.sh" ''
@@ -31,6 +35,8 @@ rec {
       '')];
       PATH = path;
       outputs = args.outputs or [ "out" ];
-    } // caArgs // removeAttrs args ["builder" "meta"])
+    } // caArgs // optionalAttrs (builtins ? derivationWithMeta) {
+      __meta = removeAttrs (args.meta or {}) ["position"];
+    } // removeAttrs args ["builder" "meta"])
     // { meta = args.meta or {}; };
 }

@@ -5,7 +5,9 @@
 
 #include <array>
 #include <cctype>
+#include <new>
 
+#include <openssl/crypto.h>
 #include <sodium.h>
 #include <boost/lexical_cast.hpp>
 #include <stdint.h>
@@ -22,6 +24,10 @@ bad_ref_cast::~bad_ref_cast() {}
 
 void initLibUtil()
 {
+    static std::atomic_flag done = ATOMIC_FLAG_INIT;
+    if (done.test_and_set())
+        return;
+
     // Check that exception handling works. Exception handling has been observed
     // not to work on darwin when the linker flags aren't quite right.
     // In this case we don't want to expose the user to some unrelated uncaught
@@ -43,6 +49,26 @@ void initLibUtil()
 
     if (sodium_init() == -1)
         throw Error("could not initialise libsodium");
+
+    /* Prevent OpenSSL from registering its atexit() handler
+       (OPENSSL_cleanup()). If we exit() while other threads that use
+       OpenSSL are still running, OPENSSL_cleanup() frees OpenSSL's
+       thread-local state handlers; when those threads then exit, their
+       thread-specific-data destructors (init_thread_stop()) crash on
+       the freed state. This happens in particular in nix-daemon
+       connection children, where library destructors run by _dl_fini()
+       (e.g. aws-crt-cpp's) stop their worker threads *after*
+       OPENSSL_cleanup() has already run. Since we're exiting anyway,
+       skipping the cleanup is harmless. This must run before any other
+       use of OpenSSL, since only the first initialisation takes
+       effect. */
+    if (OPENSSL_init_crypto(OPENSSL_INIT_NO_ATEXIT, nullptr) != 1)
+        throw Error("could not initialise OpenSSL");
+
+    /* Make sure that failing memory allocations don't result in an
+       opaque abort() (e.g. from mimalloc's `operator new` override,
+       which cannot throw `std::bad_alloc`). */
+    std::set_new_handler(outOfMemory);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -245,6 +271,11 @@ void ignoreExceptionInDestructor(Verbosity lvl)
 
 void ignoreExceptionExceptInterrupt(Verbosity lvl)
 {
+    logExceptionExceptInterrupt("error (ignored): ", lvl);
+}
+
+void logExceptionExceptInterrupt(std::string_view prefix, Verbosity lvl)
+{
     try {
         throw;
     } catch (const Interrupted & e) {
@@ -254,9 +285,9 @@ void ignoreExceptionExceptInterrupt(Verbosity lvl)
            cancellation. */
         throw;
     } catch (Error & e) {
-        printMsg(lvl, ANSI_RED "error (ignored):" ANSI_NORMAL " %s", e.info().msg);
+        printMsg(lvl, ANSI_RED "%s" ANSI_NORMAL "%s", prefix, e.info().msg);
     } catch (std::exception & e) {
-        printMsg(lvl, ANSI_RED "error (ignored):" ANSI_NORMAL " %s", e.what());
+        printMsg(lvl, ANSI_RED "%s" ANSI_NORMAL "%s", prefix, e.what());
     }
 }
 
@@ -311,5 +342,7 @@ std::pair<std::string_view, std::string_view> getLine(std::string_view s)
         return {line, s.substr(newline + 1)};
     }
 }
+
+fun<void(const char *, const char *)> setSentryTag = [](const char *, const char *) {};
 
 } // namespace nix

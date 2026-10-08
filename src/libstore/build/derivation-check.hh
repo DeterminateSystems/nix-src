@@ -13,7 +13,11 @@ namespace nix {
  * not a CAFixed output.
  */
 void checkCAFixedOutput(
-    StoreDirConfig & store, const StorePath & drvPath, const DerivationOutput & outputSpec, const ValidPathInfo & info);
+    StoreDirConfig & store,
+    const StorePath & drvPath,
+    const DerivationOutput & outputSpec,
+    const ValidPathInfo & info,
+    Activity & act);
 
 /**
  * Check that outputs meets the requirements specified by the
@@ -30,6 +34,7 @@ void checkOutputs(
     const StorePath & drvPath,
     const decltype(Derivation::outputs) & drvOutputs,
     const decltype(DerivationOptions<StorePath>::outputChecks) & drvOptions,
-    const std::map<std::string, ValidPathInfo> & outputs);
+    const std::map<std::string, ValidPathInfo> & outputs,
+    Activity & act);
 
 } // namespace nix

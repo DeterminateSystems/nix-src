@@ -2,6 +2,7 @@
 #include <type_traits>
 
 #include "nix/util/fun.hh"
+#include "util-tests-config.hh"
 
 namespace nix {
 
@@ -39,19 +40,31 @@ TEST(fun, moveConstructFromStdFunction)
 TEST(fun, rejectsEmptyStdFunction)
 {
     std::function<int(int)> empty;
+#if HAVE_CXA_THROW
+    ASSERT_DEATH((fun<int(int)>{empty}), "invalid_argument");
+#else
     EXPECT_THROW((fun<int(int)>{empty}), std::invalid_argument);
+#endif
 }
 
 TEST(fun, rejectsEmptyStdFunctionMove)
 {
     std::function<int(int)> empty;
+#if HAVE_CXA_THROW
+    ASSERT_DEATH((fun<int(int)>{std::move(empty)}), "invalid_argument");
+#else
     EXPECT_THROW((fun<int(int)>{std::move(empty)}), std::invalid_argument);
+#endif
 }
 
 TEST(fun, rejectsNullFunctionPointer)
 {
     int (*nullFp)(int) = nullptr;
+#if HAVE_CXA_THROW
+    ASSERT_DEATH((fun<int(int)>{nullFp}), "invalid_argument");
+#else
     EXPECT_THROW((fun<int(int)>{nullFp}), std::invalid_argument);
+#endif
 }
 
 TEST(fun, nullptrDeletedAtCompileTime)

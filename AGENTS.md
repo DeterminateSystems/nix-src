@@ -1,0 +1,25 @@
+Observe the following rules when contributing to this repository:
+
+* Prefer using the Edit tool over external tools.
+
+* Before committing, run ./maintainers/format.sh to detect/fix any formatting issues.
+
+* Use "Assisted-by:" instead of "Co-Authored-By:" for the Claude trailer in commits.
+
+* Create branches for PRs using `git switch -c <branch> --no-track detsys/main`, and push them using `git push -u detsys <branch>:<branch>`. Never push to `main`.
+
+* Do not create PRs unless prompted. Create PRs using `gh pr create --repo DeterminateSystems/nix-src --base main`, observing `.github/PULL_REQUEST_TEMPLATE.md`.
+
+* Keep PR descriptions concise. Detailed information is better put in commit messages.
+
+* The code base uses C++23, so C++23 features (e.g. deducing-this lambdas) can be used freely.
+
+Building and testing Nix:
+
+* Build Nix using `nix build ./packaging/nix-make#release.nix`. The result is in `./result`.
+
+* Run all tests using `nix build -L ./packaging/nix-make#release.nix-all-tests`. This covers the unit tests (e.g. `release.nix-util-tests-run`, which runs `src/libutil-tests`) and the functional tests in `tests/functional` (`release.functional-tests`); each can also be built on its own.
+
+* Individual tests can be executed by doing `nix build ./packaging/nix-make#release.nix && nix run ./packaging/nix-make#test-runner -- --nix-bin-dir ./result/bin $TEST_NAMES`, where `TEST_NAMES` are the file names inside `tests/functional` (without the `.sh` suffix), e.g. `simple` or `flakes/relative-paths`.
+
+* If you don't need an optimized build (e.g. you're not benchmarking), then instead of `release` you can use `debug-fast` (clang with -O0), e.g. `nix build -L ./packaging/nix-make#debug-fast.nix`.

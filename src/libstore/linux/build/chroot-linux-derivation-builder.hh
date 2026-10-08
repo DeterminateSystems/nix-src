@@ -59,6 +59,8 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
     void killSandbox(bool getStats) override;
 
     void addDependencyImpl(const StorePath & path) override;
+
+    ActiveBuild getActiveBuild() override;
 };
 
 } // namespace nix

@@ -19,16 +19,20 @@ namespace {
 
 static std::string_view getS(const std::vector<Logger::Field> & fields, size_t n)
 {
-    if (n >= fields.size() || fields[n].type != Logger::Field::tString)
-        throw Error("could not get expected log field of type 'string' at index %d", n);
-    return fields[n].s;
+    if (n < fields.size()) {
+        if (auto p = std::get_if<std::string>(&fields[n].raw))
+            return *p;
+    }
+    throw Error("could not get expected log field of type 'string' at index %d", n);
 }
 
 static uint64_t getI(const std::vector<Logger::Field> & fields, size_t n)
 {
-    if (n >= fields.size() || fields[n].type != Logger::Field::tInt)
-        throw Error("could not get expected log field of type 'int' at index %d", n);
-    return fields[n].i;
+    if (n < fields.size()) {
+        if (auto p = std::get_if<uint64_t>(&fields[n].raw))
+            return *p;
+    }
+    throw Error("could not get expected log field of type 'int' at index %d", n);
 }
 
 static std::string_view storePathToName(std::string_view path)
@@ -62,6 +66,7 @@ private:
         ActivityId parent;
         std::optional<std::string> name;
         std::chrono::time_point<std::chrono::steady_clock> startTime;
+        bool logged = false;
     };
 
     struct ActivitiesByType
@@ -105,7 +110,7 @@ private:
     bool printBuildLogs = false;
     bool isTTY;
 
-    std::unique_ptr<InterruptCallback> interruptCallback;
+    std::unique_ptr<InterruptCallback> interruptCallback, stopCallback, contCallback, winchCallback;
 
     void hideCursorIfNeeded() const
     {
@@ -130,6 +135,30 @@ public:
     {
         hideCursorIfNeeded();
         state_.lock()->active = isTTY;
+
+        /* On Ctrl-Z, unhide the cursor before the process is
+           stopped. */
+        stopCallback = createSignalCallback(SignalType::Stop, [&]() {
+            auto state(state_.lock());
+            if (state->active && !state->isPaused())
+                unhideCursorIfNeeded();
+        });
+
+        /* Redraw the progress bar when the process is resumed or the
+           terminal size changes. */
+        auto redrawCallback = [&]() {
+            auto state(state_.lock());
+            if (state->active && !state->isPaused()) {
+                /* Force a redraw, since the new output may be
+                   identical to the one cached by redraw(). */
+                invalidateRedrawCache();
+                hideCursorIfNeeded();
+                update(*state);
+            }
+        };
+        contCallback = createSignalCallback(SignalType::Cont, redrawCallback);
+        winchCallback = createSignalCallback(SignalType::Winch, redrawCallback);
+
         updateThread = std::thread([&]() {
             auto state(state_.lock());
             auto nextWakeup = std::chrono::milliseconds::max();
@@ -175,6 +204,11 @@ public:
 
         if (state->active) {
             clearProgressDisplay();
+            /* Show activities that were previously only shown on the
+               progress bar. Otherwise the user won't know what's
+               happening. */
+            for (auto & act : state->activities)
+                logActivity(*state, lvlNotice, act);
             unhideCursorIfNeeded();
         }
     }
@@ -203,7 +237,7 @@ public:
         return printBuildLogs;
     }
 
-    void log(Verbosity lvl, std::string_view s) override
+    void log(Verbosity lvl, std::string_view s) noexcept override
     {
         if (lvl > verbosity)
             return;
@@ -211,7 +245,7 @@ public:
         log(*state, lvl, s);
     }
 
-    void logEI(const ErrorInfo & ei) override
+    void logEI(const ErrorInfo & ei) noexcept override
     {
         auto state(state_.lock());
 
@@ -221,7 +255,7 @@ public:
         log(*state, ei.level, oss.view());
     }
 
-    void log(State & state, Verbosity lvl, std::string_view s)
+    void log(State & state, Verbosity lvl, std::string_view s) noexcept
     {
         if (state.active) {
             invalidateRedrawCache();
@@ -232,18 +266,23 @@ public:
         }
     }
 
+    void logActivity(State & state, Verbosity lvl, ActInfo & act) noexcept
+    {
+        if (!act.logged && lvl <= verbosity && !act.s.empty() && act.type != actBuildWaiting) {
+            log(state, lvl, act.s + "...");
+            act.logged = true;
+        }
+    }
+
     void startActivity(
         ActivityId act,
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
         const Fields & fields,
-        ActivityId parent) override
+        ActivityId parent) noexcept override
     {
         auto state(state_.lock());
-
-        if (lvl <= verbosity && !s.empty() && type != actBuildWaiting)
-            log(*state, lvl, s + "...");
 
         state->activities.emplace_back(
             ActInfo{.s = s, .type = type, .parent = parent, .startTime = std::chrono::steady_clock::now()});
@@ -251,18 +290,14 @@ public:
         state->its.emplace(act, i);
         state->activitiesByType[type].its.emplace(act, i);
 
+        logActivity(*state, lvl, *i);
+
         if (type == actBuild) {
             auto name = storePathToNameWithoutDrvSuffix(getS(fields, 0));
             i->s = fmt("building " ANSI_BOLD "%s" ANSI_NORMAL, name);
             auto machineName = getS(fields, 1);
             if (machineName != "")
                 i->s += fmt(" on " ANSI_BOLD "%s" ANSI_NORMAL, machineName);
-
-            // Used to be curRound and nrRounds, but the
-            // implementation was broken for a long time.
-            if (getI(fields, 2) != 1 || getI(fields, 3) != 1) {
-                throw Error("log message indicated repeating builds, but this is not currently implemented");
-            }
             i->name = DrvName(name).name;
         }
 
@@ -310,7 +345,7 @@ public:
         return false;
     }
 
-    void stopActivity(ActivityId act) override
+    void stopActivity(ActivityId act) noexcept override
     {
         auto state(state_.lock());
 
@@ -332,7 +367,7 @@ public:
         update(*state);
     }
 
-    void result(ActivityId act, ResultType type, const std::vector<Field> & fields) override
+    void result(ActivityId act, ResultType type, const std::vector<Field> & fields) noexcept override
     {
         auto state(state_.lock());
 
@@ -411,7 +446,7 @@ public:
         }
     }
 
-    void update(State & state)
+    void update(State & state) noexcept
     {
         state.haveUpdate = true;
         updateCV.notify_one();
@@ -424,7 +459,7 @@ public:
      * with text selection in some terminals, including libvte-based terminal
      * emulators.
      */
-    void redraw(std::string newOutput)
+    void redraw(std::string newOutput) noexcept
     {
         auto lastOutput(lastOutput_.lock());
         if (newOutput != *lastOutput) {
@@ -444,7 +479,7 @@ public:
         writeToStderr("\r\e[K");
     }
 
-    std::chrono::milliseconds draw(State & state)
+    std::chrono::milliseconds draw(State & state) noexcept
     {
         auto nextWakeup = std::chrono::milliseconds::max();
 
@@ -499,16 +534,12 @@ public:
             }
         }
 
-        auto width = getWindowSize().second;
-        if (width <= 0)
-            width = std::numeric_limits<decltype(width)>::max();
-
-        redraw("\r" + filterANSIEscapes(line, false, width) + ANSI_NORMAL + "\e[K");
+        redraw("\r" + filterANSIEscapes(line, false, getWindowWidth()) + ANSI_NORMAL + "\e[K");
 
         return nextWakeup;
     }
 
-    std::string getStatus(State & state)
+    std::string getStatus(State & state) noexcept
     {
         std::string res;
 

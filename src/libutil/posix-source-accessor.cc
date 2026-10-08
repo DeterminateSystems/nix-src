@@ -150,7 +150,7 @@ void PosixFileSourceAccessor::readFile(const CanonPath & path, Sink & sink, fun<
     /* The most important invariant we care about here is writing exactly size
        bytes to the sink. copyFdRange should throw an EndOfFile if we fail to read
        `size` bytes. */
-    copyFdRange(fd.get(), /*offset=*/0, size, sink);
+    copyFdRange(fd.get(), /*offset=*/0, size, sink, /*tryCoW=*/true);
 }
 
 bool PosixFileSourceAccessor::pathExists(const CanonPath & path)
@@ -468,7 +468,7 @@ void PosixDirectorySourceAccessor::readFile(const CanonPath & path, Sink & sink,
 
     if (!fileFd) {
         if (errno == ENOENT)
-            throw FileNotFound("file '%s' does not exist", showPath(path));
+            throw FileNotFound("path '%s' does not exist", showPath(path));
         throw SysError("opening '%s'", showPath(path));
     }
 

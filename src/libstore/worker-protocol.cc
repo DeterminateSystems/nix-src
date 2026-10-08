@@ -10,6 +10,7 @@
 #include "nix/store/path-info.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/util/util.hh"
+#include "nix/util/provenance.hh"
 
 #include <chrono>
 #include <cstdint>
@@ -29,6 +30,12 @@ const WorkerProto::Version WorkerProto::latest = {
                 WorkerProto::featureRealisationWithPath,
             },
             std::string{WorkerProto::featureDeleteDeadSpecificReferrers},
+            std::string{WorkerProto::featureQueryActiveBuilds},
+            std::string{WorkerProto::featureProvenance},
+            std::string{WorkerProto::featureVersionedAddToStoreMultiple},
+            std::string{WorkerProto::featureAddTempRoots},
+            std::string{WorkerProto::featureQueryPathInfos},
+            std::string{WorkerProto::featureOpenTelemetry},
         },
 };
 
@@ -379,6 +386,8 @@ UnkeyedValidPathInfo WorkerProto::Serialise<UnkeyedValidPathInfo>::read(const St
         info.sigs = WorkerProto::Serialise<std::set<Signature>>::read(store, conn);
         info.ca = ContentAddress::parseOpt(readString(conn.from));
     }
+    if (conn.version.features.contains(WorkerProto::featureProvenance))
+        info.provenance = Provenance::from_json_str_optional(readString(conn.from));
     return info;
 }
 
@@ -394,6 +403,8 @@ void WorkerProto::Serialise<UnkeyedValidPathInfo>::write(
         WorkerProto::write(store, conn, pathInfo.sigs);
         conn.to << renderContentAddress(pathInfo.ca);
     }
+    if (conn.version.features.contains(WorkerProto::featureProvenance))
+        conn.to << (pathInfo.provenance ? pathInfo.provenance->to_json_str() : "");
 }
 
 WorkerProto::ClientHandshakeInfo

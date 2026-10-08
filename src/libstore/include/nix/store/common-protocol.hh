@@ -35,6 +35,7 @@ struct CommonProto
     struct ReadConn
     {
         Source & from;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -44,6 +45,7 @@ struct CommonProto
     struct WriteConn
     {
         Sink & to;
+        bool shortStorePaths = false;
     };
 
     template<typename T>

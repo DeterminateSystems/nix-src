@@ -9,14 +9,18 @@
 #include "nix/store/references.hh"
 #include "nix/util/callback.hh"
 #include "nix/util/topo-sort.hh"
+#include "nix/util/thread-pool.hh"
+#include "nix/util/util.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/compression.hh"
 #include "nix/util/signals.hh"
 #include "nix/store/posix-fs-canonicalise.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/store/keys.hh"
+#include "nix/store/filetransfer.hh"
 #include "nix/util/users.hh"
 #include "nix/store/store-registration.hh"
+#include "nix/util/provenance.hh"
 
 #include <algorithm>
 #include <cstring>
@@ -99,6 +103,28 @@ bool LocalStoreConfig::getDefaultRequireSigs()
     return settings.requireSigs;
 }
 
+/**
+ * A `ValidPathInfo` that also records the id of the corresponding row
+ * in the `ValidPaths` table of the SQLite database. This allows
+ * `queryValidPathId()` to return the id from `pathInfoCache` without
+ * consulting the database.
+ */
+struct LocalStorePathInfo : ValidPathInfo
+{
+    uint64_t id;
+
+    LocalStorePathInfo(ValidPathInfo info, uint64_t id)
+        : UnkeyedValidPathInfo(info)
+        , ValidPathInfo(std::move(info))
+        , id(id)
+    {
+    }
+
+    void anchor() override;
+};
+
+void LocalStorePathInfo::anchor() {}
+
 struct LocalStore::State::Stmts
 {
     /* Some precompiled SQLite statements. */
@@ -106,6 +132,7 @@ struct LocalStore::State::Stmts
     SQLiteStmt UpdatePathInfo;
     SQLiteStmt AddReference;
     SQLiteStmt QueryPathInfo;
+    SQLiteStmt QueryValidPathId;
     SQLiteStmt QueryReferences;
     SQLiteStmt QueryReferrers;
     SQLiteStmt InvalidatePath;
@@ -117,7 +144,24 @@ struct LocalStore::State::Stmts
     SQLiteStmt QueryRealisedOutput;
     SQLiteStmt QueryPathFromHashPart;
     SQLiteStmt QueryValidPaths;
+    SQLiteStmt QuerySchemaMigration;
 };
+
+/**
+ * Write the schema version to `schemaPath` atomically: write it to a
+ * temporary file, fsync it, and atomically rename it into place. This
+ * ensures the schema file is never empty or partially written.
+ */
+static void writeSchemaFile(const std::filesystem::path & schemaPath, int version)
+{
+    auto tmp = schemaPath;
+    tmp += fmt(".tmp.%d", getpid());
+    AutoDelete del(tmp, false);
+    writeFile(tmp, std::to_string(version), 0666, FsSync::Yes);
+    std::filesystem::rename(tmp, schemaPath);
+    del.cancel();
+    syncParent(schemaPath);
+}
 
 LocalStore::LocalStore(ref<const Config> config)
     : Store{*config}
@@ -130,6 +174,7 @@ LocalStore::LocalStore(ref<const Config> config)
     , schemaPath(dbDir / "schema")
     , tempRootsDir(config->stateDir.get() / "temproots")
     , fnTempRoots(tempRootsDir / std::to_string(getpid()))
+    , activeBuildsDir(config->stateDir.get() / "active-builds")
 {
     auto state(_state->lock());
     state->stmts = std::make_unique<State::Stmts>();
@@ -150,6 +195,7 @@ LocalStore::LocalStore(ref<const Config> config)
     const auto & localSettings = config->getLocalSettings();
     const auto & gcSettings = localSettings.getGCSettings();
     createDirs(gcRootsDir);
+    createDirs(activeBuildsDir);
 
     for (auto & perUserDir : {profilesDir / "per-user", gcRootsDir / "per-user"}) {
         createDirs(perUserDir);
@@ -264,16 +310,7 @@ LocalStore::LocalStore(ref<const Config> config)
                            : "database schema needs migrating, but this cannot be done in read-only mode");
     }
 
-    auto acquireWriteLock = [&]() {
-        if (!lockFile(globalLock.get(), ltWrite, false)) {
-            printInfo("waiting for exclusive access to the Nix store...");
-            // We have acquired a shared lock; release it to prevent deadlocks.
-            // This can happen if someone else is trying to promote their read
-            // lock into a write lock.
-            lockFile(globalLock.get(), ltNone, false);
-            lockFile(globalLock.get(), ltWrite, true);
-        }
-    };
+    bool isNew = false;
 
     if (curSchema > nixSchemaVersion)
         throw Error("current Nix store schema is version %1%, but I only support %2%", curSchema, nixSchemaVersion);
@@ -281,7 +318,8 @@ LocalStore::LocalStore(ref<const Config> config)
     else if (curSchema == 0) { /* new store */
         curSchema = nixSchemaVersion;
         openDB(*state, true);
-        writeFile(schemaPath, fmt("%1%", curSchema), 0666, FsSync::Yes);
+        writeSchemaFile(schemaPath, curSchema);
+        isNew = true;
     }
 
     else if (curSchema < nixSchemaVersion) {
@@ -297,7 +335,12 @@ LocalStore::LocalStore(ref<const Config> config)
                 "which is no longer supported. To convert to the new format,\n"
                 "please upgrade Nix to version 1.11 first.");
 
-        acquireWriteLock();
+        if (!lockFile(globalLock.get(), ltWrite, false)) {
+            Activity act(*logger, lvlInfo, actUnknown, "waiting for exclusive access to the Nix store");
+            lockFile(
+                globalLock.get(), ltNone, false); // We have acquired a shared lock; release it to prevent deadlocks
+            lockFile(globalLock.get(), ltWrite, true);
+        }
 
         /* Get the schema version again, because another process may
            have performed the upgrade already. */
@@ -311,51 +354,45 @@ LocalStore::LocalStore(ref<const Config> config)
 
         if (curSchema < 8) {
             SQLiteTxn txn(state->db);
-            state->db.exec("alter table ValidPaths add column ultimate integer");
-            state->db.exec("alter table ValidPaths add column sigs text");
+            state->db.execNoRetry("alter table ValidPaths add column ultimate integer");
+            state->db.execNoRetry("alter table ValidPaths add column sigs text");
             txn.commit();
         }
 
         if (curSchema < 9) {
-            SQLiteTxn txn(state->db);
             state->db.exec("drop table FailedPaths");
-            txn.commit();
         }
 
         if (curSchema < 10) {
-            SQLiteTxn txn(state->db);
             state->db.exec("alter table ValidPaths add column ca text");
-            txn.commit();
         }
 
-        writeFile(schemaPath, fmt("%1%", nixSchemaVersion), 0666, FsSync::Yes);
+        writeSchemaFile(schemaPath, nixSchemaVersion);
 
-        // Downgrade to a read lock and hold to prevent other processes from
-        // upgrading the schema while we're using the store
         lockFile(globalLock.get(), ltRead, true);
     }
 
     else
         openDB(*state, false);
 
-    if (!config->readOnly && upgradeDBSchema(*state, true)) {
-        acquireWriteLock();
-        upgradeDBSchema(*state, false);
-        // Downgrade to a read lock and hold to prevent other processes from
-        // upgrading the schema while we're using the store
-        lockFile(globalLock.get(), ltRead, true);
-    }
+    upgradeDBSchema(*state, isNew);
 
     /* Prepare SQL statements. */
     state->stmts->RegisterValidPath.create(
         state->db,
-        "insert into ValidPaths (path, hash, registrationTime, deriver, narSize, ultimate, sigs, ca) values (?, ?, ?, ?, ?, ?, ?, ?);");
+        fmt("insert into ValidPaths (path, hash, registrationTime, deriver, narSize, ultimate, sigs, ca%s) values (?, ?, ?, ?, ?, ?, ?, ?%s) "
+            "on conflict (path) do update set hash = excluded.hash, narSize = excluded.narSize, ultimate = excluded.ultimate, sigs = excluded.sigs, ca = excluded.ca "
+            "returning id;",
+            experimentalFeatureSettings.isEnabled(Xp::Provenance) ? ", provenance" : "",
+            experimentalFeatureSettings.isEnabled(Xp::Provenance) ? ", ?" : ""));
     state->stmts->UpdatePathInfo.create(
         state->db, "update ValidPaths set narSize = ?, hash = ?, ultimate = ?, sigs = ?, ca = ? where path = ?;");
     state->stmts->AddReference.create(state->db, "insert or replace into Refs (referrer, reference) values (?, ?);");
     state->stmts->QueryPathInfo.create(
         state->db,
-        "select id, hash, registrationTime, deriver, narSize, ultimate, sigs, ca from ValidPaths where path = ?;");
+        fmt("select id, hash, registrationTime, deriver, narSize, ultimate, sigs, ca%s from ValidPaths where path = ?;",
+            experimentalFeatureSettings.isEnabled(Xp::Provenance) ? ", provenance" : ""));
+    state->stmts->QueryValidPathId.create(state->db, "select id from ValidPaths where path = ?;");
     state->stmts->QueryReferences.create(
         state->db, "select path from Refs join ValidPaths on reference = id where referrer = ?;");
     state->stmts->QueryReferrers.create(
@@ -579,24 +616,11 @@ void LocalStore::openDB(State & state, bool create)
     }
 }
 
-bool LocalStore::upgradeDBSchema(State & state, bool dryRun)
+void LocalStore::upgradeDBSchema(State & state, bool isNew)
 {
-    bool ret = false;
+    state.db.exec("create table if not exists SchemaMigrations (migration text primary key not null);");
 
-    {
-        SQLiteStmt queryHasSchemaMigrations;
-        queryHasSchemaMigrations.create(
-            state.db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='SchemaMigrations';");
-        auto useQueryHasSchemaMigrations(queryHasSchemaMigrations.use());
-        if (!useQueryHasSchemaMigrations.next()) {
-            if (dryRun)
-                return true;
-            else {
-                state.db.exec("create table SchemaMigrations (migration text primary key not null);");
-                ret = true;
-            }
-        }
-    }
+    state.stmts->QuerySchemaMigration.create(state.db, "select 1 from SchemaMigrations where migration = ?;");
 
     StringSet schemaMigrations;
 
@@ -608,36 +632,39 @@ bool LocalStore::upgradeDBSchema(State & state, bool dryRun)
             schemaMigrations.insert(useQuerySchemaMigrations.getStr(0));
     }
 
-    auto needsMigration = [&](const std::string & migrationName) -> bool {
-        return !schemaMigrations.contains(migrationName);
-    };
-
-    auto maybeUpgrade = [&](const std::string & migrationName, const std::string & stmt) {
-        if (!needsMigration(migrationName))
+    auto doUpgrade = [&](const std::string & migrationName, const std::string & stmt) {
+        if (schemaMigrations.contains(migrationName))
             return;
 
-        ret = true;
-        if (dryRun)
-            return;
+        if (!isNew)
+            notice("executing Nix database schema migration '%s'...", migrationName);
 
-        debug("executing Nix database schema migration '%s'...", migrationName);
+        retrySQLite<void>([&]() {
+            SQLiteTxn txn(state.db);
 
-        SQLiteTxn txn(state.db);
-        state.db.exec(stmt + fmt(";\ninsert or ignore into SchemaMigrations values('%s')", migrationName));
-        txn.commit();
+            /* Another process may have executed this migration in the
+               meantime, so check for it again within the
+               transaction. */
+            if (state.stmts->QuerySchemaMigration.use().apply(migrationName).next())
+                return;
+
+            state.db.execNoRetry(stmt + fmt(";\ninsert or ignore into SchemaMigrations values('%s')", migrationName));
+            txn.commit();
+        });
 
         schemaMigrations.insert(migrationName);
     };
 
     if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations))
-        maybeUpgrade(
+        doUpgrade(
             "20251017-ca-derivations",
 #include "ca-specific-schema.sql.gen.hh"
         );
 
-    maybeUpgrade("20260309-drop-redundant-indexreferrer", "drop index if exists IndexReferrer");
+    doUpgrade("20260309-drop-redundant-indexreferrer", "drop index if exists IndexReferrer");
 
-    return ret;
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        doUpgrade("20241024-provenance", "alter table ValidPaths add column provenance text");
 }
 
 /* To improve purity, users may want to make the Nix store a read-only
@@ -711,17 +738,29 @@ uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)
             "cannot add path '%s' to the Nix store because it claims to be content-addressed but isn't",
             printStorePath(info.path));
 
-    state.stmts->RegisterValidPath.use()
-        .apply(printStorePath(info.path))
-        .apply(info.narHash.to_string(HashFormat::Base16, true))
-        .apply(info.registrationTime == 0 ? time(nullptr) : info.registrationTime)
-        .apply(info.deriver ? printStorePath(*info.deriver) : "", (bool) info.deriver)
-        .apply(info.narSize, info.narSize != 0)
-        .apply(info.ultimate ? 1 : 0, info.ultimate)
-        .apply(concatStringsSep(" ", Signature::toStrings(info.sigs)), !info.sigs.empty())
-        .apply(renderContentAddress(info.ca), (bool) info.ca)
-        .exec();
-    uint64_t id = state.db.getLastInsertedRowId();
+    auto query = state.stmts->RegisterValidPath.use()
+                     .apply(printStorePath(info.path))
+                     .apply(info.narHash.to_string(HashFormat::Base16, true))
+                     .apply(info.registrationTime == 0 ? time(nullptr) : info.registrationTime)
+                     .apply(info.deriver ? printStorePath(*info.deriver) : "", (bool) info.deriver)
+                     .apply(info.narSize, info.narSize != 0)
+                     .apply(info.ultimate ? 1 : 0, info.ultimate)
+                     .apply(concatStringsSep(" ", Signature::toStrings(info.sigs)), !info.sigs.empty())
+                     .apply(renderContentAddress(info.ca), (bool) info.ca);
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance))
+        query.apply(info.provenance ? info.provenance->to_json_str() : "", (bool) info.provenance);
+    /* Valid ids start at 1, so a last-inserted rowid of 0 signals
+       that the upsert did an update rather than an insert. */
+    state.db.setLastInsertedRowId(0);
+    if (!query.next())
+        throw Error("registering path '%s' in the Nix database did not return an id", printStorePath(info.path));
+    uint64_t id = query.getInt(0);
+
+    /* If the path was already valid (i.e. the upsert did an update
+       rather than an insert), the derivation outputs have already
+       been registered, so we're done. */
+    if (state.db.getLastInsertedRowId() != id)
+        return id;
 
     /* If this is a derivation, then store the derivation outputs in
        the database.  This is useful for the garbage collector: it can
@@ -745,7 +784,8 @@ uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)
         }
     }
 
-    pathInfoCache->lock()->upsert(info.path, PathInfoCacheValue{.value = std::make_shared<const ValidPathInfo>(info)});
+    pathInfoCache->lock()->upsert(
+        info.path, PathInfoCacheValue{.value = std::make_shared<const LocalStorePathInfo>(info, id)});
 
     return id;
 }
@@ -780,7 +820,7 @@ std::shared_ptr<const ValidPathInfo> LocalStore::queryPathInfoInternal(State & s
         throw Error("invalid-path entry for '%s': %s", printStorePath(path), e.what());
     }
 
-    auto info = std::make_shared<ValidPathInfo>(path, UnkeyedValidPathInfo(*this, narHash));
+    auto info = std::make_shared<LocalStorePathInfo>(ValidPathInfo(path, UnkeyedValidPathInfo(*this, narHash)), id);
 
     info->registrationTime = useQueryPathInfo.getInt(2);
 
@@ -807,6 +847,12 @@ std::shared_ptr<const ValidPathInfo> LocalStore::queryPathInfoInternal(State & s
     while (useQueryReferences.next())
         info->references.insert(parseStorePath(useQueryReferences.getStr(0)));
 
+    if (experimentalFeatureSettings.isEnabled(Xp::Provenance)) {
+        auto prov = (const char *) sqlite3_column_text(state.stmts->QueryPathInfo, 8);
+        if (prov)
+            info->provenance = Provenance::from_json_str(prov);
+    }
+
     return info;
 }
 
@@ -825,7 +871,15 @@ void LocalStore::updatePathInfo(State & state, const ValidPathInfo & info)
 
 uint64_t LocalStore::queryValidPathId(State & state, const StorePath & path)
 {
-    auto use(state.stmts->QueryPathInfo.use().apply(printStorePath(path)));
+    /* Avoid a database query if the id is in `pathInfoCache`. */
+    {
+        auto cache(pathInfoCache->lock());
+        if (auto res = cache->getOrNullptr(path))
+            if (auto info = dynamic_cast<const LocalStorePathInfo *>(res->value.get()))
+                return info->id;
+    }
+
+    auto use(state.stmts->QueryValidPathId.use().apply(printStorePath(path)));
     if (!use.next())
         throw InvalidPath("path '%s' is not valid", printStorePath(path));
     return use.getInt(0);
@@ -833,7 +887,7 @@ uint64_t LocalStore::queryValidPathId(State & state, const StorePath & path)
 
 bool LocalStore::isValidPath_(State & state, const StorePath & path)
 {
-    return state.stmts->QueryPathInfo.use().apply(printStorePath(path)).next();
+    return state.stmts->QueryValidPathId.use().apply(printStorePath(path)).next();
 }
 
 bool LocalStore::isValidPathUncached(const StorePath & path)
@@ -970,20 +1024,27 @@ void LocalStore::registerValidPaths(const ValidPathInfos & infos)
 
         SQLiteTxn txn(state->db);
         StorePathSet paths;
+        std::unordered_map<StorePath, uint64_t> ids;
 
         for (auto & [_, i] : infos) {
             assert(i.narHash.algo == HashAlgorithm::SHA256);
-            if (isValidPath_(*state, i.path))
-                updatePathInfo(*state, i);
-            else
-                addValidPath(*state, i);
+            ids.insert_or_assign(i.path, addValidPath(*state, i));
             paths.insert(i.path);
         }
 
         for (auto & [_, i] : infos) {
-            auto referrer = queryValidPathId(*state, i.path);
-            for (auto & j : i.references)
-                state->stmts->AddReference.use().apply(referrer).apply(queryValidPathId(*state, j)).exec();
+            auto referrer = ids.at(i.path);
+            for (auto & j : i.references) {
+                auto k = ids.find(j);
+                /* Note that queryValidPathId() uses pathInfoCache, so it's possible that path `j` has been
+                 * garbage-collected. But that's fine: the foreign key constraint on Refs will detect that the ID is no
+                 * longer valid. Path IDs are never reused so there is no possibility that ID now refers to another
+                 * path. */
+                state->stmts->AddReference.use()
+                    .apply(referrer)
+                    .apply(k != ids.end() ? k->second : queryValidPathId(*state, j))
+                    .exec();
+            }
         }
 
         /* Do a topological sort of the paths.  This will throw an
@@ -1043,6 +1104,105 @@ bool LocalStore::realisationIsUntrusted(const Realisation & realisation)
     return config->requireSigs && !realisation.checkSignatures(realisation.id, getPublicKeys());
 }
 
+/* Check whether `path` exists and is owned by the current user. This is
+   used to decide whether to trust a previously-unpacked store path and
+   its `.unpacked` marker. Otherwise, if sandboxing is disabled, a build
+   user could plant files to trick us into registering an arbitrary
+   store path as valid. */
+static bool existsAndIsOwnedBySelf(const std::filesystem::path & path)
+{
+    auto st = maybeLstat(path);
+    if (!st)
+        return false;
+#ifndef _WIN32
+    if (st->st_uid != geteuid())
+        return false;
+#endif
+    return true;
+}
+
+void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, RepairFlag repair)
+{
+    const LocalSettings & localSettings = config->getLocalSettings();
+
+    auto realPath = toRealPath(info.path);
+
+    // TODO: make repair more safe: write to a temporary location first before renaming/deleting.
+    deletePath(realPath);
+
+    /* Maybe free up some disk space (before writing the NAR) so that
+       restorePath() below doesn't fail with ENOSPC. */
+    autoGC();
+
+    /* While restoring the path from the NAR, compute the hash
+       of the NAR. */
+    HashSink hashSink(HashAlgorithm::SHA256);
+
+    TeeSource wrapperSource{source, hashSink};
+
+    restorePath(realPath, wrapperSource, localSettings.fsyncStorePaths);
+
+    auto hashResult = hashSink.finish();
+
+    if (hashResult.numBytesDigested != info.narSize)
+        throw Error(
+            "size mismatch importing path '%s';\n  specified: %s\n  got:       %s",
+            printStorePath(info.path),
+            info.narSize,
+            hashResult.numBytesDigested);
+
+    if (hashResult.hash != info.narHash)
+        throw Error(
+            "hash mismatch importing path '%s';\n  specified: %s\n  got:       %s",
+            printStorePath(info.path),
+            info.narHash.to_string(HashFormat::SRI, true),
+            hashResult.hash.to_string(HashFormat::SRI, true));
+
+    if (info.ca) {
+        auto & specified = *info.ca;
+        auto actualHash = ({
+            SourcePath sourcePath = requireStoreObjectAccessor(info.path, /*requireValidPath=*/false);
+            Hash h{HashAlgorithm::SHA256}; // throwaway def to appease C++
+            auto fim = specified.method.getFileIngestionMethod();
+            switch (fim) {
+            case FileIngestionMethod::Flat:
+            case FileIngestionMethod::NixArchive: {
+                HashModuloSink caSink{
+                    specified.hash.algo,
+                    std::string{info.path.hashPart()},
+                };
+                dumpPath(sourcePath, caSink, (FileSerialisationMethod) fim);
+                h = caSink.finish().hash;
+                break;
+            }
+            case FileIngestionMethod::Git:
+                h = git::dumpHash(specified.hash.algo, sourcePath).hash;
+                break;
+            }
+            ContentAddress{
+                .method = specified.method,
+                .hash = std::move(h),
+            };
+        });
+        if (specified.hash != actualHash.hash) {
+            throw Error(
+                "ca hash mismatch importing path '%s';\n  specified: %s\n  got:       %s",
+                printStorePath(info.path),
+                specified.hash.to_string(HashFormat::Nix32, true),
+                actualHash.hash.to_string(HashFormat::Nix32, true));
+        }
+    }
+
+    canonicalisePathMetaData(realPath, {NIX_WHEN_SUPPORT_ACLS(localSettings.ignoredAcls)});
+
+    optimisePath(realPath, repair); // FIXME: combine with hashPath()
+
+    if (localSettings.fsyncStorePaths) {
+        recursiveSync(realPath);
+        syncParent(realPath);
+    }
+}
+
 void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs)
 {
     if (checkSigs && pathInfoIsUntrusted(info))
@@ -1066,77 +1226,7 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
             /* The path may have been created by another process in the meantime, so check again. */
             if (repair || !isValidPathUncached(info.path)) {
 
-                deletePath(realPath);
-
-                /* While restoring the path from the NAR, compute the hash
-                   of the NAR. */
-                HashSink hashSink(HashAlgorithm::SHA256);
-
-                TeeSource wrapperSource{source, hashSink};
-
-                restorePath(realPath, wrapperSource, config->getLocalSettings().fsyncStorePaths);
-
-                auto hashResult = hashSink.finish();
-
-                if (hashResult.hash != info.narHash)
-                    throw Error(
-                        "hash mismatch importing path '%s';\n  specified: %s\n  got:       %s",
-                        printStorePath(info.path),
-                        info.narHash.to_string(HashFormat::SRI, true),
-                        hashResult.hash.to_string(HashFormat::SRI, true));
-
-                if (hashResult.numBytesDigested != info.narSize)
-                    throw Error(
-                        "size mismatch importing path '%s';\n  specified: %s\n  got:       %s",
-                        printStorePath(info.path),
-                        info.narSize,
-                        hashResult.numBytesDigested);
-
-                if (info.ca) {
-                    auto & specified = *info.ca;
-                    auto actualHash = ({
-                        SourcePath sourcePath = requireStoreObjectAccessor(info.path, /*requireValidPath=*/false);
-                        Hash h{HashAlgorithm::SHA256}; // throwaway def to appease C++
-                        auto fim = specified.method.getFileIngestionMethod();
-                        switch (fim) {
-                        case FileIngestionMethod::Flat:
-                        case FileIngestionMethod::NixArchive: {
-                            HashModuloSink caSink{
-                                specified.hash.algo,
-                                std::string{info.path.hashPart()},
-                            };
-                            dumpPath(sourcePath, caSink, (FileSerialisationMethod) fim);
-                            h = caSink.finish().hash;
-                            break;
-                        }
-                        case FileIngestionMethod::Git:
-                            h = git::dumpHash(specified.hash.algo, sourcePath).hash;
-                            break;
-                        }
-                        ContentAddress{
-                            .method = specified.method,
-                            .hash = std::move(h),
-                        };
-                    });
-                    if (specified.hash != actualHash.hash) {
-                        throw Error(
-                            "ca hash mismatch importing path '%s';\n  specified: %s\n  got:       %s",
-                            printStorePath(info.path),
-                            specified.hash.to_string(HashFormat::Nix32, true),
-                            actualHash.hash.to_string(HashFormat::Nix32, true));
-                    }
-                }
-
-                autoGC();
-
-                canonicalisePathMetaData(realPath, {NIX_WHEN_SUPPORT_ACLS(config->getLocalSettings().ignoredAcls)});
-
-                optimisePath(realPath, repair); // FIXME: combine with hashPath()
-
-                if (config->getLocalSettings().fsyncStorePaths) {
-                    recursiveSync(realPath);
-                    syncParent(realPath);
-                }
+                doAddToStore(info, source, repair);
 
                 registerValidPath(info);
             } else
@@ -1148,6 +1238,156 @@ void LocalStore::addToStore(const ValidPathInfo & info, Source & source, RepairF
     }
 }
 
+void LocalStore::addMultipleToStore(
+    PathsSource && pathsToCopy, Activity & act, RepairFlag repair, CheckSigsFlag checkSigs)
+{
+    /* Atomic because it's decremented from the worker threads below
+       (when a download is skipped). */
+    std::atomic<uint64_t> bytesExpected{0};
+    for (auto & [info, _] : pathsToCopy)
+        bytesExpected += info.narSize;
+    act.setExpected(actCopyPath, bytesExpected);
+
+    std::atomic<size_t> nrDone{0};
+    std::atomic<uint64_t> nrRunning{0};
+    auto showProgress = [&, nrTotal = pathsToCopy.size()]() { act.progress(nrDone, nrTotal, nrRunning); };
+
+    using PathWithSource = std::pair<ValidPathInfo, std::unique_ptr<Source>>;
+
+    /* Stage A: figure out which paths are not already valid, lock them,
+       and re-check their validity under the lock.
+
+       `PathLocks::lockPaths()` acquires the locks in sorted order, so
+       all processes lock store paths in the same order and we cannot
+       deadlock against another process writing to the same store. All
+       locks are held until we've registered the paths as valid
+       (stage C). */
+    std::set<std::filesystem::path> pathsToLock;
+    std::vector<PathWithSource *> maybeToWrite;
+
+    for (auto & item : pathsToCopy) {
+        auto & info = item.first;
+
+        if (checkSigs && pathInfoIsUntrusted(info))
+            throw Error(
+                "cannot add path '%s' because it lacks a signature by a trusted key", printStorePath(info.path));
+
+        addTempRoot(info.path);
+
+        if (!repair && isValidPath(info.path)) {
+            nrDone++;
+            showProgress();
+            continue;
+        }
+
+        maybeToWrite.push_back(&item);
+
+        /* Lock the output path. But don't lock if we're being called
+           from a build hook (whose parent process already acquired a
+           lock on this path). */
+        if (!locksHeld.count(printStorePath(info.path)))
+            pathsToLock.insert(toRealPath(info.path));
+    }
+
+    if (maybeToWrite.empty())
+        return;
+
+    PathLocks outputLocks;
+    if (!pathsToLock.empty())
+        outputLocks.lockPaths(pathsToLock);
+
+    std::vector<PathWithSource *> toWrite;
+
+    for (auto * item : maybeToWrite) {
+        auto & info = item->first;
+
+        /* The path may have been created by another process in the meantime. */
+        if (!repair && isValidPathUncached(info.path)) {
+            // We may have a negative cache entry for this path, so get rid of it.
+            invalidatePathInfoCacheFor(info.path);
+            nrDone++;
+            showProgress();
+            continue;
+        }
+
+        info.ultimate = false;
+        toWrite.push_back(item);
+    }
+
+    /* Stage B: extract the NARs in parallel, in order of descending NAR
+       size so that the largest (and typically slowest) NARs are started
+       first. This does everything `addToStore` does except registering
+       the paths as valid, which is deferred to stage C. */
+    std::sort(toWrite.begin(), toWrite.end(), [](auto * a, auto * b) { return a->first.narSize > b->first.narSize; });
+
+    /* Use enough threads to saturate both the local CPUs (for
+       decompression/hashing/optimising) and the incoming connections to
+       the source store (e.g. a binary cache). */
+    ThreadPool pool(std::max((size_t) std::thread::hardware_concurrency(), fileTransferSettings.httpConnections.get()));
+
+    for (auto * item : toWrite) {
+        pool.enqueue([&, item]() {
+            checkInterrupt();
+
+            auto & info = item->first;
+
+            /* Make sure that the Source object is destroyed when
+               we're done. In particular, a SinkToSource object must
+               be destroyed to ensure that the destructors on its
+               stack frame are run; this includes
+               LegacySSHStore::narFromPath()'s connection lock. */
+            auto source = std::move(item->second);
+
+            MaintainCount<decltype(nrRunning)> mc(nrRunning);
+            showProgress();
+
+            /* The existence of `<realPath>.unpacked` marks that the NAR
+               for this path was previously unpacked (see below). This allows
+               an interrupted `addMultipleToStore()` to reuse already-extracted
+               paths instead of re-fetching them.
+
+               Require both the marker and the unpacked path to be owned
+               by us, so that (when sandboxing is disabled) a build user
+               can't plant a fake marker to trick us into registering an
+               arbitrary path as valid.
+
+               Note that GC will delete the marker before the path itself,
+               so if the marker and the path both exists, the contents of
+               the path are correct. */
+            auto realPath = toRealPath(info.path);
+            auto unpackedMarker = unpackedMarkerFor(realPath);
+
+            if (!repair && existsAndIsOwnedBySelf(unpackedMarker) && existsAndIsOwnedBySelf(realPath)) {
+                notice("reusing previously unpacked path at '%s'", printStorePath(info.path));
+                act.setExpected(actCopyPath, bytesExpected -= info.narSize);
+            } else {
+                doAddToStore(info, *source, repair);
+                /* The path has been unpacked, so mark it as such. */
+                writeFile(unpackedMarker, "");
+            }
+
+            nrDone++;
+            showProgress();
+        });
+    }
+
+    pool.process();
+
+    /* Stage C: register all the newly added paths as valid in a single
+       transaction. */
+    ValidPathInfos infos;
+    for (auto * item : toWrite)
+        infos.insert_or_assign(item->first.path, item->first);
+
+    registerValidPaths(infos);
+
+    /* Now that the paths are registered as valid, the .unpacked markers are no longer needed. */
+    for (auto * item : toWrite)
+        tryUnlink(unpackedMarkerFor(toRealPath(item->first.path)));
+
+    outputLocks.setDeletion(true);
+}
+
 StorePath LocalStore::addToStoreFromDump(
     Source & source0,
     std::string_view name,
@@ -1155,7 +1395,8 @@ StorePath LocalStore::addToStoreFromDump(
     ContentAddressMethod hashMethod,
     HashAlgorithm hashAlgo,
     const StorePathSet & references,
-    RepairFlag repair)
+    RepairFlag repair,
+    std::shared_ptr<const Provenance> provenance)
 {
     /* For computing the store path. */
     auto hashSink = std::make_unique<HashSink>(hashAlgo);
@@ -1192,7 +1433,7 @@ StorePath LocalStore::addToStoreFromDump(
             dumpBuffer.release();
             dumpBuffer.reset((char *) tmp);
         } else {
-            throw std::bad_alloc();
+            outOfMemory();
         }
         auto got = 0;
         Finally cleanup([&]() { dump = {dumpBuffer.get(), dump.size() + got}; });
@@ -1302,6 +1543,7 @@ StorePath LocalStore::addToStoreFromDump(
 
             auto info = ValidPathInfo::makeFromCA(*this, name, std::move(desc), narHash.hash);
             info.narSize = narHash.numBytesDigested;
+            info.provenance = provenance;
             registerValidPath(info);
         } else
             // We may have a negative cache entry for this path, so get rid of it.
