@@ -400,15 +400,17 @@ struct CmdNarioList : Command, MixJSON, MixLongListing
 
             void diffPath(
                 const ValidPathInfo & info,
+                NarioDiffAlgo algo,
                 const StorePath & basePath,
                 const Hash & baseNarHash,
                 std::string_view patch) override
             {
                 if (!json)
                     logger->cout(
-                        fmt("%s: %d bytes, diff against %s (%d bytes)",
+                        fmt("%s: %d bytes, %s diff against %s (%d bytes)",
                             store.printStorePath(info.path),
                             info.narSize,
+                            showNarioDiffAlgo(algo),
                             store.printStorePath(basePath),
                             patch.size()));
 
@@ -416,6 +418,7 @@ struct CmdNarioList : Command, MixJSON, MixLongListing
                     obj.emplace(
                         "diff",
                         nlohmann::json{
+                            {"algorithm", showNarioDiffAlgo(algo)},
                             {"base", store.printStorePath(basePath)},
                             {"baseNarHash", baseNarHash.to_string(HashFormat::SRI, true)},
                             {"size", patch.size()},

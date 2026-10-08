@@ -42,16 +42,17 @@ done
 
 nix nario export --format 2 --compression zstd -r "$new" --base "$old" > "$TEST_ROOT"/diff-zstd.nario
 (( $(stat -c %s "$TEST_ROOT"/diff-zstd.nario) < $(stat -c %s "$TEST_ROOT"/diff.nario) ))
-nix nario list < "$TEST_ROOT"/diff-zstd.nario | grepQuiet "^$new: [0-9]* bytes, diff against $old ([0-9]* bytes)$"
+nix nario list < "$TEST_ROOT"/diff-zstd.nario | grepQuiet "^$new: [0-9]* bytes, zstd diff against $old ([0-9]* bytes)$"
 nix nario list < "$TEST_ROOT"/diff-zstd.nario | grepQuiet "^$extra: [0-9]* bytes, zstd-compressed ([0-9]* bytes)$"
 
 # Test `nix nario list`.
-nix nario list < "$TEST_ROOT"/diff.nario | grepQuiet "^$new: [0-9]* bytes, diff against $old ([0-9]* bytes)$"
+nix nario list < "$TEST_ROOT"/diff.nario | grepQuiet "^$new: [0-9]* bytes, zstd diff against $old ([0-9]* bytes)$"
 nix nario list < "$TEST_ROOT"/diff.nario | grepQuiet "^$shared: expected to be present$"
 nix nario list < "$TEST_ROOT"/diff.nario | grepQuiet "^$extra: [0-9]* bytes$"
 nix nario list -R < "$TEST_ROOT"/diff.nario | grepQuiet "^$extra/data$"
 
 json=$(nix nario list --json < "$TEST_ROOT/diff.nario")
+[[ $(printf "%s" "$json" | jq -r ".paths.\"$new\".diff.algorithm") = zstd ]]
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$new\".diff.base") = "$old" ]]
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$new\".diff.baseNarHash") = $(nix path-info --json "$old" | jq -r ".[].narHash") ]]
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$shared\".present") = true ]]

@@ -40,6 +40,21 @@ struct NarioCompression
 };
 
 /**
+ * Binary diff algorithms supported in narios.
+ */
+enum class NarioDiffAlgo {
+    /**
+     * zstd compression of the target NAR, using the base NAR as a
+     * prefix dictionary (see `makeZstdPatch()`).
+     */
+    zstd,
+};
+
+std::string showNarioDiffAlgo(NarioDiffAlgo algo);
+
+NarioDiffAlgo parseNarioDiffAlgo(std::string_view s);
+
+/**
  * Callbacks for the entries in a nario, used by `parseNario()`.
  */
 struct NarioVisitor
@@ -55,12 +70,16 @@ struct NarioVisitor
     virtual void fullPath(const ValidPathInfo & info, Source & nar, std::optional<NarioCompression> compression) = 0;
 
     /**
-     * A path whose NAR is given as a binary diff (see
-     * `makeZstdPatch()`) against the NAR of `basePath`, which is
-     * expected to have NAR hash `baseNarHash`.
+     * A path whose NAR is given as a binary diff (computed using
+     * `algo`) against the NAR of `basePath`, which is expected to
+     * have NAR hash `baseNarHash`.
      */
     virtual void diffPath(
-        const ValidPathInfo & info, const StorePath & basePath, const Hash & baseNarHash, std::string_view patch) = 0;
+        const ValidPathInfo & info,
+        NarioDiffAlgo algo,
+        const StorePath & basePath,
+        const Hash & baseNarHash,
+        std::string_view patch) = 0;
 
     /**
      * A path that is not contained in the nario, but that is expected

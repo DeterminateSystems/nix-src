@@ -96,8 +96,25 @@ static double sizeRatio(uint64_t a, uint64_t b)
     return a > b ? (double) a / b : (double) b / a;
 }
 
+std::string showNarioDiffAlgo(NarioDiffAlgo algo)
+{
+    switch (algo) {
+    case NarioDiffAlgo::zstd:
+        return "zstd";
+    }
+    unreachable();
+}
+
+NarioDiffAlgo parseNarioDiffAlgo(std::string_view s)
+{
+    if (s == "zstd")
+        return NarioDiffAlgo::zstd;
+    throw Error("unsupported nario diff algorithm '%s'", s);
+}
+
 struct NarioDiff
 {
+    NarioDiffAlgo algo;
     StorePath basePath;
     Hash baseNarHash;
     std::string patch;
@@ -198,6 +215,7 @@ static std::optional<NarioDiff> makeDiff(Store & store, const StorePath & path, 
         return std::nullopt;
 
     return NarioDiff{
+        .algo = NarioDiffAlgo::zstd,
         .basePath = basePath,
         .baseNarHash = baseNarHash,
         .patch = std::move(patch),
@@ -282,6 +300,7 @@ void exportPaths(
             if (auto diff = get(diffs, path)) {
                 sink << narioTagDiff;
                 WorkerProto::write(store, conn, *info);
+                sink << showNarioDiffAlgo(diff->algo);
                 WorkerProto::write(store, conn, diff->basePath);
                 sink << diff->baseNarHash.to_string(HashFormat::SRI, true) << diff->patch;
                 continue;
@@ -423,10 +442,11 @@ void parseNario(Store & store, Source & source, NarioVisitor & visitor)
             }
 
             else if (tag == narioTagDiff) {
+                auto algo = parseNarioDiffAlgo(readString(source));
                 auto basePath = WorkerProto::Serialise<StorePath>::read(store, conn);
                 auto baseNarHash = Hash::parseAnyPrefixed(readString(source));
                 auto patch = readString(source);
-                visitor.diffPath(info, basePath, baseNarHash, patch);
+                visitor.diffPath(info, algo, basePath, baseNarHash, patch);
             }
 
             else
@@ -469,6 +489,7 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
 
         void diffPath(
             const ValidPathInfo & info,
+            NarioDiffAlgo algo,
             const StorePath & basePath,
             const Hash & baseNarHash,
             std::string_view patch) override
@@ -500,7 +521,13 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
                         actualBaseNarHash.to_string(HashFormat::SRI, true),
                         baseNarHash.to_string(HashFormat::SRI, true));
 
-                auto nar = sinkToSource([&](Sink & sink) { applyZstdPatch(baseNar.s, patch, sink); });
+                auto nar = sinkToSource([&](Sink & sink) {
+                    switch (algo) {
+                    case NarioDiffAlgo::zstd:
+                        applyZstdPatch(baseNar.s, patch, sink);
+                        break;
+                    }
+                });
                 store.addToStore(info, *nar, NoRepair, checkSigs);
             }
 
