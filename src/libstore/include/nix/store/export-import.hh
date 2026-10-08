@@ -46,6 +46,13 @@ struct NarioExportOptions
      * exported as binary diffs are compressed.
      */
     CompressionAlgo compression = CompressionAlgo::none;
+
+    /**
+     * The compression level to use for `compression`. If unset, the
+     * default is 9 for zstd, and the compression method's default
+     * otherwise.
+     */
+    std::optional<int> compressionLevel;
 };
 
 /**

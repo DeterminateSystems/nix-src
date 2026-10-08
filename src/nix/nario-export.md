@@ -51,6 +51,8 @@ By default, the NARs in a nario are not compressed. The `--compression` flag spe
 # nix nario export --format 2 --compression zstd -r /nix/store/6i6xl6bmcpxqd51m8nlva40d5c1bhndx-hello-2.12.3 > hello.nario
 ```
 
+The `--compression-level` flag specifies the compression level. For `zstd`, the default is 9, which is still fast but compresses significantly better than zstd's own default of 3.
+
 Compression requires nario format 2. Narios that contain compressed NARs cannot be imported by versions of Nix that don't support them.
 
 )""

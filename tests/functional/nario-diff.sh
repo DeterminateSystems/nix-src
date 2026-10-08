@@ -33,6 +33,13 @@ expectStderr 1 nix nario export --format 2 -r "$new" --base "$old" --base-select
 # Test compression of full NARs.
 expectStderr 1 nix nario export --format 1 --compression zstd -r "$new" | grepQuiet "compression is only supported in nario version 2"
 expectStderr 1 nix nario export --format 2 --compression foo -r "$new" | grepQuiet "unknown compression method 'foo'"
+expectStderr 1 nix nario export --format 2 --compression-level 5 -r "$new" | grepQuiet "a compression level requires a compression method"
+
+# Higher compression levels should produce smaller narios.
+nix nario export --format 2 --compression zstd --compression-level 1 -r "$new" > "$TEST_ROOT/full-zstd-1.nario"
+nix nario export --format 2 --compression zstd --compression-level 19 -r "$new" > "$TEST_ROOT/full-zstd-19.nario"
+(( $(stat -c %s "$TEST_ROOT/full-zstd-19.nario") < $(stat -c %s "$TEST_ROOT/full-zstd-1.nario") ))
+nix nario import --no-check-sigs < "$TEST_ROOT/full-zstd-19.nario"
 
 for method in zstd xz; do
     nix nario export --format 2 --compression "$method" -r "$new" > "$TEST_ROOT/full-$method.nario"

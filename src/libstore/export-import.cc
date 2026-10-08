@@ -42,7 +42,10 @@ static const double maxDiffFraction = 0.9;
 
 static const int diffCompressionLevel = 19;
 
-static const int baselineCompressionLevel = 3;
+/* The default zstd compression level for full NARs. Also used to
+   decide whether a diff is worth it if full NARs are not compressed
+   using zstd. */
+static const int defaultZstdCompressionLevel = 9;
 
 static WorkerProto::Version exportProtoVersion{
     .number =
@@ -228,7 +231,8 @@ selectDiffBases(Store & store, BaseSelectionMethod method, const StorePaths & pa
  * Returns `std::nullopt` if the diff is not small enough to be worth
  * it.
  */
-static std::optional<NarioDiff> makeDiff(Store & store, const StorePath & path, const StorePath & basePath)
+static std::optional<NarioDiff>
+makeDiff(Store & store, const StorePath & path, const StorePath & basePath, int baselineCompressionLevel)
 {
     Activity act(
         *logger,
@@ -275,6 +279,8 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
     auto version = options.version;
     auto & basePaths = options.basePaths;
     auto compression = options.compression;
+    auto compressionLevel =
+        options.compressionLevel.value_or(compression == CompressionAlgo::zstd ? defaultZstdCompressionLevel : -1);
 
     auto sorted = store.topoSortPaths(paths);
     std::reverse(sorted.begin(), sorted.end());
@@ -284,6 +290,14 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
 
     if (compression != CompressionAlgo::none && version != 2)
         throw Error("compression is only supported in nario version 2");
+
+    if (options.compressionLevel && compression == CompressionAlgo::none)
+        throw Error("a compression level requires a compression method");
+
+    /* A diff must be smaller than the full NAR compressed with zstd at
+       the level we would otherwise use. */
+    auto baselineCompressionLevel =
+        compression == CompressionAlgo::zstd ? compressionLevel : defaultZstdCompressionLevel;
 
     auto dumpNar = [&](const ValidPathInfo & info, Sink & sink) {
         HashSink hashSink(HashAlgorithm::SHA256);
@@ -321,7 +335,7 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
             ThreadPool pool;
             for (auto & [path, basePath] : diffBases)
                 pool.enqueue([&, path, basePath]() {
-                    if (auto diff = makeDiff(store, path, basePath))
+                    if (auto diff = makeDiff(store, path, basePath, baselineCompressionLevel))
                         diffs_.lock()->emplace(path, std::move(*diff));
                 });
             pool.process();
@@ -356,7 +370,7 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
                 /* We need to know the size of the compressed NAR
                    before writing it, so buffer it in memory. */
                 StringSink compressed;
-                auto compressionSink = makeCompressionSink(compression, compressed, true);
+                auto compressionSink = makeCompressionSink(compression, compressed, true, compressionLevel);
                 dumpNar(*info, *compressionSink);
                 compressionSink->finish();
 

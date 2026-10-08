@@ -38,6 +38,7 @@ struct CmdNarioExport : StorePathsCommand
     std::vector<std::string> baseArgs;
     BaseSelectionMethod baseSelectionMethod = BaseSelectionMethod::byName;
     CompressionAlgo compression = CompressionAlgo::none;
+    std::optional<int> compressionLevel;
 
     CmdNarioExport()
     {
@@ -80,6 +81,14 @@ struct CmdNarioExport : StorePathsCommand
             .labels = {"method"},
             .handler = {[this](std::string s) { compression = parseCompressionAlgo(s, true); }},
         });
+
+        addFlag({
+            .longName = "compression-level",
+            .description =
+                "Compression level to use for the method specified by `--compression`. The default is 9 for `zstd`, and the compression method's own default for other methods.",
+            .labels = {"level"},
+            .handler = {&compressionLevel},
+        });
     }
 
     std::string description() override
@@ -105,6 +114,7 @@ struct CmdNarioExport : StorePathsCommand
             .version = version,
             .baseSelectionMethod = baseSelectionMethod,
             .compression = compression,
+            .compressionLevel = compressionLevel,
         };
 
         if (!baseArgs.empty())
