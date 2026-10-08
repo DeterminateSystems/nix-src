@@ -329,70 +329,113 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
 
     case 2: {
         StorePathSet baseClosure;
-        std::map<StorePath, NarioDiff> diffs;
+        std::map<StorePath, StorePath> diffBases;
 
         if (!basePaths.empty()) {
             store.computeFSClosure(basePaths, baseClosure);
-
-            auto diffBases = selectDiffBases(store, options.baseSelectionMethod, sorted, baseClosure);
-
-            Sync<std::map<StorePath, NarioDiff>> diffs_;
-            ThreadPool pool;
-            for (auto & [path, basePath] : diffBases)
-                pool.enqueue([&, path, basePath]() {
-                    if (auto diff = makeDiff(store, path, basePath, baselineCompressionLevel))
-                        diffs_.lock()->emplace(path, std::move(*diff));
-                });
-            pool.process();
-            diffs = std::move(*diffs_.lock());
+            diffBases = selectDiffBases(store, options.baseSelectionMethod, sorted, baseClosure);
         }
+
+        /* The expensive part of an entry (a binary diff or a
+           compressed NAR), computed in parallel. If neither is set,
+           the path is either present in the base closure or written
+           as a full NAR. */
+        struct ExportEntry
+        {
+            std::optional<NarioDiff> diff;
+            std::unique_ptr<SpillingStringSink> compressed;
+        };
+
+        /* The indices in `sorted` of the paths that need expensive
+           work. Only these are processed by the thread pool, so that
+           cheap entries (e.g. paths in the base closure) don't take
+           up room in its window. */
+        std::vector<size_t> jobs;
+        for (size_t i = 0; i < sorted.size(); ++i)
+            if (!baseClosure.contains(sorted[i])
+                && (diffBases.contains(sorted[i]) || compression != CompressionAlgo::none))
+                jobs.push_back(i);
 
         WorkerProto::WriteConn conn{.to = sink, .version = exportProtoVersion, .shortStorePaths = true};
 
-        sink << exportMagicV2;
-
-        for (auto & path : sorted) {
+        auto writeEntry = [&](size_t i, ExportEntry && entry) {
+            auto & path = sorted[i];
             auto info = store.queryPathInfo(path);
 
             if (baseClosure.contains(path)) {
                 sink << narioTagPresent;
                 WorkerProto::write(store, conn, *info);
-                continue;
             }
 
-            Activity act(*logger, lvlTalkative, actUnknown, fmt("exporting path '%s'", store.printStorePath(path)));
-
-            if (auto diff = get(diffs, path)) {
+            else if (entry.diff) {
                 sink << narioTagDiff;
                 WorkerProto::write(store, conn, *info);
-                sink << showNarioDiffAlgo(diff->algo);
-                WorkerProto::write(store, conn, diff->basePath);
-                sink << diff->baseNarHash.to_string(HashFormat::SRI, true) << diff->patch;
-                continue;
+                sink << showNarioDiffAlgo(entry.diff->algo);
+                WorkerProto::write(store, conn, entry.diff->basePath);
+                sink << entry.diff->baseNarHash.to_string(HashFormat::SRI, true) << entry.diff->patch;
             }
 
-            if (compression != CompressionAlgo::none) {
-                /* We need to know the size of the compressed NAR
-                   before writing it, so buffer it in memory or on
-                   disk. */
-                SpillingStringSink compressed(maxInMemoryCompressedNarSize);
-                auto compressionSink = makeCompressionSink(compression, compressed, true, compressionLevel);
-                dumpNar(*info, *compressionSink);
-                compressionSink->finish();
-
+            else if (entry.compressed) {
                 sink << narioTagCompressed;
                 WorkerProto::write(store, conn, *info);
-                sink << showCompressionAlgo(compression) << compressed.size();
-                compressed.getSource()->drainInto(sink);
-                writePadding(compressed.size(), sink);
-                continue;
+                sink << showCompressionAlgo(compression) << entry.compressed->size();
+                entry.compressed->getSource()->drainInto(sink);
+                writePadding(entry.compressed->size(), sink);
             }
 
-            sink << narioTagFull;
-            // FIXME: move to CommonProto?
-            WorkerProto::write(store, conn, *info);
-            dumpNar(*info, sink);
-        }
+            else {
+                Activity act(*logger, lvlTalkative, actUnknown, fmt("exporting path '%s'", store.printStorePath(path)));
+                sink << narioTagFull;
+                // FIXME: move to CommonProto?
+                WorkerProto::write(store, conn, *info);
+                dumpNar(*info, sink);
+            }
+        };
+
+        /* Write the cheap entries preceding index `end`. */
+        size_t nextToWrite = 0;
+        auto writeCheapEntries = [&](size_t end) {
+            for (; nextToWrite < end; ++nextToWrite)
+                writeEntry(nextToWrite, {});
+        };
+
+        sink << exportMagicV2;
+
+        processOrdered<ExportEntry>(
+            jobs.size(),
+            [&](size_t j) {
+                auto & path = sorted[jobs[j]];
+                ExportEntry entry;
+
+                auto basePath = get(diffBases, path);
+
+                Activity act(*logger, lvlTalkative, actUnknown, fmt("exporting path '%s'", store.printStorePath(path)));
+
+                if (basePath) {
+                    entry.diff = makeDiff(store, path, *basePath, baselineCompressionLevel);
+                    if (entry.diff)
+                        return entry;
+                }
+
+                if (compression != CompressionAlgo::none) {
+                    /* We need to know the size of the compressed NAR
+                       before writing it, so buffer it in memory or on
+                       disk. */
+                    entry.compressed = std::make_unique<SpillingStringSink>(maxInMemoryCompressedNarSize);
+                    auto compressionSink = makeCompressionSink(compression, *entry.compressed, true, compressionLevel);
+                    dumpNar(*store.queryPathInfo(path), *compressionSink);
+                    compressionSink->finish();
+                }
+
+                return entry;
+            },
+            [&](size_t j, ExportEntry && entry) {
+                writeCheapEntries(jobs[j]);
+                writeEntry(jobs[j], std::move(entry));
+                nextToWrite++;
+            });
+
+        writeCheapEntries(sorted.size());
 
         sink << narioTagEnd;
         break;

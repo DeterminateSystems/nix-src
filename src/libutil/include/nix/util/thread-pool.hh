@@ -10,6 +10,8 @@
 #include <thread>
 #include <map>
 #include <atomic>
+#include <algorithm>
+#include <optional>
 
 namespace nix {
 
@@ -180,6 +182,90 @@ void processGraph(
 
     if (!graph_.lock()->left.empty())
         throw Error("graph processing incomplete (cyclic reference?)");
+}
+
+/**
+ * Compute `produce(i)` for each `i` in `[0, n)` in parallel, and call
+ * `consume(i, result)` for each result strictly in order of `i`, one
+ * at a time (though not necessarily on the same thread). At most
+ * `window` items are being produced or waiting to be consumed at any
+ * time. If `window` is 0, it defaults to twice the number of threads,
+ * so that a slow item doesn't leave the other threads idle.
+ */
+template<typename T>
+void processOrdered(
+    size_t n, fun<T(size_t)> produce, fun<void(size_t, T &&)> consume, size_t window = 0, size_t maxThreads = 0)
+{
+    if (!maxThreads)
+        maxThreads = std::max(1U, std::thread::hardware_concurrency());
+
+    if (!window)
+        window = 2 * maxThreads;
+
+    struct State
+    {
+        std::map<size_t, T> ready;
+        size_t nextToConsume = 0;
+        size_t nextToEnqueue = 0;
+        bool consuming = false;
+    };
+
+    Sync<State> state_;
+
+    std::function<void(size_t)> worker;
+
+    /* Create pool last to ensure threads are stopped before other
+       destructors run. */
+    ThreadPool pool(maxThreads);
+
+    worker = [&](size_t i) {
+        auto res = produce(i);
+
+        {
+            auto state(state_.lock());
+            state->ready.emplace(i, std::move(res));
+
+            /* If another thread is already consuming results, it will
+               pick up this one. */
+            if (state->consuming)
+                return;
+            state->consuming = true;
+        }
+
+        while (true) {
+            size_t j;
+            std::optional<T> value;
+
+            {
+                auto state(state_.lock());
+                auto k = state->ready.find(state->nextToConsume);
+                if (k == state->ready.end()) {
+                    state->consuming = false;
+                    return;
+                }
+                j = state->nextToConsume;
+                value.emplace(std::move(k->second));
+                state->ready.erase(k);
+            }
+
+            consume(j, std::move(*value));
+
+            {
+                auto state(state_.lock());
+                state->nextToConsume++;
+                if (state->nextToEnqueue < n)
+                    pool.enqueue(std::bind(worker, state->nextToEnqueue++));
+            }
+        }
+    };
+
+    {
+        auto state(state_.lock());
+        while (state->nextToEnqueue < std::min(n, window))
+            pool.enqueue(std::bind(worker, state->nextToEnqueue++));
+    }
+
+    pool.process();
 }
 
 } // namespace nix
