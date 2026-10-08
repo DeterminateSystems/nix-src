@@ -6,25 +6,53 @@
 namespace nix {
 
 /**
+ * Methods for selecting the base path against which to diff a path
+ * being exported.
+ */
+enum class BaseSelectionMethod {
+    /**
+     * Select a base path with the same name (ignoring the version).
+     */
+    byName,
+};
+
+std::string showBaseSelectionMethod(BaseSelectionMethod method);
+
+BaseSelectionMethod parseBaseSelectionMethod(std::string_view s);
+
+struct NarioExportOptions
+{
+    /**
+     * The nario format version (1 or 2).
+     */
+    unsigned int version;
+
+    /**
+     * If non-empty (only supported for version 2), the receiver is
+     * assumed to have the closure of these paths. Paths in that
+     * closure are not exported (but recorded as being expected to be
+     * present), and other paths are exported as binary diffs against
+     * a path in that closure if a suitable one is found.
+     */
+    StorePathSet basePaths;
+
+    /**
+     * How to find suitable base paths.
+     */
+    BaseSelectionMethod baseSelectionMethod = BaseSelectionMethod::byName;
+
+    /**
+     * If not `none` (only supported for version 2), NARs that are not
+     * exported as binary diffs are compressed.
+     */
+    CompressionAlgo compression = CompressionAlgo::none;
+};
+
+/**
  * Export multiple paths in the format expected by `nix-store
  * --import`. The paths will be sorted topologically.
- *
- * If `basePaths` is non-empty (only supported for version 2), the
- * receiver is assumed to have the closure of `basePaths`. Paths in
- * that closure are not exported (but recorded as being expected to
- * be present), and other paths are exported as binary diffs against
- * a path in that closure if a suitable one is found.
- *
- * If `compression` is not `none` (only supported for version 2),
- * NARs that are not exported as binary diffs are compressed.
  */
-void exportPaths(
-    Store & store,
-    const StorePathSet & paths,
-    Sink & sink,
-    unsigned int version,
-    const StorePathSet & basePaths = {},
-    CompressionAlgo compression = CompressionAlgo::none);
+void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const NarioExportOptions & options);
 
 /**
  * How a NAR is compressed inside a nario.

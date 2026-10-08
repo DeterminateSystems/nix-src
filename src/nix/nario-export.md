@@ -39,7 +39,7 @@ The `--base` flag specifies one or more *installables* whose closure (the *base 
 
 * Paths that are in the base closure are not included in the nario. Instead, the nario records that they're expected to be present, and `nix nario import` fails if they're missing or have a different NAR hash.
 
-* For other paths, `nix nario export` looks for a path in the base closure with the same name (ignoring the version), e.g. `hello-2.12.2` for `hello-2.12.3`. If one exists, the path is stored as a binary diff (computed using zstd) against the NAR of that base path, provided that the diff is sufficiently small. `nix nario import` reconstructs the path by applying the diff to the base path, after verifying that the base path has the expected NAR hash.
+* For other paths, `nix nario export` looks for a suitable path in the base closure. How this path is selected is determined by the flag `--base-selection-method`. Currently, the only method is `by-name` (the default), which selects a path with the same name (ignoring the version), e.g. `hello-2.12.2` for `hello-2.12.3`. If a suitable path exists, the path is stored as a binary diff (computed using zstd) against the NAR of that base path, provided that the diff is sufficiently small. `nix nario import` reconstructs the path by applying the diff to the base path, after verifying that the base path has the expected NAR hash.
 
 Binary diffs require nario format 2. Narios that contain binary diffs cannot be imported by versions of Nix that don't support them.
 

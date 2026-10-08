@@ -120,31 +120,42 @@ struct NarioDiff
     std::string patch;
 };
 
+std::string showBaseSelectionMethod(BaseSelectionMethod method)
+{
+    switch (method) {
+    case BaseSelectionMethod::byName:
+        return "by-name";
+    }
+    unreachable();
+}
+
+BaseSelectionMethod parseBaseSelectionMethod(std::string_view s)
+{
+    if (s == "by-name")
+        return BaseSelectionMethod::byName;
+    throw Error("unknown base selection method '%s'", s);
+}
+
 /**
- * Select the path in `baseClosure` that is most likely to produce a
- * small diff against each path in `paths` that is not in
- * `baseClosure`.
+ * The `by-name` base selection method: select a base path with the
+ * same name (ignoring the version), preferring the one with the most
+ * similar version and NAR size.
  */
 static std::map<StorePath, StorePath>
-selectDiffBases(Store & store, const StorePaths & paths, const StorePathSet & baseClosure)
+selectDiffBasesByName(Store & store, const StorePaths & targets, const StorePaths & bases)
 {
     std::map<std::pair<std::string, std::string>, std::vector<StorePath>> basesByKey;
-    for (auto & basePath : baseClosure)
+    for (auto & basePath : bases)
         basesByKey[getDiffKey(basePath.name())].push_back(basePath);
 
     std::map<StorePath, StorePath> res;
 
-    for (auto & path : paths) {
-        if (baseClosure.contains(path))
-            continue;
-
+    for (auto & path : targets) {
         auto i = basesByKey.find(getDiffKey(path.name()));
         if (i == basesByKey.end())
             continue;
 
         auto info = store.queryPathInfo(path);
-        if (info->narSize > maxDiffNarSize)
-            continue;
 
         auto version = DrvName(path.name()).version;
 
@@ -154,8 +165,6 @@ selectDiffBases(Store & store, const StorePaths & paths, const StorePathSet & ba
 
         for (auto & basePath : i->second) {
             auto baseInfo = store.queryPathInfo(basePath);
-            if (baseInfo->narSize > maxDiffNarSize || baseInfo->narSize + info->narSize > maxZstdPatchWindow())
-                continue;
             auto ratio = sizeRatio(info->narSize, baseInfo->narSize);
             if (ratio >= maxDiffSizeRatio)
                 continue;
@@ -171,6 +180,45 @@ selectDiffBases(Store & store, const StorePaths & paths, const StorePathSet & ba
         if (bestPath)
             res.emplace(path, *bestPath);
     }
+
+    return res;
+}
+
+/**
+ * Select the path in `baseClosure` that is most likely to produce a
+ * small diff against each path in `paths` that is not in
+ * `baseClosure`, using the base selection method `method`.
+ */
+static std::map<StorePath, StorePath>
+selectDiffBases(Store & store, BaseSelectionMethod method, const StorePaths & paths, const StorePathSet & baseClosure)
+{
+    /* Constraints that apply regardless of the selection method. */
+    auto isDiffable = [&](const StorePath & path) { return store.queryPathInfo(path)->narSize <= maxDiffNarSize; };
+
+    StorePaths targets;
+    for (auto & path : paths)
+        if (!baseClosure.contains(path) && isDiffable(path))
+            targets.push_back(path);
+
+    StorePaths bases;
+    for (auto & path : baseClosure)
+        if (isDiffable(path))
+            bases.push_back(path);
+
+    std::map<StorePath, StorePath> res;
+
+    switch (method) {
+    case BaseSelectionMethod::byName:
+        res = selectDiffBasesByName(store, targets, bases);
+        break;
+    }
+
+    /* zstd patches can only refer to the base if base and target
+       fit in the zstd window together. */
+    std::erase_if(res, [&](auto & pair) {
+        return store.queryPathInfo(pair.first)->narSize + store.queryPathInfo(pair.second)->narSize
+               > maxZstdPatchWindow();
+    });
 
     return res;
 }
@@ -222,14 +270,12 @@ static std::optional<NarioDiff> makeDiff(Store & store, const StorePath & path, 
     };
 }
 
-void exportPaths(
-    Store & store,
-    const StorePathSet & paths,
-    Sink & sink,
-    unsigned int version,
-    const StorePathSet & basePaths,
-    CompressionAlgo compression)
+void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const NarioExportOptions & options)
 {
+    auto version = options.version;
+    auto & basePaths = options.basePaths;
+    auto compression = options.compression;
+
     auto sorted = store.topoSortPaths(paths);
     std::reverse(sorted.begin(), sorted.end());
 
@@ -269,7 +315,7 @@ void exportPaths(
         if (!basePaths.empty()) {
             store.computeFSClosure(basePaths, baseClosure);
 
-            auto diffBases = selectDiffBases(store, sorted, baseClosure);
+            auto diffBases = selectDiffBases(store, options.baseSelectionMethod, sorted, baseClosure);
 
             Sync<std::map<StorePath, NarioDiff>> diffs_;
             ThreadPool pool;

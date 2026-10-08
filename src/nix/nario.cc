@@ -36,6 +36,7 @@ struct CmdNarioExport : StorePathsCommand
 {
     unsigned int version = 0;
     std::vector<std::string> baseArgs;
+    BaseSelectionMethod baseSelectionMethod = BaseSelectionMethod::byName;
     CompressionAlgo compression = CompressionAlgo::none;
 
     CmdNarioExport()
@@ -55,6 +56,21 @@ struct CmdNarioExport : StorePathsCommand
             .labels = {"installable"},
             .handler = {[this](std::string s) { baseArgs.push_back(s); }},
             .completer = getCompleteInstallable(),
+        });
+
+        addFlag({
+            .longName = "base-selection-method",
+            .description =
+                "How to select the path in the base closure against which to diff a path. Currently the only method is `by-name` (select a path with the same name, ignoring the version), which is the default.",
+            .labels = {"method"},
+            .handler = {[this](std::string s) { baseSelectionMethod = parseBaseSelectionMethod(s); }},
+            .completer = {[](AddCompletions & completions, size_t, std::string_view prefix) {
+                for (auto method : {BaseSelectionMethod::byName}) {
+                    auto s = showBaseSelectionMethod(method);
+                    if (s.starts_with(prefix))
+                        completions.add(s);
+                }
+            }},
         });
 
         addFlag({
@@ -85,12 +101,17 @@ struct CmdNarioExport : StorePathsCommand
             throw UsageError("refusing to write nario to a terminal");
         FdSink sink(std::move(fd));
 
-        StorePathSet basePaths;
+        NarioExportOptions options{
+            .version = version,
+            .baseSelectionMethod = baseSelectionMethod,
+            .compression = compression,
+        };
+
         if (!baseArgs.empty())
-            basePaths = Installable::toStorePathSet(
+            options.basePaths = Installable::toStorePathSet(
                 getEvalStore(), store, Realise::Outputs, operateOn, parseInstallables(store, baseArgs));
 
-        exportPaths(*store, StorePathSet(storePaths.begin(), storePaths.end()), sink, version, basePaths, compression);
+        exportPaths(*store, StorePathSet(storePaths.begin(), storePaths.end()), sink, options);
     }
 };
 

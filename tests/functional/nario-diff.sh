@@ -22,6 +22,11 @@ nix nario export --format 2 -r "$old" > "$TEST_ROOT"/old.nario
 nix nario export --format 2 -r "$new" > "$TEST_ROOT"/full.nario
 nix nario export --format 2 -r "$new" --base "$old" > "$TEST_ROOT"/diff.nario
 
+# `by-name` is the default base selection method.
+nix nario export --format 2 -r "$new" --base "$old" --base-selection-method by-name > "$TEST_ROOT"/diff-by-name.nario
+cmp "$TEST_ROOT"/diff.nario "$TEST_ROOT"/diff-by-name.nario
+expectStderr 1 nix nario export --format 2 -r "$new" --base "$old" --base-selection-method foo | grepQuiet "unknown base selection method 'foo'"
+
 # The diff should be much smaller than the full export.
 (( $(stat -c %s "$TEST_ROOT"/diff.nario) * 4 < $(stat -c %s "$TEST_ROOT"/full.nario) ))
 
