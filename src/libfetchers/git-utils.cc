@@ -1632,32 +1632,6 @@ std::vector<std::tuple<GitRepoImpl::Submodule, Hash>> GitRepoImpl::getSubmodules
     return result;
 }
 
-namespace fetchers {
-
-ref<GitRepo> Settings::getTarballCache() const
-{
-    /* v1: Had either only loose objects or thin packfiles referring to loose objects
-     * v2: Must have only packfiles with no loose objects. Should get repacked periodically
-     * for optimal packfiles.
-     */
-    static auto repoDir = std::filesystem::path(getCacheDir()) / "tarball-cache-v2";
-    auto tarballCache(_tarballCache.lock());
-    if (!*tarballCache)
-        *tarballCache = GitRepo::openRepo(
-            repoDir,
-            {
-                .create = true,
-                .bare = true,
-                .packfilesOnly = true,
-                /* Tarball unpacking is not expected to benefit from deltas much,
-                   compared to how much CPU times it takes to find. */
-                .dontFindDeltas = true,
-            });
-    return ref<GitRepo>(*tarballCache);
-}
-
-} // namespace fetchers
-
 static Sync<std::map<std::filesystem::path, GitRepo::WorkdirInfo>> workdirInfoCache_;
 
 GitRepo::WorkdirInfo GitRepo::getCachedWorkdirInfo(const std::filesystem::path & path)
