@@ -56,6 +56,7 @@ headers = [ config_pub_h ] + files(
   'fun.hh',
   'git.hh',
   'hash.hh',
+  'hdiff-patch.hh',
   'hilite.hh',
   'json-impls.hh',
   'json-non-null.hh',

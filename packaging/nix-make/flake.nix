@@ -73,9 +73,7 @@
           nix-flake-tests = self.callPackage ../../src/libflake-tests/make.nix { };
           nix-flake-tests-run = self.nix-flake-tests.tests.run;
 
-          test-runner = self.callPackage ../../tests/functional/test-runner.nix {
-            inherit (pkgs.nixDependencies2) hdiffpatch;
-          };
+          test-runner = self.callPackage ../../tests/functional/test-runner.nix { };
           functional-tests = self.callPackage ../../tests/functional/make.nix { };
 
           # Everything that runs tests; building it runs them all.
@@ -93,8 +91,6 @@
     rec {
       packages.${system} = {
         inherit (make.${system}.release) test-runner;
-        # For experimenting with `nix nario export --diff-algorithm hdiffpatch`.
-        inherit (pkgs.nixDependencies2) hdiffpatch;
       };
 
       # `nix flake check` runs all tests against the release variant.

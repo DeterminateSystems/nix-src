@@ -31,9 +31,8 @@ enum class NarioDiffAlgo {
     zstd,
 
     /**
-     * A zstd-compressed patch in HDiffPatch's single-stream format,
-     * computed and applied by the external `hdiffz` and `hpatchz`
-     * programs. Experimental.
+     * A zstd-compressed patch in HDiffPatch's single-stream format
+     * (see `makeHdiffPatch()`). Experimental.
      */
     hdiffpatch,
 };

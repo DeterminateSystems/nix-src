@@ -45,7 +45,7 @@ The flag `--diff-algorithm` determines how binary diffs are computed:
 
 * `zstd` (the default): The NAR is compressed using zstd, with the NAR of the base path as a dictionary.
 
-* `hdiffpatch`: The diff is computed using the external `hdiffz` program from [HDiffPatch](https://github.com/sisong/HDiffPatch), and applied using `hpatchz`. These programs must be in `PATH` both when exporting and importing. This is experimental.
+* `hdiffpatch`: The diff is computed using [HDiffPatch](https://github.com/sisong/HDiffPatch) and compressed using zstd. This is experimental.
 
 Binary diffs require nario format 2. Narios that contain binary diffs cannot be imported by versions of Nix that don't support them.
 

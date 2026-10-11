@@ -11,8 +11,7 @@
 #include "nix/util/zstd-patch.hh"
 #include "nix/util/compression.hh"
 #include "nix/util/spilling-sink.hh"
-#include "nix/util/file-system.hh"
-#include "nix/util/processes.hh"
+#include "nix/util/hdiff-patch.hh"
 
 #include <cctype>
 
@@ -129,53 +128,6 @@ NarioDiffAlgo parseNarioDiffAlgo(std::string_view s)
     if (s == "hdiffpatch")
         return NarioDiffAlgo::hdiffpatch;
     throw Error("unsupported nario diff algorithm '%s'", s);
-}
-
-/**
- * Compute a patch from `base` to `target` using the external `hdiffz`
- * program from HDiffPatch, compressed using zstd at level `level`.
- */
-static std::string makeHdiffPatch(std::string_view base, std::string_view target, int level)
-{
-    AutoDelete tmpDir(createTempDir("", "nix-hdiffz"), true);
-    auto basePath = tmpDir.path() / "base";
-    auto targetPath = tmpDir.path() / "target";
-    auto patchPath = tmpDir.path() / "patch";
-    writeFile(basePath, base);
-    writeFile(targetPath, target);
-    /* These are the options that HDiffPatch's own benchmarks use for
-       zstd. Run single-threaded (`-p-1`), since we already compute
-       diffs in parallel, and don't verify the patch (`-d`), since
-       the NAR hash is checked on import. */
-    runProgram(
-        "hdiffz",
-        true,
-        {"-m-6",
-         "-SD",
-         fmt("-c-zstd-%d-24", level),
-         "-p-1",
-         "-d",
-         "-f",
-         basePath.native(),
-         targetPath.native(),
-         patchPath.native()});
-    return readFile(patchPath);
-}
-
-/**
- * Apply a patch created by `makeHdiffPatch()` to `base` using the
- * external `hpatchz` program, writing the result to `sink`.
- */
-static void applyHdiffPatch(std::string_view base, std::string_view patch, Sink & sink)
-{
-    AutoDelete tmpDir(createTempDir("", "nix-hpatchz"), true);
-    auto basePath = tmpDir.path() / "base";
-    auto patchPath = tmpDir.path() / "patch";
-    auto outPath = tmpDir.path() / "out";
-    writeFile(basePath, base);
-    writeFile(patchPath, patch);
-    runProgram("hpatchz", true, {"-f", basePath.native(), patchPath.native(), outPath.native()});
-    readFile(outPath, sink);
 }
 
 struct NarioDiff
@@ -323,17 +275,19 @@ static std::optional<NarioDiff> makeDiff(
     auto [baseNar, baseNarHash] = getNar(*store.queryPathInfo(basePath));
     auto [nar, narHash] = getNar(*store.queryPathInfo(path));
 
+    auto narSize = nar.size();
+    auto baselineSize = makeZstdPatch("", nar, baselineCompressionLevel).size();
+
     std::string patch;
     switch (diffAlgo) {
     case NarioDiffAlgo::zstd:
         patch = makeZstdPatch(baseNar, nar, diffCompressionLevel);
         break;
     case NarioDiffAlgo::hdiffpatch:
-        patch = makeHdiffPatch(baseNar, nar, diffCompressionLevel);
+        /* This overwrites the NARs, so we can't use them anymore. */
+        patch = makeHdiffPatch(std::move(baseNar), std::move(nar), diffCompressionLevel);
         break;
     }
-
-    auto baselineSize = makeZstdPatch("", nar, baselineCompressionLevel).size();
 
     printMsg(
         lvlTalkative,
@@ -341,7 +295,7 @@ static std::optional<NarioDiff> makeDiff(
         store.printStorePath(path),
         store.printStorePath(basePath),
         patch.size(),
-        nar.size(),
+        narSize,
         baselineSize);
 
     if (patch.size() >= maxDiffFraction * baselineSize)

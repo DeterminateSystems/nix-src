@@ -76,6 +76,7 @@ sources = files(
   'fun.cc',
   'git.cc',
   'hash.cc',
+  'hdiff-patch.cc',
   'hilite.cc',
   'json-utils.cc',
   'local-keys.cc',

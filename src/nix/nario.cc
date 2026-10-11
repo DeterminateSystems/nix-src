@@ -78,7 +78,7 @@ struct CmdNarioExport : StorePathsCommand
         addFlag({
             .longName = "diff-algorithm",
             .description =
-                "Algorithm to use for computing binary diffs. Must be `zstd` (the default) or `hdiffpatch`. `hdiffpatch` is experimental and requires the `hdiffz` and `hpatchz` programs from HDiffPatch to be in `PATH` on export and import.",
+                "Algorithm to use for computing binary diffs. Must be `zstd` (the default) or `hdiffpatch`. `hdiffpatch` is experimental.",
             .labels = {"algorithm"},
             .handler = {[this](std::string s) { diffAlgo = parseNarioDiffAlgo(s); }},
             .completer = {[](AddCompletions & completions, size_t, std::string_view prefix) {
