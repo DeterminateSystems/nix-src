@@ -5,6 +5,10 @@
 
 #include <hdiffpatch/libHDiffPatch/HDiff/diff.h>
 #include <hdiffpatch/libHDiffPatch/HPatch/patch.h>
+
+/* Don't let the compression plugins print notices on stdout, which
+   would end up in the output of e.g. `nix nario export`. */
+#define IS_NOTICE_compress_canceled 0
 #include <hdiffpatch/compress_plugin_demo.h>
 #include <hdiffpatch/decompress_plugin_demo.h>
 

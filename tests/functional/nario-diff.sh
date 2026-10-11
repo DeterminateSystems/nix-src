@@ -35,6 +35,10 @@ expectStderr 1 nix nario export --format 2 -r "$new" --base "$old" --diff-algori
 nix nario export --format 2 -r "$new" --base "$old" --diff-algorithm hdiffpatch > "$TEST_ROOT"/diff-hdiffpatch.nario
 nix nario list < "$TEST_ROOT"/diff-hdiffpatch.nario | grepQuiet "^$new: [0-9]* bytes, hdiffpatch diff against $old ([0-9]* bytes)$"
 [[ $(nix nario list --json < "$TEST_ROOT"/diff-hdiffpatch.nario | jq -r ".paths.\"$new\".diff.algorithm") = hdiffpatch ]]
+# All fields in a nario are padded to 8 bytes, so anything else means
+# that something (like HDiffPatch's progress messages) wrote junk to
+# stdout.
+(( $(stat -c %s "$TEST_ROOT"/diff-hdiffpatch.nario) % 8 == 0 ))
 
 # The diff should be much smaller than the full export.
 (( $(stat -c %s "$TEST_ROOT"/diff.nario) * 4 < $(stat -c %s "$TEST_ROOT"/full.nario) ))

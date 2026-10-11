@@ -41,14 +41,17 @@ stdenv.mkDerivation (finalAttrs: {
     "MT=0"
   ];
 
-  # The static library gets linked into a shared library.
-  env.NIX_CFLAGS_COMPILE = "-fPIC";
+  # The static library gets linked into a shared library. Disable
+  # progress messages on stdout, which would end up in the output of
+  # programs like `nix nario export`.
+  env.NIX_CFLAGS_COMPILE = "-fPIC -D_IS_OUT_DIFF_INFO=0";
 
   enableParallelBuilding = true;
 
-  # These must match the configuration selected by `makeFlags`, since
-  # they affect the headers.
+  # These must match the configuration selected by `makeFlags` and
+  # `NIX_CFLAGS_COMPILE`, since they affect the headers.
   cflags = lib.concatStringsSep " " [
+    "-D_IS_OUT_DIFF_INFO=0"
     "-D_IS_USED_MULTITHREAD=0"
     "-DZ7_ST"
     "-D_IS_NEED_BSDIFF=0"
