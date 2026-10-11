@@ -27,6 +27,15 @@ nix nario export --format 2 -r "$new" --base "$old" --base-selection-method by-n
 cmp "$TEST_ROOT"/diff.nario "$TEST_ROOT"/diff-by-name.nario
 expectStderr 1 nix nario export --format 2 -r "$new" --base "$old" --base-selection-method foo | grepQuiet "unknown base selection method 'foo'"
 
+# `zstd` is the default diff algorithm.
+nix nario export --format 2 -r "$new" --base "$old" --diff-algorithm zstd > "$TEST_ROOT"/diff-zstd-algo.nario
+cmp "$TEST_ROOT"/diff.nario "$TEST_ROOT"/diff-zstd-algo.nario
+expectStderr 1 nix nario export --format 2 -r "$new" --base "$old" --diff-algorithm foo | grepQuiet "unsupported nario diff algorithm 'foo'"
+
+nix nario export --format 2 -r "$new" --base "$old" --diff-algorithm hdiffpatch > "$TEST_ROOT"/diff-hdiffpatch.nario
+nix nario list < "$TEST_ROOT"/diff-hdiffpatch.nario | grepQuiet "^$new: [0-9]* bytes, hdiffpatch diff against $old ([0-9]* bytes)$"
+[[ $(nix nario list --json < "$TEST_ROOT"/diff-hdiffpatch.nario | jq -r ".paths.\"$new\".diff.algorithm") = hdiffpatch ]]
+
 # The diff should be much smaller than the full export.
 (( $(stat -c %s "$TEST_ROOT"/diff.nario) * 4 < $(stat -c %s "$TEST_ROOT"/full.nario) ))
 
@@ -105,6 +114,12 @@ clearStore
 nix nario import --no-check-sigs < "$TEST_ROOT"/old.nario
 nix nario import --no-check-sigs < "$TEST_ROOT"/diff-zstd.nario
 nix store verify --no-trust -r "$new"
+
+clearStore
+nix nario import --no-check-sigs < "$TEST_ROOT"/old.nario
+nix nario import --no-check-sigs < "$TEST_ROOT"/diff-hdiffpatch.nario
+nix store verify --no-trust -r "$new"
+grepQuiet "^2$" "$new/data"
 
 # Importing fails if the base has a different NAR hash.
 clearStore

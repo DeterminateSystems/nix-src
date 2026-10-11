@@ -9,6 +9,7 @@
   bash,
   coreutils,
   jq,
+  hdiffpatch,
   git,
   mercurial,
   unixtools,
@@ -30,6 +31,8 @@ runCommand "nix-test-runner"
           bash
           coreutils
           jq
+          # For `nix nario export --diff-algorithm hdiffpatch`.
+          hdiffpatch
           git
           mercurial
           unixtools.script

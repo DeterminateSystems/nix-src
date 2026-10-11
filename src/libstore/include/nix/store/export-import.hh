@@ -20,6 +20,28 @@ std::string showBaseSelectionMethod(BaseSelectionMethod method);
 
 BaseSelectionMethod parseBaseSelectionMethod(std::string_view s);
 
+/**
+ * Binary diff algorithms supported in narios.
+ */
+enum class NarioDiffAlgo {
+    /**
+     * zstd compression of the target NAR, using the base NAR as a
+     * prefix dictionary (see `makeZstdPatch()`).
+     */
+    zstd,
+
+    /**
+     * A zstd-compressed patch in HDiffPatch's single-stream format,
+     * computed and applied by the external `hdiffz` and `hpatchz`
+     * programs. Experimental.
+     */
+    hdiffpatch,
+};
+
+std::string showNarioDiffAlgo(NarioDiffAlgo algo);
+
+NarioDiffAlgo parseNarioDiffAlgo(std::string_view s);
+
 struct NarioExportOptions
 {
     /**
@@ -40,6 +62,11 @@ struct NarioExportOptions
      * How to find suitable base paths.
      */
     BaseSelectionMethod baseSelectionMethod = BaseSelectionMethod::byName;
+
+    /**
+     * The algorithm used to compute binary diffs.
+     */
+    NarioDiffAlgo diffAlgo = NarioDiffAlgo::zstd;
 
     /**
      * If not `none` (only supported for version 2), NARs that are not
@@ -73,21 +100,6 @@ struct NarioCompression
      */
     uint64_t size;
 };
-
-/**
- * Binary diff algorithms supported in narios.
- */
-enum class NarioDiffAlgo {
-    /**
-     * zstd compression of the target NAR, using the base NAR as a
-     * prefix dictionary (see `makeZstdPatch()`).
-     */
-    zstd,
-};
-
-std::string showNarioDiffAlgo(NarioDiffAlgo algo);
-
-NarioDiffAlgo parseNarioDiffAlgo(std::string_view s);
 
 /**
  * Callbacks for the entries in a nario, used by `parseNario()`.

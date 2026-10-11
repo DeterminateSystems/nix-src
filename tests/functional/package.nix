@@ -8,6 +8,7 @@
   pkg-config,
 
   jq,
+  hdiffpatch,
   git,
   mercurial,
   python3,
@@ -56,6 +57,8 @@ mkMesonDerivation (
       pkg-config
 
       jq
+      # For `nix nario export --diff-algorithm hdiffpatch`.
+      hdiffpatch
       git
       mercurial
       # For the OpenTelemetry collector in `otel.sh`.

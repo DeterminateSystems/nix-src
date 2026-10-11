@@ -11,6 +11,8 @@
 #include "nix/util/zstd-patch.hh"
 #include "nix/util/compression.hh"
 #include "nix/util/spilling-sink.hh"
+#include "nix/util/file-system.hh"
+#include "nix/util/processes.hh"
 
 #include <cctype>
 
@@ -114,6 +116,8 @@ std::string showNarioDiffAlgo(NarioDiffAlgo algo)
     switch (algo) {
     case NarioDiffAlgo::zstd:
         return "zstd";
+    case NarioDiffAlgo::hdiffpatch:
+        return "hdiffpatch";
     }
     unreachable();
 }
@@ -122,7 +126,56 @@ NarioDiffAlgo parseNarioDiffAlgo(std::string_view s)
 {
     if (s == "zstd")
         return NarioDiffAlgo::zstd;
+    if (s == "hdiffpatch")
+        return NarioDiffAlgo::hdiffpatch;
     throw Error("unsupported nario diff algorithm '%s'", s);
+}
+
+/**
+ * Compute a patch from `base` to `target` using the external `hdiffz`
+ * program from HDiffPatch, compressed using zstd at level `level`.
+ */
+static std::string makeHdiffPatch(std::string_view base, std::string_view target, int level)
+{
+    AutoDelete tmpDir(createTempDir("", "nix-hdiffz"), true);
+    auto basePath = tmpDir.path() / "base";
+    auto targetPath = tmpDir.path() / "target";
+    auto patchPath = tmpDir.path() / "patch";
+    writeFile(basePath, base);
+    writeFile(targetPath, target);
+    /* These are the options that HDiffPatch's own benchmarks use for
+       zstd. Run single-threaded (`-p-1`), since we already compute
+       diffs in parallel, and don't verify the patch (`-d`), since
+       the NAR hash is checked on import. */
+    runProgram(
+        "hdiffz",
+        true,
+        {"-m-6",
+         "-SD",
+         fmt("-c-zstd-%d-24", level),
+         "-p-1",
+         "-d",
+         "-f",
+         basePath.native(),
+         targetPath.native(),
+         patchPath.native()});
+    return readFile(patchPath);
+}
+
+/**
+ * Apply a patch created by `makeHdiffPatch()` to `base` using the
+ * external `hpatchz` program, writing the result to `sink`.
+ */
+static void applyHdiffPatch(std::string_view base, std::string_view patch, Sink & sink)
+{
+    AutoDelete tmpDir(createTempDir("", "nix-hpatchz"), true);
+    auto basePath = tmpDir.path() / "base";
+    auto patchPath = tmpDir.path() / "patch";
+    auto outPath = tmpDir.path() / "out";
+    writeFile(basePath, base);
+    writeFile(patchPath, patch);
+    runProgram("hpatchz", true, {"-f", basePath.native(), patchPath.native(), outPath.native()});
+    readFile(outPath, sink);
 }
 
 struct NarioDiff
@@ -202,8 +255,12 @@ selectDiffBasesByName(Store & store, const StorePaths & targets, const StorePath
  * small diff against each path in `paths` that is not in
  * `baseClosure`, using the base selection method `method`.
  */
-static std::map<StorePath, StorePath>
-selectDiffBases(Store & store, BaseSelectionMethod method, const StorePaths & paths, const StorePathSet & baseClosure)
+static std::map<StorePath, StorePath> selectDiffBases(
+    Store & store,
+    BaseSelectionMethod method,
+    NarioDiffAlgo diffAlgo,
+    const StorePaths & paths,
+    const StorePathSet & baseClosure)
 {
     /* Constraints that apply regardless of the selection method. */
     auto isDiffable = [&](const StorePath & path) { return store.queryPathInfo(path)->narSize <= maxDiffNarSize; };
@@ -228,10 +285,11 @@ selectDiffBases(Store & store, BaseSelectionMethod method, const StorePaths & pa
 
     /* zstd patches can only refer to the base if base and target
        fit in the zstd window together. */
-    std::erase_if(res, [&](auto & pair) {
-        return store.queryPathInfo(pair.first)->narSize + store.queryPathInfo(pair.second)->narSize
-               > maxZstdPatchWindow();
-    });
+    if (diffAlgo == NarioDiffAlgo::zstd)
+        std::erase_if(res, [&](auto & pair) {
+            return store.queryPathInfo(pair.first)->narSize + store.queryPathInfo(pair.second)->narSize
+                   > maxZstdPatchWindow();
+        });
 
     return res;
 }
@@ -241,8 +299,12 @@ selectDiffBases(Store & store, BaseSelectionMethod method, const StorePaths & pa
  * Returns `std::nullopt` if the diff is not small enough to be worth
  * it.
  */
-static std::optional<NarioDiff>
-makeDiff(Store & store, const StorePath & path, const StorePath & basePath, int baselineCompressionLevel)
+static std::optional<NarioDiff> makeDiff(
+    Store & store,
+    const StorePath & path,
+    const StorePath & basePath,
+    NarioDiffAlgo diffAlgo,
+    int baselineCompressionLevel)
 {
     Activity act(
         *logger,
@@ -261,7 +323,16 @@ makeDiff(Store & store, const StorePath & path, const StorePath & basePath, int 
     auto [baseNar, baseNarHash] = getNar(*store.queryPathInfo(basePath));
     auto [nar, narHash] = getNar(*store.queryPathInfo(path));
 
-    auto patch = makeZstdPatch(baseNar, nar, diffCompressionLevel);
+    std::string patch;
+    switch (diffAlgo) {
+    case NarioDiffAlgo::zstd:
+        patch = makeZstdPatch(baseNar, nar, diffCompressionLevel);
+        break;
+    case NarioDiffAlgo::hdiffpatch:
+        patch = makeHdiffPatch(baseNar, nar, diffCompressionLevel);
+        break;
+    }
+
     auto baselineSize = makeZstdPatch("", nar, baselineCompressionLevel).size();
 
     printMsg(
@@ -277,7 +348,7 @@ makeDiff(Store & store, const StorePath & path, const StorePath & basePath, int 
         return std::nullopt;
 
     return NarioDiff{
-        .algo = NarioDiffAlgo::zstd,
+        .algo = diffAlgo,
         .basePath = basePath,
         .baseNarHash = baseNarHash,
         .patch = std::move(patch),
@@ -338,7 +409,7 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
 
         if (!basePaths.empty()) {
             store.computeFSClosure(basePaths, baseClosure);
-            diffBases = selectDiffBases(store, options.baseSelectionMethod, sorted, baseClosure);
+            diffBases = selectDiffBases(store, options.baseSelectionMethod, options.diffAlgo, sorted, baseClosure);
         }
 
         /* The expensive part of an entry (a binary diff or a
@@ -417,7 +488,7 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
                 Activity act(*logger, lvlTalkative, actUnknown, fmt("exporting path '%s'", store.printStorePath(path)));
 
                 if (basePath) {
-                    entry.diff = makeDiff(store, path, *basePath, baselineCompressionLevel);
+                    entry.diff = makeDiff(store, path, *basePath, options.diffAlgo, baselineCompressionLevel);
                     if (entry.diff)
                         return entry;
                 }
@@ -442,7 +513,8 @@ void exportPaths(Store & store, const StorePathSet & paths, Sink & sink, const N
             [](const ExportEntry & entry) -> size_t {
                 return entry.diff ? entry.diff->patch.size() : entry.compressed ? entry.compressed->size() : 0;
             },
-            maxBufferedEntriesSize);
+            maxBufferedEntriesSize,
+            12);
 
         writeCheapEntries(sorted.size());
 
@@ -645,6 +717,9 @@ StorePaths importPaths(Store & store, Source & source, CheckSigsFlag checkSigs)
                     switch (algo) {
                     case NarioDiffAlgo::zstd:
                         applyZstdPatch(baseNar.s, patch, sink);
+                        break;
+                    case NarioDiffAlgo::hdiffpatch:
+                        applyHdiffPatch(baseNar.s, patch, sink);
                         break;
                     }
                 });

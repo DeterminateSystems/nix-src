@@ -37,6 +37,7 @@ struct CmdNarioExport : StorePathsCommand
     unsigned int version = 0;
     std::vector<std::string> baseArgs;
     BaseSelectionMethod baseSelectionMethod = BaseSelectionMethod::byName;
+    NarioDiffAlgo diffAlgo = NarioDiffAlgo::zstd;
     CompressionAlgo compression = CompressionAlgo::none;
     std::optional<int> compressionLevel;
 
@@ -68,6 +69,21 @@ struct CmdNarioExport : StorePathsCommand
             .completer = {[](AddCompletions & completions, size_t, std::string_view prefix) {
                 for (auto method : {BaseSelectionMethod::byName}) {
                     auto s = showBaseSelectionMethod(method);
+                    if (s.starts_with(prefix))
+                        completions.add(s);
+                }
+            }},
+        });
+
+        addFlag({
+            .longName = "diff-algorithm",
+            .description =
+                "Algorithm to use for computing binary diffs. Must be `zstd` (the default) or `hdiffpatch`. `hdiffpatch` is experimental and requires the `hdiffz` and `hpatchz` programs from HDiffPatch to be in `PATH` on export and import.",
+            .labels = {"algorithm"},
+            .handler = {[this](std::string s) { diffAlgo = parseNarioDiffAlgo(s); }},
+            .completer = {[](AddCompletions & completions, size_t, std::string_view prefix) {
+                for (auto algo : {NarioDiffAlgo::zstd, NarioDiffAlgo::hdiffpatch}) {
+                    auto s = showNarioDiffAlgo(algo);
                     if (s.starts_with(prefix))
                         completions.add(s);
                 }
@@ -113,6 +129,7 @@ struct CmdNarioExport : StorePathsCommand
         NarioExportOptions options{
             .version = version,
             .baseSelectionMethod = baseSelectionMethod,
+            .diffAlgo = diffAlgo,
             .compression = compression,
             .compressionLevel = compressionLevel,
         };
