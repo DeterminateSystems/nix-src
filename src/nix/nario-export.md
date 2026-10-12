@@ -43,9 +43,9 @@ The `--base` flag specifies one or more *installables* whose closure (the *base 
 
 The flag `--diff-algorithm` determines how binary diffs are computed:
 
-* `zstd` (the default): The NAR is compressed using zstd, with the NAR of the base path as a dictionary.
+* `hdiffpatch` (the default): The diff is computed using [HDiffPatch](https://github.com/sisong/HDiffPatch) and compressed using zstd. This generally produces the smallest diffs.
 
-* `hdiffpatch`: The diff is computed using [HDiffPatch](https://github.com/sisong/HDiffPatch) and compressed using zstd. This is experimental.
+* `zstd`: The NAR is compressed using zstd, with the NAR of the base path as a dictionary.
 
 Binary diffs require nario format 2. Narios that contain binary diffs cannot be imported by versions of Nix that don't support them.
 

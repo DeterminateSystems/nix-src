@@ -27,18 +27,19 @@ nix nario export --format 2 -r "$new" --base "$old" --base-selection-method by-n
 cmp "$TEST_ROOT"/diff.nario "$TEST_ROOT"/diff-by-name.nario
 expectStderr 1 nix nario export --format 2 -r "$new" --base "$old" --base-selection-method foo | grepQuiet "unknown base selection method 'foo'"
 
-# `zstd` is the default diff algorithm.
-nix nario export --format 2 -r "$new" --base "$old" --diff-algorithm zstd > "$TEST_ROOT"/diff-zstd-algo.nario
-cmp "$TEST_ROOT"/diff.nario "$TEST_ROOT"/diff-zstd-algo.nario
+# `hdiffpatch` is the default diff algorithm.
+nix nario export --format 2 -r "$new" --base "$old" --diff-algorithm hdiffpatch > "$TEST_ROOT"/diff-hdiffpatch.nario
+cmp "$TEST_ROOT"/diff.nario "$TEST_ROOT"/diff-hdiffpatch.nario
 expectStderr 1 nix nario export --format 2 -r "$new" --base "$old" --diff-algorithm foo | grepQuiet "unsupported nario diff algorithm 'foo'"
 
-nix nario export --format 2 -r "$new" --base "$old" --diff-algorithm hdiffpatch > "$TEST_ROOT"/diff-hdiffpatch.nario
-nix nario list < "$TEST_ROOT"/diff-hdiffpatch.nario | grepQuiet "^$new: [0-9]* bytes, hdiffpatch diff against $old ([0-9]* bytes)$"
-[[ $(nix nario list --json < "$TEST_ROOT"/diff-hdiffpatch.nario | jq -r ".paths.\"$new\".diff.algorithm") = hdiffpatch ]]
 # All fields in a nario are padded to 8 bytes, so anything else means
 # that something (like HDiffPatch's progress messages) wrote junk to
 # stdout.
-(( $(stat -c %s "$TEST_ROOT"/diff-hdiffpatch.nario) % 8 == 0 ))
+(( $(stat -c %s "$TEST_ROOT"/diff.nario) % 8 == 0 ))
+
+nix nario export --format 2 -r "$new" --base "$old" --diff-algorithm zstd > "$TEST_ROOT"/diff-zstd-algo.nario
+nix nario list < "$TEST_ROOT"/diff-zstd-algo.nario | grepQuiet "^$new: [0-9]* bytes, zstd diff against $old ([0-9]* bytes)$"
+[[ $(nix nario list --json < "$TEST_ROOT"/diff-zstd-algo.nario | jq -r ".paths.\"$new\".diff.algorithm") = zstd ]]
 
 # The diff should be much smaller than the full export.
 (( $(stat -c %s "$TEST_ROOT"/diff.nario) * 4 < $(stat -c %s "$TEST_ROOT"/full.nario) ))
@@ -67,17 +68,17 @@ done
 
 nix nario export --format 2 --compression zstd -r "$new" --base "$old" > "$TEST_ROOT"/diff-zstd.nario
 (( $(stat -c %s "$TEST_ROOT"/diff-zstd.nario) < $(stat -c %s "$TEST_ROOT"/diff.nario) ))
-nix nario list < "$TEST_ROOT"/diff-zstd.nario | grepQuiet "^$new: [0-9]* bytes, zstd diff against $old ([0-9]* bytes)$"
+nix nario list < "$TEST_ROOT"/diff-zstd.nario | grepQuiet "^$new: [0-9]* bytes, hdiffpatch diff against $old ([0-9]* bytes)$"
 nix nario list < "$TEST_ROOT"/diff-zstd.nario | grepQuiet "^$extra: [0-9]* bytes, zstd-compressed ([0-9]* bytes)$"
 
 # Test `nix nario list`.
-nix nario list < "$TEST_ROOT"/diff.nario | grepQuiet "^$new: [0-9]* bytes, zstd diff against $old ([0-9]* bytes)$"
+nix nario list < "$TEST_ROOT"/diff.nario | grepQuiet "^$new: [0-9]* bytes, hdiffpatch diff against $old ([0-9]* bytes)$"
 nix nario list < "$TEST_ROOT"/diff.nario | grepQuiet "^$shared: expected to be present$"
 nix nario list < "$TEST_ROOT"/diff.nario | grepQuiet "^$extra: [0-9]* bytes$"
 nix nario list -R < "$TEST_ROOT"/diff.nario | grepQuiet "^$extra/data$"
 
 json=$(nix nario list --json < "$TEST_ROOT/diff.nario")
-[[ $(printf "%s" "$json" | jq -r ".paths.\"$new\".diff.algorithm") = zstd ]]
+[[ $(printf "%s" "$json" | jq -r ".paths.\"$new\".diff.algorithm") = hdiffpatch ]]
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$new\".diff.base") = "$old" ]]
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$new\".diff.baseNarHash") = $(nix path-info --json "$old" | jq -r ".[].narHash") ]]
 [[ $(printf "%s" "$json" | jq -r ".paths.\"$shared\".present") = true ]]
@@ -121,7 +122,7 @@ nix store verify --no-trust -r "$new"
 
 clearStore
 nix nario import --no-check-sigs < "$TEST_ROOT"/old.nario
-nix nario import --no-check-sigs < "$TEST_ROOT"/diff-hdiffpatch.nario
+nix nario import --no-check-sigs < "$TEST_ROOT"/diff-zstd-algo.nario
 nix store verify --no-trust -r "$new"
 grepQuiet "^2$" "$new/data"
 

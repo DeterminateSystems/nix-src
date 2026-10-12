@@ -32,7 +32,7 @@ enum class NarioDiffAlgo {
 
     /**
      * A zstd-compressed patch in HDiffPatch's single-stream format
-     * (see `makeHdiffPatch()`). Experimental.
+     * (see `makeHdiffPatch()`).
      */
     hdiffpatch,
 };
@@ -65,7 +65,7 @@ struct NarioExportOptions
     /**
      * The algorithm used to compute binary diffs.
      */
-    NarioDiffAlgo diffAlgo = NarioDiffAlgo::zstd;
+    NarioDiffAlgo diffAlgo = NarioDiffAlgo::hdiffpatch;
 
     /**
      * If not `none` (only supported for version 2), NARs that are not

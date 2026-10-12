@@ -37,7 +37,7 @@ struct CmdNarioExport : StorePathsCommand
     unsigned int version = 0;
     std::vector<std::string> baseArgs;
     BaseSelectionMethod baseSelectionMethod = BaseSelectionMethod::byName;
-    NarioDiffAlgo diffAlgo = NarioDiffAlgo::zstd;
+    NarioDiffAlgo diffAlgo = NarioDiffAlgo::hdiffpatch;
     CompressionAlgo compression = CompressionAlgo::none;
     std::optional<int> compressionLevel;
 
@@ -77,12 +77,11 @@ struct CmdNarioExport : StorePathsCommand
 
         addFlag({
             .longName = "diff-algorithm",
-            .description =
-                "Algorithm to use for computing binary diffs. Must be `zstd` (the default) or `hdiffpatch`. `hdiffpatch` is experimental.",
+            .description = "Algorithm to use for computing binary diffs. Must be `hdiffpatch` (the default) or `zstd`.",
             .labels = {"algorithm"},
             .handler = {[this](std::string s) { diffAlgo = parseNarioDiffAlgo(s); }},
             .completer = {[](AddCompletions & completions, size_t, std::string_view prefix) {
-                for (auto algo : {NarioDiffAlgo::zstd, NarioDiffAlgo::hdiffpatch}) {
+                for (auto algo : {NarioDiffAlgo::hdiffpatch, NarioDiffAlgo::zstd}) {
                     auto s = showNarioDiffAlgo(algo);
                     if (s.starts_with(prefix))
                         completions.add(s);
