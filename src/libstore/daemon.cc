@@ -418,6 +418,11 @@ static void performOp(
             bool repairBool;
             conn.from >> repairBool;
             auto repair = RepairFlag{repairBool};
+            /* Repairing is not atomic, so disallowed for "untrusted"
+               clients. */
+            if (repair && !trusted)
+                throw Error("you are not privileged to repair paths");
+
             auto provenance = conn.protoVersion.features.contains(WorkerProto::featureProvenance)
                                   ? Provenance::from_json_str_optional(readString(conn.from))
                                   : nullptr;
@@ -502,6 +507,10 @@ static void performOp(
     case WorkerProto::Op::AddMultipleToStore: {
         bool repair, dontCheckSigs;
         conn.from >> repair >> dontCheckSigs;
+        /* Repairing is not atomic, so disallowed for "untrusted"
+           clients. */
+        if (repair && !trusted)
+            throw Error("you are not privileged to repair store paths");
         if (!trusted && dontCheckSigs)
             dontCheckSigs = false;
 
@@ -980,6 +989,10 @@ static void performOp(
                               ? Provenance::from_json_str_optional(readString(conn.from))
                               : nullptr;
         conn.from >> repair >> dontCheckSigs;
+        /* Repairing is not atomic, so disallowed for "untrusted"
+           clients. */
+        if (repair && !trusted)
+            throw Error("you are not privileged to repair store paths");
         if (!trusted && dontCheckSigs)
             dontCheckSigs = false;
         if (!trusted)
