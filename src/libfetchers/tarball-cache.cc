@@ -158,6 +158,9 @@ struct Connection
     {
         db = SQLite(dbPath, {.useWAL = settings.useSQLiteWAL});
         db.exec("pragma synchronous = normal");
+        /* Read pages via mmap rather than pread(). This reduces system time (and thus cold imports and copying
+           trees to the store) by about 7%. Writes still go through write(). */
+        db.exec("pragma mmap_size = 1073741824");
 
         hasTree.create(db, "select 1 from Trees where oid = ?");
         queryEntries.create(db, "select name, mode, child from TreeEntries where tree = ?");
