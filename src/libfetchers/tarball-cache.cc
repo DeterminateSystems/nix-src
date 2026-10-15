@@ -13,6 +13,7 @@
 #include "nix/util/sync.hh"
 #include "nix/util/thread-pool.hh"
 #include "nix/util/users.hh"
+#include "nix/util/util.hh"
 
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/unordered/unordered_flat_set.hpp>
@@ -73,8 +74,9 @@ constexpr size_t chunkSize = 1024 * 1024;
 template<typename T>
 void appendLE(std::string & s, T n)
 {
-    for (size_t i = 0; i < sizeof(T); i++)
-        s.push_back((char) ((n >> (8 * i)) & 0xff));
+    unsigned char buf[sizeof(T)];
+    writeLittleEndian<T>(buf, n);
+    s.append((const char *) buf, sizeof(T));
 }
 
 template<typename T>
@@ -82,10 +84,7 @@ T readLE(std::string_view s, size_t offset)
 {
     if (offset + sizeof(T) > s.size())
         throw Error("tarball cache contains a truncated value");
-    T n = 0;
-    for (size_t i = 0; i < sizeof(T); i++)
-        n |= (T) (unsigned char) s[offset + i] << (8 * i);
-    return n;
+    return readLittleEndian<T>((const unsigned char *) s.data() + offset);
 }
 
 Hash toOid(std::string_view s)
