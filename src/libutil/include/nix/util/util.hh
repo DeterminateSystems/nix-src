@@ -179,7 +179,7 @@ std::optional<N> string2Float(const std::string_view s);
  * Convert a little-endian integer to host order.
  */
 template<typename T>
-T readLittleEndian(unsigned char * p)
+T readLittleEndian(const unsigned char * p)
 {
     T x = 0;
     /* Byte types such as char/unsigned char/std::byte are a bit special because
@@ -203,6 +203,17 @@ T readLittleEndian(unsigned char * p)
         }
     }
     return x;
+}
+
+/**
+ * Convert a host order integer to little-endian.
+ */
+template<typename T>
+void writeLittleEndian(unsigned char * p, T x)
+{
+    if constexpr (std::endian::native != std::endian::little)
+        x = std::byteswap(x);
+    std::memcpy(p, &x, sizeof(T));
 }
 
 /**
