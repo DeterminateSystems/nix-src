@@ -163,8 +163,7 @@ using Dir = std::map<std::string, Entry>;
 struct Connection
 {
     SQLite db;
-    SQLiteStmt hasTree, queryEntries, hasBlob, queryBlob, insertBlob, insertChunk, insertTree, queryBlobOids,
-        queryTreeOids;
+    SQLiteStmt hasTree, queryEntries, hasBlob, queryBlob, insertBlob, insertChunk, insertTree;
 
     Connection(const std::filesystem::path & dbPath)
     {
@@ -178,8 +177,6 @@ struct Connection
         db.exec("pragma cache_size = -16384");
 
         hasTree.create(db, "select 1 from Trees where oid = ?");
-        queryBlobOids.create(db, "select oid from Blobs");
-        queryTreeOids.create(db, "select oid from Trees");
         queryEntries.create(db, "select entries from Trees where oid = ?");
         hasBlob.create(db, "select 1 from Blobs where oid = ?");
         queryBlob.create(
@@ -624,27 +621,27 @@ struct TarballCacheSink : GitFileSystemObjectSink
     /** Rows waiting to be written to the database. */
     Sync<Pending> _pending;
 
-    /** The blobs that are already in the cache or have been seen during this import. */
+    /** The blobs that have already been seen during this import. */
     Sync<boost::unordered_flat_set<Hash>> _seen;
 
-    /** The trees that are already in the cache. */
-    boost::unordered_flat_set<Hash> knownTrees;
+    /**
+     * Connections used to check whether objects already exist. Each keeps a read transaction open for the duration
+     * of the import, so that the per-object queries don't each have to start a transaction (which involves locking).
+     * The transaction's snapshot doesn't include the objects written during this import, but those are tracked by
+     * `_seen`. Objects written by other processes in the meantime are simply written again (`insert or ignore`).
+     *
+     * Note: an open read transaction keeps the WAL from being reset, so it grows for the duration of the import.
+     */
+    Pool<Connection> readPool;
 
     TarballCacheSink(ref<TarballCacheImpl> cache)
         : cache(cache)
+        , readPool(std::numeric_limits<size_t>::max(), [cache]() {
+            auto conn = make_ref<Connection>(cache->dbPath);
+            conn->db.exec("begin");
+            return conn;
+        })
     {
-        auto conn(cache->pool.get());
-        {
-            auto seen(_seen.lock());
-            auto stmt(conn->queryBlobOids.use());
-            while (stmt.next())
-                seen->insert(toOid(stmt.getBlob(0)));
-        }
-        {
-            auto stmt(conn->queryTreeOids.use());
-            while (stmt.next())
-                knownTrees.insert(toOid(stmt.getBlob(0)));
-        }
     }
 
     ~TarballCacheSink()
@@ -700,7 +697,11 @@ struct TarballCacheSink : GitFileSystemObjectSink
      */
     bool needBlob(const Hash & oid)
     {
-        return _seen.lock()->insert(oid).second;
+        if (!_seen.lock()->insert(oid).second)
+            return false;
+
+        auto conn(readPool.get());
+        return !conn->hasBlob.use().apply(oid.hash, oid.hashSize).next();
     }
 
     /**
@@ -939,7 +940,7 @@ struct TarballCacheSink : GitFileSystemObjectSink
         std::vector<const Directory *> missing;
         {
             boost::unordered_flat_set<Hash> visited;
-            auto & knownTrees = this->knownTrees;
+            auto conn(readPool.get());
 
             [&](this const auto & visit, const Directory & dir) -> void {
                 checkInterrupt();
@@ -947,7 +948,7 @@ struct TarballCacheSink : GitFileSystemObjectSink
                 auto & oid = dir.oid.value();
                 if (!visited.insert(oid).second)
                     return;
-                if (knownTrees.contains(oid))
+                if (conn->hasTree.use().apply(oid.hash, oid.hashSize).next())
                     return;
 
                 for (auto & child : dir.children)
@@ -957,6 +958,9 @@ struct TarballCacheSink : GitFileSystemObjectSink
                 missing.push_back(&dir);
             }(state->root);
         }
+
+        /* Close the read connections (discarding their transactions), so the WAL can be reset again. */
+        readPool.clear();
 
         /* Write the missing trees. This must be done after writing the blobs, since the existence of a tree implies
            that all its children exist. */
