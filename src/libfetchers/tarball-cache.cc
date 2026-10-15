@@ -164,7 +164,8 @@ using Dir = std::map<std::string, Entry>;
 struct Connection
 {
     SQLite db;
-    SQLiteStmt hasTree, queryEntries, hasBlob, queryBlob, insertBlob, insertChunk, insertTree;
+    SQLiteStmt hasTree, queryEntries, hasBlob, queryBlob, insertBlob, insertChunk, insertTree, queryBlobOids,
+        queryTreeOids;
 
     Connection(const std::filesystem::path & dbPath)
     {
@@ -175,6 +176,8 @@ struct Connection
         db.exec("pragma mmap_size = 1073741824");
 
         hasTree.create(db, "select 1 from Trees where oid = ?");
+        queryBlobOids.create(db, "select oid from Blobs");
+        queryTreeOids.create(db, "select oid from Trees");
         queryEntries.create(db, "select entries from Trees where oid = ?");
         hasBlob.create(db, "select 1 from Blobs where oid = ?");
         queryBlob.create(
@@ -619,12 +622,30 @@ struct TarballCacheSink : GitFileSystemObjectSink
     /** Rows waiting to be written to the database. */
     Sync<Pending> _pending;
 
-    /** The blobs that have already been seen during this import. */
+    /** The blobs that are already in the cache or have been seen during this import. */
     Sync<boost::unordered_flat_set<Hash>> _seen;
+
+    /** The trees that are already in the cache. */
+    boost::unordered_flat_set<Hash> knownTrees;
 
     TarballCacheSink(ref<TarballCacheImpl> cache)
         : cache(cache)
     {
+        /* Preload the IDs of the objects already in the cache, so that we don't need a query (and thus a read
+           transaction) per object. Objects added by other processes during this import are simply written again
+           (`insert or ignore`). */
+        auto conn(cache->pool.get());
+        {
+            auto seen(_seen.lock());
+            auto stmt(conn->queryBlobOids.use());
+            while (stmt.next())
+                seen->insert(toOid(stmt.getBlob(0)));
+        }
+        {
+            auto stmt(conn->queryTreeOids.use());
+            while (stmt.next())
+                knownTrees.insert(toOid(stmt.getBlob(0)));
+        }
     }
 
     ~TarballCacheSink()
@@ -680,11 +701,7 @@ struct TarballCacheSink : GitFileSystemObjectSink
      */
     bool needBlob(const Hash & oid)
     {
-        if (!_seen.lock()->insert(oid).second)
-            return false;
-
-        auto conn(cache->pool.get());
-        return !conn->hasBlob.use().apply(oid.hash, oid.hashSize).next();
+        return _seen.lock()->insert(oid).second;
     }
 
     /**
@@ -922,8 +939,8 @@ struct TarballCacheSink : GitFileSystemObjectSink
            are all its children. */
         std::vector<const Directory *> missing;
         {
-            auto conn(cache->pool.get());
             boost::unordered_flat_set<Hash> visited;
+            auto & knownTrees = this->knownTrees;
 
             [&](this const auto & visit, const Directory & dir) -> void {
                 checkInterrupt();
@@ -931,7 +948,7 @@ struct TarballCacheSink : GitFileSystemObjectSink
                 auto & oid = dir.oid.value();
                 if (!visited.insert(oid).second)
                     return;
-                if (conn->hasTree.use().apply(oid.hash, oid.hashSize).next())
+                if (knownTrees.contains(oid))
                     return;
 
                 for (auto & child : dir.children)
