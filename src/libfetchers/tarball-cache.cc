@@ -174,6 +174,9 @@ struct Connection
         /* Read pages via mmap rather than pread(). This reduces system time (and thus cold imports and copying
            trees to the store) by about 7%. Writes still go through write(). */
         db.exec("pragma mmap_size = 1073741824");
+        /* A larger page cache (16 MiB instead of 2 MiB) avoids spilling dirty pages to the WAL in the middle of a
+           write transaction. */
+        db.exec("pragma cache_size = -16384");
 
         hasTree.create(db, "select 1 from Trees where oid = ?");
         queryBlobOids.create(db, "select oid from Blobs");
@@ -631,9 +634,6 @@ struct TarballCacheSink : GitFileSystemObjectSink
     TarballCacheSink(ref<TarballCacheImpl> cache)
         : cache(cache)
     {
-        /* Preload the IDs of the objects already in the cache, so that we don't need a query (and thus a read
-           transaction) per object. Objects added by other processes during this import are simply written again
-           (`insert or ignore`). */
         auto conn(cache->pool.get());
         {
             auto seen(_seen.lock());
