@@ -48,17 +48,11 @@ create table if not exists BlobChunks (
     primary key (oid, seq)
 );
 
+-- `entries` is a sequence of: mode (4 bytes LE), name length (2 bytes LE), name, child oid (20 bytes).
 create table if not exists Trees (
-    oid blob primary key not null
-) without rowid;
-
-create table if not exists TreeEntries (
-    tree  blob not null,
-    name  text not null,
-    mode  integer not null,
-    child blob not null,
-    primary key (tree, name)
-) without rowid;
+    oid     blob primary key not null,
+    entries blob not null
+);
 
 )sql";
 
@@ -75,6 +69,24 @@ enum struct Compression : int64_t {
  * import, so this bounds the memory used per file.
  */
 constexpr size_t chunkSize = 1024 * 1024;
+
+template<typename T>
+void appendLE(std::string & s, T n)
+{
+    for (size_t i = 0; i < sizeof(T); i++)
+        s.push_back((char) ((n >> (8 * i)) & 0xff));
+}
+
+template<typename T>
+T readLE(std::string_view s, size_t offset)
+{
+    if (offset + sizeof(T) > s.size())
+        throw Error("tarball cache contains a truncated value");
+    T n = 0;
+    for (size_t i = 0; i < sizeof(T); i++)
+        n |= (T) (unsigned char) s[offset + i] << (8 * i);
+    return n;
+}
 
 Hash toOid(std::string_view s)
 {
@@ -152,7 +164,7 @@ using Dir = std::map<std::string, Entry>;
 struct Connection
 {
     SQLite db;
-    SQLiteStmt hasTree, queryEntries, hasBlob, queryBlob, insertBlob, insertChunk, insertTree, insertEntry;
+    SQLiteStmt hasTree, queryEntries, hasBlob, queryBlob, insertBlob, insertChunk, insertTree;
 
     Connection(const std::filesystem::path & dbPath)
     {
@@ -163,7 +175,7 @@ struct Connection
         db.exec("pragma mmap_size = 1073741824");
 
         hasTree.create(db, "select 1 from Trees where oid = ?");
-        queryEntries.create(db, "select name, mode, child from TreeEntries where tree = ?");
+        queryEntries.create(db, "select entries from Trees where oid = ?");
         hasBlob.create(db, "select 1 from Blobs where oid = ?");
         queryBlob.create(
             db,
@@ -172,8 +184,7 @@ struct Connection
         insertBlob.create(db, "insert or ignore into Blobs(oid, size) values (?, ?)");
         insertChunk.create(
             db, "insert or ignore into BlobChunks(oid, seq, size, compression, data) values (?, ?, ?, ?, ?)");
-        insertTree.create(db, "insert or ignore into Trees(oid) values (?)");
-        insertEntry.create(db, "insert or ignore into TreeEntries(tree, name, mode, child) values (?, ?, ?, ?)");
+        insertTree.create(db, "insert or ignore into Trees(oid, entries) values (?, ?)");
     }
 };
 
@@ -279,12 +290,24 @@ struct TarballCacheImpl : TarballCache, std::enable_shared_from_this<TarballCach
         auto dir = make_ref<Dir>();
         auto conn(pool.get());
         auto stmt(conn->queryEntries.use().apply(treeHash.hash, treeHash.hashSize));
-        while (stmt.next()) {
-            auto rawMode = (git::RawMode) stmt.getInt(1);
+        if (!stmt.next())
+            throw Error("tree '%s' is missing from the tarball cache", treeHash.gitRev());
+        auto data = stmt.getBlob(0);
+        size_t pos = 0;
+        while (pos < data.size()) {
+            auto rawMode = readLE<uint32_t>(data, pos);
+            pos += 4;
             auto mode = git::decodeMode(rawMode);
             if (!mode)
                 throw Error("tarball cache contains an entry with unknown mode %o", rawMode);
-            dir->emplace(stmt.getStr(0), Entry{.mode = *mode, .oid = toOid(stmt.getBlob(2))});
+            auto nameLen = readLE<uint16_t>(data, pos);
+            pos += 2;
+            if (pos + nameLen + 20 > data.size())
+                throw Error("tarball cache contains a truncated tree");
+            std::string name(data.substr(pos, nameLen));
+            pos += nameLen;
+            dir->emplace(std::move(name), Entry{.mode = *mode, .oid = toOid(data.substr(pos, 20))});
+            pos += 20;
         }
         return dir;
     }
@@ -928,17 +951,19 @@ struct TarballCacheSink : GitFileSystemObjectSink
                 SQLiteTxn txn(conn->db);
                 for (auto dir : missing) {
                     auto & oid = dir->oid.value();
+                    std::string entries;
                     for (auto & [name, child] : dir->children) {
                         auto subdir = std::get_if<Directory>(&child.file);
                         auto & childOid = subdir ? subdir->oid.value() : std::get<Hash>(child.file);
-                        conn->insertEntry.use()
-                            .apply(oid.hash, oid.hashSize)
-                            .apply(name)
-                            .apply((int64_t) child.mode)
-                            .apply(childOid.hash, childOid.hashSize)
-                            .exec();
+                        appendLE<uint32_t>(entries, (uint32_t) child.mode);
+                        appendLE<uint16_t>(entries, (uint16_t) name.size());
+                        entries += name;
+                        entries.append((const char *) childOid.hash, childOid.hashSize);
                     }
-                    conn->insertTree.use().apply(oid.hash, oid.hashSize).exec();
+                    conn->insertTree.use()
+                        .apply(oid.hash, oid.hashSize)
+                        .apply((const unsigned char *) entries.data(), entries.size())
+                        .exec();
                 }
                 txn.commit();
             });
