@@ -438,6 +438,16 @@ LockedFlake lockFlake(
         state.store->setOptions();
     }
 
+    Activity act(
+        *logger,
+        lvlTalkative,
+        "LockFlake",
+        std::to_array<std::pair<std::string_view, Logger::Field>>({
+            {"nix.flake.ref", flake.lockedRef.to_string()},
+        }),
+        fmt("locking inputs of flake '%s'", flake.lockedRef.to_string()));
+    PushActivity pact(act.id);
+
     try {
         if (!state.fetchSettings.allowDirty && lockFlags.referenceLockFilePath) {
             throw Error("reference lock file was provided, but the `allow-dirty` setting is set to false");
