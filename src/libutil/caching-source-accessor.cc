@@ -4,6 +4,7 @@
 
 namespace nix {
 
+// FIXME: Use ForwardingSourceAccessor.
 namespace {
 
 class CachingSourceAccessor : public SourceAccessor
@@ -95,6 +96,11 @@ public:
     std::pair<CanonPath, std::optional<std::string>> getFingerprint(const CanonPath & path) override
     {
         return next->getFingerprint(path);
+    }
+
+    std::shared_ptr<const Provenance> getProvenance(const CanonPath & path) override
+    {
+        return next->getProvenance(path);
     }
 };
 

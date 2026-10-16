@@ -69,7 +69,7 @@ echo "$outPath" | grepQuiet 'xyzzy'
 test -x "$outPath/fetchurl.sh"
 test -L "$outPath/symlink"
 
-nix-store --delete "$outPath"
+nix-store --delete "$outPath" --ignore-liveness
 
 # Test unpacking a compressed NAR.
 narxz="$TEST_ROOT/archive.nar.xz"
@@ -86,3 +86,7 @@ requireDaemonNewerThan "2.20"
 expected=100
 if [[ -v NIX_DAEMON_PACKAGE ]]; then expected=1; fi # work around the daemon not returning a 100 status correctly
 expectStderr $expected nix-build --expr '{ url }: builtins.derivation { name = "nix-cache-info"; system = "x86_64-linux"; builder = "builtin:fetchurl"; inherit url; outputHashMode = "flat"; }' --argstr url "file://$narxz" 2>&1 | grep 'must be a fixed-output or impure derivation'
+
+# URLs without a scheme should give a proper error, not a crash.
+expectStderr 1 nix-prefetch-url foo | grepQuiet "URL 'foo' doesn't have a scheme"
+expectStderr 1 nix store prefetch-file foo | grepQuiet "URL 'foo' doesn't have a scheme"

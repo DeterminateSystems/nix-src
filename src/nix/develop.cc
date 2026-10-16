@@ -1,6 +1,7 @@
 #include "nix/cmd/command.hh"
 #include "nix/util/config-global.hh"
 #include "nix/expr/eval.hh"
+#include "nix/fetchers/fetch-settings.hh"
 #include "nix/cmd/installable-flake.hh"
 #include "nix/main/common-args.hh"
 #include "nix/main/shared.hh"
@@ -456,22 +457,9 @@ struct Common : InstallableCommand, MixProfile
         rewrites.insert({BuildEnvironment::getString(fileInBuilderEnv->second), targetFilePath.string()});
     }
 
-    Strings getDefaultFlakeAttrPaths() override
+    StringSet getRoles() override
     {
-        Strings paths{
-            "devShells." + settings.thisSystem.get() + ".default",
-            "devShell." + settings.thisSystem.get(),
-        };
-        for (auto & p : SourceExprCommand::getDefaultFlakeAttrPaths())
-            paths.push_back(p);
-        return paths;
-    }
-
-    Strings getDefaultFlakeAttrPathPrefixes() override
-    {
-        auto res = SourceExprCommand::getDefaultFlakeAttrPathPrefixes();
-        res.emplace_front("devShells." + settings.thisSystem.get() + ".");
-        return res;
+        return {"nix-develop"};
     }
 
     StorePath getShellOutPath(ref<Store> store, ref<Installable> installable)
@@ -506,6 +494,11 @@ struct Common : InstallableCommand, MixProfile
             BuildEnvironment::parseJSON(store->requireStoreObjectAccessor(shellOutPath)->readFile(CanonPath::root)),
             shellOutPath,
         };
+    }
+
+    void preRun(ref<Store> store) override
+    {
+        fetchSettings.warnDirty = false;
     }
 };
 
@@ -660,9 +653,9 @@ struct CmdDevelop : Common, MixEnvironment
                 std::move(nixpkgs),
                 "bashInteractive",
                 ExtendedOutputsSpec::Default(),
-                Strings{},
-                Strings{"legacyPackages." + settings.thisSystem.get() + "."},
-                nixpkgsLockFlags);
+                StringSet{"nix-build"},
+                nixpkgsLockFlags,
+                std::nullopt);
 
             for (auto & path : Installable::toStorePathSet(
                      getEvalStore(), store, Realise::Outputs, OperateOn::Output, {bashInstallable})) {

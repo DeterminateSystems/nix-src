@@ -78,6 +78,11 @@ struct SimpleUserLock : UserLock
         if (!gr)
             throw Error("the group '%s' specified in 'build-users-group' does not exist", buildUsersGroup);
 
+        gid_t buildUsersGid = gr->gr_gid;
+        if (buildUsersGid == 0)
+            throw Error(
+                "the group '%s' specified in 'build-users-group' has GID 0, which is not allowed", buildUsersGroup);
+
         /* Copy the result of getgrnam. */
         Strings users;
         for (char ** p = gr->gr_mem; *p; ++p) {
@@ -97,6 +102,9 @@ struct SimpleUserLock : UserLock
             if (!pw)
                 throw Error("the user '%s' in the group '%s' does not exist", i, buildUsersGroup);
 
+            if (pw->pw_uid == 0)
+                throw Error("the user '%s' in the group '%s' has UID 0, which is not allowed", i, buildUsersGroup);
+
             auto fnUserLock = userPoolDir / std::to_string(pw->pw_uid);
 
             AutoCloseFD fd = open(fnUserLock.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
@@ -108,7 +116,7 @@ struct SimpleUserLock : UserLock
 
                 lock->fdUserLock = std::move(fd);
                 lock->uid = pw->pw_uid;
-                lock->gid = gr->gr_gid;
+                lock->gid = buildUsersGid;
 
                 /* Sanity check... */
                 if (lock->uid == getuid() || lock->uid == geteuid())

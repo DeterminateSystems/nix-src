@@ -11,7 +11,7 @@ outPath=$(nix-store -rvv "$drvPath")
 rm -f "$NIX_STATE_DIR/gcroots/foo"
 ln -sf "$outPath" "$NIX_STATE_DIR/gcroots/foo"
 
-[ "$(nix-store -q --roots "$outPath")" = "$NIX_STATE_DIR/gcroots/foo -> $outPath" ]
+expectStderr 0 nix-store -q --roots "$outPath" | grepQuiet "$NIX_STATE_DIR/gcroots/foo -> $outPath"
 
 nix-store --gc --print-roots | grep "$outPath"
 nix-store --gc --print-live | grep "$outPath"
@@ -21,10 +21,10 @@ if nix-store --gc --print-dead | grep -E "$outPath"$; then false; fi
 nix-store --gc --print-dead
 
 inUse=$(readLink "$outPath/reference-to-input-2")
-if nix-store --delete "$inUse"; then false; fi
+expectStderr 1 nix-store --delete "$inUse" | grepQuiet "Cannot delete path.*because it's referenced by path '"
 test -e "$inUse"
 
-if nix-store --delete "$outPath"; then false; fi
+expectStderr 1 nix-store --delete "$outPath" | grepQuiet "Cannot delete path.*because it's referenced by the GC root "
 test -e "$outPath"
 
 for i in "$NIX_STORE_DIR"/*; do
@@ -33,7 +33,20 @@ for i in "$NIX_STORE_DIR"/*; do
     touch "$i.chroot"
 done
 
+# Create a stale temporary roots file. Only the garbage collector
+# should delete it.
+staleTempRoots="$NIX_STATE_DIR/temproots/123456789"
+mkdir -p "$(dirname "$staleTempRoots")"
+printf '%s\0' "$outPath" > "$staleTempRoots"
+nix-store --gc --print-roots
+if isDaemonNewer "2.35.4"; then
+    test -e "$staleTempRoots"
+fi
+
 nix-collect-garbage
+
+# Check that the stale temporary roots file has been deleted.
+if test -e "$staleTempRoots"; then false; fi
 
 # Check that the root and its dependencies haven't been deleted.
 cat "$outPath/foobar"

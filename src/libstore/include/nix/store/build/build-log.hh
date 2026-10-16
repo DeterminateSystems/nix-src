@@ -3,6 +3,7 @@
 
 #include "nix/util/logging.hh"
 #include "nix/util/serialise.hh"
+#include "nix/util/ref.hh"
 
 #include <list>
 #include <map>
@@ -31,13 +32,15 @@ private:
     std::string currentLogLine;
     size_t currentLogLinePos = 0; // to handle carriage return
 
+    bool pendingCR = false; // defer '\r' so "\r\n" is treated as a line terminator
+
     void flushLine();
 
 public:
     /**
-     * The build activity. Owned by BuildLog.
+     * The build activity.
      */
-    std::unique_ptr<Activity> act;
+    ref<Activity> act;
 
     /**
      * Map for tracking nested activities from JSON messages.
@@ -48,7 +51,7 @@ public:
      * @param maxTailLines Maximum number of tail lines to keep
      * @param act Activity for this build
      */
-    BuildLog(size_t maxTailLines, std::unique_ptr<Activity> act);
+    BuildLog(size_t maxTailLines, ref<Activity> act);
 
     /**
      * Process output data from child process.

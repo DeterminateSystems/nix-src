@@ -18,6 +18,7 @@ struct StorePath
 struct nix_derivation
 {
     nix::Derivation drv;
+    Store * store;
 };
 
 } // extern "C"

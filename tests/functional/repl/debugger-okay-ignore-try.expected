@@ -58,9 +58,6 @@ abort baseNameOf break builtins derivation derivationStrict dirOf false fetchGit
 
 nix-repl> :p bricked
 error: infinite recursion encountered
-       at «string»:1:1:
-            1| bricked
-             | ^
 
 nix-repl> :p tried
 {
@@ -89,9 +86,6 @@ abort baseNameOf break builtins derivation derivationStrict dirOf false fetchGit
 
 nix-repl> :p bricked
 error: infinite recursion encountered
-       at «string»:1:1:
-            1| bricked
-             | ^
 
 nix-repl> :p tried
 {
@@ -114,9 +108,6 @@ abort baseNameOf break builtins derivation derivationStrict dirOf false fetchGit
 
 nix-repl> :p bricked
 error: infinite recursion encountered
-       at «string»:1:1:
-            1| bricked
-             | ^
 
 nix-repl> :p tried
 {

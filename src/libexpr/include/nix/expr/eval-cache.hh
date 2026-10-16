@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <variant>
+#include "nix/expr/root-value.hh"
 
 namespace nix::eval_cache {
 
@@ -38,10 +39,28 @@ class EvalCache : public std::enable_shared_from_this<EvalCache>
     friend struct CachedEvalError;
 
     std::shared_ptr<AttrDb> db;
+
+public:
     EvalState & state;
+
+    std::function<AttrPath(AttrPath &&)> cleanupAttrPath = [](AttrPath && attrPath) { return std::move(attrPath); };
+
+public:
     typedef fun<Value *()> RootLoader;
-    RootLoader rootLoader;
-    RootValue value;
+
+private:
+
+    /**
+     * The expression that calls the root loader (see
+     * `ExprRootLoader`), and the thunk that evaluates it. Forcing
+     * the thunk goes through the evaluator's regular thunk machinery,
+     * so concurrent requests for the root value are deduplicated
+     * without holding a mutex across the evaluation, which could
+     * deadlock the fiber scheduler (fibers are pinned to their
+     * thread, see `Executor::Worker`).
+     */
+    std::unique_ptr<Expr> rootLoaderExpr;
+    RootValue rootValue;
 
     Value * getRootValue();
 
@@ -102,10 +121,13 @@ class AttrCursor : public std::enable_shared_from_this<AttrCursor>
     friend class EvalCache;
     friend struct CachedEvalError;
 
-    ref<EvalCache> root;
+public:
+    const ref<EvalCache> root;
+
+private:
     using Parent = std::optional<std::pair<ref<AttrCursor>, Symbol>>;
-    Parent parent;
-    RootValue _value;
+    const Parent parent;
+    Sync<RootValue> _value;
     std::optional<std::pair<AttrId, AttrValue>> cachedValue;
 
     AttrKey getKey();
@@ -130,7 +152,11 @@ public:
 
     AttrPath getAttrPath() const;
 
+    AttrPath getAttrPathRaw() const;
+
     AttrPath getAttrPath(Symbol name) const;
+
+    AttrPath getAttrPathRaw(Symbol name) const;
 
     std::string getAttrPathStr() const;
 

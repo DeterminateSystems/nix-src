@@ -31,18 +31,20 @@ std::filesystem::path getHomeOf(uid_t userId)
 std::filesystem::path getHome()
 {
     static std::filesystem::path homeDir = []() {
-        std::optional<std::string> unownedUserHomeDir = {};
-        auto homeDir = getEnv("HOME");
+        std::optional<std::filesystem::path> unownedUserHomeDir = {};
+        /* Ignore an empty or relative $HOME, since that would cause
+           files to be created relative to the current directory. */
+        auto homeDir = getEnvOsAbsPath("HOME");
         if (homeDir) {
             // Only use $HOME if doesn't exist or is owned by the current user.
             try {
-                auto st = maybeStat(homeDir->c_str());
+                auto st = maybeStat(*homeDir);
                 if (st && st->st_uid != geteuid())
                     unownedUserHomeDir.swap(homeDir);
             } catch (SysError & e) {
                 warn(
                     "couldn't stat $HOME ('%s') for reason other than not existing, falling back to the one defined in the 'passwd' file: %s",
-                    *homeDir,
+                    homeDir->string(),
                     e.what());
                 homeDir.reset();
             }
@@ -52,8 +54,8 @@ std::filesystem::path getHome()
             if (unownedUserHomeDir.has_value() && unownedUserHomeDir != homeDir) {
                 warn(
                     "$HOME ('%s') is not owned by you, falling back to the one defined in the 'passwd' file ('%s')",
-                    *unownedUserHomeDir,
-                    *homeDir);
+                    unownedUserHomeDir->string(),
+                    homeDir->string());
             }
         }
         return *homeDir;

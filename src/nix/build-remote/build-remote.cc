@@ -18,6 +18,10 @@
 #include "nix/util/serialise.hh"
 #include "nix/store/build-result.hh"
 #include "nix/store/store-open.hh"
+#include "nix/util/config-global.hh"
+#include "nix/util/environment-variables.hh"
+
+#include "otel-logger.hh"
 #include "nix/util/strings.hh"
 #include "nix/store/derivations.hh"
 #include "nix/store/local-store.hh"
@@ -86,11 +90,21 @@ static int main_build_remote(int argc, char ** argv)
 
         FdSource source(STDIN_FILENO);
 
-        /* Read the parent's settings. */
+        /* Read the parent's settings. The parent sends the settings of
+           all `Config`s, not just `Settings`, so apply them
+           accordingly. Only apply those that differ from ours, though:
+           we've read the same configuration files, so the rest are
+           defaults, and setting a deprecated setting warns even if
+           it's to its default. (Note that we can't just have the
+           parent send its overridden settings: things like `--store`
+           set the setting without marking it as overridden.) */
+        std::map<std::string, Config::SettingInfo> ourSettings;
+        globalConfig.getSettings(ourSettings);
         while (readInt(source)) {
             auto name = readString(source);
             auto value = readString(source);
-            settings.set(name, value);
+            if (auto i = ourSettings.find(name); i == ourSettings.end() || i->second.value != value)
+                globalConfig.set(name, value);
         }
 
         auto maxBuildJobs = settings.getWorkerSettings().maxBuildJobs;
@@ -109,6 +123,7 @@ static int main_build_remote(int argc, char ** argv)
 
         std::shared_ptr<Store> sshStore;
         AutoCloseFD bestSlotLock;
+        bool tracing = false;
 
         auto machines = Machine::parseConfig({settings.thisSystem}, settings.getWorkerSettings().builders);
         debug("got %d remote builders", machines.size());
@@ -244,6 +259,18 @@ static int main_build_remote(int argc, char ** argv)
 #endif
 
                 lock = -1;
+
+                /* Set up tracing only now that we're actually going to
+                   use a remote builder, so that a build hook that
+                   turns out to be unused (which is the common case,
+                   since we're started for every build) doesn't upload
+                   a trace. Our root span is parented to the trace of
+                   the `nix` process that runs us, which it passes in
+                   `TRACEPARENT`. */
+                if (!tracing) {
+                    tracing = true;
+                    initOtel("nix-build-remote", "nix-build-remote", getEnv("TRACEPARENT").value_or(""));
+                }
 
                 try {
                     storeUri = bestMachine->storeUri.render();

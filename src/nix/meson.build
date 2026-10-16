@@ -50,6 +50,9 @@ endif
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
 
+libmicrohttpd = dependency('libmicrohttpd')
+deps_private += libmicrohttpd
+
 configdata = configuration_data()
 
 # The CLI has a more detailed version string than the libraries; see `nixVersion`
@@ -65,6 +68,26 @@ configdata.set_quoted('NIX_BIN_DIR', bindir)
 mandir = get_option('mandir')
 mandir = fs.is_absolute(mandir) ? mandir : prefix / mandir
 configdata.set_quoted('NIX_MAN_DIR', mandir)
+
+configdata.set('HAVE_MIMALLOC', mimalloc.found().to_int())
+
+sentry_required = get_option('sentry')
+configdata.set('HAVE_SENTRY', sentry_required.enabled().to_int())
+if sentry_required.enabled()
+  crashpad_handler_path = get_option('crashpad-handler')
+  assert(
+    crashpad_handler_path != '',
+    'crashpad-handler path must be set when sentry is enabled',
+  )
+  configdata.set_quoted('CRASHPAD_HANDLER_PATH', crashpad_handler_path)
+endif
+
+otel_required = get_option('otel')
+# Note: we don't need the OTLP exporter from opentelemetry-cpp (which
+# would pull in protobuf); we serialize spans to OTLP/JSON ourselves.
+otel_trace = dependency('opentelemetry_trace', required : otel_required)
+configdata.set('HAVE_OTEL', otel_trace.found().to_int())
+deps_private += otel_trace
 
 config_priv_h = configure_file(
   configuration : configdata,
@@ -85,6 +108,7 @@ nix_sources = [ config_priv_h ] + files(
   'config.cc',
   'copy.cc',
   'crash-handler.cc',
+  'crash.cc',
   'derivation-add.cc',
   'derivation-show.cc',
   'derivation.cc',
@@ -94,6 +118,8 @@ nix_sources = [ config_priv_h ] + files(
   'edit.cc',
   'env.cc',
   'eval.cc',
+  'flake-bake.cc',
+  'flake-prefetch-inputs.cc',
   'flake-prefetch-inputs.cc',
   'flake.cc',
   'formatter.cc',
@@ -104,16 +130,21 @@ nix_sources = [ config_priv_h ] + files(
   'make-content-addressed.cc',
   'man-pages.cc',
   'nar.cc',
+  'nario.cc',
   'optimise-store.cc',
+  'otel-logger.cc',
   'path-from-hash-part.cc',
   'path-info.cc',
   'prefetch.cc',
   'profile.cc',
+  'provenance.cc',
+  'ps.cc',
   'registry.cc',
   'repl.cc',
   'run.cc',
   'search.cc',
   'self-exe.cc',
+  'serve.cc',
   'sigs.cc',
   'store-copy-log.cc',
   'store-delete.cc',
@@ -141,6 +172,7 @@ nix_sources += [
   gen_header.process('get-env.sh'),
   gen_header.process('profiles.md'),
   gen_header.process('help-stores.md'),
+  gen_header.process('baked-flake.nix'),
 ]
 
 # The rest of the subdirectories aren't separate components,
@@ -203,7 +235,9 @@ this_exe = executable(
   sources,
   dependencies : deps_private_subproject + deps_private + deps_other + deps_plugin_c_apis,
   include_directories : include_dirs,
-  link_args : linker_export_flags,
+  link_args : linker_export_flags + (
+    sentry_required.enabled() ? [ '-lsentry' ] : []
+  ),
   export_dynamic : get_option('plugin-c-api'),
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],

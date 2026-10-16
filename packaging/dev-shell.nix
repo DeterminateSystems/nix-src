@@ -210,7 +210,7 @@ nixComponents.callPackage (
       };
 
       # Remove the version suffix to avoid unnecessary attempts to substitute in nix develop
-      version = lib.fileContents ../.version;
+      version = lib.fileContents ../.version-determinate;
       name = finalAttrs.pname;
 
       installFlags = "sysconfdir=$(out)/etc";

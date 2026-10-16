@@ -4,6 +4,8 @@
 #include "nix/store/uds-remote-store.hh"
 #include "nix/store/globals.hh"
 #include "nix/util/environment-variables.hh"
+#include "nix/util/current-process.hh"
+#include "nix/util/sync.hh"
 
 #include <filesystem>
 
@@ -113,8 +115,12 @@ ref<StoreConfig> resolveStoreConfig(StoreReference && storeURI)
 
 std::list<ref<Store>> getDefaultSubstituters()
 {
-    static auto stores([]() {
-        std::list<ref<Store>> stores;
+    static Sync<std::optional<std::list<ref<Store>>>> stores_;
+
+    auto stores(stores_.lock());
+
+    if (!*stores) {
+        std::list<ref<Store>> res;
 
         std::set<StoreReference> done;
 
@@ -122,7 +128,7 @@ std::list<ref<Store>> getDefaultSubstituters()
             if (!done.insert(ref).second)
                 return;
             try {
-                stores.push_back(openStore(StoreReference{ref}));
+                res.push_back(openStore(StoreReference{ref}));
             } catch (Error & e) {
                 logWarning(e.info());
             }
@@ -131,12 +137,18 @@ std::list<ref<Store>> getDefaultSubstituters()
         for (const auto & ref : settings.getWorkerSettings().substituters.get())
             addStore(ref);
 
-        stores.sort([](ref<Store> & a, ref<Store> & b) { return a->config.priority < b->config.priority; });
+        res.sort([](ref<Store> & a, ref<Store> & b) { return a->config.priority < b->config.priority; });
 
-        return stores;
-    }());
+        *stores = std::move(res);
 
-    return stores;
+        /* Close the substituters on exit, since they may own
+           resources that need cleaning up (e.g. SSH master
+           processes). The stores are destroyed outside of the
+           lock. */
+        atQuickExit([]() { auto stores = std::exchange(*stores_.lock(), std::nullopt); });
+    }
+
+    return **stores;
 }
 
 Implementations::Map & Implementations::registered()

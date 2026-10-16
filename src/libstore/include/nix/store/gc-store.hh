@@ -7,9 +7,13 @@
 
 namespace nix {
 
+// FIXME: should turn this into an std::variant to represent the
+// several root types.
+using GcRootInfo = std::string;
+
 typedef boost::unordered_flat_map<
     StorePath,
-    boost::unordered_flat_set<std::string, StringViewHash, std::equal_to<>>,
+    boost::unordered_flat_set<GcRootInfo, StringViewHash, std::equal_to<>>,
     std::hash<StorePath>>
     Roots;
 
@@ -72,6 +76,12 @@ struct GCOptions
      * Stop after at least `maxFreed` bytes have been freed.
      */
     uint64_t maxFreed{std::numeric_limits<uint64_t>::max()};
+
+    /**
+     * Whether to hide potentially sensitive information about GC
+     * roots (such as PIDs).
+     */
+    bool censor = false;
 };
 
 struct GCResults
@@ -97,7 +107,7 @@ struct GCResults
  *
  * The notion of GC roots actually not part of this class.
  *
- *  - The base `Store` class has `Store::addTempRoot()` because for a store
+ *  - The base `Store` class has `Store::addTempRoots()` because for a store
  *    that doesn't support garbage collection at all, a temporary GC root is
  *    safely implementable as no-op.
  *

@@ -110,6 +110,12 @@ public:
         auto [accessor, subpath] = resolve(path);
         return accessor->getFingerprint(subpath);
     }
+
+    std::shared_ptr<const Provenance> getProvenance(const CanonPath & path) override
+    {
+        auto [accessor, subpath] = resolve(path);
+        return accessor->getProvenance(subpath);
+    }
 };
 
 } // namespace

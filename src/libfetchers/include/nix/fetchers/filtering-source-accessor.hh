@@ -5,6 +5,8 @@
 #include <set>
 #include <unordered_set>
 
+#include <boost/unordered/concurrent_flat_map_fwd.hpp>
+
 namespace nix {
 
 /**
@@ -53,6 +55,8 @@ struct FilteringSourceAccessor : SourceAccessor
 
     std::pair<CanonPath, std::optional<std::string>> getFingerprint(const CanonPath & path) override;
 
+    std::shared_ptr<const Provenance> getProvenance(const CanonPath & path) override;
+
     void invalidateCache() override
     {
         next->invalidateCache();
@@ -95,9 +99,9 @@ struct AllowListSourceAccessor : public FilteringSourceAccessor
  */
 struct CachingFilteringSourceAccessor : FilteringSourceAccessor
 {
-    std::map<CanonPath, bool> cache;
+    const ref<boost::concurrent_flat_map<CanonPath, bool>> cache;
 
-    using FilteringSourceAccessor::FilteringSourceAccessor;
+    CachingFilteringSourceAccessor(const SourcePath & src, MakeNotAllowedError && makeNotAllowedError);
 
     bool isAllowed(const CanonPath & path) override;
 

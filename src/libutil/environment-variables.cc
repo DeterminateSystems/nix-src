@@ -26,6 +26,17 @@ std::optional<OsString> getEnvOsNonEmpty(const OsString & key)
     return value;
 }
 
+std::optional<std::filesystem::path> getEnvOsAbsPath(const OsString & key)
+{
+    auto value = getEnvOs(key);
+    if (!value)
+        return {};
+    std::filesystem::path path(std::move(*value));
+    if (!path.is_absolute())
+        return {};
+    return path;
+}
+
 void clearEnv()
 {
     for (auto & [name, value] : getEnvOs())
