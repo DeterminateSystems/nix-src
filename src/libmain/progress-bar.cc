@@ -964,6 +964,13 @@ class ProgressIndicator final : public ProgressBarBase
     bool helpShown = false;
 
     /**
+     * If set, the display is paused, and these are the sections to
+     * show instead of the current progress. Protected by the state
+     * lock.
+     */
+    std::optional<std::vector<std::string>> frozenSections;
+
+    /**
      * Whether we're currently reading keyboard input.
      */
     std::atomic<bool> inputEnabled = false;
@@ -1198,12 +1205,52 @@ private:
             helpShown = !helpShown;
             update(*state);
             break;
+
+        case 'p':
+        case ' ':
+            if (frozenSections)
+                frozenSections.reset();
+            else {
+                auto nextWakeup = std::chrono::milliseconds::max();
+                frozenSections = renderSections(*state, std::chrono::steady_clock::now(), nextWakeup);
+            }
+            update(*state);
+            break;
         }
     }
 #endif
 
     std::vector<std::string> renderFrame(
         State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) override
+    {
+        auto lines = frozenSections ? *frozenSections : renderSections(state, now, nextWakeup);
+
+        if (frozenSections)
+            lines.push_back(ANSI_BOLD "Display paused. Press 'p' or space to resume.");
+
+        if (inputEnabled) {
+            if (helpShown) {
+                lines.push_back(ANSI_BOLD "The following keys are available:");
+                lines.push_back(
+                    fmt("  " ANSI_BOLD "l" ANSI_NORMAL "  %s build logs", printBuildLogs ? "hide" : "show"));
+                lines.push_back("  " ANSI_BOLD "v" ANSI_NORMAL "  increase verbosity");
+                lines.push_back("  " ANSI_BOLD "-" ANSI_NORMAL "  decrease verbosity");
+                lines.push_back(
+                    fmt("  " ANSI_BOLD "p" ANSI_NORMAL "  %s the display", frozenSections ? "resume" : "pause"));
+                lines.push_back("  " ANSI_BOLD "h" ANSI_NORMAL "  hide this help");
+                lines.push_back("  " ANSI_BOLD "q" ANSI_NORMAL "  quit");
+            } else if (!lines.empty() && !frozenSections)
+                lines.push_back(ANSI_FAINT "Type 'h' for help.");
+        }
+
+        return lines;
+    }
+
+    /**
+     * Render the sections showing the progress of each kind of work.
+     */
+    std::vector<std::string>
+    renderSections(State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup)
     {
         std::vector<std::string> lines;
 
@@ -1417,19 +1464,6 @@ private:
                         state.filesLinked));
                 lines.push_back(renderBar(optimise.done, 0, 0, optimise.expected));
             }
-        }
-
-        if (inputEnabled) {
-            if (helpShown) {
-                lines.push_back(ANSI_BOLD "The following keys are available:");
-                lines.push_back(
-                    fmt("  " ANSI_BOLD "l" ANSI_NORMAL "  %s build logs", printBuildLogs ? "hide" : "show"));
-                lines.push_back("  " ANSI_BOLD "v" ANSI_NORMAL "  increase verbosity");
-                lines.push_back("  " ANSI_BOLD "-" ANSI_NORMAL "  decrease verbosity");
-                lines.push_back("  " ANSI_BOLD "h" ANSI_NORMAL "  hide this help");
-                lines.push_back("  " ANSI_BOLD "q" ANSI_NORMAL "  quit");
-            } else if (!lines.empty())
-                lines.push_back(ANSI_FAINT "Type 'h' for help.");
         }
 
         /* Keep the spinner and durations moving. */
