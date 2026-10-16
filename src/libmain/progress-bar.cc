@@ -13,6 +13,12 @@
 #include <iostream>
 #include <chrono>
 
+#ifndef _WIN32
+#  include <poll.h>
+#  include <termios.h>
+#  include <unistd.h>
+#endif
+
 namespace nix {
 
 namespace {
@@ -133,7 +139,7 @@ protected:
 
     std::condition_variable quitCV, updateCV;
 
-    bool printBuildLogs = false;
+    std::atomic<bool> printBuildLogs = false;
     bool isTTY;
 
     std::unique_ptr<InterruptCallback> interruptCallback, stopCallback, contCallback, winchCallback;
@@ -165,6 +171,20 @@ protected:
     virtual std::vector<std::string>
     renderFrame(State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) = 0;
 
+    /**
+     * Hook for subclasses that read keyboard input: stop reading from
+     * the terminal and restore its settings, because something else
+     * (e.g. the REPL, a prompt, or the shell after Ctrl-Z) needs it.
+     * Called with the state lock held.
+     */
+    virtual void suspendInput(State & state) {}
+
+    /**
+     * Undo `suspendInput()`. Called with the state lock held, if the
+     * progress bar is active and not paused.
+     */
+    virtual void resumeInput(State & state) {}
+
 public:
 
     /**
@@ -183,19 +203,27 @@ public:
             redraw({"shutting down"});
         });
 
-        /* On Ctrl-Z, unhide the cursor before the process is
-           stopped. */
+        /* On Ctrl-Z, unhide the cursor and give the terminal back
+           before the process is stopped. */
         stopCallback = createSignalCallback(SignalType::Stop, [&]() {
             auto state(state_.lock());
-            if (state->active && !state->isPaused())
+            if (state->active && !state->isPaused()) {
+                suspendInput(*state);
                 unhideCursorIfNeeded();
+            }
         });
 
         /* Redraw the progress bar when the process is resumed or the
            terminal size changes. */
-        auto redrawCallback = [&]() {
+        auto redrawCallback = [&](bool resumed) {
             auto state(state_.lock());
             if (state->active && !state->isPaused()) {
+                if (resumed) {
+                    /* The shell has printed stuff since we were
+                       stopped, so don't overwrite it. */
+                    screen_.lock()->linesShown = 0;
+                    resumeInput(*state);
+                }
                 /* Force a redraw, since the new output may be
                    identical to the one cached by redraw(). */
                 invalidateRedrawCache();
@@ -203,8 +231,8 @@ public:
                 update(*state);
             }
         };
-        contCallback = createSignalCallback(SignalType::Cont, redrawCallback);
-        winchCallback = createSignalCallback(SignalType::Winch, redrawCallback);
+        contCallback = createSignalCallback(SignalType::Cont, [=]() { redrawCallback(true); });
+        winchCallback = createSignalCallback(SignalType::Winch, [=]() { redrawCallback(false); });
 
         updateThread = std::thread([&]() {
             auto state(state_.lock());
@@ -229,6 +257,7 @@ public:
         {
             auto state(state_.lock());
             if (state->active) {
+                suspendInput(*state);
                 state->active = false;
                 clearProgressDisplay();
                 unhideCursorIfNeeded();
@@ -255,6 +284,7 @@ public:
         }
 
         if (state->active) {
+            suspendInput(*state);
             clearProgressDisplay();
             /* Show activities that were previously only shown on the
                progress bar. Otherwise the user won't know what's
@@ -270,7 +300,9 @@ public:
     {
         auto state(state_.lock());
         if (state->suspensions == 0) {
-            log(lvlError, "nix::ProgressBar: resume() called without a matching preceding pause(). This is a bug.");
+            log(*state,
+                lvlError,
+                "nix::ProgressBar: resume() called without a matching preceding pause(). This is a bug.");
             return;
         } else {
             state->suspensions--;
@@ -279,6 +311,7 @@ public:
             if (state->active) {
                 clearProgressDisplay();
                 hideCursorIfNeeded();
+                resumeInput(*state);
             }
             state->haveUpdate = true;
             updateCV.notify_one();
@@ -644,10 +677,13 @@ public:
         auto state(state_.lock());
         if (!state->active)
             return {};
+        suspendInput(*state);
         clearProgressDisplay(fmt("%s ", msg));
         unhideCursorIfNeeded();
         auto s = trim(readLine(getStandardInput(), true));
         hideCursorIfNeeded();
+        if (!state->isPaused())
+            resumeInput(*state);
         if (s.size() != 1)
             return {};
         draw(*state);
@@ -930,6 +966,50 @@ class ProgressIndicator final : public ProgressBarBase
      */
     static constexpr auto spinnerInterval = std::chrono::milliseconds(100);
 
+    /**
+     * Whether the help text is shown. Protected by the state lock.
+     */
+    bool helpShown = false;
+
+    /**
+     * Whether we're currently reading keyboard input.
+     */
+    std::atomic<bool> inputEnabled = false;
+
+#ifndef _WIN32
+    struct Input
+    {
+        /**
+         * Whether the input thread may read from stdin. If true, the
+         * terminal has been put in non-canonical mode.
+         */
+        bool enabled = false;
+
+        /**
+         * The terminal settings to restore when input is disabled.
+         */
+        std::optional<struct termios> savedTermAttrs;
+
+        /**
+         * Set when stdin has reached EOF or the progress indicator is
+         * being destroyed.
+         */
+        bool quit = false;
+    };
+
+    Sync<Input> input_;
+
+    std::condition_variable inputCV;
+
+    /**
+     * Used to wake up the input thread from `poll()` when input is
+     * disabled.
+     */
+    Pipe wakeupPipe;
+
+    std::thread inputThread;
+#endif
+
 public:
 
     ProgressIndicator(bool isTTY)
@@ -940,9 +1020,195 @@ public:
     ~ProgressIndicator()
     {
         stop();
+#ifndef _WIN32
+        if (inputThread.joinable()) {
+            input_.lock()->quit = true;
+            inputCV.notify_one();
+            writeFull(wakeupPipe.writeSide.get(), "x", false);
+            inputThread.join();
+        }
+#endif
+    }
+
+    /**
+     * Start reading keyboard input, if stdin is a terminal.
+     */
+    void startInput()
+    {
+#ifndef _WIN32
+        if (!isTTY || !isatty(STDIN_FILENO))
+            return;
+
+        wakeupPipe.create();
+
+        inputThread = std::thread([this]() {
+            try {
+                inputThreadMain();
+            } catch (...) {
+                ignoreExceptionInDestructor();
+            }
+        });
+
+        auto state(state_.lock());
+        if (state->active && !state->isPaused())
+            resumeInput(*state);
+#endif
     }
 
 private:
+
+#ifndef _WIN32
+    void suspendInput(State & state) override
+    {
+        auto input(input_.lock());
+        if (!input->enabled)
+            return;
+        input->enabled = false;
+        inputEnabled = false;
+        if (input->savedTermAttrs) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &*input->savedTermAttrs);
+            input->savedTermAttrs.reset();
+        }
+        /* Interrupt the input thread's poll(). */
+        writeFull(wakeupPipe.writeSide.get(), "x", false);
+        update(state);
+    }
+
+    void resumeInput(State & state) override
+    {
+        if (!inputThread.joinable())
+            return;
+
+        auto input(input_.lock());
+        if (input->enabled || input->quit)
+            return;
+
+        /* Don't touch the terminal if we're in the background, since
+           that would cause SIGTTOU/SIGTTIN. */
+        if (tcgetpgrp(STDIN_FILENO) != getpgrp())
+            return;
+
+        /* Disable line buffering and echoing so we get keys
+           immediately. Note that we keep ISIG enabled, so Ctrl-C and
+           Ctrl-Z still send signals, and OPOST, so we don't need to
+           translate "\n" to "\r\n". */
+        struct termios term;
+        if (tcgetattr(STDIN_FILENO, &term))
+            return;
+        input->savedTermAttrs = term;
+        term.c_lflag &= ~(ICANON | ECHO);
+        term.c_cc[VMIN] = 1;
+        term.c_cc[VTIME] = 0;
+        if (tcsetattr(STDIN_FILENO, TCSANOW, &term)) {
+            input->savedTermAttrs.reset();
+            return;
+        }
+
+        input->enabled = true;
+        inputEnabled = true;
+        inputCV.notify_one();
+        update(state);
+    }
+
+    void inputThreadMain()
+    {
+        while (true) {
+            {
+                auto input(input_.lock());
+                while (!input->quit && !input->enabled)
+                    input.wait(inputCV);
+                if (input->quit)
+                    return;
+            }
+
+            std::array<struct pollfd, 2> fds{{
+                {.fd = STDIN_FILENO, .events = POLLIN, .revents = 0},
+                {.fd = wakeupPipe.readSide.get(), .events = POLLIN, .revents = 0},
+            }};
+
+            if (poll(fds.data(), fds.size(), -1) == -1) {
+                if (errno == EINTR)
+                    continue;
+                throw SysError("polling for keyboard input");
+            }
+
+            if (fds[1].revents & POLLIN) {
+                char buf[64];
+                [[maybe_unused]] auto n = ::read(wakeupPipe.readSide.get(), buf, sizeof(buf));
+                continue;
+            }
+
+            if (!fds[0].revents)
+                continue;
+
+            char c;
+            {
+                /* Read while holding the lock, so that we don't
+                   consume input after `suspendInput()` has
+                   returned. */
+                auto input(input_.lock());
+                if (!input->enabled)
+                    continue;
+                auto n = ::read(STDIN_FILENO, &c, 1);
+                if (n == -1 && errno == EINTR)
+                    continue;
+                if (n != 1) {
+                    /* EOF or error, so stop reading. */
+                    input->quit = true;
+                    return;
+                }
+            }
+
+            handleKey(c);
+        }
+    }
+
+    void handleKey(char c)
+    {
+        c = std::tolower((unsigned char) c);
+
+        if (c == 'q') {
+            /* Note: this calls the interrupt callback, which calls
+               pause(), so we must not hold the state lock. */
+            unix::triggerInterrupt();
+            return;
+        }
+
+        auto state(state_.lock());
+
+        switch (c) {
+
+        case 'l':
+            printBuildLogs = !printBuildLogs;
+            log(*state,
+                lvlError,
+                printBuildLogs ? ANSI_BOLD "Enabling build logs." : ANSI_BOLD "Disabling build logs.");
+            break;
+
+        case 'v':
+        case '+':
+        case '=':
+            if (verbosity < lvlVomit) {
+                verbosity = (Verbosity) (verbosity + 1);
+                log(*state, lvlError, ANSI_BOLD "Increasing verbosity.");
+            }
+            break;
+
+        case '-':
+            if (verbosity > lvlError) {
+                verbosity = (Verbosity) (verbosity - 1);
+                log(*state, lvlError, ANSI_BOLD "Decreasing verbosity.");
+            }
+            break;
+
+        case 'h':
+        case '?':
+            helpShown = !helpShown;
+            update(*state);
+            break;
+        }
+    }
+#endif
 
     std::vector<std::string> renderFrame(
         State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) override
@@ -1113,7 +1379,9 @@ private:
                         if (!act.phase.empty())
                             s += fmt(" (%s)", act.phase);
                         s += elapsed(act);
-                        if (!act.lastLine.empty())
+                        /* Note: if build logs are enabled, `lastLine` is not
+                           updated. */
+                        if (!act.lastLine.empty() && !printBuildLogs)
                             s += fmt(": " ANSI_FAINT "%s" ANSI_NORMAL, act.lastLine);
                         return s;
                     },
@@ -1159,6 +1427,19 @@ private:
             }
         }
 
+        if (inputEnabled) {
+            if (helpShown) {
+                lines.push_back(ANSI_BOLD "The following keys are available:");
+                lines.push_back(
+                    fmt("  " ANSI_BOLD "l" ANSI_NORMAL "  %s build logs", printBuildLogs ? "hide" : "show"));
+                lines.push_back("  " ANSI_BOLD "v" ANSI_NORMAL "  increase verbosity");
+                lines.push_back("  " ANSI_BOLD "-" ANSI_NORMAL "  decrease verbosity");
+                lines.push_back("  " ANSI_BOLD "h" ANSI_NORMAL "  hide this help");
+                lines.push_back("  " ANSI_BOLD "q" ANSI_NORMAL "  quit");
+            } else if (!lines.empty())
+                lines.push_back(ANSI_FAINT "Type 'h' for help.");
+        }
+
         /* Keep the spinner and durations moving. */
         if (busy)
             nextWakeup = std::min(nextWakeup, std::chrono::duration_cast<std::chrono::milliseconds>(spinnerInterval));
@@ -1180,6 +1461,7 @@ std::unique_ptr<Logger> makeProgressIndicator()
 {
     auto logger = std::make_unique<ProgressIndicator>(isTTY());
     logger->start();
+    logger->startInput();
     return logger;
 }
 
