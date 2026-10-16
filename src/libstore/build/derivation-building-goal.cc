@@ -1241,10 +1241,8 @@ HookReply DerivationBuildingGoal::tryBuildHook(const DerivationOptions<StorePath
             else if (s.substr(0, 2) == "# ") {
                 reply = s.substr(2);
                 break;
-            } else {
-                s += "\n";
-                writeToStderr(s);
-            }
+            } else
+                logger->log(lvlError, s);
         }
 
         debug("hook reply is '%1%'", reply);
