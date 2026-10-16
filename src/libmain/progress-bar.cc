@@ -425,7 +425,7 @@ public:
             auto lastLine = chomp(getS(fields, 0));
             auto i = state->its.find(act);
             assert(i != state->its.end());
-            ActInfo info = *i->second;
+            ActInfo & info = *i->second;
             if (printBuildLogs) {
                 auto suffix = "> ";
                 if (type == resPostBuildLogLine) {
@@ -433,10 +433,11 @@ public:
                 }
                 log(*state, lvlInfo, ANSI_FAINT + info.name.value_or("unnamed") + suffix + ANSI_NORMAL + lastLine);
             } else {
-                state->activities.erase(i->second);
+                /* Move this activity to the end of the list, making it
+                   the most recent one. Note that splice() doesn't
+                   invalidate iterators. */
+                state->activities.splice(state->activities.end(), state->activities, i->second);
                 info.lastLine = lastLine;
-                state->activities.emplace_back(info);
-                i->second = std::prev(state->activities.end());
                 update(*state);
             }
         }
@@ -876,11 +877,300 @@ private:
     }
 };
 
+static std::string renderDuration(std::chrono::steady_clock::duration d)
+{
+    auto secs = std::chrono::duration_cast<std::chrono::seconds>(d).count();
+    if (secs < 60)
+        return fmt("%ds", secs);
+    if (secs < 3600)
+        return fmt("%dm%02ds", secs / 60, secs % 60);
+    return fmt("%dh%02dm", secs / 3600, (secs / 60) % 60);
+}
+
+static std::string repeat(std::string_view s, size_t n)
+{
+    std::string res;
+    res.reserve(s.size() * n);
+    for (size_t i = 0; i < n; ++i)
+        res += s;
+    return res;
+}
+
+/**
+ * A multi-line progress indicator that shows a section with a
+ * progress bar and a list of running items for each kind of work
+ * (downloads, substitutions, builds, ...), plus a list of other
+ * running activities.
+ */
+class ProgressIndicator final : public ProgressBarBase
+{
+    const std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
+
+    /**
+     * Maximum number of running items to show per section.
+     */
+    static constexpr size_t maxItems = 5;
+
+    /**
+     * Don't show activities in the list of other activities until
+     * they've been running for this long, to avoid flicker.
+     */
+    static constexpr auto otherActivityDelay = std::chrono::milliseconds(300);
+
+    /**
+     * Interval between spinner updates.
+     */
+    static constexpr auto spinnerInterval = std::chrono::milliseconds(100);
+
+public:
+
+    ProgressIndicator(bool isTTY)
+        : ProgressBarBase(isTTY)
+    {
+    }
+
+    ~ProgressIndicator()
+    {
+        stop();
+    }
+
+private:
+
+    std::vector<std::string> renderFrame(
+        State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) override
+    {
+        std::vector<std::string> lines;
+
+        static constexpr std::array<std::string_view, 10> spinner = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
+        /* Note: the spinner is padded with a space, since the done
+           and fail marks (the same as used by `nix flake check`) are
+           two columns wide. */
+        auto busyMark = ANSI_BOLD
+                        + std::string(
+                            spinner
+                                [std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime)
+                                 / spinnerInterval % spinner.size()])
+                        + " " ANSI_NORMAL;
+        auto doneMark = "✅";
+        auto failMark = "❌";
+
+        bool busy = false;
+
+        auto width = getWindowWidth();
+        size_t barWidth = width < 14 ? 10 : std::min(60u, width - 4);
+
+        /* Render a progress bar showing the fraction of failed (red),
+           done (green) and running (yellow) items. */
+        auto renderBar = [&](uint64_t done, uint64_t failed, uint64_t running, uint64_t expected) {
+            expected = std::max(expected, (uint64_t) 1);
+            auto chars = [&](uint64_t n) { return (size_t) (barWidth * std::min((double) n / expected, 1.0)); };
+            auto chars1 = chars(failed);
+            auto chars2 = chars(failed + done);
+            auto chars3 = chars(failed + done + running);
+            return "  " ANSI_RED + repeat("█", chars1) + ANSI_GREEN + repeat("█", chars2 - chars1) + ANSI_WARNING
+                   + repeat("▓", chars3 - chars2) + ANSI_NORMAL + repeat("░", barWidth - chars3);
+        };
+
+        auto renderSizes = [&](uint64_t done, uint64_t expected) {
+            if (auto unit = getCommonSizeUnit({(int64_t) done, (int64_t) expected}))
+                return fmt(
+                    "%s/%s %siB",
+                    renderSizeWithoutUnit(done, *unit),
+                    renderSizeWithoutUnit(expected, *unit),
+                    getSizeUnitSuffix(*unit));
+            return fmt("%s/%s", renderSize(done), renderSize(expected));
+        };
+
+        /* Render the given activities, oldest first, up to
+           `maxItems`. If `isActive` is given, show the activities
+           for which it returns true first. */
+        auto renderItems = [&](std::vector<ActInfo *> items,
+                               auto renderItem,
+                               std::function<bool(const ActInfo &)> isActive = nullptr) {
+            std::ranges::sort(items, {}, &ActInfo::startTime);
+            if (isActive)
+                std::ranges::stable_partition(items, [&](ActInfo * act) { return isActive(*act); });
+            for (auto [n, item] : enumerate(items)) {
+                if (n == maxItems) {
+                    lines.push_back(fmt(ANSI_FAINT "  … and %d more" ANSI_NORMAL, items.size() - maxItems));
+                    break;
+                }
+                lines.push_back(renderItem(*item));
+            }
+        };
+
+        auto getItems = [&](ActivityType type) {
+            std::vector<ActInfo *> items;
+            for (auto & [id, i] : state.activitiesByType[type].its)
+                if (i->visible)
+                    items.push_back(&*i);
+            return items;
+        };
+
+        auto elapsed = [&](const ActInfo & act) {
+            auto d = now - act.startTime;
+            return d >= std::chrono::seconds(1) ? " " ANSI_FAINT + renderDuration(d) + ANSI_NORMAL : "";
+        };
+
+        /* Other activities (e.g. evaluation, fetching flake inputs)
+           that don't have their own section. */
+        {
+            std::vector<ActInfo *> items;
+            for (auto & act : state.activities) {
+                if (!act.visible || act.s.empty() || act.type == actBuild || act.type == actSubstitute
+                    || act.type == actFileTransfer || act.type == actCopyPath)
+                    continue;
+                if (act.startTime + otherActivityDelay > now) {
+                    nextWakeup = std::min(
+                        nextWakeup,
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            act.startTime + otherActivityDelay - now));
+                    continue;
+                }
+                items.push_back(&act);
+            }
+            if (!items.empty())
+                busy = true;
+            renderItems(items, [&](const ActInfo & act) { return fmt("%s %s%s", busyMark, act.s, elapsed(act)); });
+        }
+
+        /* Downloads. Note that this includes the downloads done by
+           substitutions, but only other downloads (e.g. flake
+           inputs) are listed as items. */
+        {
+            auto stats = getActivityStats(state, actFileTransfer);
+            if (stats.done || stats.expected) {
+                auto items = getItems(actFileTransfer);
+                bool active = !items.empty() || stats.done < stats.expected;
+                busy |= active;
+                lines.push_back(
+                    fmt("%s Downloaded %s", active ? busyMark : doneMark, renderSizes(stats.done, stats.expected)));
+                lines.push_back(renderBar(stats.done, 0, 0, stats.expected));
+                renderItems(items, [&](const ActInfo & act) {
+                    return fmt(
+                        "  ‣ %s%s%s",
+                        act.s,
+                        act.expected ? " " + renderSizes(act.done, act.expected) : "",
+                        elapsed(act));
+                });
+            }
+        }
+
+        /* Substitutions. */
+        {
+            auto paths = getActivityStats(state, actCopyPaths);
+            auto bytes = getActivityStats(state, actCopyPath);
+            if (paths.done || paths.expected) {
+                auto items = getItems(actSubstitute);
+                bool active = paths.running || paths.done < paths.expected;
+                busy |= active;
+                lines.push_back(
+                    fmt("%s Fetched %d/%d paths (%s unpacked)%s",
+                        paths.failed && !active ? failMark
+                        : active                ? busyMark
+                                                : doneMark,
+                        paths.done,
+                        paths.expected,
+                        renderSizes(bytes.done, bytes.expected),
+                        paths.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, paths.failed) : ""));
+                lines.push_back(renderBar(paths.done, paths.failed, paths.running, paths.expected));
+                renderItems(items, [&](const ActInfo & act) { return fmt("  ‣ %s%s", act.s, elapsed(act)); });
+            }
+        }
+
+        /* Builds. */
+        {
+            auto builds = getActivityStats(state, actBuilds);
+            if (builds.done || builds.expected) {
+                auto items = getItems(actBuild);
+                bool active = builds.running || builds.done < builds.expected;
+                busy |= active;
+                lines.push_back(
+                    fmt("%s Built %d/%d derivations%s%s",
+                        builds.failed && !active ? failMark
+                        : active                 ? busyMark
+                                                 : doneMark,
+                        builds.done,
+                        builds.expected,
+                        builds.running ? fmt(", %d running", builds.running) : "",
+                        builds.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, builds.failed) : ""));
+                lines.push_back(renderBar(builds.done, builds.failed, builds.running, builds.expected));
+                /* Note: build activities are also started for builds
+                   that are waiting for a build slot, so show the
+                   builds that have produced output first. */
+                renderItems(
+                    items,
+                    [&](const ActInfo & act) {
+                        auto s = fmt("  ‣ %s", act.s);
+                        if (!act.phase.empty())
+                            s += fmt(" (%s)", act.phase);
+                        s += elapsed(act);
+                        if (!act.lastLine.empty())
+                            s += fmt(": " ANSI_FAINT "%s" ANSI_NORMAL, act.lastLine);
+                        return s;
+                    },
+                    [](const ActInfo & act) { return !act.phase.empty() || !act.lastLine.empty(); });
+            }
+        }
+
+        /* Path verification. */
+        {
+            auto verify = getActivityStats(state, actVerifyPaths);
+            if (verify.done || verify.expected) {
+                auto bad = std::min(verify.done, state.corruptedPaths + state.untrustedPaths + verify.failed);
+                bool active = verify.done < verify.expected;
+                busy |= active;
+                lines.push_back(
+                    fmt("%s Verified %d/%d paths%s%s%s",
+                        active ? busyMark
+                        : bad  ? failMark
+                               : doneMark,
+                        verify.done,
+                        verify.expected,
+                        state.corruptedPaths ? fmt(", " ANSI_RED "%d corrupted" ANSI_NORMAL, state.corruptedPaths) : "",
+                        state.untrustedPaths ? fmt(", " ANSI_RED "%d untrusted" ANSI_NORMAL, state.untrustedPaths) : "",
+                        verify.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, verify.failed) : ""));
+                lines.push_back(renderBar(verify.done - bad, bad, verify.running, verify.expected));
+            }
+        }
+
+        /* Store optimisation. */
+        {
+            auto optimise = getActivityStats(state, actOptimiseStore);
+            if (optimise.done || optimise.expected) {
+                bool active = optimise.done < optimise.expected;
+                busy |= active;
+                lines.push_back(
+                    fmt("%s Optimised %d/%d paths, %s / %d inodes freed",
+                        active ? busyMark : doneMark,
+                        optimise.done,
+                        optimise.expected,
+                        renderSize(state.bytesLinked),
+                        state.filesLinked));
+                lines.push_back(renderBar(optimise.done, 0, 0, optimise.expected));
+            }
+        }
+
+        /* Keep the spinner and durations moving. */
+        if (busy)
+            nextWakeup = std::min(nextWakeup, std::chrono::duration_cast<std::chrono::milliseconds>(spinnerInterval));
+
+        return lines;
+    }
+};
+
 } // namespace
 
 std::unique_ptr<Logger> makeProgressBar()
 {
     auto logger = std::make_unique<ProgressBar>(isTTY());
+    logger->start();
+    return logger;
+}
+
+std::unique_ptr<Logger> makeProgressIndicator()
+{
+    auto logger = std::make_unique<ProgressIndicator>(isTTY());
     logger->start();
     return logger;
 }
