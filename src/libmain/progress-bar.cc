@@ -1295,8 +1295,9 @@ private:
         };
 
         /* Render the given activities, oldest first, up to
-           `maxItems`. If `isActive` is given, show the activities
-           for which it returns true first. */
+           `maxItems`. `renderItem` appends one or more lines for an
+           activity to `lines`. If `isActive` is given, show the
+           activities for which it returns true first. */
         auto renderItems = [&](std::vector<ActInfo *> items,
                                auto renderItem,
                                std::function<bool(const ActInfo &)> isActive = nullptr) {
@@ -1308,7 +1309,7 @@ private:
                     lines.push_back(fmt(ANSI_FAINT "  … and %d more" ANSI_NORMAL, items.size() - maxItems));
                     break;
                 }
-                lines.push_back(renderItem(*item));
+                renderItem(*item);
             }
         };
 
@@ -1344,7 +1345,8 @@ private:
             }
             if (!items.empty())
                 busy = true;
-            renderItems(items, [&](const ActInfo & act) { return fmt("%s %s%s", busyMark, act.s, elapsed(act)); });
+            renderItems(
+                items, [&](const ActInfo & act) { lines.push_back(fmt("%s %s%s", busyMark, act.s, elapsed(act))); });
         }
 
         /* Downloads. Note that this includes the downloads done by
@@ -1360,11 +1362,11 @@ private:
                     fmt("%s Downloaded %s", active ? busyMark : doneMark, renderSizes(stats.done, stats.expected)));
                 lines.push_back(renderBar(stats.done, 0, 0, stats.expected));
                 renderItems(items, [&](const ActInfo & act) {
-                    return fmt(
-                        "  ‣ %s%s%s",
-                        act.s,
-                        act.expected ? " " + renderSizes(act.done, act.expected) : "",
-                        elapsed(act));
+                    lines.push_back(
+                        fmt("  ‣ %s%s%s",
+                            act.s,
+                            act.expected ? " " + renderSizes(act.done, act.expected) : "",
+                            elapsed(act)));
                 });
             }
         }
@@ -1387,7 +1389,7 @@ private:
                         renderSizes(bytes.done, bytes.expected),
                         paths.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, paths.failed) : ""));
                 lines.push_back(renderBar(paths.done, paths.failed, paths.running, paths.expected));
-                renderItems(items, [&](const ActInfo & act) { return fmt("  ‣ %s%s", act.s, elapsed(act)); });
+                renderItems(items, [&](const ActInfo & act) { lines.push_back(fmt("  ‣ %s%s", act.s, elapsed(act))); });
             }
         }
 
@@ -1418,11 +1420,12 @@ private:
                         if (!act.phase.empty())
                             s += fmt(" (%s)", act.phase);
                         s += elapsed(act);
-                        /* Note: if build logs are enabled, `lastLine` is not
+                        lines.push_back(std::move(s));
+                        /* Show the last log line below the build. Note:
+                           if build logs are enabled, `lastLine` is not
                            updated. */
                         if (!act.lastLine.empty() && !printBuildLogs)
-                            s += fmt(": " ANSI_FAINT "%s" ANSI_NORMAL, act.lastLine);
-                        return s;
+                            lines.push_back(fmt("    " ANSI_FAINT "> %s" ANSI_NORMAL, act.lastLine));
                     },
                     [](const ActInfo & act) { return !act.phase.empty() || !act.lastLine.empty(); });
             }
