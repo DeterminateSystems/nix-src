@@ -69,3 +69,11 @@ if isDaemonNewer "2.36pre"; then
         --json-log-path "$TEST_ROOT/log3.json" "$path"
     (( $(jq -s --arg path "$path" '[.[] | select(.action == "start" and .type == 10113 and .name == "SubstitutionGoal" and .payload."nix.store.path" == $path)] | length' < "$TEST_ROOT/log3.json") == 1 ))
 fi
+
+# Test the `tui` log format. Since stderr is not a terminal, it prints
+# plain log messages, like the `bar` log format.
+clearStore
+nix build --log-format tui -L --file dependencies.nix --no-link 2>&1 | tee "$TEST_ROOT/tui.log"
+grepQuiet 'building.*dependencies-top.drv' "$TEST_ROOT/tui.log"
+grepQuiet 'dependencies-top> FOO' "$TEST_ROOT/tui.log"
+(! grepQuiet $'\e' "$TEST_ROOT/tui.log")
