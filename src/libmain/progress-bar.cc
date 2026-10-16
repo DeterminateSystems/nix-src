@@ -1270,7 +1270,7 @@ private:
         bool busy = false;
 
         auto width = getWindowWidth();
-        size_t barWidth = width < 14 ? 10 : std::min(60u, width - 4);
+        size_t barWidth = width < 15 ? 10 : std::min(60u, width - 5);
 
         /* Render a progress bar showing the fraction of failed (red),
            done (green) and running (yellow) items. */
@@ -1280,7 +1280,7 @@ private:
             auto chars1 = chars(failed);
             auto chars2 = chars(failed + done);
             auto chars3 = chars(failed + done + running);
-            return "  " ANSI_RED + repeat("█", chars1) + ANSI_GREEN + repeat("█", chars2 - chars1) + ANSI_WARNING
+            return "   " ANSI_RED + repeat("█", chars1) + ANSI_GREEN + repeat("█", chars2 - chars1) + ANSI_WARNING
                    + repeat("▓", chars3 - chars2) + ANSI_NORMAL + repeat("░", barWidth - chars3);
         };
 
@@ -1306,7 +1306,7 @@ private:
                 std::ranges::stable_partition(items, [&](ActInfo * act) { return isActive(*act); });
             for (auto [n, item] : enumerate(items)) {
                 if (n == maxItems) {
-                    lines.push_back(fmt(ANSI_FAINT "  … and %d more" ANSI_NORMAL, items.size() - maxItems));
+                    lines.push_back(fmt(ANSI_FAINT "   … and %d more" ANSI_NORMAL, items.size() - maxItems));
                     break;
                 }
                 renderItem(*item);
@@ -1363,7 +1363,7 @@ private:
                 lines.push_back(renderBar(stats.done, 0, 0, stats.expected));
                 renderItems(items, [&](const ActInfo & act) {
                     lines.push_back(
-                        fmt("  ‣ %s%s%s",
+                        fmt("   ‣ %s%s%s",
                             act.s,
                             act.expected ? " " + renderSizes(act.done, act.expected) : "",
                             elapsed(act)));
@@ -1389,7 +1389,8 @@ private:
                         renderSizes(bytes.done, bytes.expected),
                         paths.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, paths.failed) : ""));
                 lines.push_back(renderBar(paths.done, paths.failed, paths.running, paths.expected));
-                renderItems(items, [&](const ActInfo & act) { lines.push_back(fmt("  ‣ %s%s", act.s, elapsed(act))); });
+                renderItems(
+                    items, [&](const ActInfo & act) { lines.push_back(fmt("   ‣ %s%s", act.s, elapsed(act))); });
             }
         }
 
@@ -1416,7 +1417,7 @@ private:
                 renderItems(
                     items,
                     [&](const ActInfo & act) {
-                        auto s = fmt("  ‣ %s", act.s);
+                        auto s = fmt("   ‣ %s", act.s);
                         if (!act.phase.empty())
                             s += fmt(" (%s)", act.phase);
                         s += elapsed(act);
@@ -1425,7 +1426,7 @@ private:
                            if build logs are enabled, `lastLine` is not
                            updated. */
                         if (!act.lastLine.empty() && !printBuildLogs)
-                            lines.push_back(fmt("    " ANSI_FAINT "> %s" ANSI_NORMAL, act.lastLine));
+                            lines.push_back(fmt("     " ANSI_FAINT "> %s" ANSI_NORMAL, act.lastLine));
                     },
                     [](const ActInfo & act) { return !act.phase.empty() || !act.lastLine.empty(); });
             }
