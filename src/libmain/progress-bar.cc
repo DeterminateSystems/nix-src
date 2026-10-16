@@ -50,9 +50,18 @@ static std::string_view storePathToNameWithoutDrvSuffix(std::string_view path)
     return res;
 }
 
-class ProgressBar final : public Logger
+/**
+ * Base class for loggers that keep track of the running activities
+ * and display their progress in a "frame" of one or more lines at the
+ * bottom of the terminal. Log messages are printed above the frame.
+ * Subclasses only need to implement `renderFrame()`.
+ *
+ * Subclasses must call `start()` after construction, and `stop()` in
+ * their destructor (since the update thread calls `renderFrame()`).
+ */
+class ProgressBarBase : public Logger
 {
-private:
+protected:
     struct ActInfo
     {
         std::string s, lastLine, phase;
@@ -98,8 +107,25 @@ private:
         }
     };
 
-    /** Helps avoid unnecessary redraws, see `redraw()` */
-    Sync<std::string> lastOutput_;
+    /**
+     * What we last wrote to the terminal.
+     */
+    struct Screen
+    {
+        /**
+         * The frame last written, used to avoid unnecessary redraws
+         * (see `redraw()`). `std::nullopt` forces a redraw.
+         */
+        std::optional<std::string> lastFrame;
+
+        /**
+         * The number of lines of the frame currently on the
+         * terminal. The cursor is on the last of these lines.
+         */
+        size_t linesShown = 0;
+    };
+
+    Sync<Screen> screen_;
 
     Sync<State> state_;
 
@@ -124,19 +150,38 @@ private:
             writeToStderr("\e[?25h");
     }
 
+    ProgressBarBase(bool isTTY)
+        : isTTY(isTTY)
+    {
+        state_.lock()->active = isTTY;
+    }
+
+    /**
+     * Render the frame to be displayed, one string per line. Lines
+     * are truncated to the terminal width by the caller. Set
+     * `nextWakeup` to request a redraw after some time, even if
+     * there are no activity updates.
+     */
+    virtual std::vector<std::string>
+    renderFrame(State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) = 0;
+
 public:
 
-    ProgressBar(bool isTTY)
-        : isTTY(isTTY)
-        , interruptCallback(createInterruptCallback([&]() {
+    /**
+     * Start the update thread and register signal callbacks. This
+     * can't be done in the constructor since the update thread calls
+     * `renderFrame()`.
+     */
+    void start()
+    {
+        hideCursorIfNeeded();
+
+        interruptCallback = createInterruptCallback([&]() {
             /* Don't print the current activities, since we're about
                to abort them anyway. */
             pause(false);
-            redraw("\rshutting down\e[K");
-        }))
-    {
-        hideCursorIfNeeded();
-        state_.lock()->active = isTTY;
+            redraw({"shutting down"});
+        });
 
         /* On Ctrl-Z, unhide the cursor before the process is
            stopped. */
@@ -173,7 +218,7 @@ public:
         });
     }
 
-    ~ProgressBar()
+    ~ProgressBarBase()
     {
         stop();
     }
@@ -266,8 +311,7 @@ public:
     void log(State & state, Verbosity lvl, std::string_view s) noexcept
     {
         if (state.active) {
-            invalidateRedrawCache();
-            writeToStderr("\r\e[K" + filterANSIEscapes(s, !isTTY) + ANSI_NORMAL "\n");
+            clearProgressDisplay(filterANSIEscapes(s, !isTTY) + ANSI_NORMAL "\n");
             draw(state);
         } else {
             writeToStderr(filterANSIEscapes(s, !isTTY) + "\n");
@@ -461,30 +505,67 @@ public:
     }
 
     /**
-     * Redraw, if the output has changed.
+     * Replace the frame currently on the terminal by `lines`, if it
+     * has changed.
      *
      * Excessive redrawing is noticeable on slow terminals, and it interferes
      * with text selection in some terminals, including libvte-based terminal
      * emulators.
      */
-    void redraw(std::string newOutput) noexcept
+    void redraw(const std::vector<std::string> & lines) noexcept
     {
-        auto lastOutput(lastOutput_.lock());
-        if (newOutput != *lastOutput) {
-            writeToStderr(newOutput);
-            *lastOutput = std::move(newOutput);
+        std::string frame;
+        for (const auto & [n, line] : enumerate(lines)) {
+            if (n)
+                frame += "\n";
+            /* Reset attributes and erase the rest of the line. */
+            frame += line + ANSI_NORMAL "\e[K";
         }
+
+        auto screen(screen_.lock());
+        if (frame == screen->lastFrame)
+            return;
+
+        auto s = cursorToFrameStart(screen->linesShown) + frame;
+        /* If the new frame is shorter, erase from the cursor to the
+           end of the screen to remove the remainder of the old
+           frame. */
+        if (lines.size() < screen->linesShown)
+            s += "\e[J";
+        writeToStderr(s);
+
+        screen->lastFrame = std::move(frame);
+        screen->linesShown = lines.size();
+    }
+
+    /**
+     * Return the escape sequence that moves the cursor to the start of
+     * the first line of a frame of `linesShown` lines.
+     */
+    static std::string cursorToFrameStart(size_t linesShown)
+    {
+        /* Move the cursor up N lines (`\e[<N>A`), then to the start of
+           the line. */
+        return linesShown > 1 ? fmt("\e[%dA\r", linesShown - 1) : "\r";
     }
 
     void invalidateRedrawCache()
     {
-        *lastOutput_.lock() = "";
+        screen_.lock()->lastFrame.reset();
     }
 
-    void clearProgressDisplay()
+    /**
+     * Erase the frame, leaving the cursor at the start of an empty
+     * line, then print `s` there.
+     */
+    void clearProgressDisplay(std::string_view s = "")
     {
-        invalidateRedrawCache();
-        writeToStderr("\r\e[K");
+        auto screen(screen_.lock());
+        writeToStderr(
+            (screen->linesShown > 1 ? cursorToFrameStart(screen->linesShown) + "\e[J" : std::string("\r\e[K"))
+            + std::string(s));
+        screen->lastFrame.reset();
+        screen->linesShown = 0;
     }
 
     std::chrono::milliseconds draw(State & state) noexcept
@@ -495,6 +576,112 @@ public:
         if (state.isPaused() || !state.active)
             return nextWakeup;
 
+        auto lines = renderFrame(state, std::chrono::steady_clock::now(), nextWakeup);
+
+        /* Don't draw more lines than fit in the terminal, since then
+           we can't move the cursor back to the start of the frame. */
+        auto rows = getWindowSize().first;
+        if (rows > 1 && lines.size() >= rows)
+            lines.resize(rows - 1);
+
+        /* Truncate lines to the terminal width. In multi-line frames,
+           leave the last column empty: writing a newline after a line
+           that fills the entire width causes some terminals to move
+           the cursor down two lines (once to wrap, once for the
+           newline), so we would lose track of the cursor position. */
+        auto width = getWindowWidth();
+        if (lines.size() > 1 && width > 1 && width != std::numeric_limits<decltype(width)>::max())
+            width--;
+        for (auto & line : lines)
+            line = filterANSIEscapes(line, false, width);
+
+        redraw(lines);
+
+        return nextWakeup;
+    }
+
+    struct ActivityStats
+    {
+        uint64_t done = 0;
+        uint64_t expected = 0;
+        uint64_t running = 0;
+        uint64_t failed = 0;
+    };
+
+    /**
+     * Get the aggregate progress of all activities of type `type`,
+     * including those that have finished.
+     */
+    static ActivityStats getActivityStats(State & state, ActivityType type)
+    {
+        auto & act = state.activitiesByType[type];
+        ActivityStats stats{.done = act.done, .expected = act.done, .failed = act.failed};
+        for (auto & j : act.its) {
+            stats.done += j.second->done;
+            stats.expected += j.second->expected;
+            stats.running += j.second->running;
+            stats.failed += j.second->failed;
+        }
+        stats.expected = std::max(stats.expected, act.expected);
+        return stats;
+    }
+
+    void writeToStdout(std::string_view s) override
+    {
+        auto state(state_.lock());
+        if (state->active) {
+            clearProgressDisplay();
+            Logger::writeToStdout(s);
+            draw(*state);
+        } else {
+            Logger::writeToStdout(s);
+        }
+    }
+
+    std::optional<char> ask(std::string_view msg) override
+    {
+        auto state(state_.lock());
+        if (!state->active)
+            return {};
+        clearProgressDisplay(fmt("%s ", msg));
+        unhideCursorIfNeeded();
+        auto s = trim(readLine(getStandardInput(), true));
+        hideCursorIfNeeded();
+        if (s.size() != 1)
+            return {};
+        draw(*state);
+        return s[0];
+    }
+
+    void setPrintBuildLogs(bool printBuildLogs) override
+    {
+        this->printBuildLogs = printBuildLogs;
+    }
+};
+
+/**
+ * The classic one-line progress bar, showing the number of builds,
+ * downloads etc. and the most recently started activity.
+ */
+class ProgressBar final : public ProgressBarBase
+{
+public:
+
+    ProgressBar(bool isTTY)
+        : ProgressBarBase(isTTY)
+    {
+    }
+
+    ~ProgressBar()
+    {
+        stop();
+    }
+
+private:
+
+    std::vector<std::string> renderFrame(
+        State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) override
+    {
         std::string line;
 
         std::string status = getStatus(state);
@@ -503,8 +690,6 @@ public:
             line += status;
             line += "]";
         }
-
-        auto now = std::chrono::steady_clock::now();
 
         if (!state.activities.empty()) {
             if (!status.empty())
@@ -542,9 +727,7 @@ public:
             }
         }
 
-        redraw("\r" + filterANSIEscapes(line, false, getWindowWidth()) + ANSI_NORMAL + "\e[K");
-
-        return nextWakeup;
+        return {std::move(line)};
     }
 
     std::string getStatus(State & state) noexcept
@@ -554,16 +737,7 @@ public:
         auto renderActivity =
             [&] [[nodiscard]] (
                 ActivityType type, const std::string & itemFmt, const std::string & numberFmt = "%d", double unit = 1) {
-                auto & act = state.activitiesByType[type];
-                uint64_t done = act.done, expected = act.done, running = 0, failed = act.failed;
-                for (auto & j : act.its) {
-                    done += j.second->done;
-                    expected += j.second->expected;
-                    running += j.second->running;
-                    failed += j.second->failed;
-                }
-
-                expected = std::max(expected, act.expected);
+                auto [done, expected, running, failed] = getActivityStats(state, type);
 
                 std::string s;
 
@@ -598,16 +772,7 @@ public:
             };
 
         auto renderSizeActivity = [&] [[nodiscard]] (ActivityType type, const std::string & itemFmt = "%s") {
-            auto & act = state.activitiesByType[type];
-            uint64_t done = act.done, expected = act.done, running = 0, failed = act.failed;
-            for (auto & j : act.its) {
-                done += j.second->done;
-                expected += j.second->expected;
-                running += j.second->running;
-                failed += j.second->failed;
-            }
-
-            expected = std::max(expected, act.expected);
+            auto [done, expected, running, failed] = getActivityStats(state, type);
 
             std::optional<SizeUnit> commonUnit;
             std::string s;
@@ -717,47 +882,15 @@ public:
 
         return res;
     }
-
-    void writeToStdout(std::string_view s) override
-    {
-        auto state(state_.lock());
-        if (state->active) {
-            invalidateRedrawCache();
-            std::cerr << "\r\e[K";
-            Logger::writeToStdout(s);
-            draw(*state);
-        } else {
-            Logger::writeToStdout(s);
-        }
-    }
-
-    std::optional<char> ask(std::string_view msg) override
-    {
-        auto state(state_.lock());
-        if (!state->active)
-            return {};
-        invalidateRedrawCache();
-        std::cerr << fmt("\r\e[K%s ", msg);
-        unhideCursorIfNeeded();
-        auto s = trim(readLine(getStandardInput(), true));
-        hideCursorIfNeeded();
-        if (s.size() != 1)
-            return {};
-        draw(*state);
-        return s[0];
-    }
-
-    void setPrintBuildLogs(bool printBuildLogs) override
-    {
-        this->printBuildLogs = printBuildLogs;
-    }
 };
 
 } // namespace
 
 std::unique_ptr<Logger> makeProgressBar()
 {
-    return std::make_unique<ProgressBar>(isTTY());
+    auto logger = std::make_unique<ProgressBar>(isTTY());
+    logger->start();
+    return logger;
 }
 
 } // namespace nix
