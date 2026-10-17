@@ -6,6 +6,7 @@
   nix-store,
   nlohmann_json,
   libgit2,
+  zstd,
 
   # Configuration Options
 
@@ -35,6 +36,7 @@ mkMesonLibrary (finalAttrs: {
 
   buildInputs = [
     libgit2
+    zstd
   ];
 
   propagatedBuildInputs = [
