@@ -17,6 +17,7 @@
 #include "nix/expr/value-to-json.hh"
 #include "nix/expr/value-to-xml.hh"
 #include "nix/expr/primops.hh"
+#include "nix/expr/parallel-eval.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/sort.hh"
 #include "nix/util/mounted-source-accessor.hh"
@@ -1432,6 +1433,21 @@ static void prim_derivationStrictGeneric(EvalState & state, const PosIdx pos, Va
     state.forceAttrs(*args[0], pos, "while evaluating the argument passed to builtins.derivationStrict");
 
     auto attrs = args[0]->attrs();
+
+    /* If parallel eval is enabled, then start instantiating the
+       dependencies of this derivation in the background: a single
+       work item walks the attributes (forcing them itself, since
+       they're typically cheap) and spawns the instantiation of every
+       derivation it finds, which in turn does the same for *its*
+       dependencies. Skip this when the workers already have a backlog
+       (e.g. `nix flake show` on a big flake): the background work
+       would then only compete with the main evaluation for the same
+       thunks and cores. */
+    if (state.executor->enabled && !state.executor->hasBacklog()) {
+        Executor::WorkItems work;
+        state.addWork(work, 0, [v(RootValue(args[0])), &state]() { state.forceValueDeepParallel(**v, noPos, false); });
+        state.executor->spawn(std::move(work));
+    }
 
     /* Figure out the name first (for stack backtraces). */
     auto nameAttr =
