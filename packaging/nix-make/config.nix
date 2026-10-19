@@ -50,6 +50,12 @@
       description = "Whether to use the Boehm garbage collector in the Nix language evaluator.";
     };
 
+    gcs = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Whether to support Google Cloud Storage binary caches.";
+    };
+
     wasm = lib.mkOption {
       type = lib.types.bool;
       default = true;

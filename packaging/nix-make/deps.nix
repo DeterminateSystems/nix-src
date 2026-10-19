@@ -14,6 +14,16 @@ let
 in
 [
   {
+    prefix = "google/cloud/";
+    pkg = deps.google-cloud-cpp.override {
+      apis = [
+        "storage"
+        "universe_domain"
+      ];
+    };
+    pkgconfig = [ "google_cloud_cpp_storage" ];
+  }
+  {
     prefix = "boost/context";
     pkg = deps.boost;
     libs = [ "-lboost_context" ];
