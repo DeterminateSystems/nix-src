@@ -84,5 +84,7 @@ jq 'del(.service_account_impersonation_url)' "$serverDir/adc.json" > "$serverDir
 GOOGLE_APPLICATION_CREDENTIALS="$serverDir/direct.json" nix store info --store gs://test/direct
 jq -s -e 'any(.[]; .auth == "Bearer federated-token" and (.path | contains("/b/test/")))' "$serverDir/requests"
 
+python3 ./gcs-binary-cache-regressions.py "$serverDir" "$config_nix"
+
 # An explicit broken ADC file must not silently fall back to the VM identity.
 expect 1 env GOOGLE_APPLICATION_CREDENTIALS="$serverDir/does-not-exist" nix store info --store gs://test/bad-adc

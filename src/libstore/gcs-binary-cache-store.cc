@@ -82,6 +82,32 @@ std::string GCSBinaryCacheStoreConfig::doc()
 
 namespace gcs = google::cloud::storage;
 
+class GCSRetryPolicy : public gcs::LimitedErrorCountRetryPolicy
+{
+public:
+    GCSRetryPolicy()
+        : LimitedErrorCountRetryPolicy(3)
+    {
+    }
+
+    std::unique_ptr<gcs::RetryPolicy> clone() const override;
+
+    bool OnFailure(const google::cloud::Status & status) override
+    {
+        return !isInterrupted() && LimitedErrorCountRetryPolicy::OnFailure(status);
+    }
+
+    bool IsExhausted() const override
+    {
+        return isInterrupted() || LimitedErrorCountRetryPolicy::IsExhausted();
+    }
+};
+
+std::unique_ptr<gcs::RetryPolicy> GCSRetryPolicy::clone() const
+{
+    return std::make_unique<GCSRetryPolicy>();
+}
+
 struct GCSBinaryCacheStore : virtual BinaryCacheStore
 {
 private:
@@ -89,8 +115,13 @@ private:
 
     ref<GCSBinaryCacheStoreConfig> config;
     // A long-lived client shares and refreshes ADC credentials across requests.
-    gcs::Client client{google::cloud::Options{}.set<google::cloud::UnifiedCredentialsOption>(
-        google::cloud::MakeGoogleDefaultCredentials())};
+    gcs::Client client{
+        google::cloud::Options{}
+            .set<google::cloud::UnifiedCredentialsOption>(google::cloud::MakeGoogleDefaultCredentials())
+            .set<gcs::RetryPolicyOption>(std::make_shared<GCSRetryPolicy>())
+            // Keep retry sleeps short so cancellation is noticed promptly.
+            .set<gcs::BackoffPolicyOption>(
+                gcs::ExponentialBackoffPolicy(std::chrono::milliseconds(100), std::chrono::seconds(1), 2.0).clone())};
 
 public:
     explicit GCSBinaryCacheStore(ref<GCSBinaryCacheStoreConfig> config)
@@ -117,6 +148,7 @@ public:
     {
         checkInterrupt();
         auto result = client.GetObjectMetadata(config->cacheUri.authority->host, config->objectName(path));
+        checkInterrupt();
         if (result)
             return true;
         if (result.status().code() == google::cloud::StatusCode::kNotFound)
@@ -128,6 +160,7 @@ public:
     {
         checkInterrupt();
         auto stream = client.ReadObject(config->cacheUri.authority->host, config->objectName(path));
+        checkInterrupt();
         if (stream.status().code() == google::cloud::StatusCode::kNotFound)
             throw NoSuchBinaryCacheFile("file '%s' does not exist in GCS binary cache '%s'", path, config->cacheUri);
 
@@ -135,6 +168,7 @@ public:
         while (stream) {
             checkInterrupt();
             stream.read(buffer.data(), buffer.size());
+            checkInterrupt();
             if (stream.gcount())
                 sink({buffer.data(), static_cast<size_t>(stream.gcount())});
         }
@@ -152,10 +186,12 @@ public:
         auto stream =
             client.WriteObject(config->cacheUri.authority->host, config->objectName(path), gcs::ContentType(mimeType));
         try {
+            checkInterrupt();
             uint64_t size = 0;
             LambdaSink sink{[&](std::string_view data) {
                 checkInterrupt();
                 stream.write(data.data(), data.size());
+                checkInterrupt();
                 if (!stream)
                     throw Error(
                         "writing '%s' to GCS binary cache '%s': %s", path, config->cacheUri, stream.last_status());
@@ -165,13 +201,29 @@ public:
             if (size != sizeHint)
                 throw Error("unexpected size for GCS upload '%s': expected %d, got %d", path, sizeHint, size);
             stream.Close();
+            checkInterrupt();
             if (!stream.metadata())
                 throw Error(
                     "writing '%s' to GCS binary cache '%s': %s", path, config->cacheUri, stream.metadata().status());
+            // The SDK can return metadata successfully but set badbit when its checksum disagrees.
+            if (!stream)
+                throw Error("checksum mismatch uploading '%s' to GCS binary cache '%s'", path, config->cacheUri);
         } catch (...) {
             std::move(stream).Suspend();
             throw;
         }
+    }
+
+    std::optional<std::string> getBuildLogExact(const StorePath & path) override
+    {
+        return BinaryCacheStore::getFile("log/" + percentEncode(path.to_string()));
+    }
+
+    void addBuildLog(const StorePath & drvPath, std::string_view log) override
+    {
+        assert(drvPath.isDerivation());
+        BinaryCacheStore::upsertFile(
+            "log/" + percentEncode(drvPath.to_string()), std::string(log), "text/plain; charset=utf-8");
     }
 
     std::optional<TrustedFlag> isTrustedClient() override

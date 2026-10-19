@@ -47,12 +47,19 @@
   enableWasm ? !stdenv.hostPlatform.isStatic,
 
   withGCS ?
-    (lib.meta.availableOn stdenv.hostPlatform google-cloud-cpp) && !stdenv.hostPlatform.isStatic,
+    (lib.meta.availableOn stdenv.hostPlatform google-cloud-cpp)
+    && !stdenv.hostPlatform.isStatic
+    && (stdenv.cc.libcxx.isLLVM or false) == (google-cloud-cpp.stdenv.cc.libcxx.isLLVM or false),
 }:
 
 let
   inherit (lib) fileset;
 in
+
+assert lib.assertMsg (
+  !withGCS
+  || (stdenv.cc.libcxx.isLLVM or false) == (google-cloud-cpp.stdenv.cc.libcxx.isLLVM or false)
+) "GCS support requires Nix and google-cloud-cpp to use the same C++ standard library";
 
 mkMesonLibrary (finalAttrs: {
   pname = "determinate-nix-store";
