@@ -111,6 +111,7 @@ suites = [
       'gc-auto.sh',
       'gc-closure.sh',
       'gc-concurrent.sh',
+      'gcs-binary-cache.sh',
       'gc-non-blocking.sh',
       'gc-runtime.sh',
       'gc.sh',

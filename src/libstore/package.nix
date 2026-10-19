@@ -10,6 +10,7 @@
   nix-util,
   boost,
   curl,
+  google-cloud-cpp,
   aws-c-common,
   aws-crt-cpp,
   libseccomp,
@@ -41,6 +42,9 @@
     (lib.meta.availableOn stdenv.hostPlatform aws-c-common) && !stdenv.hostPlatform.isStatic,
 
   enableWasm ? !stdenv.hostPlatform.isStatic,
+
+  withGCS ?
+    (lib.meta.availableOn stdenv.hostPlatform google-cloud-cpp) && !stdenv.hostPlatform.isStatic,
 }:
 
 let
@@ -87,6 +91,14 @@ mkMesonLibrary (finalAttrs: {
   ++ lib.optional stdenv.hostPlatform.isLinux libseccomp
   ++ lib.optional stdenv.hostPlatform.isFreeBSD freebsd.libjail
   ++ lib.optional withAWS aws-crt-cpp
+  ++ lib.optional withGCS (
+    google-cloud-cpp.override {
+      apis = [
+        "storage"
+        "universe_domain"
+      ];
+    }
+  )
   ++ lib.optional enableWasm wasmtime;
 
   propagatedBuildInputs = [
@@ -98,6 +110,7 @@ mkMesonLibrary (finalAttrs: {
     (lib.mesonEnable "seccomp-sandboxing" stdenv.hostPlatform.isLinux)
     (lib.mesonBool "embedded-sandbox-shell" embeddedSandboxShell)
     (lib.mesonEnable "s3-aws-auth" withAWS)
+    (lib.mesonEnable "gcs" withGCS)
     (lib.mesonEnable "wasm" enableWasm)
   ]
   ++ lib.optionals withSandboxShell [

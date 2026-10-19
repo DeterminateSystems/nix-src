@@ -43,6 +43,7 @@ nixMake.mkComponent {
       NIX_LOCAL_SYSTEM = "x86_64-linux";
       NIX_SUPPORT_ACL = 1;
       NIX_WITH_AWS_AUTH = nixMake.config.awsAuth;
+      NIX_WITH_GCS = nixMake.config.gcs;
     };
     "store-config-private.hh" = {
       CAN_LINK_SYMLINK = 1;
