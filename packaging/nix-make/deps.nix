@@ -15,12 +15,19 @@ in
 [
   {
     prefix = "google/cloud/";
-    pkg = deps.google-cloud-cpp.override {
-      apis = [
-        "storage"
-        "universe_domain"
-      ];
-    };
+    pkg = with deps; [
+      (google-cloud-cpp.override {
+        apis = [
+          "storage"
+          "universe_domain"
+        ];
+      })
+      # google-cloud-cpp does not propagate its pkg-config dependencies.
+      abseil-cpp
+      crc32c
+      curl
+      openssl
+    ];
     pkgconfig = [ "google_cloud_cpp_storage" ];
   }
   {

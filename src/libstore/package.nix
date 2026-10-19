@@ -11,6 +11,9 @@
   boost,
   curl,
   google-cloud-cpp,
+  abseil-cpp,
+  crc32c,
+  openssl,
   aws-c-common,
   aws-crt-cpp,
   libseccomp,
@@ -91,14 +94,18 @@ mkMesonLibrary (finalAttrs: {
   ++ lib.optional stdenv.hostPlatform.isLinux libseccomp
   ++ lib.optional stdenv.hostPlatform.isFreeBSD freebsd.libjail
   ++ lib.optional withAWS aws-crt-cpp
-  ++ lib.optional withGCS (
-    google-cloud-cpp.override {
+  ++ lib.optionals withGCS [
+    (google-cloud-cpp.override {
       apis = [
         "storage"
         "universe_domain"
       ];
-    }
-  )
+    })
+    # google-cloud-cpp does not propagate its pkg-config dependencies.
+    abseil-cpp
+    crc32c
+    openssl
+  ]
   ++ lib.optional enableWasm wasmtime;
 
   propagatedBuildInputs = [

@@ -9,6 +9,7 @@ import pathlib
 import re
 import sys
 import urllib.parse
+import uuid
 
 
 def crc32c(data):
@@ -85,9 +86,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if query.get("alt") != ["media"]:
                 return self.reply(200, metadata)
             checksum = metadata["md5Hash"]
+            crc = metadata["crc32c"]
             if (self.server.root / "corrupt").exists() and "/nar/" in key[1]:
                 checksum = base64.b64encode(b"x" * 16).decode()
-            headers = {"x-goog-hash": f"md5={checksum},crc32c={metadata['crc32c']}", "x-goog-generation": "1"}
+                crc = base64.b64encode(bytes(byte ^ 255 for byte in base64.b64decode(crc))).decode()
+            headers = {"x-goog-hash": f"md5={checksum},crc32c={crc}", "x-goog-generation": "1"}
             if self.headers.get("Range"):
                 start = int(self.headers["Range"].split("=")[1].split("-")[0])
                 headers["Content-Range"] = f"bytes {start}-{len(data) - 1}/{len(data)}"
@@ -99,7 +102,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             metadata = json.loads(body or b"{}")
             name = query.get("name", [metadata.get("name")])[0]
             bucket = url.path.split("/b/", 1)[1].split("/", 1)[0]
-            session = str(len(self.server.uploads))
+            session = uuid.uuid4().hex
             self.server.uploads[session] = (bucket, name, bytearray(), metadata)
             return self.reply(200, {}, {"Location": f"http://127.0.0.1:{self.server.server_port}/session/{session}"})
 
@@ -120,8 +123,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 assert int(start) == len(data)
                 assert int(end) - int(start) + 1 == len(body)
                 # Make the SDK retry a large chunk, including querying the session.
-                if len(body) > 1024 * 1024 and not self.server.retried:
+                if "/nar/" in name and not self.server.retried:
                     self.server.retried = True
+                    (self.server.root / "retried").touch()
                     return self.reply(503, {"error": {"code": 503, "message": "retry this chunk"}})
                 data.extend(body)
                 if total == "*":

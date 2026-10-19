@@ -19,7 +19,9 @@ endpoint="http://127.0.0.1:$(cat "$serverDir/port")"
 export CLOUD_STORAGE_EMULATOR_ENDPOINT=$endpoint
 GCE_METADATA_ROOT="127.0.0.1:$(cat "$serverDir/port")"
 export GCE_METADATA_ROOT
-unset GOOGLE_APPLICATION_CREDENTIALS
+unset GOOGLE_APPLICATION_CREDENTIALS GOOGLE_GCLOUD_ADC_PATH_OVERRIDE GOOGLE_CLOUD_UNIVERSE_DOMAIN
+export NO_PROXY=127.0.0.1,localhost
+export no_proxy=$NO_PROXY
 
 if ! nix store info --store gs://test/cache >"$serverDir/probe" 2>&1; then
     grepQuiet 'built without GCS support' "$serverDir/probe" && skipTest "GCS support is disabled"
@@ -32,6 +34,7 @@ python3 -c 'import sys; open(sys.argv[1], "wb").write(b"0123456789abcdef" * (640
 outPath=$(nix-store --add "$TEST_ROOT/payload")
 originalHash=$(nix hash path "$outPath")
 nix copy --to 'gs://test/cache?compression=none' "$outPath"
+[[ -e $serverDir/retried ]]
 clearStore
 nix copy --from gcs://test/cache "$outPath" --no-check-sigs
 [[ $(nix hash path "$outPath") == "$originalHash" ]]
