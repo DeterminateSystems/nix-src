@@ -76,6 +76,8 @@ trap 'killDaemon; kill "$serverPid"' EXIT
 GOOGLE_APPLICATION_CREDENTIALS="$serverDir/does-not-exist" nix-store --realise "$outPath"
 [[ $(nix hash path "$outPath") == "$originalHash" ]]
 killDaemon
+# killDaemon clears the EXIT trap, so restore cleanup for the remaining checks.
+trap 'kill "$serverPid"; wait "$serverPid" || true' EXIT
 
 # ADC without impersonation uses the federated access token directly.
 jq 'del(.service_account_impersonation_url)' "$serverDir/adc.json" > "$serverDir/direct.json"
