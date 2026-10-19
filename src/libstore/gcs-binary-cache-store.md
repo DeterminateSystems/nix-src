@@ -4,7 +4,7 @@ R"(
 
 This store reads and writes the standard [binary cache](@docroot@/protocols/binary-cache/index.md) layout in Google Cloud Storage.
 It requires a build of Nix with Google Cloud Storage support (`-Dgcs=enabled` in the `nix-store` Meson project).
-The Nix package enables this support by default on supported, dynamically linked platforms.
+The Nix package enables this support by default on supported, dynamically linked platforms when Nix and the Google client use the same C++ standard library.
 
 ### Authentication
 
@@ -30,8 +30,9 @@ $ nix copy --from 'gs://example-nix-cache/team' /nix/store/…
 ```
 
 The optional prefix places all cache objects, including `nix-cache-info`, under that prefix.
-Uploads are streamed using GCS resumable uploads, with bounded buffering and retries provided by the Google client.
-Downloads are streamed and checked by the client for transport and checksum errors.
+Uploads are streamed using GCS resumable uploads, with bounded buffering.
+Transient GCS request failures are retried up to three times; interruption stops further retries.
+Uploads and downloads are checked by the client for transport and checksum errors.
 Nix's normal NAR hashes and signature checks still apply.
 Configure cache signing keys and `trusted-public-keys` as for other binary caches.
 

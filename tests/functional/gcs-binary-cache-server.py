@@ -43,8 +43,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(url.query)
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         auth = self.headers.get("Authorization")
+        metadata = {}
+        if self.command == "POST" and url.path.startswith("/upload/storage/v1/b/"):
+            metadata = json.loads(body or b"{}")
+        object_name = query.get("name", [metadata.get("name")])[0]
         with (self.server.root / "requests").open("a") as log:
-            log.write(json.dumps({"method": self.command, "path": url.path, "auth": auth, "size": len(body)}) + "\n")
+            log.write(json.dumps({"method": self.command, "path": url.path, "auth": auth,
+                                  "name": object_name, "size": len(body)}) + "\n")
 
         if url.path.startswith("/computeMetadata/v1/"):
             assert self.headers.get("Metadata-Flavor") == "Google"
@@ -77,6 +82,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if "/b/denied/" in url.path:
             return self.reply(403, {"error": {"code": 403, "message": "permission denied by test"}})
 
+        if "/b/interrupted/" in url.path:
+            (self.server.root / "interrupted").touch()
+            return self.reply(503, {"error": {"code": 503, "message": "retry until interrupted"}})
+
         if self.command == "GET" and "/o/" in url.path:
             bucket, name = url.path.split("/b/", 1)[1].split("/o/", 1)
             key = (bucket, urllib.parse.unquote(name))
@@ -99,8 +108,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if self.command == "POST" and url.path.startswith("/upload/storage/v1/b/"):
             assert query["uploadType"] == ["resumable"]
-            metadata = json.loads(body or b"{}")
-            name = query.get("name", [metadata.get("name")])[0]
+            name = object_name
             bucket = url.path.split("/b/", 1)[1].split("/", 1)[0]
             session = uuid.uuid4().hex
             self.server.uploads[session] = (bucket, name, bytearray(), metadata)
@@ -133,6 +141,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 assert len(data) == int(total)
             metadata.update({"name": name, "bucket": bucket, "size": str(len(data)), "generation": "1",
                              "md5Hash": base64.b64encode(hashlib.md5(data).digest()).decode(), "crc32c": crc32c(data)})
+            if name.startswith("bad-upload/nar/"):
+                metadata["md5Hash"] = base64.b64encode(b"x" * 16).decode()
+                metadata["crc32c"] = base64.b64encode(bytes(byte ^ 255 for byte in base64.b64decode(metadata["crc32c"]))).decode()
             self.server.objects[(bucket, name)] = (bytes(data), metadata)
             return self.reply(200, metadata)
 
