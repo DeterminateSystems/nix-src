@@ -3,16 +3,16 @@
     "bdwgc": {
       "flake": false,
       "locked": {
-        "lastModified": 1791890853,
-        "narHash": "sha256-Wip2gE+2EJGC6trYxO9Pl36rkgA3BJJkAsiWTVGXFBc=",
+        "lastModified": 1792703853,
+        "narHash": "sha256-Grnt2SmCk+57bb4l0ktrHIKxxCgu15+0E5v+qSuAT6A=",
         "owner": "DeterminateSystems",
         "repo": "bdwgc",
-        "rev": "d569c29c479acb44bcf4e992acfc776fb88fb857",
+        "rev": "b142427d2604472202e16418de609283f91a8dd7",
         "type": "github"
       },
       "original": {
         "owner": "DeterminateSystems",
-        "ref": "user-defined-stacks",
+        "ref": "allow-multiple-heap-expansions",
         "repo": "bdwgc",
         "type": "github"
       }
