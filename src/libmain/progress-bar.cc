@@ -574,7 +574,7 @@ public:
             line += "]";
         }
 
-        std::string statusMessage = line;
+        std::string statusMessage;
         auto now = std::chrono::steady_clock::now();
 
         if (!state.activities.empty()) {
@@ -599,13 +599,13 @@ public:
             }
 
             if (i != state.activities.rend()) {
-                line += i->s;
+                statusMessage = i->s;
                 if (!i->phase.empty()) {
-                    line += " (";
-                    line += i->phase;
-                    line += ")";
+                    statusMessage += " (";
+                    statusMessage += i->phase;
+                    statusMessage += ")";
                 }
-                statusMessage = line;
+                line += statusMessage;
                 if (!i->lastLine.empty()) {
                     if (!i->s.empty())
                         line += ": ";
@@ -614,7 +614,7 @@ public:
             }
         }
 
-        reportWorking(state, statusMessage);
+        reportWorking(state, statusMessage, !line.empty());
 
         redraw("\r" + filterANSIEscapes(line, false, getWindowWidth()) + ANSI_NORMAL + "\e[K");
 
@@ -644,9 +644,9 @@ public:
         return (unsigned) std::min<uint64_t>(100, done * 100 / expected);
     }
 
-    void reportWorking(State & state, std::string_view statusMessage)
+    void reportWorking(State & state, std::string_view statusMessage, bool haveStatus)
     {
-        if (!statusMessage.empty() || state.lastReportedState == ProgramState::Blocked)
+        if (haveStatus || state.lastReportedState == ProgramState::Blocked)
             reportStatus(state, ProgramState::Working, statusMessage, getProgress(state));
         else
             state.statusReportPending = false;
