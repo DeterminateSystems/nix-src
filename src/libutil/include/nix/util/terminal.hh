@@ -82,4 +82,9 @@ std::string makeProgramStatusReport(
     std::optional<unsigned> progress = {},
     std::optional<ProgramStatusKind> kind = {});
 
+/**
+ * @return An OSC 7501 sequence that removes the program's status
+ */
+std::string makeProgramStatusClearReport();
+
 } // namespace nix

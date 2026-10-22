@@ -279,6 +279,11 @@ std::string makeProgramStatusReport(
     return report;
 }
 
+std::string makeProgramStatusClearReport()
+{
+    return "\e]7501;state=clear\e\\";
+}
+
 //////////////////////////////////////////////////////////////////////
 
 // Note: this object intentionally leaks to avoid a destructor ordering issue (specifically, ~ProgressBar() calling
