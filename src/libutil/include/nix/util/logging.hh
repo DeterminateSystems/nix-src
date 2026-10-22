@@ -140,6 +140,12 @@ public:
     virtual void stop() {};
 
     /**
+     * Called by `handleExceptions()` with the process' final exit status,
+     * after `stop()`. Lets a logger report the overall outcome of the command.
+     */
+    virtual void exited(int status) {};
+
+    /**
      * Flush any buffered state to its final destination. Loggers that
      * upload to a remote service (such as the OpenTelemetry logger) use
      * this to perform the upload on exit.
