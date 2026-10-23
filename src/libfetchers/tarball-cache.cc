@@ -675,25 +675,6 @@ struct TarballCacheSink : GitFileSystemObjectSink
     }
 
     /**
-     * Queue a chunk for writing, and write the queued rows if there are enough of them.
-     */
-    void queueChunk(PendingChunk && chunk)
-    {
-        Pending batch;
-
-        {
-            auto pending(_pending.lock());
-            pending->addChunk(std::move(chunk));
-            if (pending->size < maxBatchSize)
-                return;
-            batch = std::move(*pending);
-            pending->clear();
-        }
-
-        cache->writePending(batch);
-    }
-
-    /**
      * Return whether the blob `oid` still needs to be written, i.e. it's not in the cache and hasn't been queued
      * during this import.
      */
@@ -760,19 +741,28 @@ struct TarballCacheSink : GitFileSystemObjectSink
         if (!needBlob(oid))
             return oid;
 
-        /* Second pass: compress and queue the chunks. */
+        /* Second pass: compress and write the chunks. These don't go through `_pending`, since batches taken from
+           there by different threads can be committed in any order, which could cause the `Blobs` row to be
+           committed before all its chunks. Instead, the chunks are written from this thread, in order, with the
+           `Blobs` row in the same transaction as the last chunks. */
         rewind();
         FdSource source(fd);
         std::string buf;
         uint64_t seq = 0, left = size;
+        Pending pending;
         do {
             buf.resize(std::min<uint64_t>(chunkSize, left));
             source(buf.data(), buf.size());
             left -= buf.size();
-            queueChunk(makeChunk(oid, seq++, buf));
+            pending.addChunk(makeChunk(oid, seq++, buf));
+            if (pending.size >= maxBatchSize) {
+                cache->writePending(pending);
+                pending.clear();
+            }
         } while (left);
 
-        _pending.lock()->blobs.push_back({.oid = oid, .size = size});
+        pending.blobs.push_back({.oid = oid, .size = size});
+        cache->writePending(pending);
 
         return oid;
     }
