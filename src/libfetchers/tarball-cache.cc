@@ -567,6 +567,15 @@ struct TarballCacheSink : GitFileSystemObjectSink
     /** If the file contents in flight exceed this threshold, files are processed synchronously. */
     static constexpr size_t maxBufSize = 64 * 1024 * 1024;
 
+    /** Number of files spilled to a temporary file that are waiting to be processed. */
+    std::atomic<size_t> spilledInFlight{0};
+
+    /**
+     * If more than this number of spilled files are in flight, files are processed synchronously. Each one holds
+     * an open file descriptor and space in the temporary directory until it's processed.
+     */
+    static constexpr size_t maxSpilledInFlight = 64;
+
     /** The amount of (compressed) blob data to write to the database in a single transaction. */
     static constexpr size_t maxBatchSize = 16 * 1024 * 1024;
 
@@ -849,10 +858,17 @@ struct TarballCacheSink : GitFileSystemObjectSink
             return;
         }
 
-        workers.enqueue([this, path, mode, crf, id]() {
+        auto work = [this, path, mode, crf, id]() {
+            Finally release([&]() { spilledInFlight--; });
             auto oid = addBlobFromFile(crf->tempFd.get(), crf->size);
             addNode(*_state.lock(), path, Child{mode, oid, id});
-        });
+        };
+
+        /* Bound the number of open temporary files (see `maxSpilledInFlight`). */
+        if (++spilledInFlight > maxSpilledInFlight)
+            work();
+        else
+            workers.enqueue(std::move(work));
     }
 
     void createDirectory(const CanonPath & path) override
