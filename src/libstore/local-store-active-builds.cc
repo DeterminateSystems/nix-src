@@ -264,7 +264,13 @@ std::vector<ActiveBuildInfo> LocalStore::queryActiveBuilds()
 
                 for (auto pid : pids) {
                     try {
-                        info.processes.push_back(getProcessInfo(pid));
+                        auto process = getProcessInfo(pid);
+                        /* Skip processes not owned by the build's UID(s). These are daemon processes that have
+                           forked to start the builder but haven't switched to the build user yet. */
+                        if (process.user.uid < info.mainUser.uid
+                            || process.user.uid - info.mainUser.uid >= info.mainUidCount)
+                            continue;
+                        info.processes.push_back(std::move(process));
                     } catch (...) {
                         // Process may have exited.
                         ignoreExceptionExceptInterrupt(lvlDebug);

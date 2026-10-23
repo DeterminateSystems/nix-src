@@ -32,6 +32,13 @@ struct ActiveBuild
 
     pid_t mainPid;
     UserInfo mainUser;
+
+    /**
+     * The number of UIDs allocated to the build, starting at `mainUser.uid`. This is greater than 1 for builds that
+     * use a UID range (`auto-allocate-uids` with the `uid-range` feature).
+     */
+    uid_t mainUidCount = 1;
+
     std::optional<std::filesystem::path> cgroup;
 
     time_t startTime;
