@@ -14,6 +14,8 @@ Observe the following rules when contributing to this repository:
 
 * The code base uses C++23, so C++23 features (e.g. deducing-this lambdas) can be used freely.
 
+* `packaging/nix-make` and `packaging/secure-packages` are separate flakes with their own lock files, which also lock the inputs of the top-level flake (as `nix/<input>`). When updating an input in `flake.lock`, update it in those lock files as well, e.g. `(cd packaging/nix-make && nix flake update nix/bdwgc)`. Note that `nix flake lock` doesn't do this.
+
 Building and testing Nix:
 
 * Build Nix using `nix build ./packaging/nix-make#release.nix`. The result is in `./result`.
