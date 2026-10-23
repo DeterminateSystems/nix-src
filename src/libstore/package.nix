@@ -10,6 +10,10 @@
   nix-util,
   boost,
   curl,
+  google-cloud-cpp,
+  abseil-cpp,
+  crc32c,
+  openssl,
   aws-c-common,
   aws-crt-cpp,
   libseccomp,
@@ -41,11 +45,21 @@
     (lib.meta.availableOn stdenv.hostPlatform aws-c-common) && !stdenv.hostPlatform.isStatic,
 
   enableWasm ? !stdenv.hostPlatform.isStatic,
+
+  withGCS ?
+    (lib.meta.availableOn stdenv.hostPlatform google-cloud-cpp)
+    && !stdenv.hostPlatform.isStatic
+    && (stdenv.cc.libcxx.isLLVM or false) == (google-cloud-cpp.stdenv.cc.libcxx.isLLVM or false),
 }:
 
 let
   inherit (lib) fileset;
 in
+
+assert lib.assertMsg (
+  !withGCS
+  || (stdenv.cc.libcxx.isLLVM or false) == (google-cloud-cpp.stdenv.cc.libcxx.isLLVM or false)
+) "GCS support requires Nix and google-cloud-cpp to use the same C++ standard library";
 
 mkMesonLibrary (finalAttrs: {
   pname = "determinate-nix-store";
@@ -87,6 +101,18 @@ mkMesonLibrary (finalAttrs: {
   ++ lib.optional stdenv.hostPlatform.isLinux libseccomp
   ++ lib.optional stdenv.hostPlatform.isFreeBSD freebsd.libjail
   ++ lib.optional withAWS aws-crt-cpp
+  ++ lib.optionals withGCS [
+    (google-cloud-cpp.override {
+      apis = [
+        "storage"
+        "universe_domain"
+      ];
+    })
+    # google-cloud-cpp does not propagate its pkg-config dependencies.
+    abseil-cpp
+    crc32c
+    openssl
+  ]
   ++ lib.optional enableWasm wasmtime;
 
   propagatedBuildInputs = [
@@ -98,6 +124,7 @@ mkMesonLibrary (finalAttrs: {
     (lib.mesonEnable "seccomp-sandboxing" stdenv.hostPlatform.isLinux)
     (lib.mesonBool "embedded-sandbox-shell" embeddedSandboxShell)
     (lib.mesonEnable "s3-aws-auth" withAWS)
+    (lib.mesonEnable "gcs" withGCS)
     (lib.mesonEnable "wasm" enableWasm)
   ]
   ++ lib.optionals withSandboxShell [

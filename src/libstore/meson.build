@@ -184,6 +184,14 @@ endif
 
 configdata_pub.set('NIX_WITH_AWS_AUTH', s3_aws_auth.enabled().to_int())
 
+gcs = dependency(
+  'google_cloud_cpp_storage',
+  version : '>= 2.44',
+  required : get_option('gcs'),
+)
+deps_private += gcs
+configdata_pub.set('NIX_WITH_GCS', gcs.found().to_int())
+
 subdir('nix-meson-build-support/generate-header')
 
 generated_headers = []
@@ -333,6 +341,7 @@ sources = files(
   'export-import.cc',
   'filetransfer.cc',
   'gc.cc',
+  'gcs-binary-cache-store.cc',
   'globals.cc',
   'http-binary-cache-store.cc',
   'indirect-root-store.cc',
