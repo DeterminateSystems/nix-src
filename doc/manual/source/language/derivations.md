@@ -7,6 +7,8 @@ this section just concerns how to create one from the Nix language.
 This builtin function takes as input an attribute set, the attributes of which specify the inputs to the process.
 It outputs an attribute set, and produces a [store derivation] as a side effect of evaluation.
 
+To attach metadata to a derivation's provenance, use [`derivationWithMeta`](./derivation-metadata.md) instead.
+
 [store derivation]: @docroot@/glossary.md#gloss-store-derivation
 
 ## Input attributes

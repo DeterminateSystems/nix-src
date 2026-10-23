@@ -15,9 +15,13 @@ set +x
 badDiff=0
 badExitCode=0
 
-# Normalize store paths, hashes, source paths, and system
+# Normalize store paths, hashes, source paths, and system. Also remove
+# the warning about $HOME that the build hook may print when running
+# in a daemon that has an unowned $HOME (e.g. in the NixOS tests).
 normalize() {
+    # shellcheck disable=SC2016 # '$HOME' is meant literally
     sed -i \
+        -e '/^warning: \$HOME (.*) is not owned by you, falling back to the one defined in the .passwd. file/d' \
         -e "s|${NIX_STORE_DIR:-/nix/store}/[a-z0-9]\{32\}|/test-root/store/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx|g" \
         -e "s|$TEST_ROOT|/test-root|g" \
         -e "s|$(pwd)|/pwd|g" \

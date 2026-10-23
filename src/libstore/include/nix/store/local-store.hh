@@ -6,12 +6,14 @@
 #include "nix/store/pathlocks.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/indirect-root-store.hh"
+#include "nix/store/active-builds.hh"
 #include "nix/util/sync.hh"
 
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <string>
-#include <boost/unordered/unordered_flat_set.hpp>
+#include <boost/unordered/concurrent_flat_set_fwd.hpp>
 
 namespace nix {
 
@@ -27,8 +29,8 @@ const int nixSchemaVersion = 10;
 
 struct OptimiseStats
 {
-    unsigned long filesLinked = 0;
-    uint64_t bytesFreed = 0;
+    std::atomic<unsigned long> filesLinked = 0;
+    std::atomic<uint64_t> bytesFreed = 0;
 };
 
 struct LocalSettings;
@@ -179,7 +181,10 @@ public:
 
 MakeError(PathInUse, Error);
 
-class LocalStore : public virtual IndirectRootStore, public virtual GcStore
+class LocalStore : public virtual IndirectRootStore,
+                   public virtual GcStore,
+                   public virtual TrackActiveBuildsStore,
+                   public virtual QueryActiveBuildsStore
 {
     void anchor() override;
 
@@ -244,7 +249,6 @@ public:
     const std::filesystem::path reservedPath;
     const std::filesystem::path schemaPath;
     const std::filesystem::path tempRootsDir;
-    const std::filesystem::path fnTempRoots;
 
 private:
 
@@ -295,6 +299,9 @@ public:
 
     void addToStore(const ValidPathInfo & info, Source & source, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
+    void
+    addMultipleToStore(PathsSource && pathsToCopy, Activity & act, RepairFlag repair, CheckSigsFlag checkSigs) override;
+
     StorePath addToStoreFromDump(
         Source & dump,
         std::string_view name,
@@ -302,18 +309,55 @@ public:
         ContentAddressMethod hashMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override;
 
-    void addTempRoot(const StorePath & path) override;
+    void addTempRoots(const StorePathSet & paths, bool skipIfSlow) override;
 
 private:
 
+    /**
+     * Restore the contents of `info` from `source` (a NAR) into the
+     * store, verifying the NAR hash/size and (if applicable) the
+     * content address, then canonicalise, optimise and optionally fsync
+     * the path.
+     *
+     * This does *not* acquire a lock on the path or register it as
+     * valid: the caller must already hold the path lock and is
+     * responsible for registering the path afterwards. Shared by
+     * `addToStore()` and `addMultipleToStore()`.
+     */
+    void doAddToStore(const ValidPathInfo & info, Source & source, RepairFlag repair);
+
+    /**
+     * The path of the marker file (`<realPath>.unpacked`) used to record
+     * that the NAR for the store path at `realPath` has been unpacked
+     * completely and successfully. See `addMultipleToStore()`.
+     */
+    static std::filesystem::path unpackedMarkerFor(const std::filesystem::path & realPath)
+    {
+        auto marker = realPath;
+        marker += ".unpacked";
+        return marker;
+    }
+
     void createTempRootsFile();
+
+    struct TempRootsFile
+    {
+        /**
+         * The path of the file, i.e. `<tempRootsDir>/<n>` (see
+         * createTempRootsFile()).
+         */
+        std::filesystem::path path;
+
+        AutoCloseFD fd;
+    };
 
     /**
      * The file to which we write our temporary roots.
      */
-    Sync<AutoCloseFD> _fdTempRoots;
+    Sync<TempRootsFile> _tempRootsFile;
 
     /**
      * The global GC lock.
@@ -337,7 +381,16 @@ public:
 
 private:
 
-    void findTempRoots(Roots & roots, bool censor);
+    /**
+     * Read the temporary roots files of all processes.
+     *
+     * @param deleteStale Whether to delete the temporary roots files
+     * of processes that have exited. This must only be done while
+     * holding the global GC lock, since otherwise concurrent
+     * deleters could race with each other and with
+     * createTempRootsFile().
+     */
+    void findTempRoots(Roots & roots, bool censor, bool deleteStale = false);
 
     AutoCloseFD openGCLock();
 
@@ -473,12 +526,7 @@ private:
 
     void openDB(State & state, bool create);
 
-    /**
-     * Perform or check if a database schema upgrade is needed.
-     * @param dryRun only check if an upgrade is needed.
-     * @return true if an upgrade is needed or was performed, false otherwise.
-     */
-    bool upgradeDBSchema(State & state, bool dryRun);
+    void upgradeDBSchema(State & state, bool isNew);
 
     void makeStoreWritable();
 
@@ -505,7 +553,7 @@ private:
 
     std::pair<std::filesystem::path, AutoCloseFD> createTempDirInStore();
 
-    typedef boost::unordered_flat_set<ino_t> InodeHash;
+    typedef boost::concurrent_flat_set<ino_t> InodeHash;
 
     InodeHash loadInodeHash();
     Strings readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash);
@@ -526,6 +574,24 @@ private:
     friend struct DerivationGoal;
     /* Only used for createTempDirInStore. */
     friend class DerivationBuilderImpl;
+
+private:
+
+    std::filesystem::path activeBuildsDir;
+
+    struct ActiveBuildFile
+    {
+        AutoCloseFD fd;
+        AutoDelete del;
+    };
+
+    Sync<std::unordered_map<uint64_t, ActiveBuildFile>> activeBuilds;
+
+    std::vector<ActiveBuildInfo> queryActiveBuilds() override;
+
+    BuildHandle buildStarted(const ActiveBuild & build) override;
+
+    void buildFinished(const BuildHandle & handle) override;
 };
 
 } // namespace nix

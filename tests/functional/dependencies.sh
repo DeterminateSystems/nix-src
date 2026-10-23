@@ -64,9 +64,9 @@ drvPath2=$(nix-instantiate dependencies.nix --argstr hashInvalidator yay)
 test "$(nix-store -q --valid-derivers "$outPath" | sort)" = "$(sort <<< "$drvPath"$'\n'"$drvPath2")"
 
 # check that nix-store --valid-derivers only returns existing drv
-nix-store --delete "$drvPath"
+nix-store --delete "$drvPath" --ignore-liveness
 test "$(nix-store -q --valid-derivers "$outPath")" = "$drvPath2"
 
 # check that --valid-derivers returns nothing when there are no valid derivers
-nix-store --delete "$drvPath2"
+nix-store --delete "$drvPath2" --ignore-liveness
 test -z "$(nix-store -q --valid-derivers "$outPath")"

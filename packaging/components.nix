@@ -27,7 +27,7 @@ let
     pkg-config
     ;
 
-  baseVersion = lib.fileContents ../.version;
+  baseVersion = lib.fileContents ../.version-determinate;
 
   versionSuffix = lib.optionalString (!officialRelease) "pre";
 
@@ -54,15 +54,6 @@ let
   mkPackageBuilder = mkPackageBuilderFor stdenv;
 
   setVersionLayer = finalAttrs: prevAttrs: {
-    preConfigure =
-      prevAttrs.preConfigure or ""
-      +
-      # Update the repo-global .version file.
-      # Symlink ./.version points there, but by default only workDir is writable.
-      ''
-        chmod u+w ./.version
-        echo ${finalAttrs.version} > ./.version
-      '';
   };
 
   localSourceLayer =

@@ -5,6 +5,7 @@
 #include <map>
 #include <list>
 #include <optional>
+#include <utility>
 
 namespace nix {
 
@@ -56,23 +57,32 @@ public:
      * Insert or upsert an item in the cache.
      */
     template<typename K>
-    void upsert(const K & key, const Value & value)
+    void upsert(const K & key, Value value) noexcept
     {
         if (capacity == 0)
             return;
 
-        erase(key);
-
-        if (data.size() >= capacity) {
-            /**
-             * Retire the oldest item.
-             */
-            auto oldest = lru.begin();
-            data.erase(*oldest);
-            lru.erase(oldest);
+        if (auto i = data.find(key); i != data.end()) {
+            i->second.second = std::move(value);
+            promote(i->second.first.it);
+            return;
         }
 
-        auto res = data.emplace(key, std::make_pair(LRUIterator(), value));
+        if (data.size() >= capacity) {
+            /* Retire the oldest item, reusing its map and list nodes
+               for the new item. */
+            auto oldest = lru.begin();
+            auto nh = data.extract(*oldest);
+            nh.key() = Key(key);
+            nh.mapped().second = std::move(value);
+            auto res = data.insert(std::move(nh));
+            assert(res.inserted);
+            *oldest = res.position;
+            promote(oldest);
+            return;
+        }
+
+        auto res = data.emplace(key, std::make_pair(LRUIterator(), std::move(value)));
         assert(res.second);
         auto & i(res.first);
 

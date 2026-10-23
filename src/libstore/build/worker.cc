@@ -20,8 +20,8 @@ Worker::Worker(Store & store, Store & evalStore)
     /* Can't use make_ref, because the constructor is private. */
     : wakerState(ref<Waker>(new Waker{}))
     , act(*logger, actRealise)
-    , actDerivations(*logger, actBuilds)
-    , actSubstitutions(*logger, actCopyPaths)
+    , actDerivations(*logger, actBuilds, {}, act.id)
+    , actSubstitutions(*logger, actCopyPaths, {}, act.id)
 #ifdef _WIN32
     , ioport{CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0)}
 #endif
@@ -116,10 +116,10 @@ std::shared_ptr<DerivationBuildingGoal> Worker::makeDerivationBuildingGoal(
         derivationBuildingGoals[drvPath], drvPath, std::move(drv), *this, buildMode, storeDerivation);
 }
 
-std::shared_ptr<PathSubstitutionGoal>
-Worker::makePathSubstitutionGoal(const StorePath & path, RepairFlag repair, std::optional<ContentAddress> ca)
+std::shared_ptr<PathSubstitutionGoal> Worker::makePathSubstitutionGoal(
+    const StorePath & path, bool pathRequired, RepairFlag repair, std::optional<ContentAddress> ca)
 {
-    return initGoalIfNeeded(substitutionGoals[path], path, *this, repair, ca);
+    return initGoalIfNeeded(substitutionGoals[path], path, *this, pathRequired, repair, ca);
 }
 
 std::shared_ptr<DrvOutputSubstitutionGoal> Worker::makeDrvOutputSubstitutionGoal(const DrvOutput & id)
@@ -135,7 +135,7 @@ GoalPtr Worker::makeGoal(const DerivedPath & req, BuildMode buildMode)
                 return makeDerivationTrampolineGoal(bfd.drvPath, bfd.outputs, buildMode);
             },
             [&](const DerivedPath::Opaque & bo) -> GoalPtr {
-                return makePathSubstitutionGoal(bo.path, buildMode == bmRepair ? Repair : NoRepair);
+                return makePathSubstitutionGoal(bo.path, false, buildMode == bmRepair ? Repair : NoRepair);
             },
         },
         req.raw());

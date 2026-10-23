@@ -21,7 +21,7 @@ InstallableAttrPath::InstallableAttrPath(
     ExtendedOutputsSpec extendedOutputsSpec)
     : InstallableValue(state)
     , cmd(cmd)
-    , v(allocRootValue(v))
+    , v(RootValue(v))
     , attrPath(attrPath)
     , extendedOutputsSpec(std::move(extendedOutputsSpec))
 {
@@ -30,13 +30,13 @@ InstallableAttrPath::InstallableAttrPath(
 std::pair<Value *, PosIdx> InstallableAttrPath::toValue(EvalState & state)
 {
     auto [vRes, pos] = findAlongAttrPath(state, attrPath, *cmd.getAutoArgs(state), **v);
-    state.forceValue(*vRes, pos);
     return {vRes, pos};
 }
 
 DerivedPathsWithInfo InstallableAttrPath::toDerivedPaths()
 {
     auto [v, pos] = toValue(*state);
+    state->forceValue(*v, pos);
 
     if (std::optional derivedPathWithInfo =
             trySinglePathToDerivedPaths(*v, pos, fmt("while evaluating the attribute '%s'", attrPath))) {
@@ -78,7 +78,8 @@ DerivedPathsWithInfo InstallableAttrPath::toDerivedPaths()
     }
 
     DerivedPathsWithInfo res;
-    for (auto & [drvPath, outputs] : byDrvPath)
+    for (auto & [drvPath, outputs] : byDrvPath) {
+        state->waitForPath(drvPath);
         res.push_back({
             .path =
                 DerivedPath::Built{
@@ -91,6 +92,7 @@ DerivedPathsWithInfo InstallableAttrPath::toDerivedPaths()
                    so we can fill in this info. */
             }),
         });
+    }
 
     return res;
 }
