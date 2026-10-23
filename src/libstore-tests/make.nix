@@ -44,7 +44,7 @@ let
       };
     };
 
-    linkFlags = [ "-Wl,--wrap=__assert_fail" ];
+    linkFlags = nixMake.wrapAssertFailFlags;
   };
 
   # Some data is shared with the functional tests: they create it, we

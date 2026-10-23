@@ -43,7 +43,7 @@ let
       };
     };
 
-    linkFlags = [ "-Wl,--wrap=__assert_fail" ];
+    linkFlags = nixMake.wrapAssertFailFlags;
   };
 in
 

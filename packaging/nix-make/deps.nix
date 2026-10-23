@@ -131,7 +131,8 @@ in
   }
   {
     # The AWS CRT and its C libraries have no pkg-config files; the
-    # defines are what their CMake targets would set.
+    # defines are what their CMake targets would set (aws-c-io's event
+    # loop differs per platform).
     prefix = "aws/";
     pkg = with deps; [
       aws-crt-cpp
@@ -148,21 +149,30 @@ in
       aws-c-sdkutils
       s2n-tls
     ];
-    cflags = [
-      "-DAWS_ENABLE_EPOLL"
-      "-DAWS_AUTH_USE_IMPORT_EXPORT"
-      "-DAWS_CAL_USE_IMPORT_EXPORT"
-      "-DAWS_CHECKSUMS_USE_IMPORT_EXPORT"
-      "-DAWS_COMMON_USE_IMPORT_EXPORT"
-      "-DAWS_COMPRESSION_USE_IMPORT_EXPORT"
-      "-DAWS_CRT_CPP_USE_IMPORT_EXPORT"
-      "-DAWS_EVENT_STREAM_USE_IMPORT_EXPORT"
-      "-DAWS_HTTP_USE_IMPORT_EXPORT"
-      "-DAWS_IO_USE_IMPORT_EXPORT"
-      "-DAWS_MQTT_USE_IMPORT_EXPORT"
-      "-DAWS_S3_USE_IMPORT_EXPORT"
-      "-DAWS_SDKUTILS_USE_IMPORT_EXPORT"
-    ];
+    cflags =
+      (
+        if pkgs.stdenv.hostPlatform.isDarwin then
+          [
+            "-DAWS_ENABLE_DISPATCH_QUEUE"
+            "-DAWS_ENABLE_KQUEUE"
+          ]
+        else
+          [ "-DAWS_ENABLE_EPOLL" ]
+      )
+      ++ [
+        "-DAWS_AUTH_USE_IMPORT_EXPORT"
+        "-DAWS_CAL_USE_IMPORT_EXPORT"
+        "-DAWS_CHECKSUMS_USE_IMPORT_EXPORT"
+        "-DAWS_COMMON_USE_IMPORT_EXPORT"
+        "-DAWS_COMPRESSION_USE_IMPORT_EXPORT"
+        "-DAWS_CRT_CPP_USE_IMPORT_EXPORT"
+        "-DAWS_EVENT_STREAM_USE_IMPORT_EXPORT"
+        "-DAWS_HTTP_USE_IMPORT_EXPORT"
+        "-DAWS_IO_USE_IMPORT_EXPORT"
+        "-DAWS_MQTT_USE_IMPORT_EXPORT"
+        "-DAWS_S3_USE_IMPORT_EXPORT"
+        "-DAWS_SDKUTILS_USE_IMPORT_EXPORT"
+      ];
     libs = [
       "-laws-crt-cpp"
       "-laws-c-auth"
@@ -243,5 +253,12 @@ in
     pkg = deps.rapidcheck;
     pkgconfig = [ "rapidcheck" ];
     libs = [ "-lrapidcheck" ];
+    # Its headers use std::exception_ptr without including <exception>,
+    # which libc++ (unlike libstdc++) does not provide transitively; Meson's
+    # precompiled headers hide this on Darwin.
+    cflags = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+      "-include"
+      "exception"
+    ];
   }
 ]

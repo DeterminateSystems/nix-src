@@ -29,5 +29,5 @@ nixMake.mkComponent {
     "call-flake.nix.gen.hh" = nixMake.mkStringHeader ./call-flake.nix;
   };
 
-  linkFlags = [ "-Wl,--wrap=__assert_fail" ];
+  linkFlags = nixMake.wrapAssertFailFlags;
 }

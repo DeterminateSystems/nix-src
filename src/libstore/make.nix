@@ -7,6 +7,9 @@
 
 let
   inherit (pkgs) lib;
+  inherit (nixMake.hostPlatform) isLinux isDarwin;
+  # Meson's checks find these on Linux but not on Darwin.
+  onLinux = if isLinux then 1 else 0;
 in
 
 nixMake.mkComponent {
@@ -17,18 +20,29 @@ nixMake.mkComponent {
 
   root = ./.;
 
+  # Meson builds linux/ on Linux and darwin/ on Darwin, and the chroot
+  # builder only on Linux (and FreeBSD).
   excludeSources = [
     "windows"
     "freebsd"
-    "darwin"
+  ]
+  ++ lib.optional (!isDarwin) "darwin"
+  ++ lib.optionals (!isLinux) [
+    "linux"
+    "unix/build/chroot-derivation-builder.cc"
   ]
   ++ lib.optional (!nixMake.config.awsAuth) "aws-creds.cc";
 
   includeDirs = [
     ""
     "include"
+  ]
+  ++ lib.optionals isLinux [
     "linux/build"
     "linux/include"
+  ]
+  ++ lib.optional isDarwin "darwin/build"
+  ++ [
     "unix/build"
     "unix/include"
   ];
@@ -40,19 +54,23 @@ nixMake.mkComponent {
 
   configHeaders = {
     "include/nix/store/config.hh" = {
-      NIX_LOCAL_SYSTEM = "x86_64-linux";
-      NIX_SUPPORT_ACL = 1;
+      NIX_LOCAL_SYSTEM = nixMake.hostPlatform.system;
+      # macOS has <sys/xattr.h>, but not llistxattr.
+      NIX_SUPPORT_ACL = onLinux;
       NIX_WITH_AWS_AUTH = nixMake.config.awsAuth;
     };
     "store-config-private.hh" = {
-      CAN_LINK_SYMLINK = 1;
+      # Hard links to symlinks fail on macOS.
+      CAN_LINK_SYMLINK = onLinux;
       DETERMINATE_NIX_VERSION = lib.fileContents ../../.version-determinate;
       HAVE_EMBEDDED_SANDBOX_SHELL = 0;
-      HAVE_LANDLOCK = 1;
-      HAVE_MOVE_MOUNT = 1;
-      HAVE_OPEN_TREE = 1;
-      HAVE_POSIX_FALLOCATE = 1;
-      HAVE_SECCOMP = 1;
+      # Only checked for (and so only defined) on Linux.
+      HAVE_LANDLOCK = if isLinux then 1 else null;
+      HAVE_MOVE_MOUNT = onLinux;
+      HAVE_OPEN_TREE = onLinux;
+      HAVE_POSIX_FALLOCATE = onLinux;
+      # package.nix only enables seccomp on Linux.
+      HAVE_SECCOMP = onLinux;
       HAVE_STATVFS = 1;
       IS_STATIC = null;
       LSOF = "lsof";
@@ -62,11 +80,15 @@ nixMake.mkComponent {
       NIX_STORE_DIR = "/nix/store";
       NIX_USE_WASMTIME = nixMake.config.wasm;
       PACKAGE_VERSION = lib.fileContents ../../.version;
-      SANDBOX_SHELL = "${pkgs.busybox-sandbox-shell}/bin/busybox";
+      # package.nix only has a sandbox shell on Linux.
+      SANDBOX_SHELL = if isLinux then "${pkgs.busybox-sandbox-shell}/bin/busybox" else null;
     };
   };
 
+  # The Darwin sandbox (`sandbox_init_with_parameters`), as in meson.build.
+  extraLinkLibs = lib.optional isDarwin "-lsandbox";
+
   extraCxxFlags = nixMake.weakVtablesFlags;
 
-  linkFlags = [ "-Wl,--wrap=__assert_fail" ];
+  linkFlags = nixMake.wrapAssertFailFlags;
 }

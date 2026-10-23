@@ -17,21 +17,33 @@
       flake-schemas,
     }:
     let
-      system = "x86_64-linux";
+      inherit (nixpkgs) lib;
 
-      pkgs = import nixpkgs {
-        inherit system;
-        # Provides `nixDependencies2`, the same dependency overrides used by the Meson build.
-        overlays = [ nix.overlays.internal ];
-      };
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+      ];
+      forAllSystems = lib.genAttrs systems;
 
-      # Build all components with the configuration given by `cfg`, a module
-      # setting the options declared in config.nix. The result is a package
-      # scope (like `nixComponents` in packaging/components.nix), so it can be
-      # extended with `overrideScope`.
+      pkgsFor = forAllSystems (
+        system:
+        import nixpkgs {
+          inherit system;
+          # Provides `nixDependencies2`, the same dependency overrides used by the Meson build.
+          overlays = [ nix.overlays.internal ];
+        }
+      );
+
+      # Build all components for `system` with the configuration given by
+      # `cfg`, a module setting the options declared in config.nix. The
+      # result is a package scope (like `nixComponents` in
+      # packaging/components.nix), so it can be extended with `overrideScope`.
       makeNixVariant =
-        cfg:
+        system: cfg:
         let
+          pkgs = pkgsFor.${system};
+          inherit (pkgs.stdenv.hostPlatform) isLinux;
           config =
             (nixpkgs.lib.evalModules {
               modules = [
@@ -57,7 +69,9 @@
           nix-util-test-support = self.callPackage ../../src/libutil-test-support/make.nix { };
           nix-util-tests = self.callPackage ../../src/libutil-tests/make.nix { };
           nix-util-tests-run = self.nix-util-tests.tests.run;
-          nix-util-tests-run-without-new-syscalls = self.nix-util-tests.tests.run-without-new-syscalls;
+          # Linux only (it uses seccomp); a `null` attribute name is omitted.
+          ${if isLinux then "nix-util-tests-run-without-new-syscalls" else null} =
+            self.nix-util-tests.tests.run-without-new-syscalls;
           nix-store-c = self.callPackage ../../src/libstore-c/make.nix { };
           nix-store-test-support = self.callPackage ../../src/libstore-test-support/make.nix { };
           nix-store-tests = self.callPackage ../../src/libstore-tests/make.nix { };
@@ -77,58 +91,62 @@
           functional-tests = self.callPackage ../../tests/functional/make.nix { };
 
           # Everything that runs tests; building it runs them all.
-          nix-all-tests = pkgs.linkFarmFromDrvs "nix-all-tests" [
-            self.nix-util-tests-run
-            self.nix-util-tests-run-without-new-syscalls
-            self.nix-store-tests-run
-            self.nix-fetchers-tests-run
-            self.nix-expr-tests-run
-            self.nix-flake-tests-run
-            self.functional-tests
-          ];
+          nix-all-tests = pkgs.linkFarmFromDrvs "nix-all-tests" (
+            [ self.nix-util-tests-run ]
+            ++ lib.optional isLinux self.nix-util-tests-run-without-new-syscalls
+            ++ [
+              self.nix-store-tests-run
+              self.nix-fetchers-tests-run
+              self.nix-expr-tests-run
+              self.nix-flake-tests-run
+              self.functional-tests
+            ]
+          );
         });
     in
     rec {
-      packages.${system} = {
+      packages = forAllSystems (system: {
         inherit (make.${system}.release) test-runner;
-      };
+      });
 
       # `nix flake check` runs all tests against the release variant.
-      checks.${system} = {
+      checks = forAllSystems (system: {
         inherit (make.${system}.release) nix-all-tests;
-      };
+      });
 
-      devShells.${system}.default = pkgs.mkShell {
-        packages = [ make.${system}.release.test-runner ];
-      };
+      devShells = forAllSystems (system: {
+        default = pkgsFor.${system}.mkShell {
+          packages = [ make.${system}.release.test-runner ];
+        };
+      });
 
       # The build variants, named after Meson's build types.
-      make.${system} = {
-        release = makeNixVariant {
+      make = forAllSystems (system: {
+        release = makeNixVariant system {
           optimize = true;
           debug = false;
         };
-        debugoptimized = makeNixVariant {
+        debugoptimized = makeNixVariant system {
           optimize = true;
           debug = true;
         };
-        debug = makeNixVariant {
+        debug = makeNixVariant system {
           optimize = false;
           debug = true;
         };
         # Like `release`, but without the Boehm garbage collector.
-        nogc = makeNixVariant {
+        nogc = makeNixVariant system {
           optimize = true;
           debug = false;
           boehmgc = false;
         };
         # Like `debug`, but built with clang, which compiles faster.
-        debug-fast = makeNixVariant {
+        debug-fast = makeNixVariant system {
           optimize = false;
           debug = true;
           compiler = "clang";
         };
-      };
+      });
 
       # Describe the `make` output to `nix flake show` and `nix flake check`.
       # Defining `schemas` replaces the built-in ones, so re-export the ones

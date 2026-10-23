@@ -19,9 +19,13 @@ let
   # The version, as in the package.nix files.
   defaultVersion = lib.fileContents ../../.version-determinate;
 
-  # The stdenv providing the compiler. `clangStdenv` uses libstdc++, so the
-  # dependencies built by Nixpkgs with GCC can be used as is.
+  # The stdenv providing the compiler. On Linux, `clangStdenv` uses
+  # libstdc++, so the dependencies built by Nixpkgs with GCC can be used as
+  # is. On Darwin, both are clang with libc++, as in Nixpkgs.
   stdenv = if config.compiler == "clang" then pkgs.clangStdenv else pkgs.stdenv;
+  inherit (stdenv.hostPlatform) isLinux isDarwin;
+  # Whether the compiler is clang; on Darwin it is even with `compiler = "gcc"`.
+  isClang = stdenv.cc.isClang;
 
   # `builtins.parallel xs x` starts evaluating the values `xs` on other
   # threads and returns `x`. It requires the `parallel-eval` experimental
@@ -52,7 +56,7 @@ let
     "-Wno-deprecated-declarations"
   ]
   ++ (
-    if config.compiler == "clang" then
+    if isClang then
       [ "-Werror=c99-designator" ]
     else
       [
@@ -64,16 +68,18 @@ let
   # Meson enables this for libutil, libstore and libexpr only: all vtables
   # must have a "key" function so they are emitted as strong symbols, which
   # matters for dynamic linking on Darwin. Clang only.
-  weakVtablesFlags = lib.optional (config.compiler == "clang") "-Werror=weak-vtables";
+  weakVtablesFlags = lib.optional isClang "-Werror=weak-vtables";
 
   commonCxxFlags = [
     "-std=c++23"
     "-fPIC"
     "-pthread"
     "-D_FILE_OFFSET_BITS=64"
-    "-D_GLIBCXX_USE_TBB_PAR_BACKEND=0"
-    "-fno-semantic-interposition"
   ]
+  # Meson only sets this with libstdc++, which Darwin does not use.
+  ++ lib.optional (!isDarwin) "-D_GLIBCXX_USE_TBB_PAR_BACKEND=0"
+  # Unused for Mach-O, where clang warns about it on every unit.
+  ++ lib.optional (!isDarwin) "-fno-semantic-interposition"
   ++ optimizationFlags
   ++ debugFlags
   ++ warningFlags;
@@ -81,8 +87,9 @@ let
   commonLinkLibs = [
     "-pthread"
     "-ldl"
-    "-lrt"
-  ];
+  ]
+  # macOS has no librt; its functions are in libSystem.
+  ++ lib.optional (!isDarwin) "-lrt";
 
   # A stand-in for a configuration header (like Meson's `configure_file()`
   # output). It is empty: the macros are passed to the compiler as `-D`
@@ -470,43 +477,72 @@ let
     in
     link component (map (compileUnit component) units);
 
-  # Macros the scanner can rely on when evaluating preprocessor conditionals
-  # (Linux, x86_64, GCC). Only what is certain: an unknown macro keeps both
-  # branches of a conditional, but a wrong one would drop includes.
+  # Macros the scanner can rely on when evaluating preprocessor conditionals,
+  # for the target platform (Linux or Darwin; x86_64 or aarch64) and
+  # compiler. Only what is certain: an unknown macro keeps both branches of
+  # a conditional, but a wrong one would drop includes.
+  inherit (stdenv.hostPlatform) isx86_64 isAarch64;
   platformDefines = {
+    __LP64__ = 1;
+  }
+  // lib.optionalAttrs isLinux {
     __linux__ = 1;
     __gnu_linux__ = 1;
     __unix__ = 1;
     __unix = 1;
-    __x86_64__ = 1;
-    __LP64__ = 1;
-  };
+  }
+  # Apple's clang does not define `__unix__`.
+  // lib.optionalAttrs isDarwin {
+    __APPLE__ = 1;
+    __MACH__ = 1;
+  }
+  // lib.optionalAttrs isx86_64 { __x86_64__ = 1; }
+  # GCC on Linux defines only `__aarch64__`; clang on Darwin also `__arm64__`.
+  // lib.optionalAttrs isAarch64 (
+    { __aarch64__ = 1; } // lib.optionalAttrs isDarwin { __arm64__ = 1; }
+  )
+  // lib.optionalAttrs isClang { __clang__ = 1; };
   platformUndefines = [
     "_WIN32"
     "_WIN64"
     "__CYGWIN__"
     "__MINGW32__"
+  ]
+  ++ lib.optionals (!isDarwin) [
     "__APPLE__"
     "__MACH__"
+  ]
+  ++ [
     "__FreeBSD__"
     "__NetBSD__"
     "__OpenBSD__"
     "__DragonFly__"
     "__sun"
-    "__clang__"
-  ];
+  ]
+  ++ lib.optionals isDarwin [
+    "__linux__"
+    "__gnu_linux__"
+    "__unix__"
+    "__unix"
+  ]
+  ++ lib.optional isAarch64 "__x86_64__"
+  ++ lib.optional (!isClang) "__clang__";
 
-  # Sources from nix-meson-build-support that Meson links into every component.
-  commonSupportFiles = {
+  # Sources from nix-meson-build-support that Meson links into every
+  # component, with the linker flags they need. Meson only does this if the
+  # linker supports `--wrap`, which Darwin's does not.
+  commonSupportFiles = lib.optionalAttrs (!isDarwin) {
     "nix-meson-build-support/common/assert-fail/wrap-assert-fail.cc" =
       ../../nix-meson-build-support/common/assert-fail/wrap-assert-fail.cc;
   };
+  wrapAssertFailFlags = lib.optional (!isDarwin) "-Wl,--wrap=__assert_fail";
 
 in
 {
   # The build configuration (see config.nix), for component files that
-  # need to vary with it.
+  # need to vary with it, and the platform built for.
   inherit config;
+  inherit (stdenv) hostPlatform;
 
   inherit
     getDeps
@@ -515,5 +551,6 @@ in
     mkComponent
     runTest
     commonSupportFiles
+    wrapAssertFailFlags
     ;
 }
