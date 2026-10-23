@@ -55,24 +55,32 @@ def collect(args: argparse.Namespace) -> None:
 def aggregate(args: argparse.Namespace) -> None:
     groups: dict[str, dict] = defaultdict(
         lambda: {
-            "jobs": 0,
-            "retried_jobs": 0,
-            "flakes": 0,
-            "max_mem": 0.0,
-            **{field: 0.0 for field in FIELDS},
+            "totals": {
+                "jobs": 0,
+                "retried_jobs": 0,
+                "flakes": 0,
+                "max_mem": 0.0,
+                **{field: 0.0 for field in FIELDS},
+            },
+            "jobs": [],
         }
     )
 
     for path in sorted(args.input_dir.glob("*.json")):
         job = json.loads(path.read_text())
         group = groups[job["nix_config"]]
-        group["jobs"] += 1
-        group["retried_jobs"] += job["retried"]
+        group["jobs"].append(job)
+        totals = group["totals"]
+        totals["jobs"] += 1
+        totals["retried_jobs"] += job["retried"]
         for flake in job["flakes"]:
-            group["flakes"] += 1
+            totals["flakes"] += 1
             for field in FIELDS:
-                group[field] += flake[field]
-            group["max_mem"] = max(group["max_mem"], flake["mem"])
+                totals[field] += flake[field]
+            totals["max_mem"] = max(totals["max_mem"], flake["mem"])
+
+    for group in groups.values():
+        group["jobs"].sort(key=lambda job: job["glob"])
 
     if args.output:
         args.output.write_text(json.dumps(groups, indent=2, sort_keys=True) + "\n")
@@ -85,20 +93,37 @@ def aggregate(args: argparse.Namespace) -> None:
         "| Configuration | Jobs | Flakes | Elapsed (s) | User (s) | Kernel (s) | Σ max RSS (GiB) | Max RSS (GiB) |",
         "|---|--:|--:|--:|--:|--:|--:|--:|",
     ]
-    for nix_config, g in sorted(groups.items()):
-        jobs = str(g["jobs"])
-        if g["retried_jobs"]:
-            jobs += f" ({g['retried_jobs']} retried)"
+    for nix_config, group in sorted(groups.items()):
+        t = group["totals"]
+        jobs = str(t["jobs"])
+        if t["retried_jobs"]:
+            jobs += f" ({t['retried_jobs']} retried)"
         lines.append(
-            f"| `{nix_config}` | {jobs} | {g['flakes']} "
-            f"| {g['elapsed']:.1f} | {g['user']:.1f} | {g['kernel']:.1f} "
-            f"| {g['mem'] / gib:.1f} | {g['max_mem'] / gib:.2f} |"
+            f"| `{nix_config}` | {jobs} | {t['flakes']} "
+            f"| {t['elapsed']:.1f} | {t['user']:.1f} | {t['kernel']:.1f} "
+            f"| {t['mem'] / gib:.1f} | {t['max_mem'] / gib:.2f} |"
         )
-    if any(g["retried_jobs"] for g in groups.values()):
+    if any(group["totals"]["retried_jobs"] for group in groups.values()):
         lines += [
             "",
             "Retried jobs re-evaluate all their flakes against an empty store, so their timings are not comparable.",
         ]
+
+    for nix_config, group in sorted(groups.items()):
+        flakes = [flake for job in group["jobs"] for flake in job["flakes"]]
+        slowest = sorted(flakes, key=lambda flake: flake["elapsed"], reverse=True)[: args.top]
+        lines += [
+            "",
+            f"### Slowest flakes for `{nix_config}`",
+            "",
+            "| Flake | Elapsed (s) | User (s) | Kernel (s) | Max RSS (GiB) |",
+            "|---|--:|--:|--:|--:|",
+        ]
+        for flake in slowest:
+            lines.append(
+                f"| `{flake['flake']}` | {flake['elapsed']:.1f} | {flake['user']:.1f} "
+                f"| {flake['kernel']:.1f} | {flake['mem'] / gib:.2f} |"
+            )
 
     summary = "\n".join(lines) + "\n"
     print(summary)
@@ -123,6 +148,7 @@ def main() -> None:
     p.add_argument("--input-dir", type=Path, required=True)
     p.add_argument("--output", type=Path)
     p.add_argument("--summary", type=Path, help="append a Markdown summary to this file")
+    p.add_argument("--top", type=int, default=10, help="number of slowest flakes to show per configuration")
     p.set_defaults(func=aggregate)
 
     args = parser.parse_args()
