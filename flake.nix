@@ -7,7 +7,7 @@
   inputs.nixpkgs-23-11.url = "github:NixOS/nixpkgs/a62e6edd6d5e1fa0329b8653c801147986f8d446";
 
   inputs.bdwgc = {
-    url = "github:DeterminateSystems/bdwgc/allow-multiple-heap-expansions";
+    url = "github:DeterminateSystems/bdwgc/nix-patches-master";
     flake = false;
   };
 
