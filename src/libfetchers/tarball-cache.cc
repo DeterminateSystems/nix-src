@@ -836,7 +836,6 @@ struct TarballCacheSink : GitFileSystemObjectSink
             bool executable = false;
 
             AutoCloseFD tempFd;
-            AutoDelete tempDel;
             uint64_t size = 0;
 
             void operator()(std::string_view data) override
@@ -849,9 +848,8 @@ struct TarballCacheSink : GitFileSystemObjectSink
                         return;
                     }
 
-                    auto [fd, path] = createTempFile("nix-tarball-cache");
-                    tempFd = std::move(fd);
-                    tempDel = AutoDelete(path, /*recursive=*/false);
+                    /* An anonymous file is deleted automatically, even if the process is killed. */
+                    tempFd = createAnonymousTempFile();
                     writeFull(tempFd.get(), contents);
                     contents.clear();
                     contents.shrink_to_fit();
