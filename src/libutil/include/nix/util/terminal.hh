@@ -2,7 +2,9 @@
 ///@file
 
 #include <limits>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "nix/util/file-descriptor.hh"
 
@@ -56,5 +58,33 @@ unsigned int getWindowWidth();
  * @return The slave device name as a string
  */
 std::string getPtsName(int fd);
+
+/**
+ * Program Status Protocol states.
+ * https://www.superlogical.com/rex/docs/build/program-status
+ */
+enum class ProgramState { Idle, Working, Done, Blocked, Error };
+
+/** Action type for the user to do while blocked. */
+enum class ProgramStatusKind { Permission, Question, Auth };
+
+/**
+ * @param msg A one line readable description without escape sequences,
+ * control characters, and malformed UTF-8 replaced with U+FFFD.
+ * @param progress Percentage from 0 to 100, only for `Working` and `Blocked` states
+ * @param kind What the user needs to do, only for `Blocked` states
+ * @return An OSC 7501 sequence string that reports program state
+ */
+std::string makeProgramStatusReport(
+    ProgramState state,
+    std::string_view app,
+    std::string_view msg = "",
+    std::optional<unsigned> progress = {},
+    std::optional<ProgramStatusKind> kind = {});
+
+/**
+ * @return An OSC 7501 sequence that removes the program's status
+ */
+std::string makeProgramStatusClearReport();
 
 } // namespace nix

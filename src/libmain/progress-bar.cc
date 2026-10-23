@@ -92,6 +92,13 @@ private:
         size_t suspensions = 0;
         bool haveUpdate = true;
 
+        bool interrupted = false;
+        bool statusReportPending = false;
+        std::optional<ProgramState> lastReportedState;
+        std::optional<unsigned> lastReportedProgress;
+        std::chrono::steady_clock::time_point lastStatusReportTime;
+        std::string lastStatusReport;
+
         bool isPaused() const
         {
             return suspensions > 0;
@@ -112,6 +119,40 @@ private:
 
     std::unique_ptr<InterruptCallback> interruptCallback, stopCallback, contCallback, winchCallback;
 
+    void reportStatus(
+        State & state,
+        ProgramState st,
+        std::string_view msg = "",
+        std::optional<unsigned> progress = {},
+        std::optional<ProgramStatusKind> kind = {})
+    {
+        if (!isTTY)
+            return;
+
+        auto report = makeProgramStatusReport(st, "nix", msg, progress, kind);
+        state.statusReportPending = false;
+
+        if (report == state.lastStatusReport)
+            return;
+
+        auto now = std::chrono::steady_clock::now();
+        auto nextReport = state.lastStatusReportTime + std::chrono::seconds(1);
+
+        // send state and progress changes immediately
+        if (st == ProgramState::Working && state.lastReportedState == st && state.lastReportedProgress == progress
+            && now < nextReport) {
+            state.statusReportPending = true;
+            updateCV.notify_one();
+            return;
+        }
+
+        state.lastStatusReport = report;
+        state.lastReportedState = st;
+        state.lastReportedProgress = progress;
+        state.lastStatusReportTime = now;
+        writeToStderr(report);
+    }
+
     void hideCursorIfNeeded() const
     {
         if (isTTY)
@@ -129,6 +170,7 @@ public:
     ProgressBar(bool isTTY)
         : isTTY(isTTY)
         , interruptCallback(createInterruptCallback([&]() {
+            state_.lock()->interrupted = true;
             pause();
             redraw("\rshutting down\e[K");
         }))
@@ -162,9 +204,21 @@ public:
         updateThread = std::thread([&]() {
             auto state(state_.lock());
             auto nextWakeup = std::chrono::milliseconds::max();
+
             while (state->active) {
-                if (!state->haveUpdate)
-                    state.wait_for(updateCV, nextWakeup);
+                if (!state->haveUpdate) {
+                    auto delay = nextWakeup;
+
+                    if (state->statusReportPending && !state->isPaused()) {
+                        auto retryAt = state->lastStatusReportTime + std::chrono::seconds(1);
+                        auto retryDelay =
+                            std::chrono::ceil<std::chrono::milliseconds>(retryAt - std::chrono::steady_clock::now());
+                        delay = std::min(delay, std::max(retryDelay, std::chrono::milliseconds::zero()));
+                    }
+
+                    state.wait_for(updateCV, delay);
+                }
+
                 nextWakeup = draw(*state);
                 state.wait_for(quitCV, std::chrono::milliseconds(50));
             }
@@ -183,6 +237,13 @@ public:
             auto state(state_.lock());
             if (state->active) {
                 state->active = false;
+
+                if (state->lastReportedState) {
+                    state->lastStatusReport = makeProgramStatusClearReport();
+                    state->statusReportPending = false;
+                    writeToStderr(state->lastStatusReport);
+                }
+
                 clearProgressDisplay();
                 unhideCursorIfNeeded();
                 updateCV.notify_one();
@@ -191,6 +252,23 @@ public:
         }
         if (updateThread.joinable())
             updateThread.join();
+    }
+
+    void exited(int status) override
+    {
+        auto state(state_.lock());
+
+        if (state->lastReportedState) {
+            auto finalState = ProgramState::Error;
+
+            if (status == 0)
+                finalState = ProgramState::Done;
+
+            if (state->interrupted)
+                finalState = ProgramState::Idle;
+
+            reportStatus(*state, finalState);
+        }
     }
 
     void pause() override
@@ -496,6 +574,7 @@ public:
             line += "]";
         }
 
+        std::string statusMessage;
         auto now = std::chrono::steady_clock::now();
 
         if (!state.activities.empty()) {
@@ -520,12 +599,13 @@ public:
             }
 
             if (i != state.activities.rend()) {
-                line += i->s;
+                statusMessage = i->s;
                 if (!i->phase.empty()) {
-                    line += " (";
-                    line += i->phase;
-                    line += ")";
+                    statusMessage += " (";
+                    statusMessage += i->phase;
+                    statusMessage += ")";
                 }
+                line += statusMessage;
                 if (!i->lastLine.empty()) {
                     if (!i->s.empty())
                         line += ": ";
@@ -534,9 +614,42 @@ public:
             }
         }
 
+        reportWorking(state, statusMessage, !line.empty());
+
         redraw("\r" + filterANSIEscapes(line, false, getWindowWidth()) + ANSI_NORMAL + "\e[K");
 
         return nextWakeup;
+    }
+
+    std::optional<unsigned> getProgress(State & state) noexcept
+    {
+        uint64_t done = 0, expected = 0;
+
+        for (auto type : {actBuilds, actCopyPaths}) {
+            auto & activity = state.activitiesByType[type];
+            uint64_t activityDone = activity.done, activityExpected = activity.done;
+
+            for (auto & j : activity.its) {
+                activityDone += j.second->done;
+                activityExpected += j.second->expected;
+            }
+
+            done += activityDone;
+            expected += std::max(activityExpected, activity.expected);
+        }
+
+        if (expected == 0)
+            return {};
+
+        return (unsigned) std::min<uint64_t>(100, done * 100 / expected);
+    }
+
+    void reportWorking(State & state, std::string_view statusMessage, bool haveStatus)
+    {
+        if (haveStatus || state.lastReportedState == ProgramState::Blocked)
+            reportStatus(state, ProgramState::Working, statusMessage, getProgress(state));
+        else
+            state.statusReportPending = false;
     }
 
     std::string getStatus(State & state) noexcept
@@ -731,11 +844,14 @@ public:
         invalidateRedrawCache();
         std::cerr << fmt("\r\e[K%s ", msg);
         unhideCursorIfNeeded();
+        reportStatus(*state, ProgramState::Blocked, msg, {}, ProgramStatusKind::Permission);
         auto s = trim(readLine(getStandardInput(), true));
         hideCursorIfNeeded();
+        draw(*state);
+        if (state->lastReportedState == ProgramState::Blocked)
+            reportStatus(*state, ProgramState::Working);
         if (s.size() != 1)
             return {};
-        draw(*state);
         return s[0];
     }
 

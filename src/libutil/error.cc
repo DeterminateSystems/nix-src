@@ -500,12 +500,15 @@ int handleExceptions(const std::string & programName, fun<void()> body)
 
     ErrorInfo::programName = baseNameOf(programName);
 
+    int status = 0;
+
     /* Note: this must happen after `printException()` below, so that
        loggers that record the exception (like the OpenTelemetry
        logger) can still do so. `flush()` must come after `stop()`,
        which ends any open spans. */
-    Finally stopLogger([]() {
+    Finally stopLogger([&]() {
         logger->stop();
+        logger->exited(status);
         logger->flush();
     });
 
@@ -523,17 +526,17 @@ int handleExceptions(const std::string & programName, fun<void()> body)
         try {
             std::rethrow_exception(ex);
         } catch (Exit & e) {
-            return e.status;
+            status = e.status;
         } catch (UsageError & e) {
-            return 1;
+            status = 1;
         } catch (BaseError & e) {
-            return e.info().status;
+            status = e.info().status;
         } catch (...) {
-            return 1;
+            status = 1;
         }
     }
 
-    return 0;
+    return status;
 }
 
 } // namespace nix
