@@ -67,6 +67,10 @@ enum struct Compression : int64_t {
 /**
  * The maximum (uncompressed) size of a blob chunk. Files larger than this are spilled to a temporary file during
  * import, so this bounds the memory used per file.
+ *
+ * Note: this is part of the on-disk format. Chunks left behind by an interrupted import are reused by a later import
+ * of the same blob (`insert or ignore`), which is only correct if the chunk size is unchanged. So changing it requires
+ * a new database file name.
  */
 constexpr size_t chunkSize = 1024 * 1024;
 
@@ -336,24 +340,28 @@ struct TarballCacheImpl : TarballCache, std::enable_shared_from_this<TarballCach
             if ((uint64_t) stmt.getInt(1) != seq)
                 corrupt(fmt("chunk %d is missing", seq));
 
-            uint64_t chunkSize = stmt.getInt(2);
+            uint64_t chunkLen = stmt.getInt(2);
             auto compression = (Compression) stmt.getInt(3);
             auto data = stmt.getBlob(4);
 
+            /* Check the chunk size before trusting it (e.g. to allocate a decompression buffer). */
+            if (chunkLen > chunkSize || chunkLen > size - bytesRead)
+                corrupt(fmt("chunk %d has an impossible size %d", seq, chunkLen));
+
             switch (compression) {
             case Compression::None:
-                if (data.size() != chunkSize)
-                    corrupt(fmt("chunk %d has size %d, expected %d", seq, data.size(), chunkSize));
+                if (data.size() != chunkLen)
+                    corrupt(fmt("chunk %d has size %d, expected %d", seq, data.size(), chunkLen));
                 sink(data);
                 break;
             case Compression::Zstd:
-                sink(decompress(data, chunkSize));
+                sink(decompress(data, chunkLen));
                 break;
             default:
                 corrupt(fmt("unknown compression type %d", (int64_t) compression));
             }
 
-            bytesRead += chunkSize;
+            bytesRead += chunkLen;
             seq++;
         }
 
