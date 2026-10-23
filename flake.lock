@@ -3,16 +3,16 @@
     "bdwgc": {
       "flake": false,
       "locked": {
-        "lastModified": 1792703853,
-        "narHash": "sha256-Grnt2SmCk+57bb4l0ktrHIKxxCgu15+0E5v+qSuAT6A=",
+        "lastModified": 1792766812,
+        "narHash": "sha256-ZXxPgcmKohIJv8sYVHJaUV36/OCfTGQh+N7VfrPHVAM=",
         "owner": "DeterminateSystems",
         "repo": "bdwgc",
-        "rev": "b142427d2604472202e16418de609283f91a8dd7",
+        "rev": "8505c09cafce7bd2cffc421fd94b79390f37e428",
         "type": "github"
       },
       "original": {
         "owner": "DeterminateSystems",
-        "ref": "allow-multiple-heap-expansions",
+        "ref": "nix-patches-master",
         "repo": "bdwgc",
         "type": "github"
       }
