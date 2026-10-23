@@ -263,6 +263,10 @@ jobs:
           lscpu
           nproc
 
+          cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/nix"
+          du -sh "$cache_dir"/* || true
+          find "$cache_dir/tarball-cache-v2/objects/pack" -name '*.pack' | wc -l || true
+
           if ! flake-regressions/eval-all.sh; then
             echo "Some failed, trying again"
             printf "\n\n\n\n\n\n\n\n"
