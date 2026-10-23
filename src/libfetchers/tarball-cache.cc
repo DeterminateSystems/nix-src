@@ -1,7 +1,6 @@
 #include "nix/fetchers/tarball-cache.hh"
 #include "nix/fetchers/cache.hh"
 #include "nix/fetchers/fetch-settings.hh"
-#include "nix/store/globals.hh"
 #include "nix/store/sqlite.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/file-system.hh"
@@ -167,7 +166,11 @@ struct Connection
 
     Connection(const std::filesystem::path & dbPath)
     {
-        db = SQLite(dbPath, {.useWAL = settings.useSQLiteWAL});
+        /* Note: we always use WAL mode (regardless of the `use-sqlite-wal` setting, which is about the store
+           database), since the cache's concurrency relies on it: readers don't block the writer, and the sink keeps
+           read transactions open for the duration of an import. In rollback-journal mode, the latter would block
+           the import's own writes. */
+        db = SQLite(dbPath, {.useWAL = true});
         db.exec("pragma synchronous = normal");
         /* Read pages via mmap rather than pread(). This reduces system time (and thus cold imports and copying
            trees to the store) by about 7%. Writes still go through write(). */
@@ -275,9 +278,8 @@ struct TarballCacheImpl : TarballCache, std::enable_shared_from_this<TarballCach
     {
         createDirs(dbPath.parent_path());
 
-        SQLite db(dbPath, {.useWAL = settings.useSQLiteWAL});
-        if (settings.useSQLiteWAL)
-            db.exec("pragma main.journal_mode = wal");
+        SQLite db(dbPath, {.useWAL = true});
+        db.exec("pragma main.journal_mode = wal");
         db.exec(schema);
     }
 
