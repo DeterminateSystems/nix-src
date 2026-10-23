@@ -111,6 +111,10 @@ deps_private += brotli
 zstd = dependency('libzstd', version : '>= 1.4.0')
 deps_private += zstd
 
+# For experimental HDiffPatch binary diffs.
+hdiffpatch = dependency('hdiffpatch')
+deps_private += hdiffpatch
+
 cpuid_required = get_option('cpuid')
 if host_machine.cpu_family() != 'x86_64' and cpuid_required.enabled()
   warning('Force-enabling seccomp on non-x86_64 does not make sense')
@@ -169,6 +173,7 @@ sources = [ config_priv_h ] + files(
   'fs-sink.cc',
   'git.cc',
   'hash.cc',
+  'hdiff-patch.cc',
   'hilite.cc',
   'json-utils.cc',
   'logging.cc',
@@ -188,6 +193,7 @@ sources = [ config_priv_h ] + files(
   'signature/signer.cc',
   'source-accessor.cc',
   'source-path.cc',
+  'spilling-sink.cc',
   'strings.cc',
   'suggestions.cc',
   'table.cc',
@@ -201,6 +207,7 @@ sources = [ config_priv_h ] + files(
   'users.cc',
   'util.cc',
   'xml-writer.cc',
+  'zstd-patch.cc',
 )
 
 subdir('include/nix/util')

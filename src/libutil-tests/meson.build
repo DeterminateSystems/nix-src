@@ -76,6 +76,7 @@ sources = files(
   'fun.cc',
   'git.cc',
   'hash.cc',
+  'hdiff-patch.cc',
   'hilite.cc',
   'json-utils.cc',
   'local-keys.cc',
@@ -95,14 +96,17 @@ sources = files(
   'sort.cc',
   'source-accessor.cc',
   'spawn.cc',
+  'spilling-sink.cc',
   'strings.cc',
   'suggestions.cc',
   'terminal.cc',
+  'thread-pool.cc',
   'topo-sort.cc',
   'url.cc',
   'users.cc',
   'util.cc',
   'xml-writer.cc',
+  'zstd-patch.cc',
 )
 
 if have_cxa_throw
