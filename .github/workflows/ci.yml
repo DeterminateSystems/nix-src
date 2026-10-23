@@ -23,7 +23,7 @@ jobs:
   eval:
     runs-on: UbuntuLatest32Cores128G
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: DeterminateSystems/determinate-nix-action@main
@@ -149,7 +149,7 @@ jobs:
           contains(needs.*.result, 'failure') ||
           contains(needs.*.result, 'cancelled')
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
 
@@ -232,7 +232,7 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-push@main
         with:
