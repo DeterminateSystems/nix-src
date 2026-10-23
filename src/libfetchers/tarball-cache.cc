@@ -667,6 +667,10 @@ struct TarballCacheSink : GitFileSystemObjectSink
         assert(!path.isRoot());
         auto parent = path.parent();
 
+        /* The tree encoding stores name lengths in 16 bits. */
+        if (path.baseName()->size() > std::numeric_limits<uint16_t>::max())
+            throw Error("file name '%s' is too long for the tarball cache", path);
+
         Directory * cur = &state.root;
 
         for (auto & i : *parent) {
