@@ -231,8 +231,11 @@ jobs:
           path: flake-regressions/tests
       - uses: DeterminateSystems/determinate-nix-action@main
         with:
+          # The installer enables parallel evaluation by default; only the
+          # `eval-cores = 24` configuration should use it.
           extra-conf: |
             extra-experimental-features = provenance
+            eval-cores = 1
       - uses: DeterminateSystems/flakehub-cache-action@main
       - name: Run flake regression tests
         id: run
