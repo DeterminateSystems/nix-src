@@ -885,6 +885,9 @@ struct TarballCacheSink : GitFileSystemObjectSink
 
     void createSymlink(const CanonPath & path, const std::string & target) override
     {
+        /* Symlink targets are not spilled to a temporary file, so they must fit in a single chunk. */
+        if (target.size() > chunkSize)
+            throw Error("symlink target of '%s' is too long (%d bytes)", path, target.size());
         addBlobNode(path, git::Mode::Symlink, target, 0);
     }
 
