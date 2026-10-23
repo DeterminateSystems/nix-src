@@ -561,6 +561,20 @@ struct TarballCacheSink : GitFileSystemObjectSink
 
     ThreadPool workers{concurrency};
 
+    /**
+     * Enqueue a work item. If a worker has thrown an exception, the thread pool refuses new items; in that case,
+     * rethrow the worker's exception rather than the thread pool's.
+     */
+    void enqueue(ThreadPool::work_t work)
+    {
+        try {
+            workers.enqueue(std::move(work));
+        } catch (ThreadPoolShutDown &) {
+            workers.process();
+            throw;
+        }
+    }
+
     /** Total file contents in flight. */
     std::atomic<size_t> totalBufSize{0};
 
@@ -799,7 +813,7 @@ struct TarballCacheSink : GitFileSystemObjectSink
         if (totalBufSize > maxBufSize)
             work();
         else
-            workers.enqueue(std::move(work));
+            enqueue(std::move(work));
     }
 
     void createRegularFile(const CanonPath & path, fun<void(CreateRegularFileSink &)> func) override
@@ -872,7 +886,7 @@ struct TarballCacheSink : GitFileSystemObjectSink
         if (++spilledInFlight > maxSpilledInFlight)
             work();
         else
-            workers.enqueue(std::move(work));
+            enqueue(std::move(work));
     }
 
     void createDirectory(const CanonPath & path) override
