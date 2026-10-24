@@ -13,6 +13,12 @@
 #include <iostream>
 #include <chrono>
 
+#ifndef _WIN32
+#  include <poll.h>
+#  include <termios.h>
+#  include <unistd.h>
+#endif
+
 namespace nix {
 
 namespace {
@@ -50,9 +56,18 @@ static std::string_view storePathToNameWithoutDrvSuffix(std::string_view path)
     return res;
 }
 
-class ProgressBar final : public Logger
+/**
+ * Base class for loggers that keep track of the running activities
+ * and display their progress in a "frame" of one or more lines at the
+ * bottom of the terminal. Log messages are printed above the frame.
+ * Subclasses only need to implement `renderFrame()`.
+ *
+ * Subclasses must call `start()` after construction, and `stop()` in
+ * their destructor (since the update thread calls `renderFrame()`).
+ */
+class ProgressBarBase : public Logger
 {
-private:
+protected:
     struct ActInfo
     {
         std::string s, lastLine, phase;
@@ -98,8 +113,25 @@ private:
         }
     };
 
-    /** Helps avoid unnecessary redraws, see `redraw()` */
-    Sync<std::string> lastOutput_;
+    /**
+     * What we last wrote to the terminal.
+     */
+    struct Screen
+    {
+        /**
+         * The frame last written, used to avoid unnecessary redraws
+         * (see `redraw()`). `std::nullopt` forces a redraw.
+         */
+        std::optional<std::string> lastFrame;
+
+        /**
+         * The number of lines of the frame currently on the
+         * terminal. The cursor is on the last of these lines.
+         */
+        size_t linesShown = 0;
+    };
+
+    Sync<Screen> screen_;
 
     Sync<State> state_;
 
@@ -107,7 +139,7 @@ private:
 
     std::condition_variable quitCV, updateCV;
 
-    bool printBuildLogs = false;
+    std::atomic<bool> printBuildLogs = false;
     bool isTTY;
 
     std::unique_ptr<InterruptCallback> interruptCallback, stopCallback, contCallback, winchCallback;
@@ -124,31 +156,72 @@ private:
             writeToStderr("\e[?25h");
     }
 
+    ProgressBarBase(bool isTTY)
+        : isTTY(isTTY)
+    {
+        state_.lock()->active = isTTY;
+    }
+
+    /**
+     * Render the frame to be displayed, one string per line. Lines
+     * are truncated to the terminal width by the caller. Set
+     * `nextWakeup` to request a redraw after some time, even if
+     * there are no activity updates.
+     */
+    virtual std::vector<std::string>
+    renderFrame(State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) = 0;
+
+    /**
+     * Hook for subclasses that read keyboard input: stop reading from
+     * the terminal and restore its settings, because something else
+     * (e.g. the REPL, a prompt, or the shell after Ctrl-Z) needs it.
+     * Called with the state lock held.
+     */
+    virtual void suspendInput(State & state) {}
+
+    /**
+     * Undo `suspendInput()`. Called with the state lock held, if the
+     * progress bar is active and not paused.
+     */
+    virtual void resumeInput(State & state) {}
+
 public:
 
-    ProgressBar(bool isTTY)
-        : isTTY(isTTY)
-        , interruptCallback(createInterruptCallback([&]() {
-            pause();
-            redraw("\rshutting down\e[K");
-        }))
+    /**
+     * Start the update thread and register signal callbacks. This
+     * can't be done in the constructor since the update thread calls
+     * `renderFrame()`.
+     */
+    void start()
     {
         hideCursorIfNeeded();
-        state_.lock()->active = isTTY;
 
-        /* On Ctrl-Z, unhide the cursor before the process is
-           stopped. */
+        interruptCallback = createInterruptCallback([&]() {
+            pause();
+            redraw({"shutting down"});
+        });
+
+        /* On Ctrl-Z, unhide the cursor and give the terminal back
+           before the process is stopped. */
         stopCallback = createSignalCallback(SignalType::Stop, [&]() {
             auto state(state_.lock());
-            if (state->active && !state->isPaused())
+            if (state->active && !state->isPaused()) {
+                suspendInput(*state);
                 unhideCursorIfNeeded();
+            }
         });
 
         /* Redraw the progress bar when the process is resumed or the
            terminal size changes. */
-        auto redrawCallback = [&]() {
+        auto redrawCallback = [&](bool resumed) {
             auto state(state_.lock());
             if (state->active && !state->isPaused()) {
+                if (resumed) {
+                    /* The shell has printed stuff since we were
+                       stopped, so don't overwrite it. */
+                    screen_.lock()->linesShown = 0;
+                    resumeInput(*state);
+                }
                 /* Force a redraw, since the new output may be
                    identical to the one cached by redraw(). */
                 invalidateRedrawCache();
@@ -156,8 +229,8 @@ public:
                 update(*state);
             }
         };
-        contCallback = createSignalCallback(SignalType::Cont, redrawCallback);
-        winchCallback = createSignalCallback(SignalType::Winch, redrawCallback);
+        contCallback = createSignalCallback(SignalType::Cont, [=]() { redrawCallback(true); });
+        winchCallback = createSignalCallback(SignalType::Winch, [=]() { redrawCallback(false); });
 
         updateThread = std::thread([&]() {
             auto state(state_.lock());
@@ -171,7 +244,7 @@ public:
         });
     }
 
-    ~ProgressBar()
+    ~ProgressBarBase()
     {
         stop();
     }
@@ -182,6 +255,7 @@ public:
         {
             auto state(state_.lock());
             if (state->active) {
+                suspendInput(*state);
                 state->active = false;
                 clearProgressDisplay();
                 unhideCursorIfNeeded();
@@ -203,6 +277,7 @@ public:
         }
 
         if (state->active) {
+            suspendInput(*state);
             clearProgressDisplay();
             /* Show activities that were previously only shown on the
                progress bar. Otherwise the user won't know what's
@@ -217,7 +292,9 @@ public:
     {
         auto state(state_.lock());
         if (state->suspensions == 0) {
-            log(lvlError, "nix::ProgressBar: resume() called without a matching preceding pause(). This is a bug.");
+            log(*state,
+                lvlError,
+                "nix::ProgressBar: resume() called without a matching preceding pause(). This is a bug.");
             return;
         } else {
             state->suspensions--;
@@ -226,6 +303,7 @@ public:
             if (state->active) {
                 clearProgressDisplay();
                 hideCursorIfNeeded();
+                resumeInput(*state);
             }
             state->haveUpdate = true;
             updateCV.notify_one();
@@ -258,8 +336,7 @@ public:
     void log(State & state, Verbosity lvl, std::string_view s) noexcept
     {
         if (state.active) {
-            invalidateRedrawCache();
-            writeToStderr("\r\e[K" + filterANSIEscapes(s, !isTTY) + ANSI_NORMAL "\n");
+            clearProgressDisplay(filterANSIEscapes(s, !isTTY) + ANSI_NORMAL "\n");
             draw(state);
         } else {
             writeToStderr(filterANSIEscapes(s, !isTTY) + "\n");
@@ -381,7 +458,7 @@ public:
             auto lastLine = chomp(getS(fields, 0));
             auto i = state->its.find(act);
             assert(i != state->its.end());
-            ActInfo info = *i->second;
+            ActInfo & info = *i->second;
             if (printBuildLogs) {
                 auto suffix = "> ";
                 if (type == resPostBuildLogLine) {
@@ -389,10 +466,11 @@ public:
                 }
                 log(*state, lvlInfo, ANSI_FAINT + info.name.value_or("unnamed") + suffix + ANSI_NORMAL + lastLine);
             } else {
-                state->activities.erase(i->second);
+                /* Move this activity to the end of the list, making it
+                   the most recent one. Note that splice() doesn't
+                   invalidate iterators. */
+                state->activities.splice(state->activities.end(), state->activities, i->second);
                 info.lastLine = lastLine;
-                state->activities.emplace_back(info);
-                i->second = std::prev(state->activities.end());
                 update(*state);
             }
         }
@@ -453,30 +531,67 @@ public:
     }
 
     /**
-     * Redraw, if the output has changed.
+     * Replace the frame currently on the terminal by `lines`, if it
+     * has changed.
      *
      * Excessive redrawing is noticeable on slow terminals, and it interferes
      * with text selection in some terminals, including libvte-based terminal
      * emulators.
      */
-    void redraw(std::string newOutput) noexcept
+    void redraw(const std::vector<std::string> & lines) noexcept
     {
-        auto lastOutput(lastOutput_.lock());
-        if (newOutput != *lastOutput) {
-            writeToStderr(newOutput);
-            *lastOutput = std::move(newOutput);
+        std::string frame;
+        for (const auto & [n, line] : enumerate(lines)) {
+            if (n)
+                frame += "\n";
+            /* Reset attributes and erase the rest of the line. */
+            frame += line + ANSI_NORMAL "\e[K";
         }
+
+        auto screen(screen_.lock());
+        if (frame == screen->lastFrame)
+            return;
+
+        auto s = cursorToFrameStart(screen->linesShown) + frame;
+        /* If the new frame is shorter, erase from the cursor to the
+           end of the screen to remove the remainder of the old
+           frame. */
+        if (lines.size() < screen->linesShown)
+            s += "\e[J";
+        writeToStderr(s);
+
+        screen->lastFrame = std::move(frame);
+        screen->linesShown = lines.size();
+    }
+
+    /**
+     * Return the escape sequence that moves the cursor to the start of
+     * the first line of a frame of `linesShown` lines.
+     */
+    static std::string cursorToFrameStart(size_t linesShown)
+    {
+        /* Move the cursor up N lines (`\e[<N>A`), then to the start of
+           the line. */
+        return linesShown > 1 ? fmt("\e[%dA\r", linesShown - 1) : "\r";
     }
 
     void invalidateRedrawCache()
     {
-        *lastOutput_.lock() = "";
+        screen_.lock()->lastFrame.reset();
     }
 
-    void clearProgressDisplay()
+    /**
+     * Erase the frame, leaving the cursor at the start of an empty
+     * line, then print `s` there.
+     */
+    void clearProgressDisplay(std::string_view s = "")
     {
-        invalidateRedrawCache();
-        writeToStderr("\r\e[K");
+        auto screen(screen_.lock());
+        writeToStderr(
+            (screen->linesShown > 1 ? cursorToFrameStart(screen->linesShown) + "\e[J" : std::string("\r\e[K"))
+            + std::string(s));
+        screen->lastFrame.reset();
+        screen->linesShown = 0;
     }
 
     std::chrono::milliseconds draw(State & state) noexcept
@@ -487,6 +602,115 @@ public:
         if (state.isPaused() || !state.active)
             return nextWakeup;
 
+        auto lines = renderFrame(state, std::chrono::steady_clock::now(), nextWakeup);
+
+        /* Don't draw more lines than fit in the terminal, since then
+           we can't move the cursor back to the start of the frame. */
+        auto rows = getWindowSize().first;
+        if (rows > 1 && lines.size() >= rows)
+            lines.resize(rows - 1);
+
+        /* Truncate lines to the terminal width. In multi-line frames,
+           leave the last column empty: writing a newline after a line
+           that fills the entire width causes some terminals to move
+           the cursor down two lines (once to wrap, once for the
+           newline), so we would lose track of the cursor position. */
+        auto width = getWindowWidth();
+        if (lines.size() > 1 && width > 1 && width != std::numeric_limits<decltype(width)>::max())
+            width--;
+        for (auto & line : lines)
+            line = filterANSIEscapes(line, false, width);
+
+        redraw(lines);
+
+        return nextWakeup;
+    }
+
+    struct ActivityStats
+    {
+        uint64_t done = 0;
+        uint64_t expected = 0;
+        uint64_t running = 0;
+        uint64_t failed = 0;
+    };
+
+    /**
+     * Get the aggregate progress of all activities of type `type`,
+     * including those that have finished.
+     */
+    static ActivityStats getActivityStats(State & state, ActivityType type)
+    {
+        auto & act = state.activitiesByType[type];
+        ActivityStats stats{.done = act.done, .expected = act.done, .failed = act.failed};
+        for (auto & j : act.its) {
+            stats.done += j.second->done;
+            stats.expected += j.second->expected;
+            stats.running += j.second->running;
+            stats.failed += j.second->failed;
+        }
+        stats.expected = std::max(stats.expected, act.expected);
+        return stats;
+    }
+
+    void writeToStdout(std::string_view s) override
+    {
+        auto state(state_.lock());
+        if (state->active) {
+            clearProgressDisplay();
+            Logger::writeToStdout(s);
+            draw(*state);
+        } else {
+            Logger::writeToStdout(s);
+        }
+    }
+
+    std::optional<char> ask(std::string_view msg) override
+    {
+        auto state(state_.lock());
+        if (!state->active)
+            return {};
+        suspendInput(*state);
+        clearProgressDisplay(fmt("%s ", msg));
+        unhideCursorIfNeeded();
+        auto s = trim(readLine(getStandardInput(), true));
+        hideCursorIfNeeded();
+        if (!state->isPaused())
+            resumeInput(*state);
+        if (s.size() != 1)
+            return {};
+        draw(*state);
+        return s[0];
+    }
+
+    void setPrintBuildLogs(bool printBuildLogs) override
+    {
+        this->printBuildLogs = printBuildLogs;
+    }
+};
+
+/**
+ * The classic one-line progress bar, showing the number of builds,
+ * downloads etc. and the most recently started activity.
+ */
+class ProgressBar final : public ProgressBarBase
+{
+public:
+
+    ProgressBar(bool isTTY)
+        : ProgressBarBase(isTTY)
+    {
+    }
+
+    ~ProgressBar()
+    {
+        stop();
+    }
+
+private:
+
+    std::vector<std::string> renderFrame(
+        State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) override
+    {
         std::string line;
 
         std::string status = getStatus(state);
@@ -495,8 +719,6 @@ public:
             line += status;
             line += "]";
         }
-
-        auto now = std::chrono::steady_clock::now();
 
         if (!state.activities.empty()) {
             if (!status.empty())
@@ -534,9 +756,7 @@ public:
             }
         }
 
-        redraw("\r" + filterANSIEscapes(line, false, getWindowWidth()) + ANSI_NORMAL + "\e[K");
-
-        return nextWakeup;
+        return {std::move(line)};
     }
 
     std::string getStatus(State & state) noexcept
@@ -546,16 +766,7 @@ public:
         auto renderActivity =
             [&] [[nodiscard]] (
                 ActivityType type, const std::string & itemFmt, const std::string & numberFmt = "%d", double unit = 1) {
-                auto & act = state.activitiesByType[type];
-                uint64_t done = act.done, expected = act.done, running = 0, failed = act.failed;
-                for (auto & j : act.its) {
-                    done += j.second->done;
-                    expected += j.second->expected;
-                    running += j.second->running;
-                    failed += j.second->failed;
-                }
-
-                expected = std::max(expected, act.expected);
+                auto [done, expected, running, failed] = getActivityStats(state, type);
 
                 std::string s;
 
@@ -590,16 +801,7 @@ public:
             };
 
         auto renderSizeActivity = [&] [[nodiscard]] (ActivityType type, const std::string & itemFmt = "%s") {
-            auto & act = state.activitiesByType[type];
-            uint64_t done = act.done, expected = act.done, running = 0, failed = act.failed;
-            for (auto & j : act.its) {
-                done += j.second->done;
-                expected += j.second->expected;
-                running += j.second->running;
-                failed += j.second->failed;
-            }
-
-            expected = std::max(expected, act.expected);
+            auto [done, expected, running, failed] = getActivityStats(state, type);
 
             std::optional<SizeUnit> commonUnit;
             std::string s;
@@ -709,39 +911,570 @@ public:
 
         return res;
     }
+};
 
-    void writeToStdout(std::string_view s) override
+static std::string renderDuration(std::chrono::steady_clock::duration d)
+{
+    auto secs = std::chrono::duration_cast<std::chrono::seconds>(d).count();
+    if (secs < 60)
+        return fmt("%ds", secs);
+    if (secs < 3600)
+        return fmt("%dm%02ds", secs / 60, secs % 60);
+    return fmt("%dh%02dm", secs / 3600, (secs / 60) % 60);
+}
+
+static std::string repeat(std::string_view s, size_t n)
+{
+    std::string res;
+    res.reserve(s.size() * n);
+    for (size_t i = 0; i < n; ++i)
+        res += s;
+    return res;
+}
+
+/**
+ * A multi-line progress indicator that shows a section with a
+ * progress bar and a list of running items for each kind of work
+ * (downloads, substitutions, builds, ...), plus a list of other
+ * running activities.
+ */
+class ProgressIndicator final : public ProgressBarBase
+{
+    const std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
+
+    /**
+     * Maximum number of running items to show per section.
+     */
+    static constexpr size_t maxItems = 5;
+
+    /**
+     * Don't show activities in the list of other activities until
+     * they've been running for this long, to avoid flicker.
+     */
+    static constexpr auto otherActivityDelay = std::chrono::milliseconds(300);
+
+    /**
+     * Interval between spinner updates.
+     */
+    static constexpr auto spinnerInterval = std::chrono::milliseconds(100);
+
+    /**
+     * Whether the help text is shown. Protected by the state lock.
+     */
+    bool helpShown = false;
+
+    /**
+     * If set, the display is paused, and these are the sections to
+     * show instead of the current progress. Protected by the state
+     * lock.
+     */
+    std::optional<std::vector<std::string>> frozenSections;
+
+    /**
+     * Whether we're currently reading keyboard input.
+     */
+    std::atomic<bool> inputEnabled = false;
+
+#ifndef _WIN32
+    struct Input
     {
+        /**
+         * Whether the input thread may read from stdin. If true, the
+         * terminal has been put in non-canonical mode.
+         */
+        bool enabled = false;
+
+        /**
+         * The terminal settings to restore when input is disabled.
+         */
+        std::optional<struct termios> savedTermAttrs;
+
+        /**
+         * Set when stdin has reached EOF or the progress indicator is
+         * being destroyed.
+         */
+        bool quit = false;
+    };
+
+    Sync<Input> input_;
+
+    std::condition_variable inputCV;
+
+    /**
+     * Used to wake up the input thread from `poll()` when input is
+     * disabled.
+     */
+    Pipe wakeupPipe;
+
+    std::thread inputThread;
+#endif
+
+public:
+
+    ProgressIndicator(bool isTTY)
+        : ProgressBarBase(isTTY)
+    {
+    }
+
+    ~ProgressIndicator()
+    {
+        stop();
+#ifndef _WIN32
+        if (inputThread.joinable()) {
+            input_.lock()->quit = true;
+            inputCV.notify_one();
+            writeFull(wakeupPipe.writeSide.get(), "x", false);
+            inputThread.join();
+        }
+#endif
+    }
+
+    /**
+     * Start reading keyboard input, if stdin is a terminal.
+     */
+    void startInput()
+    {
+#ifndef _WIN32
+        if (!isTTY || !isatty(STDIN_FILENO))
+            return;
+
+        wakeupPipe.create();
+
+        inputThread = std::thread([this]() {
+            try {
+                inputThreadMain();
+            } catch (...) {
+                ignoreExceptionInDestructor();
+            }
+        });
+
         auto state(state_.lock());
-        if (state->active) {
-            invalidateRedrawCache();
-            std::cerr << "\r\e[K";
-            Logger::writeToStdout(s);
-            draw(*state);
-        } else {
-            Logger::writeToStdout(s);
+        if (state->active && !state->isPaused())
+            resumeInput(*state);
+#endif
+    }
+
+private:
+
+#ifndef _WIN32
+    void suspendInput(State & state) override
+    {
+        auto input(input_.lock());
+        if (!input->enabled)
+            return;
+        input->enabled = false;
+        inputEnabled = false;
+        if (input->savedTermAttrs) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &*input->savedTermAttrs);
+            input->savedTermAttrs.reset();
+        }
+        /* Interrupt the input thread's poll(). */
+        writeFull(wakeupPipe.writeSide.get(), "x", false);
+        update(state);
+    }
+
+    void resumeInput(State & state) override
+    {
+        if (!inputThread.joinable())
+            return;
+
+        auto input(input_.lock());
+        if (input->enabled || input->quit)
+            return;
+
+        /* Don't touch the terminal if we're in the background, since
+           that would cause SIGTTOU/SIGTTIN. */
+        if (tcgetpgrp(STDIN_FILENO) != getpgrp())
+            return;
+
+        /* Disable line buffering and echoing so we get keys
+           immediately. Note that we keep ISIG enabled, so Ctrl-C and
+           Ctrl-Z still send signals, and OPOST, so we don't need to
+           translate "\n" to "\r\n". */
+        struct termios term;
+        if (tcgetattr(STDIN_FILENO, &term))
+            return;
+        input->savedTermAttrs = term;
+        term.c_lflag &= ~(ICANON | ECHO);
+        term.c_cc[VMIN] = 1;
+        term.c_cc[VTIME] = 0;
+        if (tcsetattr(STDIN_FILENO, TCSANOW, &term)) {
+            input->savedTermAttrs.reset();
+            return;
+        }
+
+        input->enabled = true;
+        inputEnabled = true;
+        inputCV.notify_one();
+        update(state);
+    }
+
+    void inputThreadMain()
+    {
+        while (true) {
+            {
+                auto input(input_.lock());
+                while (!input->quit && !input->enabled)
+                    input.wait(inputCV);
+                if (input->quit)
+                    return;
+            }
+
+            std::array<struct pollfd, 2> fds{{
+                {.fd = STDIN_FILENO, .events = POLLIN, .revents = 0},
+                {.fd = wakeupPipe.readSide.get(), .events = POLLIN, .revents = 0},
+            }};
+
+            if (poll(fds.data(), fds.size(), -1) == -1) {
+                if (errno == EINTR)
+                    continue;
+                throw SysError("polling for keyboard input");
+            }
+
+            if (fds[1].revents & POLLIN) {
+                char buf[64];
+                [[maybe_unused]] auto n = ::read(wakeupPipe.readSide.get(), buf, sizeof(buf));
+                continue;
+            }
+
+            if (!fds[0].revents)
+                continue;
+
+            char c;
+            {
+                /* Read while holding the lock, so that we don't
+                   consume input after `suspendInput()` has
+                   returned. */
+                auto input(input_.lock());
+                if (!input->enabled)
+                    continue;
+                auto n = ::read(STDIN_FILENO, &c, 1);
+                if (n == -1 && errno == EINTR)
+                    continue;
+                if (n != 1) {
+                    /* EOF or error, so stop reading. */
+                    input->quit = true;
+                    return;
+                }
+            }
+
+            handleKey(c);
         }
     }
 
-    std::optional<char> ask(std::string_view msg) override
+    void handleKey(char c)
     {
+        c = std::tolower((unsigned char) c);
+
+        if (c == 'q') {
+            /* Note: this calls the interrupt callback, which calls
+               pause(), so we must not hold the state lock. */
+            unix::triggerInterrupt();
+            return;
+        }
+
         auto state(state_.lock());
-        if (!state->active)
-            return {};
-        invalidateRedrawCache();
-        std::cerr << fmt("\r\e[K%s ", msg);
-        unhideCursorIfNeeded();
-        auto s = trim(readLine(getStandardInput(), true));
-        hideCursorIfNeeded();
-        if (s.size() != 1)
-            return {};
-        draw(*state);
-        return s[0];
+
+        switch (c) {
+
+        case 'l':
+            printBuildLogs = !printBuildLogs;
+            log(*state,
+                lvlError,
+                printBuildLogs ? ANSI_BOLD "Enabling build logs." : ANSI_BOLD "Disabling build logs.");
+            break;
+
+        case 'v':
+        case '+':
+        case '=':
+            if (verbosity < lvlVomit) {
+                verbosity = (Verbosity) (verbosity + 1);
+                log(*state, lvlError, ANSI_BOLD "Increasing verbosity.");
+            }
+            break;
+
+        case '-':
+            if (verbosity > lvlError) {
+                verbosity = (Verbosity) (verbosity - 1);
+                log(*state, lvlError, ANSI_BOLD "Decreasing verbosity.");
+            }
+            break;
+
+        case 'h':
+        case '?':
+            helpShown = !helpShown;
+            update(*state);
+            break;
+
+        case 'p':
+        case ' ':
+            if (frozenSections)
+                frozenSections.reset();
+            else {
+                auto nextWakeup = std::chrono::milliseconds::max();
+                frozenSections = renderSections(*state, std::chrono::steady_clock::now(), nextWakeup);
+            }
+            update(*state);
+            break;
+        }
+    }
+#endif
+
+    std::vector<std::string> renderFrame(
+        State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) override
+    {
+        auto lines = frozenSections ? *frozenSections : renderSections(state, now, nextWakeup);
+
+        if (frozenSections)
+            lines.push_back(ANSI_BOLD "Display paused. Press 'p' or space to resume.");
+
+        if (inputEnabled) {
+            if (helpShown) {
+                lines.push_back(ANSI_BOLD "The following keys are available:");
+                lines.push_back(
+                    fmt("  " ANSI_BOLD "l" ANSI_NORMAL "  %s build logs", printBuildLogs ? "hide" : "show"));
+                lines.push_back("  " ANSI_BOLD "v" ANSI_NORMAL "  increase verbosity");
+                lines.push_back("  " ANSI_BOLD "-" ANSI_NORMAL "  decrease verbosity");
+                lines.push_back(
+                    fmt("  " ANSI_BOLD "p" ANSI_NORMAL "  %s the display", frozenSections ? "resume" : "pause"));
+                lines.push_back("  " ANSI_BOLD "h" ANSI_NORMAL "  hide this help");
+                lines.push_back("  " ANSI_BOLD "q" ANSI_NORMAL "  quit");
+            } else if (!lines.empty() && !frozenSections)
+                lines.push_back(ANSI_FAINT "Type 'h' for help.");
+        }
+
+        return lines;
     }
 
-    void setPrintBuildLogs(bool printBuildLogs) override
+    /**
+     * Render the sections showing the progress of each kind of work.
+     */
+    std::vector<std::string>
+    renderSections(State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup)
     {
-        this->printBuildLogs = printBuildLogs;
+        std::vector<std::string> lines;
+
+        static constexpr std::array<std::string_view, 10> spinner = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
+        /* Note: the spinner is padded with a space, since the done
+           and fail marks (the same as used by `nix flake check`) are
+           two columns wide. */
+        auto busyMark = ANSI_BOLD
+                        + std::string(
+                            spinner
+                                [std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime)
+                                 / spinnerInterval % spinner.size()])
+                        + " " ANSI_NORMAL;
+        auto doneMark = "✅";
+        auto failMark = "❌";
+
+        bool busy = false;
+
+        auto width = getWindowWidth();
+        size_t barWidth = width < 15 ? 10 : std::min(60u, width - 5);
+
+        /* Render a progress bar showing the fraction of failed (red),
+           done (green) and running (yellow) items. */
+        auto renderBar = [&](uint64_t done, uint64_t failed, uint64_t running, uint64_t expected) {
+            expected = std::max(expected, (uint64_t) 1);
+            auto chars = [&](uint64_t n) { return (size_t) (barWidth * std::min((double) n / expected, 1.0)); };
+            auto chars1 = chars(failed);
+            auto chars2 = chars(failed + done);
+            auto chars3 = chars(failed + done + running);
+            return "   " ANSI_RED + repeat("█", chars1) + ANSI_GREEN + repeat("█", chars2 - chars1) + ANSI_WARNING
+                   + repeat("▓", chars3 - chars2) + ANSI_NORMAL + repeat("░", barWidth - chars3);
+        };
+
+        auto renderSizes = [&](uint64_t done, uint64_t expected) {
+            if (auto unit = getCommonSizeUnit({(int64_t) done, (int64_t) expected}))
+                return fmt(
+                    "%s/%s %siB",
+                    renderSizeWithoutUnit(done, *unit),
+                    renderSizeWithoutUnit(expected, *unit),
+                    getSizeUnitSuffix(*unit));
+            return fmt("%s/%s", renderSize(done), renderSize(expected));
+        };
+
+        /* Render the given activities, oldest first, up to
+           `maxItems`. `renderItem` appends one or more lines for an
+           activity to `lines`. If `isActive` is given, show the
+           activities for which it returns true first. */
+        auto renderItems = [&](std::vector<ActInfo *> items,
+                               auto renderItem,
+                               std::function<bool(const ActInfo &)> isActive = nullptr) {
+            std::ranges::sort(items, {}, &ActInfo::startTime);
+            if (isActive)
+                std::ranges::stable_partition(items, [&](ActInfo * act) { return isActive(*act); });
+            for (auto [n, item] : enumerate(items)) {
+                if (n == maxItems) {
+                    lines.push_back(fmt(ANSI_FAINT "   … and %d more" ANSI_NORMAL, items.size() - maxItems));
+                    break;
+                }
+                renderItem(*item);
+            }
+        };
+
+        auto getItems = [&](ActivityType type) {
+            std::vector<ActInfo *> items;
+            for (auto & [id, i] : state.activitiesByType[type].its)
+                if (i->visible)
+                    items.push_back(&*i);
+            return items;
+        };
+
+        auto elapsed = [&](const ActInfo & act) {
+            auto d = now - act.startTime;
+            return d >= std::chrono::seconds(1) ? " " ANSI_FAINT + renderDuration(d) + ANSI_NORMAL : "";
+        };
+
+        /* Other activities (e.g. evaluation, fetching flake inputs)
+           that don't have their own section. */
+        {
+            std::vector<ActInfo *> items;
+            for (auto & act : state.activities) {
+                if (!act.visible || act.s.empty() || act.type == actBuild || act.type == actSubstitute
+                    || act.type == actFileTransfer || act.type == actCopyPath)
+                    continue;
+                if (act.startTime + otherActivityDelay > now) {
+                    nextWakeup = std::min(
+                        nextWakeup,
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            act.startTime + otherActivityDelay - now));
+                    continue;
+                }
+                items.push_back(&act);
+            }
+            if (!items.empty())
+                busy = true;
+            renderItems(
+                items, [&](const ActInfo & act) { lines.push_back(fmt("%s %s%s", busyMark, act.s, elapsed(act))); });
+        }
+
+        /* Downloads. Note that this includes the downloads done by
+           substitutions, but only other downloads (e.g. flake
+           inputs) are listed as items. */
+        {
+            auto stats = getActivityStats(state, actFileTransfer);
+            if (stats.done || stats.expected) {
+                auto items = getItems(actFileTransfer);
+                bool active = !items.empty() || stats.done < stats.expected;
+                busy |= active;
+                lines.push_back(
+                    fmt("%s Downloaded %s", active ? busyMark : doneMark, renderSizes(stats.done, stats.expected)));
+                lines.push_back(renderBar(stats.done, 0, 0, stats.expected));
+                renderItems(items, [&](const ActInfo & act) {
+                    lines.push_back(
+                        fmt("   ‣ %s%s%s",
+                            act.s,
+                            act.expected ? " " + renderSizes(act.done, act.expected) : "",
+                            elapsed(act)));
+                });
+            }
+        }
+
+        /* Substitutions. */
+        {
+            auto paths = getActivityStats(state, actCopyPaths);
+            auto bytes = getActivityStats(state, actCopyPath);
+            if (paths.done || paths.expected) {
+                auto items = getItems(actSubstitute);
+                bool active = paths.running || paths.done < paths.expected;
+                busy |= active;
+                lines.push_back(
+                    fmt("%s Fetched %d/%d paths (%s unpacked)%s",
+                        paths.failed && !active ? failMark
+                        : active                ? busyMark
+                                                : doneMark,
+                        paths.done,
+                        paths.expected,
+                        renderSizes(bytes.done, bytes.expected),
+                        paths.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, paths.failed) : ""));
+                lines.push_back(renderBar(paths.done, paths.failed, paths.running, paths.expected));
+                renderItems(
+                    items, [&](const ActInfo & act) { lines.push_back(fmt("   ‣ %s%s", act.s, elapsed(act))); });
+            }
+        }
+
+        /* Builds. */
+        {
+            auto builds = getActivityStats(state, actBuilds);
+            if (builds.done || builds.expected) {
+                auto items = getItems(actBuild);
+                bool active = builds.running || builds.done < builds.expected;
+                busy |= active;
+                lines.push_back(
+                    fmt("%s Built %d/%d derivations%s%s",
+                        builds.failed && !active ? failMark
+                        : active                 ? busyMark
+                                                 : doneMark,
+                        builds.done,
+                        builds.expected,
+                        builds.running ? fmt(", %d running", builds.running) : "",
+                        builds.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, builds.failed) : ""));
+                lines.push_back(renderBar(builds.done, builds.failed, builds.running, builds.expected));
+                /* Note: build activities are also started for builds
+                   that are waiting for a build slot, so show the
+                   builds that have produced output first. */
+                renderItems(
+                    items,
+                    [&](const ActInfo & act) {
+                        auto s = fmt("   ‣ %s", act.s);
+                        if (!act.phase.empty())
+                            s += fmt(" (%s)", act.phase);
+                        s += elapsed(act);
+                        lines.push_back(std::move(s));
+                        /* Show the last log line below the build. Note:
+                           if build logs are enabled, `lastLine` is not
+                           updated. */
+                        if (!act.lastLine.empty() && !printBuildLogs)
+                            lines.push_back(fmt("     " ANSI_FAINT "> %s" ANSI_NORMAL, act.lastLine));
+                    },
+                    [](const ActInfo & act) { return !act.phase.empty() || !act.lastLine.empty(); });
+            }
+        }
+
+        /* Path verification. */
+        {
+            auto verify = getActivityStats(state, actVerifyPaths);
+            if (verify.done || verify.expected) {
+                auto bad = std::min(verify.done, state.corruptedPaths + state.untrustedPaths + verify.failed);
+                bool active = verify.done < verify.expected;
+                busy |= active;
+                lines.push_back(
+                    fmt("%s Verified %d/%d paths%s%s%s",
+                        active ? busyMark
+                        : bad  ? failMark
+                               : doneMark,
+                        verify.done,
+                        verify.expected,
+                        state.corruptedPaths ? fmt(", " ANSI_RED "%d corrupted" ANSI_NORMAL, state.corruptedPaths) : "",
+                        state.untrustedPaths ? fmt(", " ANSI_RED "%d untrusted" ANSI_NORMAL, state.untrustedPaths) : "",
+                        verify.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, verify.failed) : ""));
+                lines.push_back(renderBar(verify.done - bad, bad, verify.running, verify.expected));
+            }
+        }
+
+        /* Store optimisation. */
+        {
+            auto optimise = getActivityStats(state, actOptimiseStore);
+            if (optimise.done || optimise.expected) {
+                bool active = optimise.done < optimise.expected;
+                busy |= active;
+                lines.push_back(
+                    fmt("%s Optimised %d/%d paths, %s / %d inodes freed",
+                        active ? busyMark : doneMark,
+                        optimise.done,
+                        optimise.expected,
+                        renderSize(state.bytesLinked),
+                        state.filesLinked));
+                lines.push_back(renderBar(optimise.done, 0, 0, optimise.expected));
+            }
+        }
+
+        /* Keep the spinner and durations moving. */
+        if (busy)
+            nextWakeup = std::min(nextWakeup, std::chrono::duration_cast<std::chrono::milliseconds>(spinnerInterval));
+
+        return lines;
     }
 };
 
@@ -749,7 +1482,17 @@ public:
 
 std::unique_ptr<Logger> makeProgressBar()
 {
-    return std::make_unique<ProgressBar>(isTTY());
+    auto logger = std::make_unique<ProgressBar>(isTTY());
+    logger->start();
+    return logger;
+}
+
+std::unique_ptr<Logger> makeProgressIndicator()
+{
+    auto logger = std::make_unique<ProgressIndicator>(isTTY());
+    logger->start();
+    logger->startInput();
+    return logger;
 }
 
 } // namespace nix
