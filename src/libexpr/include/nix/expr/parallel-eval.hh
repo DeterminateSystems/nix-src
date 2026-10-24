@@ -229,23 +229,51 @@ struct Executor
 };
 
 /**
- * RAII guard that prevents the current fiber (if any) from being
- * suspended while the guard is alive: if it has to wait for a value
- * that is being evaluated by another thread, it blocks its worker
- * thread instead of yielding it to other fibers. This is needed around
- * code that keeps per-thread state which must not be interleaved with
- * or migrated to other threads, such as wasmtime's stack of active
- * Wasm calls. Nesting is allowed.
+ * RAII guard that registers a hook with the current fiber (if any) for
+ * saving and restoring per-thread state that must be private to the
+ * fiber, such as wasmtime's list of active Wasm calls. While the guard
+ * is alive, `suspend()` is called right before the fiber switches away
+ * to wait for a value, and `resume()` right after it has been switched
+ * back in (always on the same thread, since fibers don't migrate). If
+ * several hooks are registered, `suspend()` is called on the most
+ * recently registered one first, and `resume()` in the reverse order.
+ * `suspend()` is called while holding a waiter domain lock, so it must
+ * not block or evaluate anything. Does nothing on non-fiber threads.
+ *
+ * Note: the hook is registered by the base class constructor and
+ * unregistered by its destructor, i.e. while the derived object
+ * doesn't exist (yet or anymore). That's fine because the fiber can't
+ * be suspended in those windows.
  */
-struct FiberNoSuspend
+struct FiberSuspendHook
 {
-    FiberNoSuspend();
-    ~FiberNoSuspend();
-    FiberNoSuspend(const FiberNoSuspend &) = delete;
-    FiberNoSuspend & operator=(const FiberNoSuspend &) = delete;
+    FiberSuspendHook();
+    virtual ~FiberSuspendHook();
+    FiberSuspendHook(const FiberSuspendHook &) = delete;
+    FiberSuspendHook & operator=(const FiberSuspendHook &) = delete;
+
+    virtual void suspend() = 0;
+    virtual void resume() = 0;
+
+    /**
+     * Call `suspend()` on `hook` and the hooks registered before it,
+     * most recent first.
+     */
+    static void suspendAll(FiberSuspendHook * hook);
+
+    /**
+     * Call `resume()` on `hook` and the hooks registered before it,
+     * in the reverse order of `suspendAll()`.
+     */
+    static void resumeAll(FiberSuspendHook * hook);
 
 private:
     Executor::Fiber * fiber;
+
+    /**
+     * The previously registered hook of `fiber`.
+     */
+    FiberSuspendHook * next = nullptr;
 };
 
 struct FutureVector

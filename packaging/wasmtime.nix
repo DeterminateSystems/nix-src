@@ -11,20 +11,25 @@
 }:
 rust.packages.stable.rustPlatform.buildRustPackage (finalAttrs: {
   pname = "wasmtime";
-  version = "48.0.2";
+  version = "48.0.7";
 
   src = fetchFromGitHub {
     owner = "bytecodealliance";
     repo = "wasmtime";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-XMCHmvPVmiWpMsICNOGhV5GN+yyPTVFfnUgOC68qyo0=";
+    hash = "sha256-LBosQpECAGZLQPc7o/vsmmHUJQHs+SgsVM0N32rDlBI=";
     fetchSubmodules = true;
   };
+
+  patches = [
+    # Lets Nix give each evaluator fiber its own list of active Wasm calls.
+    ./wasmtime-tls-swap-activations.patch
+  ];
 
   # Disable cargo-auditable until https://github.com/rust-secure-code/cargo-auditable/issues/124 is solved.
   auditable = false;
 
-  cargoHash = "sha256-KNCqgHMP/bCUAmDwTY+90g7bI69ud0rckj1iKlxadfM=";
+  cargoHash = "sha256-oYGT8mGpCL9bss3CFhZXEe+I17aASXg4OxzBKl53QJM=";
   cargoBuildFlags = [
     "--package"
     "wasmtime-c-api"
