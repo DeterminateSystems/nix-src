@@ -164,8 +164,11 @@ jobs:
         run: |
           shopt -s nullglob
           for dir in ./downloaded/*; do
+            # Skip artifacts that aren't binary tarballs (e.g. flake regression statistics).
+            tarballs=("$dir"/*.xz)
+            [[ ${#tarballs[@]} -gt 0 ]] || continue
             arch="$(basename "$dir")"
-            mv "$dir"/*.xz ./artifacts/"${arch}"
+            mv "${tarballs[@]}" ./artifacts/"${arch}"
           done
 
       - name: Build fallback-paths.nix
