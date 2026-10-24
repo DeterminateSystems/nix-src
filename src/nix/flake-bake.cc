@@ -55,7 +55,7 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas, MixReadOnlyOption
     {
         auto state = getEvalState();
         auto evalStore = getEvalStore();
-        auto flake = make_ref<LockedFlake>(lockFlake());
+        std::shared_ptr<LockedFlake> flake(lockFlake());
 
         /* Don't use the eval cache: baking evaluates everything exactly once, so caching every attribute in
            SQLite is pure overhead (and it serialises parallel evaluation on the database writer). */

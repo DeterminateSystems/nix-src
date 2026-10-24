@@ -2,7 +2,7 @@ R""(
 
 # Examples
 
-* Show what `dwarffs` resolves to:
+* Show what `dwarffs` resolves to (assuming it has a version 8 lock file):
 
   ```console
   # nix flake metadata dwarffs
@@ -12,6 +12,16 @@ R""(
   Path:          /nix/store/vdyf2s1pygcl4y3dn3bm9wy7mnl8hxcv-source
   Revision:      f691e2c991e75edb22836f1dbe632c40324215c5
   Last modified: 2021-01-21 15:41:26
+  Inputs: (use --transitive to show all locks)
+  ├───nix: github:NixOS/nix/6254b1f5d298ff73127d7b0f0da48f142bdc753c
+  └───nixpkgs follows input 'nix/nixpkgs'
+  ```
+
+* Also show the transitive inputs of `dwarffs`:
+
+  ```console
+  # nix flake metadata dwarffs --transitive
+  ...
   Inputs:
   ├───nix: github:NixOS/nix/6254b1f5d298ff73127d7b0f0da48f142bdc753c
   │   ├───lowdown-src: github:kristapsdz/lowdown/1705b4a26fbf065d9574dce47a94e8c7c79e052f
@@ -81,8 +91,13 @@ data. This includes:
   time of the commit of the locked flake; for tarball flakes, it's the
   most recent timestamp of any file inside the tarball.
 
-* `Inputs`: The flake inputs with their corresponding lock file
-  entries.
+* `Inputs`: The inputs recorded in the flake's lock file. For version
+  8 lock files, these are the immediate inputs of the flake and any
+  overrides of transitive inputs; with `--transitive`, the inputs of
+  those inputs are shown as well, recursively, which may require
+  fetching them in order to read their lock files. Version 7 lock
+  files record all transitive inputs, so `--transitive` makes no
+  difference for them.
 
 With `--json`, the output is a JSON object with the following fields:
 
