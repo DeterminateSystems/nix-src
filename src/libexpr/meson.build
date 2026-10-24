@@ -89,6 +89,16 @@ wasmtime_required = get_option('wasm').disable_if(
 
 if wasmtime_required.enabled()
   link_args += '-lwasmtime'
+  # Added by packaging/wasmtime-tls-swap-activations.patch.
+  if not cxx.has_function(
+    'wasmtime_tls_swap_activations',
+    prefix : '#include <wasmtime.h>',
+    args : '-lwasmtime',
+  )
+    error(
+      'wasmtime lacks wasmtime_tls_swap_activations(); build it with packaging/wasmtime-tls-swap-activations.patch',
+    )
+  endif
 endif
 
 toml11 = dependency(

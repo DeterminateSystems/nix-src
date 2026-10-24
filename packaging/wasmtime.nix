@@ -21,6 +21,11 @@ rust.packages.stable.rustPlatform.buildRustPackage (finalAttrs: {
     fetchSubmodules = true;
   };
 
+  patches = [
+    # Lets Nix give each evaluator fiber its own list of active Wasm calls.
+    ./wasmtime-tls-swap-activations.patch
+  ];
+
   # Disable cargo-auditable until https://github.com/rust-secure-code/cargo-auditable/issues/124 is solved.
   auditable = false;
 

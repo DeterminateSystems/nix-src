@@ -771,6 +771,49 @@ struct WasiLogger
     }
 };
 
+/**
+ * Gives the current fiber its own list of active Wasm calls. wasmtime
+ * keeps that list in thread-local storage and requires calls to return
+ * in LIFO order, but host functions may suspend the fiber (when they
+ * have to wait for a value being evaluated by another fiber), after
+ * which other fibers can start Wasm calls of their own on this thread.
+ * So we take our list out of the thread-local storage while we're
+ * suspended. This relies on fibers always being resumed on the same
+ * thread.
+ *
+ * Unlike wasmtime's own async support, this doesn't save any per-store
+ * state, so it also relies on each `builtins.wasm` call having its own
+ * `wasmtime::Store` that no other fiber touches while this one is
+ * suspended. (Don't cache or pool stores without revisiting this.)
+ *
+ * Note: if the fiber is suspended before this thread has ever entered
+ * Wasm, `wasmtime_tls_swap_activations()` performs wasmtime's one-time
+ * per-thread initialization (e.g. setting up the signal stack). That
+ * happens while holding a waiter domain lock, but it's cheap and
+ * doesn't wait for anything.
+ */
+struct WasmActivationsHook : FiberSuspendHook
+{
+    void * saved = nullptr;
+
+    void suspend() override;
+    void resume() override;
+};
+
+void WasmActivationsHook::suspend()
+{
+    saved = wasmtime_tls_swap_activations(nullptr);
+}
+
+void WasmActivationsHook::resume()
+{
+    [[maybe_unused]] auto prev = wasmtime_tls_swap_activations(saved);
+    /* Any other fibers that ran on this thread in the meantime must
+       have removed their Wasm calls as well. */
+    assert(!prev);
+    saved = nullptr;
+}
+
 static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
     state.forceAttrs(*args[0], pos, "while evaluating the first argument to `builtins.wasm`");
@@ -793,12 +836,9 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
     // Second argument is the value to pass to the function
     auto argValue = args[1];
 
-    /* wasmtime keeps a per-thread stack of active Wasm calls, so the
-       host functions below (which may have to wait for values being
-       evaluated by other threads) must not suspend this fiber: another
-       fiber's Wasm call could then be interleaved on this thread, or
-       we could be resumed on another thread. */
-    FiberNoSuspend noSuspend;
+    /* The host functions called by the Wasm code below may suspend this
+       fiber, so give it its own list of active Wasm calls. */
+    WasmActivationsHook activationsHook;
 
     try {
         auto instance = pathAttr ? instantiateWasm(state, state.realisePath(pos, *pathAttr->value))

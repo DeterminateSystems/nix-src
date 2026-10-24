@@ -79,11 +79,10 @@ struct Executor::Fiber
     work_t work;
 
     /**
-     * The number of active `FiberNoSuspend` guards on this fiber.
-     * While non-zero, `waitOnThunk()` blocks the thread instead of
-     * suspending the fiber.
+     * The most recently registered `FiberSuspendHook` of this fiber,
+     * if any.
      */
-    unsigned int noSuspendDepth = 0;
+    FiberSuspendHook * suspendHooks = nullptr;
 
     /**
      * The fiber's continuation. Valid while the fiber is queued or
@@ -416,6 +415,8 @@ Executor::FiberPtr Executor::makeFiber(Worker & owner, Item && item)
                 } catch (...) {
                     fib->promise.set_exception(std::current_exception());
                 }
+                /* All hooks must have been unregistered by now. */
+                assert(!fib->suspendHooks);
                 // Terminate the fiber, freeing its stack, and return
                 // to the scheduler.
                 return std::move(fib->schedCtx);
@@ -667,20 +668,39 @@ std::vector<std::future<void>> Executor::spawn(WorkItems && items)
     return futures;
 }
 
-FiberNoSuspend::FiberNoSuspend()
+FiberSuspendHook::FiberSuspendHook()
     : fiber(currentFiber)
 {
-    if (fiber)
-        fiber->noSuspendDepth++;
+    if (fiber) {
+        next = fiber->suspendHooks;
+        fiber->suspendHooks = this;
+    }
 }
 
-FiberNoSuspend::~FiberNoSuspend()
+FiberSuspendHook::~FiberSuspendHook()
 {
-    /* Note: `fiber` is still the current fiber, since it cannot have
-       been suspended (and thus migrated) while this guard was alive. */
+    /* Note: `fiber` is still the current fiber, since fibers are only
+       ever resumed by their owner thread. */
     if (fiber) {
         assert(fiber == currentFiber);
-        fiber->noSuspendDepth--;
+        assert(fiber->suspendHooks == this);
+        fiber->suspendHooks = next;
+    }
+}
+
+void FiberSuspendHook::suspendAll(FiberSuspendHook * hook)
+{
+    for (; hook; hook = hook->next)
+        hook->suspend();
+}
+
+void FiberSuspendHook::resumeAll(FiberSuspendHook * hook)
+{
+    /* Note: the recursion depth is the number of registered hooks,
+       e.g. the nesting depth of `builtins.wasm` calls. */
+    if (hook) {
+        resumeAll(hook->next);
+        hook->resume();
     }
 }
 
@@ -781,7 +801,9 @@ suspendFiber(WaiterDomain & domain, std::unique_lock<std::mutex> & lk, detail::V
        materializes on the scheduler side, and publishing it before the
        switch-out completes would allow another thread to resume a
        half-suspended fiber. */
+    FiberSuspendHook::suspendAll(fib->suspendHooks);
     fib->schedCtx = std::move(fib->schedCtx).resume();
+    FiberSuspendHook::resumeAll(fib->suspendHooks);
 #if NIX_USE_BOEHMGC
     /* We're running again, so our stack is scanned as the thread's
        active stack from here on. */
@@ -848,9 +870,7 @@ ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer expec
 
     auto now1 = std::chrono::steady_clock::now();
 
-    /* Note: a fiber inside a `FiberNoSuspend` region uses the blocking
-       wait below, like a non-fiber thread. */
-    if (auto fib = currentFiber; fib && fib->noSuspendDepth == 0) {
+    if (auto fib = currentFiber) {
         /* Shutdown guard: `quit`/`_isInterrupted` are always set
            *before* the wait lists are flushed, and flushing takes the
            domain lock that we're currently holding. So either we see
