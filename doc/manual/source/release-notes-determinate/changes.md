@@ -260,15 +260,3 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 * Determinate Nix has a `nix top` command that shows a continuously updating view of the active builds and their CPU and memory usage. [DeterminateSystems/nix-src#710](https://github.com/DeterminateSystems/nix-src/pull/710)
 
 <!-- Determinate Nix version 3.24.1 -->
-
-* CI: Bump actions/checkout and actions-netlify to Node.js 24 versions by @edolstra in [DeterminateSystems/nix-src#726](https://github.com/DeterminateSystems/nix-src/pull/726)
-
-* Canonicalize home path literals by @edolstra in [DeterminateSystems/nix-src#727](https://github.com/DeterminateSystems/nix-src/pull/727)
-
-* nix ps: Only show processes owned by the build user by @edolstra in [DeterminateSystems/nix-src#729](https://github.com/DeterminateSystems/nix-src/pull/729)
-
-* CI: Aggregate flake-regressions statistics by @edolstra in [DeterminateSystems/nix-src#728](https://github.com/DeterminateSystems/nix-src/pull/728)
-
-* builtins.wasm: Fix deadlock with parallel evaluation by @edolstra in [DeterminateSystems/nix-src#731](https://github.com/DeterminateSystems/nix-src/pull/731)
-
-* Use bdwgc with multiple heap expansions between collections by @grahamc in [DeterminateSystems/nix-src#725](https://github.com/DeterminateSystems/nix-src/pull/725)
