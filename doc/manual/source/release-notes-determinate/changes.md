@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.24.0.<!-- differences -->
+This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.24.1.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -258,3 +258,5 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 <!-- Determinate Nix version 3.24.0 -->
 
 * Determinate Nix has a `nix top` command that shows a continuously updating view of the active builds and their CPU and memory usage. [DeterminateSystems/nix-src#710](https://github.com/DeterminateSystems/nix-src/pull/710)
+
+<!-- Determinate Nix version 3.24.1 -->
