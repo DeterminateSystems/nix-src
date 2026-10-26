@@ -371,12 +371,15 @@ struct CmdTop : StoreCommand
             auto elapsed =
                 lastSample ? std::chrono::duration_cast<std::chrono::microseconds>(now - *lastSample).count() : 0;
 
+            /* A build or process that wasn't in the previous sample started after it, so all of its CPU time was
+               consumed in this interval. */
             auto usage =
                 [&](auto & prevTimes, const auto & key, std::chrono::microseconds cpuTime) -> std::optional<double> {
-                auto prev = prevTimes.find(key);
-                if (prev == prevTimes.end() || elapsed <= 0)
+                if (elapsed <= 0)
                     return std::nullopt;
-                return std::max<double>((cpuTime - prev->second).count(), 0) * 100.0 / elapsed;
+                auto prev = prevTimes.find(key);
+                auto prevTime = prev == prevTimes.end() ? std::chrono::microseconds(0) : prev->second;
+                return std::max<double>((cpuTime - prevTime).count(), 0) * 100.0 / elapsed;
             };
 
             decltype(buildCpuTimes) newBuildCpuTimes;
