@@ -498,7 +498,7 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
     if (!builderOut)
         throw SysError("opening pseudoterminal master");
 
-    std::string slaveName = getPtsName(builderOut.get());
+    slaveName = getPtsName(builderOut.get());
 
     if (buildUser) {
         chmod(slaveName, 0600);
@@ -658,7 +658,7 @@ void DerivationBuilderImpl::prepareSandbox()
 
 AutoCloseFD DerivationBuilderImpl::openSlaveNoDup()
 {
-    std::string slaveName = getPtsName(builderOut.get());
+    assert(!slaveName.empty());
 
     AutoCloseFD builderOut = open(slaveName.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC);
     if (!builderOut)

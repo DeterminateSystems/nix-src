@@ -262,6 +262,14 @@ protected:
     }
 
     /**
+     * The name of the slave side of the pseudoterminal. This is
+     * determined in the parent, since `getPtsName()` may take a lock
+     * (on macOS), which is not safe in a child forked from a
+     * multi-threaded process.
+     */
+    std::string slaveName;
+
+    /**
      * Open the slave side of the pseudoterminal.
      */
     AutoCloseFD openSlaveNoDup();
