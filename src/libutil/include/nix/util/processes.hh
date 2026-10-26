@@ -108,6 +108,13 @@ struct ProcessOptions
      * use clone() with the specified flags (Linux only)
      */
     int cloneFlags = 0;
+    /**
+     * If set, create the child directly in the cgroup referred to by
+     * this directory file descriptor, using `clone3(CLONE_INTO_CGROUP)`
+     * (Linux only). This is much cheaper than migrating the child
+     * afterwards by writing to `cgroup.procs`.
+     */
+    int cgroupFd = -1;
 };
 
 /**
