@@ -273,8 +273,14 @@ struct LockedFlake
      * inputs that have a lock file of their own may be fetched in
      * order to include their transitive locks; otherwise only the
      * locks contained in this lock file are returned.
+     *
+     * The default implementation returns all transitive inputs, as
+     * reported by `visit()`, regardless of `fetchTransitive`. This is
+     * correct for lock file formats that contain the locks of all
+     * transitive inputs. Other formats must override it to handle the
+     * case where `fetchTransitive` is false.
      */
-    virtual std::map<InputAttrPath, LockEntry> getAllLockEntries(bool fetchTransitive) const = 0;
+    virtual std::map<InputAttrPath, LockEntry> getAllLockEntries(EvalState & state, bool fetchTransitive) const;
 
     virtual nlohmann::json toJSON() const = 0;
 
@@ -290,8 +296,8 @@ std::ostream & operator<<(std::ostream & stream, const LockedFlake & lockedFlake
  * `lockFlake()`. If `fetchTransitive` is true, transitive lock files
  * may be fetched (see `LockedFlake::getAllLockEntries()`).
  */
-std::string
-diffLockedFlakes(const LockedFlake & oldLockedFlake, const LockedFlake & newLockedFlake, bool fetchTransitive);
+std::string diffLockedFlakes(
+    EvalState & state, const LockedFlake & oldLockedFlake, const LockedFlake & newLockedFlake, bool fetchTransitive);
 
 struct LockFlags
 {

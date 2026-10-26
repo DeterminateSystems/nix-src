@@ -81,7 +81,7 @@ struct CmdFlakeDiffLocks : EvalCommand
         auto oldLockedFlake = readLockedFlake(oldFlakeUrl);
         auto newLockedFlake = readLockedFlake(newFlakeUrl);
 
-        auto diff = diffLockedFlakes(*oldLockedFlake, *newLockedFlake, transitive);
+        auto diff = diffLockedFlakes(*state, *oldLockedFlake, *newLockedFlake, transitive);
 
         if (diff.empty())
             logger->cout("No changes.");

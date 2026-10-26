@@ -307,7 +307,7 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                    for version 8, overrides of transitive inputs and
                    the locks of inputs that don't have a lock file of
                    their own. */
-                for (auto & [inputAttrPath, entry] : lockedFlake->getAllLockEntries(false))
+                for (auto & [inputAttrPath, entry] : lockedFlake->getAllLockEntries(state, false))
                     addNode(
                         inputAttrPath,
                         std::visit(

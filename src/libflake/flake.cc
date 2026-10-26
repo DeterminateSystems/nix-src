@@ -545,7 +545,7 @@ std::unique_ptr<LockedFlake> lockFlake(
         auto lockedFlakeJson = lockedFlake->toJSON();
         if (lockedFlakeJson != oldLockedFlake->toJSON() || lockFlags.outputLockFilePath) {
 
-            auto diff = diffLockedFlakes(*oldLockedFlake, *lockedFlake, false);
+            auto diff = diffLockedFlakes(state, *oldLockedFlake, *lockedFlake, false);
 
             if (lockFlags.writeLockFile) {
                 if (sourcePath || lockFlags.outputLockFilePath) {
@@ -932,6 +932,28 @@ void LockedFlake::visit(EvalState & state, VisitCallback callback) const
     };
 
     recurse({});
+}
+
+std::map<InputAttrPath, LockedFlake::LockEntry>
+LockedFlake::getAllLockEntries(EvalState & state, bool fetchTransitive) const
+{
+    std::map<InputAttrPath, LockEntry> res;
+
+    visit(state, [&](const InputAttrPath & inputAttrPath, const std::variant<InputInfo, InputAttrPath> & input) {
+        /* Skip the root flake, which doesn't have a lock entry. */
+        if (!inputAttrPath.empty())
+            res.emplace(
+                inputAttrPath,
+                std::visit(
+                    overloaded{
+                        [](const InputInfo & info) -> LockEntry { return info.lockedRef; },
+                        [](const InputAttrPath & follows) -> LockEntry { return follows; },
+                    },
+                    input));
+        return true;
+    });
+
+    return res;
 }
 
 std::string LockedFlake::to_string() const

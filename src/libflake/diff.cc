@@ -30,8 +30,8 @@ static std::string describe(const LockedFlake::LockEntry & entry)
         return fmt("follows '%s'", printInputAttrPath(std::get<InputAttrPath>(entry)));
 }
 
-std::string
-diffLockedFlakes(const LockedFlake & oldLockedFlake, const LockedFlake & newLockedFlake, bool fetchTransitive)
+std::string diffLockedFlakes(
+    EvalState & state, const LockedFlake & oldLockedFlake, const LockedFlake & newLockedFlake, bool fetchTransitive)
 {
     std::string res;
 
@@ -41,8 +41,8 @@ diffLockedFlakes(const LockedFlake & oldLockedFlake, const LockedFlake & newLock
                 oldLockedFlake.version(),
                 newLockedFlake.version());
 
-    auto oldFlat = oldLockedFlake.getAllLockEntries(fetchTransitive);
-    auto newFlat = newLockedFlake.getAllLockEntries(fetchTransitive);
+    auto oldFlat = oldLockedFlake.getAllLockEntries(state, fetchTransitive);
+    auto newFlat = newLockedFlake.getAllLockEntries(state, fetchTransitive);
 
     auto i = oldFlat.begin();
     auto j = newFlat.begin();

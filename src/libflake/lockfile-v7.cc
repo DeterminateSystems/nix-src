@@ -473,22 +473,6 @@ struct LockedFlakeV7 : LockedFlake
         return lockFile.version;
     }
 
-    std::map<InputAttrPath, LockEntry> getAllLockEntries(bool fetchTransitive) const override
-    {
-        /* Note: `fetchTransitive` is irrelevant, since a version 7
-           lock file already contains all transitive locks. */
-        std::map<InputAttrPath, LockEntry> res;
-
-        for (auto & [path, edge] : lockFile.getAllInputs()) {
-            if (auto node = std::get_if<0>(&edge))
-                res.emplace(path, (*node)->lockedRef);
-            else
-                res.emplace(path, std::get<1>(edge));
-        }
-
-        return res;
-    }
-
     nlohmann::json toJSON() const override
     {
         return lockFile.toJSON();

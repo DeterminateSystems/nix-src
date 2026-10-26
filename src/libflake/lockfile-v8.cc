@@ -610,11 +610,13 @@ struct LockedFlakeV8 : LockedFlake
         return 8;
     }
 
-    std::map<InputAttrPath, LockEntry> getAllLockEntries(bool fetchTransitive) const override
+    std::map<InputAttrPath, LockEntry> getAllLockEntries(EvalState & state, bool fetchTransitive) const override
     {
         if (fetchTransitive)
-            throw Error("fetching transitive lock files is not implemented yet for lock file version 8");
+            return LockedFlake::getAllLockEntries(state, fetchTransitive);
 
+        /* Only the locks recorded in this lock file, which doesn't
+           require fetching any inputs. */
         std::map<InputAttrPath, LockEntry> res;
         lockFile.getAllLockEntries(res);
         return res;
