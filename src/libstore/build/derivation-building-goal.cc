@@ -44,7 +44,14 @@ DerivationBuildingGoal::DerivationBuildingGoal(
     worker.store.addTempRoot(this->drvPath);
 }
 
-DerivationBuildingGoal::~DerivationBuildingGoal() = default;
+DerivationBuildingGoal::~DerivationBuildingGoal()
+{
+    /* Wait for the builder start thread to finish, since it uses the
+       builder, which is about to be destroyed along with the
+       coroutine frame. */
+    if (pendingBuilderStart.valid())
+        pendingBuilderStart.wait();
+}
 
 std::string DerivationBuildingGoal::key()
 {
@@ -1013,7 +1020,31 @@ Goal::Co DerivationBuildingGoal::buildLocally(
                                 std::move(params));
         }
 
-        if (auto builderOutOpt = builder->startBuild()) {
+        /* Start the builder on another thread, since this can take a
+           while (e.g. waiting for the sandbox to be set up), during
+           which the worker can do other things. We occupy a build
+           slot in the meantime. */
+        worker.childStarted(shared_from_this(), {}, /*inBuildSlot=*/true, /*respectTimeouts=*/false);
+        auto promise = std::make_shared<std::promise<std::optional<Descriptor>>>();
+        pendingBuilderStart = promise->get_future();
+        worker.startBuilderAsync([&builder = *builder,
+                                  promise,
+                                  weakGoal = weak_from_this(),
+                                  maybeWaker = worker.getCrossThreadWaker(),
+                                  actId = act->id]() {
+            PushActivity pact(actId);
+            try {
+                promise->set_value(builder.startBuild());
+            } catch (...) {
+                promise->set_exception(std::current_exception());
+            }
+            if (auto waker = maybeWaker.lock())
+                waker->enqueue(weakGoal);
+        });
+        co_await waitUntilWoken();
+        worker.childTerminated(this);
+
+        if (auto builderOutOpt = pendingBuilderStart.get()) {
             builderOut = *std::move(builderOutOpt);
         } else {
             if (!actLock)

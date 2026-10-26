@@ -182,6 +182,18 @@ private:
      */
     ref<Waker> wakerState;
 
+    struct BuilderStartPool;
+
+    /**
+     * Threads that start builders, created on demand. Note that these
+     * threads must outlive the builders they started, since on Linux a
+     * child process's parent-death signal is delivered when the
+     * *thread* that created it exits. This is guaranteed because
+     * `~Worker()` destroys all goals (and thus kills their builders)
+     * before this is destroyed.
+     */
+    std::unique_ptr<BuilderStartPool> builderStartPool;
+
 public:
 
     const Activity act;
@@ -306,6 +318,14 @@ public:
      * for wakeup from other threads.
      */
     std::weak_ptr<Waker> getCrossThreadWaker();
+
+    /**
+     * Run `work` (typically `DerivationBuilder::startBuild()`) on a
+     * builder start thread, so that the worker can process other goals
+     * while the builder is being started. `work` must not throw, and
+     * must notify the caller via the cross-thread waker.
+     */
+    void startBuilderAsync(fun<void()> work);
 
     /**
      * Return the number of local build processes currently running (but not
