@@ -25,5 +25,5 @@ nixMake.mkComponent {
     "builtin-flake-registry.json.gen.hh" = nixMake.mkStringHeader ./builtin-flake-registry.json;
   };
 
-  linkFlags = [ "-Wl,--wrap=__assert_fail" ];
+  linkFlags = nixMake.wrapAssertFailFlags;
 }

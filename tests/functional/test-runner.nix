@@ -3,6 +3,7 @@
 # PATH or given with `--nix-bin-dir`.
 {
   lib,
+  stdenv,
   runCommand,
   makeWrapper,
   python3,
@@ -26,15 +27,21 @@ runCommand "nix-test-runner"
     makeWrapper ${lib.getExe python3} $out/bin/run-tests \
       --add-flags $out/libexec/run-tests.py \
       --prefix PATH : ${
-        lib.makeBinPath [
-          bash
-          coreutils
-          jq
-          git
-          mercurial
-          unixtools.script
-          busybox-sandbox-shell
-          util-linux
-        ]
+        lib.makeBinPath (
+          [
+            bash
+            coreutils
+            jq
+            git
+            mercurial
+            unixtools.script
+          ]
+          # Linux only, as in package.nix: a static shell for the sandboxing
+          # tests, and `mount`, `unshare` etc.
+          ++ lib.optionals stdenv.hostPlatform.isLinux [
+            busybox-sandbox-shell
+            util-linux
+          ]
+        )
       }
   ''

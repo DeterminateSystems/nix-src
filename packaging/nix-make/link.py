@@ -29,14 +29,28 @@ def main():
             text=True,
         ).stdout.split()
 
-    common = ["-Wl,--as-needed", "-Wl,--no-undefined", *attrs["linkFlags"]]
+    # The builder runs on the platform it builds for. Darwin's linker
+    # rejects undefined symbols by default and has no `--as-needed` (its
+    # `-dead_strip_dylibs` is the equivalent).
+    darwin = sys.platform == "darwin"
+    if darwin:
+        common = ["-Wl,-dead_strip_dylibs", *attrs["linkFlags"]]
+    else:
+        common = ["-Wl,--as-needed", "-Wl,--no-undefined", *attrs["linkFlags"]]
     inputs = [*attrs["objects"], *pkg_config_libs, *attrs["linkLibs"]]
 
     if attrs["type"] == "library":
-        lib = f"lib{attrs['libName']}.so"
+        if darwin:
+            # The absolute install name lets dependents find the library
+            # without an rpath, as with libraries built by Nixpkgs.
+            lib = f"lib{attrs['libName']}.dylib"
+            name_flags = ["-dynamiclib", f"-Wl,-install_name,{out}/lib/{lib}"]
+        else:
+            lib = f"lib{attrs['libName']}.so"
+            name_flags = ["-shared", "-fPIC", f"-Wl,-soname,{lib}"]
         os.makedirs(f"{out}/lib")
         subprocess.run(
-            [cxx, "-shared", "-fPIC", f"-Wl,-soname,{lib}", *common, "-o", f"{out}/lib/{lib}", *inputs],
+            [cxx, *name_flags, *common, "-o", f"{out}/lib/{lib}", *inputs],
             check=True,
         )
     elif attrs["type"] == "executable":

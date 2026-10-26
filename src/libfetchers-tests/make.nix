@@ -30,7 +30,7 @@ let
     # (see src/libutil-tests/make.nix).
     extraLinkLibs = [ "-lgtest_main" ];
 
-    linkFlags = [ "-Wl,--wrap=__assert_fail" ];
+    linkFlags = nixMake.wrapAssertFailFlags;
   };
 in
 

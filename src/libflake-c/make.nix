@@ -36,5 +36,5 @@ nixMake.mkComponent {
 
   files = nixMake.commonSupportFiles;
 
-  linkFlags = [ "-Wl,--wrap=__assert_fail" ];
+  linkFlags = nixMake.wrapAssertFailFlags;
 }

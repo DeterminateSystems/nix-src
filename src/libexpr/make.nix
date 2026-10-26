@@ -73,7 +73,8 @@ nixMake.mkComponent {
       NIX_USE_BOEHMGC = nixMake.config.boehmgc;
     };
     "expr-config-private.hh" = {
-      HAVE_PTHREAD_GETATTR_NP = 1;
+      # A GNU extension, which macOS lacks.
+      HAVE_PTHREAD_GETATTR_NP = if nixMake.hostPlatform.isLinux then 1 else 0;
       HAVE_SYSCONF = 1;
       HAVE_TOML11_4 = 1;
     };
@@ -99,5 +100,5 @@ nixMake.mkComponent {
 
   extraCxxFlags = nixMake.weakVtablesFlags;
 
-  linkFlags = [ "-Wl,--wrap=__assert_fail" ];
+  linkFlags = nixMake.wrapAssertFailFlags;
 }
