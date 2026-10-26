@@ -145,6 +145,20 @@ struct LocalStore::State::Stmts
     SQLiteStmt QueryPathFromHashPart;
     SQLiteStmt QueryValidPaths;
     SQLiteStmt QuerySchemaMigration;
+
+    /**
+     * The realisation statements (and the CA schema) are only set up
+     * if `ca-derivations` was enabled when the store was opened, so
+     * throw an error if it got enabled later (e.g. by a flake's
+     * `nixConfig`).
+     */
+    void requireCaDerivations()
+    {
+        if (!QueryRealisedOutput.stmt)
+            throw Error(
+                "experimental Nix feature 'ca-derivations' was enabled after the Nix store was opened; "
+                "enable it in nix.conf or on the command line instead");
+    }
 };
 
 /**
@@ -705,6 +719,7 @@ void LocalStore::registerDrvOutput(const Realisation & info)
     experimentalFeatureSettings.require(Xp::CaDerivations);
     retrySQLite<void>([&]() {
         auto state(_state->lock());
+        state->stmts->requireCaDerivations();
         if (auto oldR = queryRealisation_(*state, info.id)) {
             if (info.isCompatibleWith(*oldR)) {
                 auto combinedSignatures = oldR->signatures;
@@ -1854,6 +1869,7 @@ void LocalStore::addSignatures(const StorePath & storePath, const std::set<Signa
 std::optional<std::pair<int64_t, UnkeyedRealisation>>
 LocalStore::queryRealisationCore_(LocalStore::State & state, const DrvOutput & id)
 {
+    state.stmts->requireCaDerivations();
     auto useQueryRealisedOutput(
         state.stmts->QueryRealisedOutput.use().apply(id.drvPath.to_string()).apply(id.outputName));
     if (!useQueryRealisedOutput.next())
