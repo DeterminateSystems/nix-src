@@ -499,7 +499,7 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
     if (!builderOut)
         throw SysError("opening pseudoterminal master");
 
-    std::string slaveName = getPtsName(builderOut.get());
+    slaveName = getPtsName(builderOut.get());
 
     if (buildUser) {
         chmod(slaveName, 0600);
@@ -659,7 +659,8 @@ void DerivationBuilderImpl::prepareSandbox()
 
 AutoCloseFD DerivationBuilderImpl::openSlaveNoDup()
 {
-    return openPtySlave(getPtsName(builderOut.get()));
+    assert(!slaveName.empty());
+    return openPtySlave(slaveName);
 }
 
 #if NIX_WITH_AWS_AUTH
@@ -703,7 +704,7 @@ void DerivationBuilderImpl::startChild()
 #ifdef __APPLE__
     /* On macOS, the slave must be opened in the child (see
        c536e00c9deeac58bc4b3299dbc702604c32adbe). */
-    pid = spawnBuilderChild(spec, getPtsName(builderOut.get()), {}, {});
+    pid = spawnBuilderChild(spec, slaveName, {}, {});
 #else
     auto slave = openSlaveNoDup();
     std::array<Descriptor, 1> fds{slave.get()};
