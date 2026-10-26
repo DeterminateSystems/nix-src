@@ -200,21 +200,14 @@ jobs:
           - "lazy-trees = true"
           - "lazy-trees = false"
           - "eval-cores = 24"
+        # Each group takes roughly 10 minutes.
         glob:
-          - "[0-9]*"
-          - "[a-b]*"
-          - "[c]*"
-          - "[d]*"
-          - "[e]*"
-          - "[f]*"
-          - "[g-h]*"
-          - "[i-k]*"
+          - "[0-9a-d]*"
+          - "[e-k]*"
           - "[l]*"
           - "[m]*"
           - "[n]*"
-          - "[o-s]*"
-          - "[t]*"
-          - "[u-z]*"
+          - "[o-z]*"
 
     steps:
       - name: Checkout nix
