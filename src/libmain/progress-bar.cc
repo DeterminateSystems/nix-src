@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <map>
 #include <thread>
 #include <sstream>
@@ -77,6 +78,11 @@ private:
         uint64_t done = 0;
         uint64_t expected = 0;
         uint64_t failed = 0;
+
+        bool hasUnknownSize() const
+        {
+            return std::ranges::any_of(its, [](auto & j) { return j.second->expected == 0; });
+        }
     };
 
     struct State
@@ -96,6 +102,15 @@ private:
         {
             static constexpr auto minInterval = std::chrono::seconds(1);
 
+            /* a logger can be replaced while running,
+               nix should not forget to report interrupts or report done twice. */
+            struct Process
+            {
+                static inline std::atomic<bool> reported{false};
+                static inline std::atomic<bool> exitReported{false};
+                static inline std::atomic<bool> interrupted{false};
+            };
+
             // stable across runs, so each run replaces the record left behind by the previous one
             static constexpr std::string_view id = "nix";
 
@@ -103,7 +118,6 @@ private:
             std::optional<uint64_t> lastProgress;
             std::chrono::steady_clock::time_point lastTime;
             std::optional<ProgramState> lastState;
-            bool interrupted = false;
             bool pending = false;
 
             std::chrono::steady_clock::time_point retryAt() const
@@ -135,6 +149,8 @@ private:
 
     std::unique_ptr<InterruptCallback> interruptCallback, stopCallback, contCallback, winchCallback;
 
+    using Process = State::StatusReportState::Process;
+
     void reportStatus(
         State::StatusReportState & sr,
         ProgramState st,
@@ -164,6 +180,7 @@ private:
         sr.lastState = st;
         sr.lastProgress = progress;
         sr.lastTime = now;
+        Process::reported = true;
         writeToStderr(report);
     }
 
@@ -184,7 +201,7 @@ public:
     ProgressBar(bool isTTY)
         : isTTY(isTTY)
         , interruptCallback(createInterruptCallback([&]() {
-            state_.lock()->statusReportState.interrupted = true;
+            Process::interrupted = true;
             /* Don't print the current activities, since we're about
                to abort them anyway. */
             pause(false);
@@ -273,7 +290,8 @@ public:
     {
         auto state(state_.lock());
 
-        if (state->statusReportState.lastState) {
+        bool failed = status != 0 && !Process::interrupted;
+        if ((Process::reported || failed) && !Process::exitReported.exchange(true)) {
             auto finalState = ProgramState::Error;
             auto msg = fmt("exited with status %d", status);
 
@@ -282,7 +300,7 @@ public:
                 msg = "finished successfully";
             }
 
-            if (state->statusReportState.interrupted) {
+            if (Process::interrupted) {
                 finalState = ProgramState::Idle;
                 msg = "interrupted";
             }
@@ -662,11 +680,6 @@ public:
         return std::ranges::find(types, type) != types.end();
     }
 
-    /**
-     * Whether a running activity has counters. These often live on an
-     * unnamed parent (e.g. `actVerifyPaths`) of the activity whose
-     * message is shown, so this can't be decided from that activity.
-     */
     static bool haveRunningCounters(State & state)
     {
         return std::ranges::any_of(state.activitiesByType, [](auto & entry) {
@@ -693,6 +706,9 @@ public:
 
             // normalize byte counts to [0, 1], so they count as one activity
             if (type == actCopyPath || type == actFileTransfer) {
+                if (activity.hasUnknownSize())
+                    return {};
+
                 done += static_cast<double>(std::min(activityDone, activityExpected)) / activityExpected;
                 expected += 1;
             } else {
@@ -709,8 +725,6 @@ public:
 
     void reportWorking(State & state, std::string_view statusMessage, bool haveStatus)
     {
-        auto lastState = state.statusReportState.lastState;
-
         if (haveStatus)
             // without running counters there's no progress to report
             reportStatus(
@@ -718,10 +732,8 @@ public:
                 ProgramState::Working,
                 statusMessage,
                 haveRunningCounters(state) ? getProgress(state) : std::nullopt);
-        else if (lastState == ProgramState::Working || lastState == ProgramState::Blocked)
-            // nothing left to show, e.g. after a prompt was answered
-            reportStatus(state.statusReportState, ProgramState::Idle);
         else
+            // gaps between activities aren't idle, the final state is reported on exit
             state.statusReportState.pending = false;
     }
 
@@ -785,7 +797,7 @@ public:
                 failed += j.second->failed;
             }
 
-            expected = std::max(expected, act.expected);
+            expected = act.hasUnknownSize() ? 0 : std::max(expected, act.expected);
 
             std::optional<SizeUnit> commonUnit;
             std::string s;
