@@ -117,23 +117,21 @@ RC_GTEST_FIXTURE_PROP(StorePathTest, prop_check_regex_eq_parse, ())
         rc::gen::just('.'),
         rc::gen::just('-'),
         rc::gen::just('-'),
-        // ascii symbol ranges
+        // ascii symbol ranges, excluding '/' (see below)
         rc::gen::oneOf(
-            rc::gen::inRange(' ', '/'),
+            rc::gen::inRange(' ', '.'),
             rc::gen::inRange(':', '@'),
             rc::gen::inRange('[', '`'),
             rc::gen::inRange('{', '~')),
         // typical whitespace
         rc::gen::oneOf(rc::gen::just(' '), rc::gen::just('\t'), rc::gen::just('\n'), rc::gen::just('\r')),
-        // some chance of control codes, non-ascii or other garbage we missed
-        rc::gen::inRange('\0', '\xff')));
+        // some chance of control codes, non-ascii or other garbage we missed, excluding '/' (see below)
+        rc::gen::suchThat(rc::gen::inRange('\0', '\xff'), [](char c) { return c != '/'; })));
 
+    /* Note: names containing '/' are not generated, since `parseStorePath()` canonicalises the path, so such a
+       name may be parsed as a different name (e.g. a trailing slash is removed, and `/.` and `/..` components
+       are resolved) and can't be compared against the regex. `bad_slash` above covers them. */
     auto name = *nameFuzzer;
-
-    /* `parseStorePath()` canonicalises the path, so a name with a slash in it may be parsed as a different name
-       (e.g. a trailing slash is removed, and `/.` and `/..` components are resolved). Such names can't be
-       compared against the regex; `bad_slash` above covers them. */
-    RC_PRE(name.find('/') == std::string::npos);
 
     std::string path = store->storeDir + "/575s52sh487i0ylmbs9pvi606ljdszr0-" + name;
     bool parsed = false;
