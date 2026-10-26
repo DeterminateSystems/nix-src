@@ -54,6 +54,7 @@ TEST_DONT_PARSE(dot_dot_dash, "..-1")
 TEST_DONT_PARSE(dot_dash, ".-1")
 TEST_DONT_PARSE(dot_dot_dash_a, "..-a")
 TEST_DONT_PARSE(dot_dash_a, ".-a")
+TEST_DONT_PARSE(slash, "a/b")
 
 #undef TEST_DONT_PARSE
 
@@ -128,6 +129,11 @@ RC_GTEST_FIXTURE_PROP(StorePathTest, prop_check_regex_eq_parse, ())
         rc::gen::inRange('\0', '\xff')));
 
     auto name = *nameFuzzer;
+
+    /* `parseStorePath()` canonicalises the path, so a name with a slash in it may be parsed as a different name
+       (e.g. a trailing slash is removed, and `/.` and `/..` components are resolved). Such names can't be
+       compared against the regex; `bad_slash` above covers them. */
+    RC_PRE(name.find('/') == std::string::npos);
 
     std::string path = store->storeDir + "/575s52sh487i0ylmbs9pvi606ljdszr0-" + name;
     bool parsed = false;
