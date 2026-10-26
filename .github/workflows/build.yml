@@ -116,7 +116,7 @@ jobs:
 
   # Run and test the new build system.
   nix_make:
-    if: ${{ inputs.if && inputs.run_tests && (inputs.system == 'x86_64-linux' || inputs.system == 'aarch64-linux') }}
+    if: ${{ inputs.if && inputs.run_tests }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     steps:
