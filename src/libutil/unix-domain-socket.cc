@@ -180,11 +180,18 @@ void unix::sendMessageWithFds(Descriptor sockfd, std::span<const std::byte> data
         }
     }
 
+    // Don't raise SIGPIPE if the other side has gone away; throw an
+    // exception instead.
+    int flags = 0;
+#  ifdef MSG_NOSIGNAL
+    flags |= MSG_NOSIGNAL;
+#  endif
+
     // Loop to handle partial writes. Ancillary data (FDs) is only
     // sent with the first successful sendmsg call. Use do/while so
     // SOCK_DGRAM zero-length messages still trigger sendmsg.
     do {
-        ssize_t sent = sendmsg(sockfd, &msg, 0);
+        ssize_t sent = sendmsg(sockfd, &msg, flags);
         if (sent < 0)
             throw SysError("sendmsg");
 

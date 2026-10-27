@@ -6,6 +6,7 @@
 #include "nix/util/processes.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/serialise.hh"
+#include "nix/util/spawner.hh"
 
 #include <cerrno>
 #include <filesystem>
@@ -44,12 +45,19 @@ Pid::Pid(Pid && other) noexcept
     , separatePG(other.separatePG)
     , killSignal(other.killSignal)
     , killTimeout(other.killTimeout)
+    , spawnerChild(std::move(other.spawnerChild))
 {
     other.release();
 }
 
 Pid::Pid(pid_t pid)
     : pid(pid)
+{
+}
+
+Pid::Pid(pid_t pid, std::shared_ptr<SpawnerChild> spawnerChild)
+    : pid(pid)
+    , spawnerChild(std::move(spawnerChild))
 {
 }
 
@@ -68,6 +76,7 @@ void Pid::operator=(pid_t pid)
     if (this->pid != -1 && this->pid != pid)
         kill();
     this->pid = pid;
+    spawnerChild.reset();
     killSignal = SIGKILL; // reset signal to default
 }
 
@@ -130,6 +139,12 @@ int Pid::kill(bool allowInterrupts)
 int Pid::wait(bool allowInterrupts)
 {
     assert(pid != -1);
+    if (spawnerChild) {
+        auto status = waitSpawnerChild(*spawnerChild, allowInterrupts);
+        pid = -1;
+        spawnerChild.reset();
+        return status;
+    }
     while (1) {
         int status;
         int res = waitpid(pid, &status, 0);
@@ -147,6 +162,13 @@ int Pid::wait(bool allowInterrupts)
 bool Pid::isAlive()
 {
     assert(pid != -1);
+    if (spawnerChild) {
+        if (spawnerChildIsAlive(*spawnerChild))
+            return true;
+        pid = -1;
+        spawnerChild.reset();
+        return false;
+    }
     pid_t res = waitpid(pid, nullptr, WNOHANG);
     if (res == 0)
         return true;
@@ -181,6 +203,11 @@ void Pid::setKillTimeout(std::chrono::milliseconds duration)
 pid_t Pid::release()
 {
     pid_t p = pid;
+    if (spawnerChild) {
+        if (pid != -1)
+            detachSpawnerChild(*spawnerChild);
+        spawnerChild.reset();
+    }
     /* We use the move assignment operator rather than setting the individual fields so we aren't duplicating the
        default values from the header, which would be hard to keep in sync. If we just used the assignment operator
        without manually resetting pid first it would kill that process, however, so we do manually reset that one field.
@@ -190,41 +217,44 @@ pid_t Pid::release()
     return p;
 }
 
+/* The system call kill(-1, sig) sends the signal `sig' to all
+   users to which the current process can send signals.  So we
+   fork a process, switch to uid, and send a mass kill. */
+static RegisterSpawnOp killUserOp("kill-user", [](Source & args, std::vector<AutoCloseFD> fds) {
+    auto uid = readNum<uid_t>(args);
+
+    if (setuid(uid) == -1)
+        throw SysError("setting uid");
+
+    while (true) {
+#ifdef __APPLE__
+        /* OSX's kill syscall takes a third parameter that, among
+           other things, determines if kill(-1, signo) affects the
+           calling process. In the OSX libc, it's set to true,
+           which means "follow POSIX", which we don't want here
+             */
+        if (syscall(SYS_kill, -1, SIGKILL, false) == 0)
+            break;
+#else
+        if (kill(-1, SIGKILL) == 0)
+            break;
+#endif
+        if (errno == ESRCH || errno == EPERM)
+            break; /* no more processes */
+        if (errno != EINTR)
+            throw SysError("cannot kill processes for uid '%1%'", uid);
+    }
+
+    _exit(0);
+});
+
 void killUser(uid_t uid)
 {
     debug("killing all processes running under uid '%1%'", uid);
 
     assert(uid != 0); /* just to be safe... */
 
-    /* The system call kill(-1, sig) sends the signal `sig' to all
-       users to which the current process can send signals.  So we
-       fork a process, switch to uid, and send a mass kill. */
-
-    Pid pid = startProcess([&] {
-        if (setuid(uid) == -1)
-            throw SysError("setting uid");
-
-        while (true) {
-#ifdef __APPLE__
-            /* OSX's kill syscall takes a third parameter that, among
-               other things, determines if kill(-1, signo) affects the
-               calling process. In the OSX libc, it's set to true,
-               which means "follow POSIX", which we don't want here
-                 */
-            if (syscall(SYS_kill, -1, SIGKILL, false) == 0)
-                break;
-#else
-            if (kill(-1, SIGKILL) == 0)
-                break;
-#endif
-            if (errno == ESRCH || errno == EPERM)
-                break; /* no more processes */
-            if (errno != EINTR)
-                throw SysError("cannot kill processes for uid '%1%'", uid);
-        }
-
-        _exit(0);
-    });
+    Pid pid = killUserOp.spawn([&](Sink & args) { args << uid; });
 
     int status = pid.wait();
     if (status != 0)
@@ -276,7 +306,7 @@ static pid_t doCloneIntoCgroup(int cloneFlags, int cgroupFd, ChildWrapperFunctio
         .flags = (uint64_t(cloneFlags) & ~uint64_t(CSIGNAL)) | CLONE_INTO_CGROUP,
         /* clone3() doesn't allow an exit signal with CLONE_PARENT;
            the child inherits ours instead. */
-        .exit_signal = cloneFlags & CLONE_PARENT ? 0 : SIGCHLD,
+        .exit_signal = uint64_t(cloneFlags & CLONE_PARENT ? 0 : SIGCHLD),
         .cgroup = uint64_t(cgroupFd),
     };
     pid_t pid = syscall(SYS_clone3, &args, sizeof(args));

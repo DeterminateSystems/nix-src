@@ -102,12 +102,17 @@ void unix::closeExtraFDs()
     constexpr int MAX_KEPT_FD = 2;
     static_assert(std::max({STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) == MAX_KEPT_FD);
 
+    closeFDsFrom(MAX_KEPT_FD + 1);
+}
+
+void unix::closeFDsFrom(int firstFd)
+{
 #if defined(__linux__) || defined(__FreeBSD__)
     // first try to close_range everything we don't care about. if this
     // returns an error with these parameters we're running on a kernel
     // that does not implement close_range (i.e. pre 5.9) and fall back
     // to the old method. we should remove that though, in some future.
-    if (unix_close_range(MAX_KEPT_FD + 1, ~0U, 0) == 0) {
+    if (unix_close_range(firstFd, ~0U, 0) == 0) {
         return;
     }
 #endif
@@ -117,7 +122,7 @@ void unix::closeExtraFDs()
         for (auto & s : DirectoryIterator{"/proc/self/fd"}) {
             checkInterrupt();
             auto fd = std::stoi(s.path().filename());
-            if (fd > MAX_KEPT_FD) {
+            if (fd >= firstFd) {
                 debug("closing leaked FD %d", fd);
                 close(fd);
             }
@@ -131,7 +136,7 @@ void unix::closeExtraFDs()
 #if HAVE_SYSCONF
     maxFD = sysconf(_SC_OPEN_MAX);
 #endif
-    for (int fd = MAX_KEPT_FD + 1; fd < maxFD; ++fd)
+    for (int fd = firstFd; fd < maxFD; ++fd)
         close(fd); /* ignore result */
 }
 

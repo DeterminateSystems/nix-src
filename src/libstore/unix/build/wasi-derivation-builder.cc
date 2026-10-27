@@ -32,6 +32,13 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
         experimentalFeatureSettings.require(Xp::WasmDerivations);
     }
 
+    /* We run wasmtime in the child, which requires the virtual
+       execBuilder() method. */
+    bool canUseSpawner() override
+    {
+        return false;
+    }
+
     void execBuilder(const Strings & args, const Strings & envStrs) override
     {
         using namespace wasmtime;

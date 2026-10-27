@@ -22,6 +22,7 @@
 #include "nix/util/terminal.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/store/provenance.hh"
+#include "nix/util/config-global.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -658,23 +659,7 @@ void DerivationBuilderImpl::prepareSandbox()
 
 AutoCloseFD DerivationBuilderImpl::openSlaveNoDup()
 {
-    std::string slaveName = getPtsName(builderOut.get());
-
-    AutoCloseFD builderOut = open(slaveName.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC);
-    if (!builderOut)
-        throw SysError("opening pseudoterminal slave");
-
-    // Put the pt into raw mode to prevent \n -> \r\n translation.
-    struct termios term;
-    if (tcgetattr(builderOut.get(), &term))
-        throw SysError("getting pseudoterminal attributes");
-
-    cfmakeraw(&term);
-
-    if (tcsetattr(builderOut.get(), TCSANOW, &term))
-        throw SysError("putting pseudoterminal into raw mode");
-
-    return builderOut;
+    return openPtySlave(getPtsName(builderOut.get()));
 }
 
 #if NIX_WITH_AWS_AUTH
@@ -705,16 +690,91 @@ std::optional<AwsCredentials> DerivationBuilderImpl::preResolveAwsCredentials()
 
 void DerivationBuilderImpl::startChild()
 {
-    RunChildArgs args{
-#if NIX_WITH_AWS_AUTH
-        .awsCredentials = preResolveAwsCredentials(),
-#endif
-    };
+    auto spec = makeChildSpec();
 
-    pid = startProcess([this, args = std::move(args)]() {
-        openSlave();
-        runChild(std::move(args));
-    });
+    if (!canUseSpawner()) {
+        pid = startProcess([&]() {
+            openSlave();
+            runChild(spec);
+        });
+        return;
+    }
+
+#ifdef __APPLE__
+    /* On macOS, the slave must be opened in the child (see
+       c536e00c9deeac58bc4b3299dbc702604c32adbe). */
+    spec.ptySlaveName = getPtsName(builderOut.get());
+    pid = spawnBuilderChild(spec, {}, {});
+#else
+    auto slave = openSlaveNoDup();
+    std::array<Descriptor, 1> fds{slave.get()};
+    pid = spawnBuilderChild(spec, fds, {});
+#endif
+}
+
+BuilderChildSpec DerivationBuilderImpl::makeChildSpec()
+{
+    BuilderChildSpec spec;
+
+    spec.storeDir = store.storeDir;
+    spec.builder = drv.builder;
+    spec.tmpDirInSandbox = tmpDirInSandbox();
+
+    spec.args.push_back(std::string(baseNameOf(drv.builder)));
+    for (auto & i : drv.args)
+        spec.args.push_back(rewriteStrings(i, inputRewrites));
+
+    for (auto & i : env)
+        spec.envStrs.push_back(rewriteStrings(i.first + "=" + i.second, inputRewrites));
+
+    if (drv.isBuiltin()) {
+        BuilderChildSpec::Builtin builtin{
+            .drv = drv,
+            .hashedMirrors = settings.getLocalSettings().hashedMirrors,
+#if NIX_WITH_AWS_AUTH
+            .awsCredentials = preResolveAwsCredentials(),
+#endif
+        };
+
+        for (auto & e : drv.outputs)
+            builtin.outputs.insert_or_assign(e.first, store.printStorePath(scratchOutputs.at(e.first)));
+
+        /* Make the contents of netrc and the CA certificate bundle
+           available to builtin:fetchurl (which may run under a
+           different uid and/or in a sandbox). */
+        if (drv.builder == "builtin:fetchurl") {
+            try {
+                builtin.netrcData = readFile(fileTransferSettings.netrcFile.get());
+            } catch (SystemError &) {
+            }
+
+            if (auto & caFile = fileTransferSettings.caFile.get())
+                try {
+                    builtin.caFileData = readFile(*caFile);
+                } catch (SystemError &) {
+                }
+        }
+
+        StringSink settingsSink;
+        writeGlobalSettings(settingsSink);
+        builtin.settings = std::move(settingsSink.s);
+
+        spec.builtin = std::move(builtin);
+    }
+
+    /* If we are running in `build-users' mode, then switch to the
+       user we allocated. Preserve supplementary groups of the build
+       user, to allow admins to specify groups such as "kvm". */
+    if (buildUser)
+        spec.credentials = BuilderChildSpec::Credentials{
+            .uid = buildUser->getUID(),
+            .gid = buildUser->getGID(),
+            .supplementaryGids = buildUser->getSupplementaryGIDs(),
+        };
+
+    fillChildSpec(spec);
+
+    return spec;
 }
 
 void DerivationBuilderImpl::processSandboxSetupMessages()
@@ -989,108 +1049,15 @@ void DerivationBuilderImpl::writeBuilderFile(const std::string & name, std::stri
     chownToBuilder(fd.get(), path);
 }
 
-void DerivationBuilderImpl::runChild(RunChildArgs args)
+void DerivationBuilderImpl::runChild(const BuilderChildSpec & spec)
 {
-    /* Warning: in the child we should absolutely not make any SQLite
-       calls! */
-
-    bool sendException = true;
-
-    try { /* child */
-
-        commonChildInit();
-
-        /* Make the contents of netrc and the CA certificate bundle
-           available to builtin:fetchurl (which may run under a
-           different uid and/or in a sandbox). */
-        BuiltinBuilderContext ctx{
-            .drv = drv,
-            .hashedMirrors = settings.getLocalSettings().hashedMirrors,
-            .tmpDirInSandbox = tmpDirInSandbox(),
-#if NIX_WITH_AWS_AUTH
-            .awsCredentials = args.awsCredentials,
-#endif
-        };
-
-        if (drv.isBuiltin() && drv.builder == "builtin:fetchurl") {
-            try {
-                ctx.netrcData = readFile(fileTransferSettings.netrcFile.get());
-            } catch (SystemError &) {
-            }
-
-            if (auto & caFile = fileTransferSettings.caFile.get())
-                try {
-                    ctx.caFileData = readFile(*caFile);
-                } catch (SystemError &) {
-                }
-        }
-
-        enterChroot();
-
-        if (chdir(tmpDirInSandbox().c_str()) == -1)
-            throw SysError("changing into %1%", PathFmt(tmpDir));
-
-        /* Close all other file descriptors. */
-        unix::closeExtraFDs();
-
-        /* Disable core dumps by default. */
-        struct rlimit limit = {0, RLIM_INFINITY};
-        setrlimit(RLIMIT_CORE, &limit);
-
-        /* Make sure the builder inherits a predictable umask. It must not be group-writable, since registerOutputs
-         * rejects those as defense-in-depth. */
-        umask(0022);
-
-        // FIXME: set other limits to deterministic values?
-
-        setUser();
-
-        /* Indicate that we managed to set up the build environment. */
-        writeFull(STDERR_FILENO, std::string("\2\n"));
-
-        sendException = false;
-
-        /* If this is a builtin builder, call it now. This should not return. */
-        if (drv.isBuiltin()) {
-            try {
-                logger = makeJSONLogger(getStandardError()).release();
-
-                for (auto & e : drv.outputs)
-                    ctx.outputs.insert_or_assign(e.first, store.printStorePath(scratchOutputs.at(e.first)));
-
-                std::string builtinName = drv.builder.substr(8);
-                assert(RegisterBuiltinBuilder::builtinBuilders);
-                if (auto builtin = get(RegisterBuiltinBuilder::builtinBuilders(), builtinName))
-                    (*builtin)(ctx);
-                else
-                    throw Error("unsupported builtin builder '%1%'", builtinName);
-                _exit(0);
-            } catch (std::exception & e) {
-                writeFull(STDERR_FILENO, e.what() + std::string("\n"));
-                _exit(1);
-            }
-        }
-
-        /* It's not a builtin builder, so execute the program. */
-
-        Strings args;
-        args.push_back(std::string(baseNameOf(drv.builder)));
-
-        for (auto & i : drv.args)
-            args.push_back(rewriteStrings(i, inputRewrites));
-
-        Strings envStrs;
-        for (auto & i : env)
-            envStrs.push_back(rewriteStrings(i.first + "=" + i.second, inputRewrites));
-
-        execBuilder(args, envStrs);
-
-        throw SysError("executing '%1%'", drv.builder);
-
-    } catch (...) {
-        handleChildException(sendException);
-        _exit(1);
-    }
+    runBuilderChild(
+        spec,
+        {
+            .enterSandbox = [&]() { enterChroot(); },
+            .setUser = [&]() { setUser(); },
+            .execBuilder = [&](const Strings & args, const Strings & envStrs) { execBuilder(args, envStrs); },
+        });
 }
 
 void DerivationBuilderImpl::setUser()
@@ -1101,23 +1068,14 @@ void DerivationBuilderImpl::setUser()
        descriptors except std*, so that's safe.  Also note that
        setuid() when run as root sets the real, effective and
        saved UIDs. */
-    if (buildUser) {
-        preserveDeathSignal([this]() {
+    if (buildUser)
+        setCredentials({
+            .uid = buildUser->getUID(),
+            .gid = buildUser->getGID(),
             /* Preserve supplementary groups of the build user, to allow
                admins to specify groups such as "kvm".  */
-            auto gids = buildUser->getSupplementaryGIDs();
-            if (setgroups(gids.size(), gids.data()) == -1)
-                throw SysError("cannot set supplementary groups of build user");
-
-            if (setgid(buildUser->getGID()) == -1 || getgid() != buildUser->getGID()
-                || getegid() != buildUser->getGID())
-                throw SysError("setgid failed");
-
-            if (setuid(buildUser->getUID()) == -1 || getuid() != buildUser->getUID()
-                || geteuid() != buildUser->getUID())
-                throw SysError("setuid failed");
+            .supplementaryGids = buildUser->getSupplementaryGIDs(),
         });
-    }
 }
 
 void DerivationBuilderImpl::execBuilder(const Strings & args, const Strings & envStrs)
