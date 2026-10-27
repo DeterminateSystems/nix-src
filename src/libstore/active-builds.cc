@@ -1,11 +1,8 @@
 #include "nix/store/active-builds.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/util/users.hh"
 
 #include <nlohmann/json.hpp>
-
-#ifndef _WIN32
-#  include <pwd.h>
-#endif
 
 namespace nix {
 
@@ -19,12 +16,8 @@ UserInfo UserInfo::fromUid(uid_t uid)
     info.uid = uid;
 
 #ifndef _WIN32
-    // Look up the user name for the UID (thread-safe)
-    struct passwd pwd;
-    struct passwd * result;
-    std::vector<char> buf(16384);
-    if (getpwuid_r(uid, &pwd, buf.data(), buf.size(), &result) == 0 && result)
-        info.name = result->pw_name;
+    if (auto pw = getUserById(uid))
+        info.name = pw->name;
 #endif
 
     return info;

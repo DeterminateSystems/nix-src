@@ -226,7 +226,7 @@ LocalStore::LocalStore(ref<const Config> config)
     if (isRootUser() && localSettings.buildUsersGroup != "") {
         mode_t perm = 01775;
 
-        struct group * gr = getgrnam(localSettings.buildUsersGroup.get().c_str());
+        auto gr = getGroupByName(localSettings.buildUsersGroup);
         if (!gr)
             printError(
                 "warning: the group '%1%' specified in 'build-users-group' does not exist",
@@ -234,8 +234,8 @@ LocalStore::LocalStore(ref<const Config> config)
         else if (!config->readOnly) {
             auto st = stat(config->realStoreDir.get());
 
-            if (st.st_uid != 0 || st.st_gid != gr->gr_gid || (st.st_mode & ~S_IFMT) != perm) {
-                chown(config->realStoreDir.get(), 0, gr->gr_gid);
+            if (st.st_uid != 0 || st.st_gid != gr->gid || (st.st_mode & ~S_IFMT) != perm) {
+                chown(config->realStoreDir.get(), 0, gr->gid);
                 chmod(config->realStoreDir.get(), perm);
             }
         }

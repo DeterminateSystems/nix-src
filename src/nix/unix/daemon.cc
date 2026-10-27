@@ -20,6 +20,7 @@
 #include "man-pages.hh"
 #include "otel-logger.hh"
 #include "nix/util/socket.hh"
+#include "nix/util/users.hh"
 
 #include <algorithm>
 #include <climits>
@@ -33,8 +34,6 @@
 #include <sys/stat.h>
 #include <poll.h>
 #include <errno.h>
-#include <pwd.h>
-#include <grp.h>
 #include <fcntl.h>
 
 #ifdef __linux__
@@ -172,12 +171,9 @@ static void setSigChldAction(bool autoReap)
  *
  * @param group Group the user might be a member of.
  */
-static bool matchUser(std::string_view user, const struct group & gr)
+static bool matchUser(std::string_view user, const GroupEntry & gr)
 {
-    for (char ** mem = gr.gr_mem; *mem; mem++)
-        if (user == std::string_view(*mem))
-            return true;
-    return false;
+    return std::ranges::find(gr.members, user) != gr.members.end();
 }
 
 /**
@@ -207,7 +203,7 @@ matchUser(const std::optional<std::string> & user, const std::optional<std::stri
         if (i.substr(0, 1) == "@") {
             if (group && *group == i.substr(1))
                 return true;
-            struct group * gr = getgrnam(i.c_str() + 1);
+            auto gr = getGroupByName(i.substr(1));
             if (!gr)
                 continue;
             if (user && matchUser(*user, *gr))
@@ -232,13 +228,13 @@ static std::pair<TrustedFlag, std::optional<std::string>> authPeer(const unix::P
 {
     TrustedFlag trusted = NotTrusted;
 
-    auto pw = peer.uid ? getpwuid(*peer.uid) : nullptr;
-    auto user = pw         ? std::optional<std::string>(pw->pw_name)
+    auto pw = peer.uid ? getUserById(*peer.uid) : std::nullopt;
+    auto user = pw         ? std::optional<std::string>(pw->name)
                 : peer.uid ? std::optional(std::to_string(*peer.uid))
                            : std::nullopt;
 
-    auto gr = peer.gid ? getgrgid(*peer.gid) : 0;
-    auto group = gr         ? std::optional<std::string>(gr->gr_name)
+    auto gr = peer.gid ? getGroupById(*peer.gid) : std::nullopt;
+    auto group = gr         ? std::optional<std::string>(gr->name)
                  : peer.gid ? std::optional(std::to_string(*peer.gid))
                             : std::nullopt;
 

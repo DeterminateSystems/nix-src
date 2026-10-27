@@ -1,5 +1,4 @@
 #include <vector>
-#include <pwd.h>
 #include <grp.h>
 
 #include "nix/store/user-lock.hh"
@@ -74,38 +73,31 @@ struct SimpleUserLock : UserLock
         assert(buildUsersGroup != "");
 
         /* Get the members of the build-users-group. */
-        struct group * gr = getgrnam(buildUsersGroup.c_str());
+        auto gr = getGroupByName(buildUsersGroup);
         if (!gr)
             throw Error("the group '%s' specified in 'build-users-group' does not exist", buildUsersGroup);
 
-        gid_t buildUsersGid = gr->gr_gid;
+        gid_t buildUsersGid = gr->gid;
         if (buildUsersGid == 0)
             throw Error(
                 "the group '%s' specified in 'build-users-group' has GID 0, which is not allowed", buildUsersGroup);
 
-        /* Copy the result of getgrnam. */
-        Strings users;
-        for (char ** p = gr->gr_mem; *p; ++p) {
-            debug("found build user '%s'", *p);
-            users.push_back(*p);
-        }
-
-        if (users.empty())
+        if (gr->members.empty())
             throw Error("the build users group '%s' has no members", buildUsersGroup);
 
         /* Find a user account that isn't currently in use for another
            build. */
-        for (auto & i : users) {
+        for (auto & i : gr->members) {
             debug("trying user '%s'", i);
 
-            struct passwd * pw = getpwnam(i.c_str());
+            auto pw = getUserByName(i);
             if (!pw)
                 throw Error("the user '%s' in the group '%s' does not exist", i, buildUsersGroup);
 
-            if (pw->pw_uid == 0)
+            if (pw->uid == 0)
                 throw Error("the user '%s' in the group '%s' has UID 0, which is not allowed", i, buildUsersGroup);
 
-            auto fnUserLock = userPoolDir / std::to_string(pw->pw_uid);
+            auto fnUserLock = userPoolDir / std::to_string(pw->uid);
 
             AutoCloseFD fd = open(fnUserLock.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
             if (!fd)
@@ -115,7 +107,7 @@ struct SimpleUserLock : UserLock
                 auto lock = std::make_unique<SimpleUserLock>();
 
                 lock->fdUserLock = std::move(fd);
-                lock->uid = pw->pw_uid;
+                lock->uid = pw->uid;
                 lock->gid = buildUsersGid;
 
                 /* Sanity check... */
@@ -127,7 +119,7 @@ struct SimpleUserLock : UserLock
                  * usually either empty or contains a group such as "kvm". */
 
                 // Finally, trim back the GID list to its real size.
-                for (auto gid : get_group_list(pw->pw_name, pw->pw_gid)) {
+                for (auto gid : get_group_list(pw->name.c_str(), pw->gid)) {
                     if (gid != lock->gid)
                         lock->supplementaryGIDs.push_back(gid);
                 }
@@ -202,9 +194,8 @@ struct AutoUserLock : UserLock
 
                 auto firstUid = uidSettings.startId + i * maxIdsPerBuild;
 
-                auto pw = getpwuid(firstUid);
-                if (pw)
-                    throw Error("auto-allocated UID %d clashes with existing user account '%s'", firstUid, pw->pw_name);
+                if (auto pw = getUserById(firstUid))
+                    throw Error("auto-allocated UID %d clashes with existing user account '%s'", firstUid, pw->name);
 
                 auto lock = std::make_unique<AutoUserLock>();
                 lock->fdUserLock = std::move(fd);
@@ -212,10 +203,10 @@ struct AutoUserLock : UserLock
                 if (useUserNamespace)
                     lock->firstGid = firstUid;
                 else {
-                    struct group * gr = getgrnam(buildUsersGroup.c_str());
+                    auto gr = getGroupByName(buildUsersGroup);
                     if (!gr)
                         throw Error("the group '%s' specified in 'build-users-group' does not exist", buildUsersGroup);
-                    lock->firstGid = gr->gr_gid;
+                    lock->firstGid = gr->gid;
                 }
                 lock->nrIds = nrIds;
                 return lock;
