@@ -58,6 +58,7 @@ nixMake.mkComponent {
       # macOS has <sys/xattr.h>, but not llistxattr.
       NIX_SUPPORT_ACL = onLinux;
       NIX_WITH_AWS_AUTH = nixMake.config.awsAuth;
+      NIX_WITH_GCS = nixMake.config.gcs;
     };
     "store-config-private.hh" = {
       # Hard links to symlinks fail on macOS.
