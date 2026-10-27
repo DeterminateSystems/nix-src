@@ -50,9 +50,7 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
 
     void startChild() override;
 
-    void enterChroot() override;
-
-    void setUser() override;
+    void fillChildSpec(BuilderChildSpec & spec) override;
 
     SingleDrvOutputs unprepareBuild() override;
 

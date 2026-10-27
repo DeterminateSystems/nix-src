@@ -1,4 +1,5 @@
 sources += files(
+  'build/builder-child.cc',
   'build/child.cc',
   'build/chroot.cc',
   'build/derivation-builder.cc',

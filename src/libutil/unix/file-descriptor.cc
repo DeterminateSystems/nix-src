@@ -108,11 +108,16 @@ void unix::closeExtraFDs()
     constexpr int MAX_KEPT_FD = 2;
     static_assert(std::max({STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) == MAX_KEPT_FD);
 
+    closeFDsFrom(MAX_KEPT_FD + 1);
+}
+
+void unix::closeFDsFrom(int firstFd)
+{
     /* The logic here is a bit convoluted and platform-dependent.
      * Keep in mind that this function is free to assume that it's the only thread running
      * in the process (it's usually called right after fork()-ing).
      *
-     * - We always keep stdio file descriptors, and close the [MAX_KEPT_FD + 1, ...) range.
+     * - We close the [firstFd, ...) range.
      *
      * - Attempt platform-specific ways to close the above:
      *   On Linux (>= 5.9) and FreeBSD, we try close_range syscall.
@@ -125,7 +130,7 @@ void unix::closeExtraFDs()
      */
 
 #if defined(__linux__) || defined(__FreeBSD__)
-    if (unix_close_range(MAX_KEPT_FD + 1, ~0U, 0) == 0)
+    if (unix_close_range(firstFd, ~0U, 0) == 0)
         return;
 #endif
 
@@ -141,7 +146,7 @@ void unix::closeExtraFDs()
             auto fd = string2Int<int>(s.path().filename().native());
             if (!fd)
                 continue;
-            if (*fd > MAX_KEPT_FD)
+            if (*fd >= firstFd)
                 openFds.push_back(*fd);
         }
         for (auto fd : openFds)
@@ -163,7 +168,7 @@ void unix::closeExtraFDs()
             throw SysError("listing open file descriptors");
         fds.resize(bufSize / sizeof(::proc_fdinfo));
         for (const auto & fdinfo : fds)
-            if (fdinfo.proc_fd > MAX_KEPT_FD)
+            if (fdinfo.proc_fd >= firstFd)
                 ::close(fdinfo.proc_fd); /* ignore result */
 #  endif
         return;
@@ -176,7 +181,7 @@ void unix::closeExtraFDs()
 #if HAVE_SYSCONF
     maxFD = sysconf(_SC_OPEN_MAX);
 #endif
-    for (int fd = MAX_KEPT_FD + 1; fd < maxFD; ++fd)
+    for (int fd = firstFd; fd < maxFD; ++fd)
         close(fd); /* ignore result */
 }
 

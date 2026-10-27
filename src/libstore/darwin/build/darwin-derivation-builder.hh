@@ -26,9 +26,7 @@ struct DarwinDerivationBuilder : DerivationBuilderImpl
 
     void prepareSandbox() override;
 
-    void setUser() override;
-
-    void execBuilder(const Strings & args, const Strings & envStrs) override;
+    void fillChildSpec(BuilderChildSpec & spec) override;
 
     /**
      * Cleans up all System V IPC objects owned by the specified user.

@@ -25,6 +25,9 @@
 #include "nix/flake/settings.hh"
 #include "nix/util/exit.hh"
 #include "nix/util/sentry.hh"
+#ifndef _WIN32
+#  include "nix/util/spawner.hh"
+#endif
 
 #include "self-exe.hh"
 #include "crash-handler.hh"
@@ -826,6 +829,10 @@ void mainWrapped(int argc, char ** argv)
 int main(int argc, char ** argv)
 {
     using namespace nix;
+
+#ifndef _WIN32
+    runSpawnerIfRequested();
+#endif
 
     // The CLI has a more detailed version than the libraries; see nixVersion.
     nix::nixVersion = NIX_CLI_VERSION;

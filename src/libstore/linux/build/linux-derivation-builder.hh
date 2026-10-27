@@ -19,13 +19,13 @@
 
 namespace nix {
 
-void setupSeccomp(const LocalSettings & localSettings);
+void setupSeccomp(bool filterSyscalls, bool allowNewPrivileges);
 
 struct LinuxDerivationBuilder : virtual DerivationBuilderImpl
 {
     using DerivationBuilderImpl::DerivationBuilderImpl;
 
-    void enterChroot() override;
+    void fillChildSpec(BuilderChildSpec & spec) override;
 };
 
 } // namespace nix

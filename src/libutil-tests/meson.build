@@ -30,7 +30,7 @@ subdir('nix-meson-build-support/windows-version')
 rapidcheck = dependency('rapidcheck')
 deps_private += rapidcheck
 
-gtest = dependency('gtest', main : true)
+gtest = dependency('gtest', main : false)
 deps_private += gtest
 
 gmock = dependency('gmock')
@@ -78,6 +78,7 @@ sources = files(
   'hash.cc',
   'hilite.cc',
   'json-utils.cc',
+  'main.cc',
   'local-keys.cc',
   'logging.cc',
   'lru-cache.cc',
@@ -124,7 +125,6 @@ this_exe = executable(
   include_directories : include_dirs,
   # TODO: -lrapidcheck, see ../libutil-support/build.meson
   link_args : linker_export_flags + [ '-lrapidcheck' ],
-  # get main from gtest
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )
