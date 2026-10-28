@@ -276,7 +276,7 @@ static pid_t doCloneIntoCgroup(int cloneFlags, int cgroupFd, ChildWrapperFunctio
         .flags = (uint64_t(cloneFlags) & ~uint64_t(CSIGNAL)) | CLONE_INTO_CGROUP,
         /* clone3() doesn't allow an exit signal with CLONE_PARENT;
            the child inherits ours instead. */
-        .exit_signal = cloneFlags & CLONE_PARENT ? 0 : SIGCHLD,
+        .exit_signal = uint64_t(cloneFlags & CLONE_PARENT ? 0 : SIGCHLD),
         .cgroup = uint64_t(cgroupFd),
     };
     pid_t pid = syscall(SYS_clone3, &args, sizeof(args));
