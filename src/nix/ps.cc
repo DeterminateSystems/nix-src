@@ -6,7 +6,6 @@
 #include "nix/store/active-builds.hh"
 #include "nix/util/table.hh"
 #include "nix/util/terminal.hh"
-#include "nix/util/base-nix-32.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/signals.hh"
@@ -38,94 +37,9 @@ static std::string formatCpuTime(std::chrono::microseconds cpuTime)
         std::chrono::duration_cast<std::chrono::duration<float, std::chrono::seconds::period>>(cpuTime).count());
 }
 
-/**
- * The total CPU time of a process, including that of its reaped children, or `std::nullopt` if not available.
- */
-static std::optional<std::chrono::microseconds> getProcessCpuTime(const ActiveBuildInfo::ProcessInfo & process)
-{
-    if (!process.utime && !process.stime && !process.cutime && !process.cstime)
-        return std::nullopt;
-    return process.utime.value_or(std::chrono::microseconds(0)) + process.stime.value_or(std::chrono::microseconds(0))
-           + process.cutime.value_or(std::chrono::microseconds(0))
-           + process.cstime.value_or(std::chrono::microseconds(0));
-}
-
-/**
- * The CPU time of a build. Use cgroup stats if available, otherwise sum process times.
- */
-static std::chrono::microseconds getBuildCpuTime(const ActiveBuildInfo & build)
-{
-    if (build.utime && build.stime)
-        return *build.utime + *build.stime;
-    std::chrono::microseconds total{0};
-    for (const auto & process : build.processes)
-        total += getProcessCpuTime(process).value_or(std::chrono::microseconds(0));
-    return total;
-}
-
-/**
- * The resident memory of a build. Use cgroup stats if available, otherwise sum process RSS. Note that the latter
- * double-counts shared pages.
- */
-static std::optional<uint64_t> getBuildRss(const ActiveBuildInfo & build)
-{
-    if (build.rss)
-        return build.rss;
-    std::optional<uint64_t> total;
-    for (const auto & process : build.processes)
-        if (process.rss)
-            total = total.value_or(0) + *process.rss;
-    return total;
-}
-
 static TableCell formatRss(std::optional<uint64_t> rss)
 {
     return {rss ? renderSize(*rss) : "", TableCell::Alignment::Right};
-}
-
-/**
- * Abbreviate the hash parts of store paths in `s`, e.g. `/nix/store/2limljgc50jy76vg388ldgggcjhhkhav-gcc-15.2.0`
- * becomes `/nix/store/2limlj…-gcc-15.2.0`.
- */
-static std::string abbreviateStorePaths(std::string_view s, std::string_view storeDir)
-{
-    constexpr size_t keep = 6;
-    auto prefix = std::string(storeDir) + "/";
-    std::string res;
-    size_t pos = 0;
-    while (true) {
-        auto i = s.find(prefix, pos);
-        if (i == s.npos)
-            break;
-        auto hashStart = i + prefix.size();
-        auto hashEnd = hashStart + StorePath::HashLen;
-        if (hashEnd < s.size() && s[hashEnd] == '-'
-            && std::ranges::all_of(
-                s.substr(hashStart, StorePath::HashLen),
-                [](char c) { return BaseNix32::lookupReverse(c).has_value(); })) {
-            res += s.substr(pos, hashStart + keep - pos);
-            res += "…";
-            pos = hashEnd;
-        } else {
-            res += s.substr(pos, hashStart - pos);
-            pos = hashStart;
-        }
-    }
-    res += s.substr(pos);
-    return res;
-}
-
-/**
- * Format the command line of a process. If `stripProgramPath` is set, only show the base name of argv[0].
- */
-static std::string formatArgv(const ActiveBuildInfo::ProcessInfo & process, bool stripProgramPath = false)
-{
-    auto argv = process.argv;
-    /* Don't touch argv[0] if it contains whitespace, since some processes overwrite their argv with a
-       free-form title (like "sshd: user"). */
-    if (stripProgramPath && !argv.empty() && argv[0].find_first_of(" \t\n") == std::string::npos)
-        argv[0] = baseNameOf(argv[0]);
-    return concatStringsSep(" ", tokenizeString<std::vector<std::string>>(concatStringsSep(" ", argv)));
 }
 
 /**
@@ -210,8 +124,8 @@ struct CmdPs : MixJSON, StoreCommand
             table.push_back(
                 {formatUser(build.mainUser),
                  std::to_string(build.mainPid),
-                 {formatCpuTime(getBuildCpuTime(build)), TableCell::Alignment::Right},
-                 formatRss(getBuildRss(build)),
+                 {formatCpuTime(build.getCpuTime()), TableCell::Alignment::Right},
+                 formatRss(build.getRss()),
                  fmt(ANSI_BOLD "%s" ANSI_NORMAL " (wall=%ds)",
                      store->printStorePath(build.derivation),
                      time(nullptr) - build.startTime)});
@@ -226,13 +140,13 @@ struct CmdPs : MixJSON, StoreCommand
             } else {
                 /* Render the process tree. */
                 visitProcessTree(build, [&](const ActiveBuildInfo::ProcessInfo & process, std::string_view prefix) {
-                    auto cpuTime = getProcessCpuTime(process);
+                    auto cpuTime = process.getCpuTime();
                     table.push_back(
                         {formatUser(process.user),
                          std::to_string(process.pid),
                          {cpuTime ? formatCpuTime(*cpuTime) : "", TableCell::Alignment::Right},
                          formatRss(process.rss),
-                         fmt("%s%s", prefix, formatArgv(process))});
+                         fmt("%s%s", prefix, process.formatArgv())});
                 });
             }
         }
@@ -389,7 +303,7 @@ struct CmdTop : StoreCommand
 
             for (auto & build : builds) {
                 auto key = getBuildKey(build);
-                auto cpuTime = getBuildCpuTime(build);
+                auto cpuTime = build.getCpuTime();
                 if (auto u = usage(buildCpuTimes, key, cpuTime))
                     buildCpuUsage[key] = *u;
                 newBuildCpuTimes[key] = cpuTime;
@@ -433,7 +347,7 @@ struct CmdTop : StoreCommand
                            > (ub == buildCpuUsage.end() ? -1.0 : ub->second);
                 }
                 case SortOrder::Rss:
-                    return getBuildRss(*a).value_or(0) > getBuildRss(*b).value_or(0);
+                    return a->getRss().value_or(0) > b->getRss().value_or(0);
                 case SortOrder::Wall:
                     return a->startTime < b->startTime;
                 case SortOrder::Name:
@@ -464,14 +378,14 @@ struct CmdTop : StoreCommand
                 nrProcesses += build->processes.size();
                 if (auto i = buildCpuUsage.find(key); i != buildCpuUsage.end())
                     totalUsage += i->second;
-                totalRss += getBuildRss(*build).value_or(0);
+                totalRss += build->getRss().value_or(0);
 
                 table.push_back(
                     {formatUser(build->mainUser),
                      {std::to_string(build->mainPid), TableCell::Alignment::Right},
                      {formatUsage(buildCpuUsage, key), TableCell::Alignment::Right},
-                     {formatCpuTime(getBuildCpuTime(*build)), TableCell::Alignment::Right},
-                     formatRss(getBuildRss(*build)),
+                     {formatCpuTime(build->getCpuTime()), TableCell::Alignment::Right},
+                     formatRss(build->getRss()),
                      {formatWallTime(now - build->startTime), TableCell::Alignment::Right},
                      fmt(ANSI_BOLD "%s" ANSI_NORMAL, store->printStorePath(build->derivation))});
 
@@ -490,7 +404,7 @@ struct CmdTop : StoreCommand
                 else
                     visitProcessTree(
                         *build, [&](const ActiveBuildInfo::ProcessInfo & process, std::string_view prefix) {
-                            auto cpuTime = getProcessCpuTime(process);
+                            auto cpuTime = process.getCpuTime();
                             table.push_back(
                                 {formatUser(process.user),
                                  {std::to_string(process.pid), TableCell::Alignment::Right},
@@ -500,8 +414,8 @@ struct CmdTop : StoreCommand
                                  {"", TableCell::Alignment::Right},
                                  fmt("%s%s",
                                      prefix,
-                                     compact ? abbreviateStorePaths(formatArgv(process, true), store->storeDir)
-                                             : formatArgv(process))});
+                                     compact ? abbreviateStorePaths(process.formatArgv(true), store->storeDir)
+                                             : process.formatArgv())});
                         });
             }
 
