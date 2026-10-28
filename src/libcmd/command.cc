@@ -2,6 +2,7 @@
 #include <nlohmann/json.hpp>
 
 #include "nix/cmd/command.hh"
+#include "nix/main/progress-bar.hh"
 #include "nix/cmd/legacy.hh"
 #include "nix/cmd/markdown.hh"
 #include "nix/store/globals.hh"
@@ -96,6 +97,7 @@ ref<Store> StoreCommand::createStore()
 {
     auto store = getStoreConfig()->openStore();
     store->init();
+    setProgressBarStore(store);
     return store;
 }
 

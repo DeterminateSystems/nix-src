@@ -5,6 +5,8 @@
 #include "nix/store/path.hh"
 #include "nix/util/file-system.hh"
 #include "nix/store/names.hh"
+#include "nix/store/store-api.hh"
+#include "nix/store/active-builds.hh"
 #include "nix/util/util.hh"
 
 #include <map>
@@ -57,6 +59,13 @@ static std::string_view storePathToNameWithoutDrvSuffix(std::string_view path)
 }
 
 /**
+ * The store that the progress indicator queries for active builds.
+ * Note: this object intentionally leaks to avoid destructor ordering
+ * issues with the progress indicator's threads.
+ */
+static auto * const progressBarStore = new Sync<std::weak_ptr<Store>>();
+
+/**
  * Base class for loggers that keep track of the running activities
  * and display their progress in a "frame" of one or more lines at the
  * bottom of the terminal. Log messages are printed above the frame.
@@ -82,6 +91,13 @@ protected:
         std::optional<std::string> name;
         std::chrono::time_point<std::chrono::steady_clock> startTime;
         bool logged = false;
+        /**
+         * For `actBuild` activities, the derivation being built, and
+         * the remote machine it's being built on (empty for local
+         * builds).
+         */
+        std::optional<std::string> drvPath;
+        std::string machineName;
     };
 
     struct ActivitiesByType
@@ -384,6 +400,8 @@ public:
             if (machineName != "")
                 i->s += fmt(" on " ANSI_BOLD "%s" ANSI_NORMAL, machineName);
             i->name = DrvName(name).name;
+            i->drvPath = getS(fields, 0);
+            i->machineName = machineName;
         }
 
         if (type == actSubstitute) {
@@ -1017,6 +1035,44 @@ class ProgressIndicator final : public ProgressBarBase
     std::thread inputThread;
 #endif
 
+    /**
+     * The minimum interval between queries for active builds.
+     */
+    static constexpr auto minActiveBuildsInterval = std::chrono::seconds(1);
+
+    /**
+     * Information about the running local builds, obtained from
+     * `QueryActiveBuildsStore::queryActiveBuilds()` by the active
+     * builds thread. Note: when both are needed, the state lock must
+     * be acquired first.
+     */
+    struct ActiveBuilds
+    {
+        struct Build
+        {
+            ActiveBuildInfo info;
+
+            /**
+             * The CPU usage (in percent of one core) since the
+             * previous sample, if any.
+             */
+            std::optional<double> cpuUsage;
+        };
+
+        /**
+         * The active builds, keyed by derivation path.
+         */
+        std::map<std::string, Build> builds;
+
+        bool quit = false;
+    };
+
+    Sync<ActiveBuilds> activeBuilds_;
+
+    std::condition_variable activeBuildsCV;
+
+    std::thread activeBuildsThread;
+
 public:
 
     ProgressIndicator(bool isTTY)
@@ -1035,7 +1091,129 @@ public:
             inputThread.join();
         }
 #endif
+        if (activeBuildsThread.joinable()) {
+            activeBuilds_.lock()->quit = true;
+            activeBuildsCV.notify_one();
+            activeBuildsThread.join();
+        }
     }
+
+    /**
+     * Start the thread that periodically queries the store for
+     * information about running local builds (as shown by `nix ps`).
+     */
+    void startActiveBuildsThread()
+    {
+        if (!isTTY)
+            return;
+
+        activeBuildsThread = std::thread([this]() {
+            try {
+                activeBuildsThreadMain();
+            } catch (...) {
+                ignoreExceptionInDestructor();
+            }
+        });
+    }
+
+private:
+
+    /**
+     * Whether there are local builds for which we want to show
+     * information.
+     */
+    bool wantActiveBuilds(State & state)
+    {
+        if (!state.active || state.isPaused() || frozenSections)
+            return false;
+        auto i = state.activitiesByType.find(actBuild);
+        if (i == state.activitiesByType.end())
+            return false;
+        for (auto & [id, act] : i->second.its)
+            if (act->drvPath && act->machineName.empty())
+                return true;
+        return false;
+    }
+
+    void activeBuildsThreadMain()
+    {
+        auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(minActiveBuildsInterval);
+
+        /* The CPU times of the builds in the previous sample. */
+        std::map<std::string, std::chrono::microseconds> prevCpuTimes;
+        std::optional<std::chrono::steady_clock::time_point> prevSample;
+
+        while (true) {
+            {
+                auto activeBuilds(activeBuilds_.lock());
+                activeBuilds.wait_for(activeBuildsCV, interval, [&] { return activeBuilds->quit; });
+                if (activeBuilds->quit)
+                    return;
+            }
+
+            if (!wantActiveBuilds(*state_.lock())) {
+                activeBuilds_.lock()->builds.clear();
+                prevCpuTimes.clear();
+                prevSample.reset();
+                continue;
+            }
+
+            auto store = progressBarStore->lock()->lock();
+            if (!store)
+                continue;
+
+            auto queryStore = dynamic_cast<QueryActiveBuildsStore *>(&*store);
+            if (!queryStore)
+                return;
+
+            /* Note: this may call the logger (e.g. to show messages
+               from the daemon), so we must not hold any locks. If the
+               query fails (e.g. because the daemon is too old), give
+               up. */
+            auto before = std::chrono::steady_clock::now();
+            std::vector<ActiveBuildInfo> infos;
+            try {
+                infos = queryStore->queryActiveBuilds();
+            } catch (...) {
+                return;
+            }
+            auto now = std::chrono::steady_clock::now();
+
+            /* Don't spend more than ~10% of the time querying. */
+            interval = std::max<std::chrono::steady_clock::duration>(minActiveBuildsInterval, (now - before) * 10);
+
+            /* Compute the CPU usage since the previous sample. A build
+               that wasn't in the previous sample started after it, so
+               all of its CPU time was consumed in this interval. */
+            auto elapsed = prevSample ? std::chrono::duration_cast<std::chrono::microseconds>(now - *prevSample)
+                                      : std::chrono::microseconds(0);
+
+            std::map<std::string, ActiveBuilds::Build> builds;
+            decltype(prevCpuTimes) cpuTimes;
+
+            for (auto & info : infos) {
+                auto drvPath = store->printStorePath(info.derivation);
+                auto cpuTime = info.getCpuTime();
+                std::optional<double> cpuUsage;
+                if (elapsed.count() > 0) {
+                    auto prev = prevCpuTimes.find(drvPath);
+                    auto prevTime = prev == prevCpuTimes.end() ? std::chrono::microseconds(0) : prev->second;
+                    cpuUsage = std::max<double>((cpuTime - prevTime).count(), 0) * 100.0 / elapsed.count();
+                }
+                cpuTimes[drvPath] = cpuTime;
+                builds.insert_or_assign(drvPath, ActiveBuilds::Build{.info = std::move(info), .cpuUsage = cpuUsage});
+            }
+
+            prevCpuTimes = std::move(cpuTimes);
+            prevSample = now;
+
+            activeBuilds_.lock()->builds = std::move(builds);
+
+            update(*state_.lock());
+        }
+    }
+
+public:
 
     /**
      * Start reading keyboard input, if stdin is a terminal.
@@ -1228,6 +1406,52 @@ private:
     }
 #endif
 
+    /**
+     * Render the statistics of a running build: the number of
+     * processes, CPU usage and memory usage.
+     */
+    static std::vector<std::string> renderActiveBuildStats(const ActiveBuilds::Build & build)
+    {
+        auto & info = build.info;
+        std::vector<std::string> res;
+        auto n = info.processes.size();
+        res.push_back(fmt("%d %s", n, n == 1 ? "process" : "processes"));
+        if (build.cpuUsage)
+            res.push_back(fmt("%.0f%% CPU", *build.cpuUsage));
+        if (auto rss = info.getRss())
+            res.push_back(renderSize(*rss));
+        return res;
+    }
+
+    /**
+     * Return the program name of the most recently started process of
+     * a running build, other than the builder's main process (if there
+     * are others).
+     */
+    static std::optional<std::string> getLatestProgram(const ActiveBuilds::Build & build)
+    {
+        auto & info = build.info;
+        const ActiveBuildInfo::ProcessInfo * latest = nullptr;
+        for (auto & process : info.processes)
+            if (!latest || (latest->pid == info.mainPid) || (process.pid != info.mainPid && process.pid > latest->pid))
+                latest = &process;
+        if (!latest || latest->argv.empty())
+            return std::nullopt;
+        auto & argv = latest->argv;
+        /* Note: some processes overwrite their argv with a free-form
+           title (like "sshd: user"), so only use the first word. */
+        auto words = tokenizeString<std::vector<std::string>>(argv[0]);
+        if (words.empty())
+            return std::nullopt;
+        auto program = std::string(baseNameOf(words[0]));
+        /* For scripts (e.g. the gcc wrapper), show the name of the
+           script rather than of the interpreter. */
+        static const std::set<std::string, std::less<>> interpreters = {"sh", "bash", "dash", "perl", "python3"};
+        if (argv.size() >= 2 && interpreters.contains(program) && !argv[1].empty() && argv[1][0] != '-')
+            program = baseNameOf(argv[1]);
+        return program;
+    }
+
     std::vector<std::string> renderFrame(
         State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) override
     {
@@ -1419,16 +1643,43 @@ private:
                         builds.running ? fmt(", %d running", builds.running) : "",
                         builds.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, builds.failed) : ""));
                 lines.push_back(renderBar(builds.done, builds.failed, builds.running, builds.expected));
+
+                auto activeBuilds(activeBuilds_.lock());
+
+                auto getActiveBuild = [&](const ActInfo & act) -> const ActiveBuilds::Build * {
+                    if (!act.drvPath || !act.machineName.empty())
+                        return nullptr;
+                    auto i = activeBuilds->builds.find(*act.drvPath);
+                    return i == activeBuilds->builds.end() ? nullptr : &i->second;
+                };
+
                 /* Note: build activities are also started for builds
                    that are waiting for a build slot, so show the
-                   builds that have produced output first. */
+                   builds that are actually running first. */
                 renderItems(
                     items,
                     [&](const ActInfo & act) {
+                        auto activeBuild = getActiveBuild(act);
                         auto s = fmt("   ‣ %s", act.s);
                         if (!act.phase.empty())
                             s += fmt(" (%s)", act.phase);
-                        s += elapsed(act);
+                        if (activeBuild) {
+                            /* Show the elapsed time and statistics.
+                               Use the time at which the build actually
+                               started, i.e. not including waiting for a
+                               build slot. */
+                            std::vector<std::string> stats;
+                            auto d = std::chrono::system_clock::now()
+                                     - std::chrono::system_clock::from_time_t(activeBuild->info.startTime);
+                            if (d >= std::chrono::seconds(1))
+                                stats.push_back(renderDuration(d));
+                            std::ranges::move(renderActiveBuildStats(*activeBuild), std::back_inserter(stats));
+                            s += " " ANSI_FAINT + concatStringsSep(", ", stats);
+                            if (auto program = getLatestProgram(*activeBuild))
+                                s += fmt(" (%s)", *program);
+                            s += ANSI_NORMAL;
+                        } else
+                            s += elapsed(act);
                         lines.push_back(std::move(s));
                         /* Show the last log line below the build. Note:
                            if build logs are enabled, `lastLine` is not
@@ -1436,7 +1687,9 @@ private:
                         if (!act.lastLine.empty() && !printBuildLogs)
                             lines.push_back(fmt("     " ANSI_FAINT "> %s" ANSI_NORMAL, act.lastLine));
                     },
-                    [](const ActInfo & act) { return !act.phase.empty() || !act.lastLine.empty(); });
+                    [&](const ActInfo & act) {
+                        return getActiveBuild(act) || !act.phase.empty() || !act.lastLine.empty();
+                    });
             }
         }
 
@@ -1500,7 +1753,13 @@ std::unique_ptr<Logger> makeProgressIndicator()
     auto logger = std::make_unique<ProgressIndicator>(isTTY());
     logger->start();
     logger->startInput();
+    logger->startActiveBuildsThread();
     return logger;
+}
+
+void setProgressBarStore(ref<Store> store)
+{
+    *progressBarStore->lock() = store.get_ptr();
 }
 
 } // namespace nix
