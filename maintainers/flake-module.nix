@@ -119,6 +119,10 @@
           };
           shellcheck = {
             enable = true;
+            excludes = [
+              # direnv config, not a standalone script
+              ''^\.envrc$''
+            ];
           };
         };
       };

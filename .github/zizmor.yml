@@ -1,0 +1,7 @@
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        DeterminateSystems/*: ref-pin
+  self-repository:
+    disable: true
