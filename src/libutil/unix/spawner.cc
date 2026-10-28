@@ -316,6 +316,14 @@ void Server::handleSpawn(Message & msg)
             msg.fds.pop_back();
         }
 
+        /* If the child creates a new session, don't reply until it
+           has done so. Otherwise the parent could try to kill the
+           child's process group before it exists. The child closes
+           its side of the pipe after setsid(). */
+        Pipe sessionCreated;
+        if (options.setSid)
+            sessionCreated.create();
+
         auto pid = startChild(options, cgroupFd.get(), [&]() {
             /* Undo the spawner's state. */
             signal(SIGCHLD, SIG_DFL);
@@ -326,8 +334,12 @@ void Server::handleSpawn(Message & msg)
 
             verbosity = childVerbosity;
 
-            if (options.setSid && setsid() == -1)
-                throw SysError("creating a new session");
+            if (options.setSid) {
+                sessionCreated.readSide.close();
+                if (setsid() == -1)
+                    throw SysError("creating a new session");
+                sessionCreated.writeSide.close();
+            }
 
             if (options.chdir && chdir(options.chdir->c_str()) == -1)
                 throw SysError("changing directory to %s", PathFmt(*options.chdir));
@@ -339,6 +351,11 @@ void Server::handleSpawn(Message & msg)
         });
 
         children.emplace(pid, Child{.dieWithParent = options.dieWithParent});
+
+        if (options.setSid) {
+            sessionCreated.writeSide.close();
+            drainFD(sessionCreated.readSide.get());
+        }
 
         StringSink reply;
         reply << requestId << (uint64_t) pid;

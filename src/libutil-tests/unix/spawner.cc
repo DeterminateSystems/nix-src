@@ -136,7 +136,8 @@ TEST(Spawner, spawnFailure)
 
     /* The spawner should still work afterwards. */
     auto pid = testExitOp.spawn([&](Sink & args) { args << (uint64_t) 3; });
-    ASSERT_EQ(WEXITSTATUS(pid.wait()), 3);
+    auto status = pid.wait();
+    ASSERT_EQ(WEXITSTATUS(status), 3);
 }
 #endif
 
@@ -154,7 +155,8 @@ TEST(Spawner, detach)
     }
 
     auto pid = testExitOp.spawn([&](Sink & args) { args << (uint64_t) 5; });
-    ASSERT_EQ(WEXITSTATUS(pid.wait()), 5);
+    auto status = pid.wait();
+    ASSERT_EQ(WEXITSTATUS(status), 5);
 }
 
 TEST(Spawner, concurrent)
