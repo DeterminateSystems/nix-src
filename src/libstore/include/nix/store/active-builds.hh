@@ -57,6 +57,18 @@ struct ActiveBuildInfo : ActiveBuild
         std::optional<std::chrono::microseconds> utime, stime, cutime, cstime;
         // Resident set size in bytes.
         std::optional<uint64_t> rss;
+
+        /**
+         * The total CPU time of this process, including that of its reaped children, or `std::nullopt` if not
+         * available.
+         */
+        std::optional<std::chrono::microseconds> getCpuTime() const;
+
+        /**
+         * The command line of this process, with whitespace normalized. If `stripProgramPath` is set, only show the
+         * base name of argv[0].
+         */
+        std::string formatArgv(bool stripProgramPath = false) const;
     };
 
     // User/system CPU time for the entire cgroup, if available.
@@ -66,7 +78,24 @@ struct ActiveBuildInfo : ActiveBuild
     std::optional<uint64_t> rss;
 
     std::vector<ProcessInfo> processes;
+
+    /**
+     * The CPU time of this build. Use cgroup stats if available, otherwise sum process times.
+     */
+    std::chrono::microseconds getCpuTime() const;
+
+    /**
+     * The resident memory of this build. Use cgroup stats if available, otherwise sum process RSS. Note that the
+     * latter double-counts shared pages.
+     */
+    std::optional<uint64_t> getRss() const;
 };
+
+/**
+ * Abbreviate the hash parts of store paths in `s`, e.g. `/nix/store/2limljgc50jy76vg388ldgggcjhhkhav-gcc-15.2.0`
+ * becomes `/nix/store/2limlj…-gcc-15.2.0`.
+ */
+std::string abbreviateStorePaths(std::string_view s, std::string_view storeDir);
 
 struct TrackActiveBuildsStore
 {

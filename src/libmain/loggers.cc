@@ -18,6 +18,8 @@ LogFormat parseLogFormat(const std::string & logFormatStr)
         return LogFormat::bar;
     else if (logFormatStr == "bar-with-logs")
         return LogFormat::barWithLogs;
+    else if (logFormatStr == "tui")
+        return LogFormat::tui;
     throw Error("option 'log-format' has an invalid value '%s'", logFormatStr);
 }
 
@@ -37,6 +39,8 @@ std::unique_ptr<Logger> makeDefaultLogger()
         logger->setPrintBuildLogs(true);
         return logger;
     }
+    case LogFormat::tui:
+        return makeProgressIndicator();
     default:
         unreachable();
     }

@@ -1,7 +1,12 @@
 #include "nix/store/active-builds.hh"
+#include "nix/util/base-nix-32.hh"
+#include "nix/util/file-system.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/util/strings.hh"
 
 #include <nlohmann/json.hpp>
+
+#include <algorithm>
 
 #ifndef _WIN32
 #  include <pwd.h>
@@ -12,6 +17,73 @@ namespace nix {
 void QueryActiveBuildsStore::anchor() {}
 
 void TrackActiveBuildsStore::anchor() {}
+
+std::optional<std::chrono::microseconds> ActiveBuildInfo::ProcessInfo::getCpuTime() const
+{
+    if (!utime && !stime && !cutime && !cstime)
+        return std::nullopt;
+    return utime.value_or(std::chrono::microseconds(0)) + stime.value_or(std::chrono::microseconds(0))
+           + cutime.value_or(std::chrono::microseconds(0)) + cstime.value_or(std::chrono::microseconds(0));
+}
+
+std::string ActiveBuildInfo::ProcessInfo::formatArgv(bool stripProgramPath) const
+{
+    auto argv = this->argv;
+    /* Don't touch argv[0] if it contains whitespace, since some processes overwrite their argv with a
+       free-form title (like "sshd: user"). */
+    if (stripProgramPath && !argv.empty() && argv[0].find_first_of(" \t\n") == std::string::npos)
+        argv[0] = baseNameOf(argv[0]);
+    return concatStringsSep(" ", tokenizeString<std::vector<std::string>>(concatStringsSep(" ", argv)));
+}
+
+std::chrono::microseconds ActiveBuildInfo::getCpuTime() const
+{
+    if (utime && stime)
+        return *utime + *stime;
+    std::chrono::microseconds total{0};
+    for (const auto & process : processes)
+        total += process.getCpuTime().value_or(std::chrono::microseconds(0));
+    return total;
+}
+
+std::optional<uint64_t> ActiveBuildInfo::getRss() const
+{
+    if (rss)
+        return rss;
+    std::optional<uint64_t> total;
+    for (const auto & process : processes)
+        if (process.rss)
+            total = total.value_or(0) + *process.rss;
+    return total;
+}
+
+std::string abbreviateStorePaths(std::string_view s, std::string_view storeDir)
+{
+    constexpr size_t keep = 6;
+    auto prefix = std::string(storeDir) + "/";
+    std::string res;
+    size_t pos = 0;
+    while (true) {
+        auto i = s.find(prefix, pos);
+        if (i == s.npos)
+            break;
+        auto hashStart = i + prefix.size();
+        auto hashEnd = hashStart + StorePath::HashLen;
+        if (hashEnd < s.size() && s[hashEnd] == '-'
+            && std::ranges::all_of(
+                s.substr(hashStart, StorePath::HashLen),
+                [](char c) { return BaseNix32::lookupReverse(c).has_value(); })) {
+            res += s.substr(pos, hashStart + keep - pos);
+            res += "…";
+            pos = hashEnd;
+        } else {
+            res += s.substr(pos, hashStart - pos);
+            pos = hashStart;
+        }
+    }
+    res += s.substr(pos);
+    return res;
+}
 
 UserInfo UserInfo::fromUid(uid_t uid)
 {
