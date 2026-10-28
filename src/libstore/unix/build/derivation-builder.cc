@@ -1574,7 +1574,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
                     PathFmt(store.toRealPath(newInfo.path)));
                 deletePath(actualPath);
                 /* Trigger the hash-mismatch error. */
-                checkCAFixedOutput(store, drvPath, *output, newInfo, *act);
+                checkCAFixedOutput(store, drvPath, *output, newInfo, miscMethods->getActivity());
                 unreachable();
             }
         }
@@ -1693,7 +1693,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
 
     /* Apply output checks. This includes checking of the wanted vs got
        hash of fixed-outputs. */
-    checkOutputs(store, drvPath, drv.outputs, drvOptions.outputChecks, infos, *act);
+    checkOutputs(store, drvPath, drv.outputs, drvOptions.outputChecks, infos, miscMethods->getActivity());
 
     if (buildMode == bmCheck) {
         return {};

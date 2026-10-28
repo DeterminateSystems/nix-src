@@ -3,7 +3,6 @@
 
 #include "nix/util/logging.hh"
 #include "nix/util/serialise.hh"
-#include "nix/util/ref.hh"
 
 #include <list>
 #include <map>
@@ -12,11 +11,11 @@
 namespace nix {
 
 /**
- * Line buffering and log tracking for build output.
+ * @brief Line buffering and log tracking for build output.
  *
  * This class handles:
  * - Owning the build Activity for logging
- * - Buffering partial lines (handling \r and \n)
+ * - Buffering partial lines (handling \\r and \\n)
  * - Maintaining a tail of recent log lines (for error messages)
  * - Processing JSON log messages via handleJSONLogMessage
  *
@@ -38,9 +37,9 @@ private:
 
 public:
     /**
-     * The build activity.
+     * The build activity. Owned by BuildLog.
      */
-    ref<Activity> act;
+    std::unique_ptr<Activity> act;
 
     /**
      * Map for tracking nested activities from JSON messages.
@@ -51,7 +50,7 @@ public:
      * @param maxTailLines Maximum number of tail lines to keep
      * @param act Activity for this build
      */
-    BuildLog(size_t maxTailLines, ref<Activity> act);
+    BuildLog(size_t maxTailLines, std::unique_ptr<Activity> act);
 
     /**
      * Process output data from child process.

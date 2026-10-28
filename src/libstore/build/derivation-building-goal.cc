@@ -703,7 +703,7 @@ Goal::Co DerivationBuildingGoal::buildWithHook(
 
     std::unique_ptr<BuildLog> buildLog = std::make_unique<BuildLog>(
         worker.settings.logLines,
-        make_ref<Activity>(
+        std::make_unique<Activity>(
             *logger,
             lvlInfo,
             actBuild,
@@ -873,18 +873,6 @@ Goal::Co DerivationBuildingGoal::buildLocally(
 #ifdef _WIN32 // TODO enable `DerivationBuilder` on Windows
     throw UnimplementedError("building derivations is not yet implemented on Windows");
 #else
-    auto msg =
-        fmt(buildMode == bmRepair  ? "repairing outputs of '%s'"
-            : buildMode == bmCheck ? "checking outputs of '%s'"
-                                   : "building '%s'",
-            worker.store.printStorePath(drvPath));
-    auto act = make_ref<Activity>(
-        *logger,
-        lvlInfo,
-        actBuild,
-        msg,
-        Logger::Fields{worker.store.printStorePath(drvPath), "", 1, 1},
-        worker.actDerivations.id);
     std::unique_ptr<BuildLog> buildLog;
     std::unique_ptr<LogFile> logFile;
 
@@ -895,7 +883,20 @@ Goal::Co DerivationBuildingGoal::buildLocally(
     auto closeLogFile = [&]() { logFile.reset(); };
 
     auto started = [&]() {
-        buildLog = std::make_unique<BuildLog>(worker.settings.logLines, act);
+        auto msg =
+            fmt(buildMode == bmRepair  ? "repairing outputs of '%s'"
+                : buildMode == bmCheck ? "checking outputs of '%s'"
+                                       : "building '%s'",
+                worker.store.printStorePath(drvPath));
+        buildLog = std::make_unique<BuildLog>(
+            worker.settings.logLines,
+            std::make_unique<Activity>(
+                *logger,
+                lvlInfo,
+                actBuild,
+                msg,
+                Logger::Fields{worker.store.printStorePath(drvPath), "", 1, 1},
+                worker.actDerivations.id));
         mcRunningBuilds = std::make_unique<MaintainCount<uint64_t>>(worker.runningBuilds);
         worker.updateProgress();
     };
@@ -929,12 +930,17 @@ Goal::Co DerivationBuildingGoal::buildLocally(
                 DerivationBuildingGoal & goal;
                 fun<void()> openLogFileFn;
                 fun<void()> closeLogFileFn;
+                std::unique_ptr<BuildLog> & buildLog;
 
                 DerivationBuildingGoalCallbacks(
-                    DerivationBuildingGoal & goal, fun<void()> openLogFileFn, fun<void()> closeLogFileFn)
+                    DerivationBuildingGoal & goal,
+                    fun<void()> openLogFileFn,
+                    fun<void()> closeLogFileFn,
+                    std::unique_ptr<BuildLog> & buildLog)
                     : goal{goal}
                     , openLogFileFn{std::move(openLogFileFn)}
                     , closeLogFileFn{std::move(closeLogFileFn)}
+                    , buildLog{buildLog}
                 {
                 }
 
@@ -953,6 +959,12 @@ Goal::Co DerivationBuildingGoal::buildLocally(
                 void closeLogFile() override
                 {
                     closeLogFileFn();
+                }
+
+                Activity & getActivity() override
+                {
+                    assert(buildLog);
+                    return *buildLog->act;
                 }
             };
 
@@ -981,7 +993,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
                 desugaredEnv = DesugaredEnv::create(worker.store, *drv, drvOptions, inputPaths);
             } catch (BuildError & e) {
                 outputLocks.unlock();
-                co_return doneFailure(std::move(e), act->id);
+                co_return doneFailure(std::move(e));
             }
 
             DerivationBuilderParams params{
@@ -996,21 +1008,19 @@ Goal::Co DerivationBuildingGoal::buildLocally(
                 .defaultPathsInChroot = std::move(defaultPathsInChroot),
                 .systemFeatures = worker.store.config.systemFeatures.get(),
                 .desugaredEnv = std::move(desugaredEnv),
-                .act = act,
             };
 
             /* If we have to wait and retry (see below), then `builder` will
                already be created, so we don't need to create it again. */
+            auto callbacks =
+                std::make_shared<DerivationBuildingGoalCallbacks>(*this, openLogFile, closeLogFile, buildLog);
             builder = localBuildCap.externalBuilder
                           ? makeExternalDerivationBuilder(
                                 localBuildCap.localStore,
-                                std::make_shared<DerivationBuildingGoalCallbacks>(*this, openLogFile, closeLogFile),
+                                std::move(callbacks),
                                 std::move(params),
                                 *localBuildCap.externalBuilder)
-                          : makeDerivationBuilder(
-                                localBuildCap.localStore,
-                                std::make_shared<DerivationBuildingGoalCallbacks>(*this, openLogFile, closeLogFile),
-                                std::move(params));
+                          : makeDerivationBuilder(localBuildCap.localStore, std::move(callbacks), std::move(params));
         }
 
         if (auto builderOutOpt = builder->startBuild()) {
@@ -1055,7 +1065,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
             break;
         } else if (auto * timeout = std::get_if<std::unique_ptr<TimedOut>>(&event)) {
             builder->killChild();
-            co_return doneFailure(std::move(**timeout), act->id);
+            co_return doneFailure(std::move(**timeout), buildLog->act->id);
         }
     }
 
@@ -1067,11 +1077,11 @@ Goal::Co DerivationBuildingGoal::buildLocally(
     } catch (BuilderFailureError & e) {
         builder.reset();
         outputLocks.unlock();
-        co_return doneFailure(fixupBuilderFailureErrorMessage(std::move(e), *buildLog), act->id);
+        co_return doneFailure(fixupBuilderFailureErrorMessage(std::move(e), *buildLog), buildLog->act->id);
     } catch (BuildError & e) {
         builder.reset();
         outputLocks.unlock();
-        co_return doneFailure(std::move(e), act->id);
+        co_return doneFailure(std::move(e), buildLog->act->id);
     }
     {
         builder.reset();
@@ -1111,7 +1121,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
            (unlinked) lock files. */
         outputLocks.setDeletion(true);
         outputLocks.unlock();
-        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs), act->id, provenance);
+        co_return doneSuccess(BuildResult::Success::Built, std::move(builtOutputs), buildLog->act->id, provenance);
     }
 #endif
 }
