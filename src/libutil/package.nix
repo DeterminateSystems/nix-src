@@ -5,6 +5,7 @@
 
   boost,
   brotli,
+  hdiffpatch,
   libarchive,
   libblake3,
   libcpuid,
@@ -50,6 +51,7 @@ mkMesonLibrary (finalAttrs: {
 
   buildInputs = [
     brotli
+    hdiffpatch
     libblake3
     libsodium
     openssl
