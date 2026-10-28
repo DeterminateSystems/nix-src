@@ -9,6 +9,7 @@
 #include "nix/store/active-builds.hh"
 #include "nix/util/util.hh"
 
+#include <deque>
 #include <map>
 #include <thread>
 #include <sstream>
@@ -145,7 +146,36 @@ protected:
          * terminal. The cursor is on the last of these lines.
          */
         size_t linesShown = 0;
+
+        /**
+         * Whether we're on the alternate screen (see
+         * `enterAltScreen()`).
+         */
+        bool altScreen = false;
+
+        struct DeferredOutput
+        {
+            bool toStdout;
+            std::string data;
+        };
+
+        /**
+         * Output written while on the alternate screen, to be written
+         * to the normal screen when we leave the alternate screen.
+         */
+        std::vector<DeferredOutput> deferredOutput;
+
+        /**
+         * The most recent lines of log output written while on the
+         * alternate screen.
+         */
+        std::deque<std::string> recentLog;
     };
+
+    /**
+     * The maximum number of lines kept in `Screen::recentLog`.
+     */
+    static constexpr size_t maxRecentLog = 500;
 
     Sync<Screen> screen_;
 
@@ -578,11 +608,13 @@ public:
         if (frame == screen->lastFrame)
             return;
 
-        auto s = cursorToFrameStart(screen->linesShown) + frame;
+        /* On the alternate screen, we own the entire screen, so we can
+           draw from the top-left corner (`\e[H`). */
+        auto s = (screen->altScreen ? "\e[H" : cursorToFrameStart(screen->linesShown)) + frame;
         /* If the new frame is shorter, erase from the cursor to the
            end of the screen to remove the remainder of the old
            frame. */
-        if (lines.size() < screen->linesShown)
+        if (screen->altScreen || lines.size() < screen->linesShown)
             s += "\e[J";
         writeToStderr(s);
 
@@ -608,16 +640,101 @@ public:
 
     /**
      * Erase the frame, leaving the cursor at the start of an empty
-     * line, then print `s` there.
+     * line, then print `s` there. On the alternate screen, `s` is
+     * deferred until we leave the alternate screen instead.
      */
     void clearProgressDisplay(std::string_view s = "")
     {
         auto screen(screen_.lock());
-        writeToStderr(
-            (screen->linesShown > 1 ? cursorToFrameStart(screen->linesShown) + "\e[J" : std::string("\r\e[K"))
-            + std::string(s));
+        if (screen->altScreen) {
+            defer(*screen, false, s);
+            return;
+        }
+        clearProgressDisplay(*screen);
+        writeToStderr(s);
+    }
+
+    static void clearProgressDisplay(Screen & screen)
+    {
+        writeToStderr(screen.linesShown > 1 ? cursorToFrameStart(screen.linesShown) + "\e[J" : std::string("\r\e[K"));
+        screen.lastFrame.reset();
+        screen.linesShown = 0;
+    }
+
+    static void defer(Screen & screen, bool toStdout, std::string_view s)
+    {
+        if (s.empty())
+            return;
+        if (!screen.deferredOutput.empty() && screen.deferredOutput.back().toStdout == toStdout)
+            screen.deferredOutput.back().data += s;
+        else
+            screen.deferredOutput.push_back({.toStdout = toStdout, .data = std::string(s)});
+        if (!toStdout) {
+            for (auto & line : tokenizeString<std::vector<std::string>>(s, "\n"))
+                screen.recentLog.push_back(std::move(line));
+            while (screen.recentLog.size() > maxRecentLog)
+                screen.recentLog.pop_front();
+        }
+    }
+
+    /**
+     * Switch to the terminal's alternate screen, which we can use in
+     * its entirety without disturbing the normal screen. Output written
+     * while on the alternate screen is deferred until
+     * `leaveAltScreen()`.
+     */
+    void enterAltScreen()
+    {
+        auto screen(screen_.lock());
+        if (screen->altScreen)
+            return;
+        /* Erase the frame on the normal screen first, so there is no
+           stale frame when we come back. */
+        clearProgressDisplay(*screen);
+        writeToStderr("\e[?1049h");
+        screen->altScreen = true;
+    }
+
+    /**
+     * Switch back to the normal screen and write the output deferred
+     * while on the alternate screen.
+     */
+    void leaveAltScreen()
+    {
+        auto screen(screen_.lock());
+        if (!screen->altScreen)
+            return;
+        writeToStderr("\e[?1049l");
+        screen->altScreen = false;
         screen->lastFrame.reset();
         screen->linesShown = 0;
+        for (auto & output : screen->deferredOutput) {
+            if (output.toStdout) {
+                try {
+                    writeFull(getStandardOutput(), output.data, false);
+                } catch (SystemError &) {
+                }
+            } else
+                writeToStderr(output.data);
+        }
+        screen->deferredOutput.clear();
+        screen->recentLog.clear();
+    }
+
+    bool isOnAltScreen()
+    {
+        return screen_.lock()->altScreen;
+    }
+
+    /**
+     * Return the last `n` lines of log output written while on the
+     * alternate screen.
+     */
+    std::vector<std::string> getRecentLog(size_t n)
+    {
+        auto screen(screen_.lock());
+        n = std::min(n, screen->recentLog.size());
+        return {screen->recentLog.end() - n, screen->recentLog.end()};
     }
 
     std::chrono::milliseconds draw(State & state) noexcept
@@ -631,10 +748,13 @@ public:
         auto lines = renderFrame(state, std::chrono::steady_clock::now(), nextWakeup);
 
         /* Don't draw more lines than fit in the terminal, since then
-           we can't move the cursor back to the start of the frame. */
+           we can't move the cursor back to the start of the frame. On
+           the alternate screen, we draw from the top of the screen, so
+           we can use every row. */
         auto rows = getWindowSize().first;
-        if (rows > 1 && lines.size() >= rows)
-            lines.resize(rows - 1);
+        size_t maxRows = isOnAltScreen() ? rows : rows - 1;
+        if (rows > 1 && lines.size() > maxRows)
+            lines.resize(maxRows);
 
         /* Truncate lines to the terminal width. In multi-line frames,
            leave the last column empty: writing a newline after a line
@@ -682,6 +802,18 @@ public:
     {
         auto state(state_.lock());
         if (state->active) {
+            {
+                /* If stdout is the terminal, defer the output while on
+                   the alternate screen. */
+                auto screen(screen_.lock());
+                if (screen->altScreen) {
+                    if (nix::isTTY(getStandardOutput()))
+                        defer(*screen, true, std::string(s) + "\n");
+                    else
+                        Logger::writeToStdout(s);
+                    return;
+                }
+            }
             clearProgressDisplay();
             Logger::writeToStdout(s);
             draw(*state);
@@ -999,6 +1131,12 @@ class ProgressIndicator final : public ProgressBarBase
     std::optional<std::vector<std::string>> frozenSections;
 
     /**
+     * Whether full-screen mode is enabled, in which case we use the
+     * entire alternate screen. Protected by the state lock.
+     */
+    bool fullScreen = false;
+
+    /**
      * Whether we're currently reading keyboard input.
      */
     std::atomic<bool> inputEnabled = false;
@@ -1247,6 +1385,8 @@ private:
 #ifndef _WIN32
     void suspendInput(State & state) override
     {
+        leaveAltScreen();
+
         auto input(input_.lock());
         if (!input->enabled)
             return;
@@ -1294,6 +1434,10 @@ private:
         input->enabled = true;
         inputEnabled = true;
         inputCV.notify_one();
+
+        if (fullScreen)
+            enterAltScreen();
+
         update(state);
     }
 
@@ -1400,8 +1544,18 @@ private:
                 frozenSections.reset();
             else {
                 auto nextWakeup = std::chrono::milliseconds::max();
-                frozenSections = renderSections(*state, std::chrono::steady_clock::now(), nextWakeup, getMaxLines());
+                frozenSections = renderSections(
+                    *state, std::chrono::steady_clock::now(), nextWakeup, getMaxLines(renderTrailer(true).size()));
             }
+            update(*state);
+            break;
+
+        case 'f':
+            fullScreen = !fullScreen;
+            if (fullScreen)
+                enterAltScreen();
+            else
+                leaveAltScreen();
             update(*state);
             break;
         }
@@ -1455,26 +1609,35 @@ private:
     }
 
     /**
-     * Return the maximum number of lines that the sections may occupy.
+     * Return the maximum number of lines that the sections (and in
+     * full-screen mode, the log) may occupy, given that the trailer
+     * (see `renderTrailer()`) has `trailerLines` lines.
      */
-    size_t getMaxLines()
+    size_t getMaxLines(size_t trailerLines)
     {
         size_t rows = getWindowSize().first;
         if (rows == 0)
             rows = 24;
+        /* In full-screen mode, everything must fit on the screen. */
+        if (isOnAltScreen())
+            return rows > trailerLines ? rows - trailerLines : 0;
         auto maxLines = std::max(minLines, rows * maxHeightPercent / 100);
-        /* Leave room for the "Type 'h' for help" line. */
+        /* Leave room for the "Type 'h' for help" line. The help text
+           is shown in addition to the sections. */
         if (inputEnabled && !helpShown)
             maxLines--;
         return maxLines;
     }
 
-    std::vector<std::string> renderFrame(
-        State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) override
+    /**
+     * Render the lines shown below the sections: the pause message,
+     * and the help text or a hint on how to show it.
+     */
+    std::vector<std::string> renderTrailer(bool paused)
     {
-        auto lines = frozenSections ? *frozenSections : renderSections(state, now, nextWakeup, getMaxLines());
+        std::vector<std::string> lines;
 
-        if (frozenSections)
+        if (paused)
             lines.push_back(ANSI_BOLD "Display paused. Press 'p' or space to resume.");
 
         if (inputEnabled) {
@@ -1484,12 +1647,46 @@ private:
                     fmt("  " ANSI_BOLD "l" ANSI_NORMAL "  %s build logs", printBuildLogs ? "hide" : "show"));
                 lines.push_back("  " ANSI_BOLD "v" ANSI_NORMAL "  increase verbosity");
                 lines.push_back("  " ANSI_BOLD "-" ANSI_NORMAL "  decrease verbosity");
+                lines.push_back(fmt("  " ANSI_BOLD "p" ANSI_NORMAL "  %s the display", paused ? "resume" : "pause"));
                 lines.push_back(
-                    fmt("  " ANSI_BOLD "p" ANSI_NORMAL "  %s the display", frozenSections ? "resume" : "pause"));
+                    fmt("  " ANSI_BOLD "f" ANSI_NORMAL "  %s full-screen mode", fullScreen ? "leave" : "enter"));
                 lines.push_back("  " ANSI_BOLD "h" ANSI_NORMAL "  hide this help");
                 lines.push_back("  " ANSI_BOLD "q" ANSI_NORMAL "  quit");
-            } else if (!lines.empty() && !frozenSections)
+            } else if (!paused)
                 lines.push_back(ANSI_FAINT "Type 'h' for help.");
+        }
+
+        return lines;
+    }
+
+    std::vector<std::string> renderFrame(
+        State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) override
+    {
+        auto paused = frozenSections.has_value();
+        auto trailer = renderTrailer(paused);
+        auto maxLines = getMaxLines(trailer.size());
+
+        auto lines = paused ? *frozenSections : renderSections(state, now, nextWakeup, maxLines);
+
+        auto altScreen = isOnAltScreen();
+
+        /* In full-screen mode, show the most recent log output in the
+           remaining space, since it's not visible otherwise. */
+        if (altScreen && lines.size() + 2 <= maxLines) {
+            auto log = getRecentLog(maxLines - lines.size() - 1);
+            if (!log.empty()) {
+                lines.push_back(ANSI_FAINT "── log ──");
+                std::ranges::move(log, std::back_inserter(lines));
+            }
+        }
+
+        /* Don't show the help hint if there is nothing else to show. */
+        if (!lines.empty() || paused || helpShown) {
+            /* In full-screen mode, show the trailer at the bottom of
+               the screen. */
+            if (altScreen && lines.size() < maxLines)
+                lines.resize(maxLines);
+            std::ranges::move(trailer, std::back_inserter(lines));
         }
 
         return lines;
