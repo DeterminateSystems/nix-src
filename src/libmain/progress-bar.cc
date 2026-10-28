@@ -969,9 +969,11 @@ class ProgressIndicator final : public ProgressBarBase
     const std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
 
     /**
-     * Maximum number of running items to show per section.
+     * The maximum height of the progress indicator, as a percentage of
+     * the height of the terminal, but at least `minLines`.
      */
-    static constexpr size_t maxItems = 5;
+    static constexpr size_t maxHeightPercent = 30;
+    static constexpr size_t minLines = 8;
 
     /**
      * Don't show activities in the list of other activities until
@@ -1398,7 +1400,7 @@ private:
                 frozenSections.reset();
             else {
                 auto nextWakeup = std::chrono::milliseconds::max();
-                frozenSections = renderSections(*state, std::chrono::steady_clock::now(), nextWakeup);
+                frozenSections = renderSections(*state, std::chrono::steady_clock::now(), nextWakeup, getMaxLines());
             }
             update(*state);
             break;
@@ -1452,10 +1454,25 @@ private:
         return program;
     }
 
+    /**
+     * Return the maximum number of lines that the sections may occupy.
+     */
+    size_t getMaxLines()
+    {
+        size_t rows = getWindowSize().first;
+        if (rows == 0)
+            rows = 24;
+        auto maxLines = std::max(minLines, rows * maxHeightPercent / 100);
+        /* Leave room for the "Type 'h' for help" line. */
+        if (inputEnabled && !helpShown)
+            maxLines--;
+        return maxLines;
+    }
+
     std::vector<std::string> renderFrame(
         State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup) override
     {
-        auto lines = frozenSections ? *frozenSections : renderSections(state, now, nextWakeup);
+        auto lines = frozenSections ? *frozenSections : renderSections(state, now, nextWakeup, getMaxLines());
 
         if (frozenSections)
             lines.push_back(ANSI_BOLD "Display paused. Press 'p' or space to resume.");
@@ -1479,12 +1496,85 @@ private:
     }
 
     /**
-     * Render the sections showing the progress of each kind of work.
+     * A section of the progress indicator, showing the progress of
+     * some kind of work.
      */
-    std::vector<std::string>
-    renderSections(State & state, std::chrono::steady_clock::time_point now, std::chrono::milliseconds & nextWakeup)
+    struct Section
     {
+        /**
+         * Lines that are always shown (e.g. a title and progress bar).
+         */
+        std::vector<std::string> header;
+
+        /**
+         * The running items (e.g. builds), in display order. Each item
+         * consists of one or more lines.
+         */
+        std::vector<std::vector<std::string>> items;
+    };
+
+    /**
+     * Combine the sections into at most `maxLines` lines. Section
+     * headers are always shown, even if they exceed `maxLines`. The
+     * remaining lines are distributed round-robin among the sections'
+     * items, i.e. every section gets to show its first item before any
+     * section shows its second item. Hidden items are summarized by a
+     * "… and N more" line.
+     */
+    static std::vector<std::string> layoutSections(const std::vector<Section> & sections, size_t maxLines)
+    {
+        /* The number of items shown for each section. */
+        std::vector<size_t> shown(sections.size(), 0);
+
+        /* Initially, every section with items needs a line saying how
+           many items are hidden. */
+        size_t used = 0;
+        for (auto & section : sections)
+            used += section.header.size() + (section.items.empty() ? 0 : 1);
+
+        bool progress = true;
+        while (progress) {
+            progress = false;
+            for (auto [n, section] : enumerate(sections)) {
+                if (shown[n] == section.items.size())
+                    continue;
+                /* If this is the last item, we don't need the "… and N
+                   more" line anymore. */
+                auto height = section.items[shown[n]].size();
+                auto delta = height - (shown[n] + 1 == section.items.size() ? 1 : 0);
+                if (used + delta > maxLines)
+                    continue;
+                used += delta;
+                shown[n]++;
+                progress = true;
+            }
+        }
+
         std::vector<std::string> lines;
+        for (auto [n, section] : enumerate(sections)) {
+            std::ranges::copy(section.header, std::back_inserter(lines));
+            for (size_t i = 0; i < shown[n]; ++i)
+                std::ranges::copy(section.items[i], std::back_inserter(lines));
+            auto hidden = section.items.size() - shown[n];
+            if (hidden)
+                lines.push_back(
+                    shown[n] ? fmt(ANSI_FAINT "   … and %d more" ANSI_NORMAL, hidden)
+                             : fmt(ANSI_FAINT "   … %d more" ANSI_NORMAL, hidden));
+        }
+        return lines;
+    }
+
+    /**
+     * Render the sections showing the progress of each kind of work,
+     * using at most `maxLines` lines (see `layoutSections()`).
+     */
+    std::vector<std::string> renderSections(
+        State & state,
+        std::chrono::steady_clock::time_point now,
+        std::chrono::milliseconds & nextWakeup,
+        size_t maxLines)
+    {
+        std::vector<Section> sections;
 
         static constexpr std::array<std::string_view, 10> spinner = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
         /* Note: the spinner is padded with a space, since the done
@@ -1526,23 +1616,19 @@ private:
             return fmt("%s/%s", renderSize(done), renderSize(expected));
         };
 
-        /* Render the given activities, oldest first, up to
-           `maxItems`. `renderItem` appends one or more lines for an
-           activity to `lines`. If `isActive` is given, show the
-           activities for which it returns true first. */
+        /* Render the given activities, oldest first. `renderItem`
+           returns the lines for an activity. If `isActive` is given,
+           show the activities for which it returns true first. */
         auto renderItems = [&](std::vector<ActInfo *> items,
                                auto renderItem,
                                std::function<bool(const ActInfo &)> isActive = nullptr) {
             std::ranges::sort(items, {}, &ActInfo::startTime);
             if (isActive)
                 std::ranges::stable_partition(items, [&](ActInfo * act) { return isActive(*act); });
-            for (auto [n, item] : enumerate(items)) {
-                if (n == maxItems) {
-                    lines.push_back(fmt(ANSI_FAINT "   … and %d more" ANSI_NORMAL, items.size() - maxItems));
-                    break;
-                }
-                renderItem(*item);
-            }
+            std::vector<std::vector<std::string>> res;
+            for (auto item : items)
+                res.push_back(renderItem(*item));
+            return res;
         };
 
         auto getItems = [&](ActivityType type) {
@@ -1577,8 +1663,9 @@ private:
             }
             if (!items.empty())
                 busy = true;
-            renderItems(
-                items, [&](const ActInfo & act) { lines.push_back(fmt("%s %s%s", busyMark, act.s, elapsed(act))); });
+            sections.push_back({.items = renderItems(items, [&](const ActInfo & act) -> std::vector<std::string> {
+                                    return {fmt("%s %s%s", busyMark, act.s, elapsed(act))};
+                                })});
         }
 
         /* Downloads. Note that this includes the downloads done by
@@ -1590,15 +1677,19 @@ private:
                 auto items = getItems(actFileTransfer);
                 bool active = !items.empty() || stats.done < stats.expected;
                 busy |= active;
-                lines.push_back(
-                    fmt("%s Downloaded %s", active ? busyMark : doneMark, renderSizes(stats.done, stats.expected)));
-                lines.push_back(renderBar(stats.done, 0, 0, stats.expected));
-                renderItems(items, [&](const ActInfo & act) {
-                    lines.push_back(
-                        fmt("   ‣ %s%s%s",
-                            act.s,
-                            act.expected ? " " + renderSizes(act.done, act.expected) : "",
-                            elapsed(act)));
+                sections.push_back({
+                    .header =
+                        {fmt("%s Downloaded %s", active ? busyMark : doneMark, renderSizes(stats.done, stats.expected)),
+                         renderBar(stats.done, 0, 0, stats.expected)},
+                    .items = renderItems(
+                        items,
+                        [&](const ActInfo & act) -> std::vector<std::string> {
+                            return {
+                                fmt("   ‣ %s%s%s",
+                                    act.s,
+                                    act.expected ? " " + renderSizes(act.done, act.expected) : "",
+                                    elapsed(act))};
+                        }),
                 });
             }
         }
@@ -1611,18 +1702,23 @@ private:
                 auto items = getItems(actSubstitute);
                 bool active = paths.running || paths.done < paths.expected;
                 busy |= active;
-                lines.push_back(
-                    fmt("%s Fetched %d/%d paths (%s unpacked)%s",
-                        paths.failed && !active ? failMark
-                        : active                ? busyMark
-                                                : doneMark,
-                        paths.done,
-                        paths.expected,
-                        renderSizes(bytes.done, bytes.expected),
-                        paths.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, paths.failed) : ""));
-                lines.push_back(renderBar(paths.done, paths.failed, paths.running, paths.expected));
-                renderItems(
-                    items, [&](const ActInfo & act) { lines.push_back(fmt("   ‣ %s%s", act.s, elapsed(act))); });
+                sections.push_back({
+                    .header =
+                        {fmt("%s Fetched %d/%d paths (%s unpacked)%s",
+                             paths.failed && !active ? failMark
+                             : active                ? busyMark
+                                                     : doneMark,
+                             paths.done,
+                             paths.expected,
+                             renderSizes(bytes.done, bytes.expected),
+                             paths.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, paths.failed) : ""),
+                         renderBar(paths.done, paths.failed, paths.running, paths.expected)},
+                    .items = renderItems(
+                        items,
+                        [&](const ActInfo & act) -> std::vector<std::string> {
+                            return {fmt("   ‣ %s%s", act.s, elapsed(act))};
+                        }),
+                });
             }
         }
 
@@ -1633,7 +1729,8 @@ private:
                 auto items = getItems(actBuild);
                 bool active = builds.running || builds.done < builds.expected;
                 busy |= active;
-                lines.push_back(
+                Section section;
+                section.header.push_back(
                     fmt("%s Built %d/%d derivations%s%s",
                         builds.failed && !active ? failMark
                         : active                 ? busyMark
@@ -1642,7 +1739,7 @@ private:
                         builds.expected,
                         builds.running ? fmt(", %d running", builds.running) : "",
                         builds.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, builds.failed) : ""));
-                lines.push_back(renderBar(builds.done, builds.failed, builds.running, builds.expected));
+                section.header.push_back(renderBar(builds.done, builds.failed, builds.running, builds.expected));
 
                 auto activeBuilds(activeBuilds_.lock());
 
@@ -1656,9 +1753,10 @@ private:
                 /* Note: build activities are also started for builds
                    that are waiting for a build slot, so show the
                    builds that are actually running first. */
-                renderItems(
+                section.items = renderItems(
                     items,
                     [&](const ActInfo & act) {
+                        std::vector<std::string> lines;
                         auto activeBuild = getActiveBuild(act);
                         auto s = fmt("   ‣ %s", act.s);
                         if (!act.phase.empty())
@@ -1686,10 +1784,12 @@ private:
                            updated. */
                         if (!act.lastLine.empty() && !printBuildLogs)
                             lines.push_back(fmt("     " ANSI_FAINT "> %s" ANSI_NORMAL, act.lastLine));
+                        return lines;
                     },
                     [&](const ActInfo & act) {
                         return getActiveBuild(act) || !act.phase.empty() || !act.lastLine.empty();
                     });
+                sections.push_back(std::move(section));
             }
         }
 
@@ -1700,7 +1800,8 @@ private:
                 auto bad = std::min(verify.done, state.corruptedPaths + state.untrustedPaths + verify.failed);
                 bool active = verify.done < verify.expected;
                 busy |= active;
-                lines.push_back(
+                Section section;
+                section.header.push_back(
                     fmt("%s Verified %d/%d paths%s%s%s",
                         active ? busyMark
                         : bad  ? failMark
@@ -1710,7 +1811,8 @@ private:
                         state.corruptedPaths ? fmt(", " ANSI_RED "%d corrupted" ANSI_NORMAL, state.corruptedPaths) : "",
                         state.untrustedPaths ? fmt(", " ANSI_RED "%d untrusted" ANSI_NORMAL, state.untrustedPaths) : "",
                         verify.failed ? fmt(", " ANSI_RED "%d failed" ANSI_NORMAL, verify.failed) : ""));
-                lines.push_back(renderBar(verify.done - bad, bad, verify.running, verify.expected));
+                section.header.push_back(renderBar(verify.done - bad, bad, verify.running, verify.expected));
+                sections.push_back(std::move(section));
             }
         }
 
@@ -1720,14 +1822,16 @@ private:
             if (optimise.done || optimise.expected) {
                 bool active = optimise.done < optimise.expected;
                 busy |= active;
-                lines.push_back(
-                    fmt("%s Optimised %d/%d paths, %s / %d inodes freed",
-                        active ? busyMark : doneMark,
-                        optimise.done,
-                        optimise.expected,
-                        renderSize(state.bytesLinked),
-                        state.filesLinked));
-                lines.push_back(renderBar(optimise.done, 0, 0, optimise.expected));
+                sections.push_back({
+                    .header =
+                        {fmt("%s Optimised %d/%d paths, %s / %d inodes freed",
+                             active ? busyMark : doneMark,
+                             optimise.done,
+                             optimise.expected,
+                             renderSize(state.bytesLinked),
+                             state.filesLinked),
+                         renderBar(optimise.done, 0, 0, optimise.expected)},
+                });
             }
         }
 
@@ -1735,7 +1839,7 @@ private:
         if (busy)
             nextWakeup = std::min(nextWakeup, std::chrono::duration_cast<std::chrono::milliseconds>(spinnerInterval));
 
-        return lines;
+        return layoutSections(sections, maxLines);
     }
 };
 
