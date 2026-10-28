@@ -122,11 +122,6 @@ struct DerivationBuilderParams
     StringSet systemFeatures;
 
     DesugaredEnv desugaredEnv;
-
-    /**
-     * The activity corresponding to the build.
-     */
-    ref<Activity> act;
 };
 
 /**
@@ -150,6 +145,12 @@ struct DerivationBuilderCallbacks
      * @todo this should be reworked
      */
     virtual void childTerminated() = 0;
+
+    /**
+     * The activity corresponding to the build. Only available once
+     * the build has started.
+     */
+    virtual Activity & getActivity() = 0;
 };
 
 /**
