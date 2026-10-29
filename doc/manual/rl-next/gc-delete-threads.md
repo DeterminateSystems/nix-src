@@ -11,4 +11,3 @@ The number of threads is controlled by the new [`gc-delete-threads`](@docroot@/c
 Raise it on dedicated local NVMe storage or uncontended high-IOPS volumes; on shared or IOPS-capped volumes more threads mostly add I/O pressure on other users of the device.
 Setting it to `1` restores the previous behaviour of deleting store paths in place, one at a time.
 If a garbage collection is interrupted, the next one deletes the trash it left behind.
-With `--max-freed`, garbage is still deleted in place, one store path at a time.

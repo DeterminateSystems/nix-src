@@ -83,13 +83,12 @@ public:
           high-IOPS volumes.
 
           With more than one thread, the amount of freed space reported
-          may be underestimated for files that are shared between dead
-          store paths through hard links
+          (and used for `--max-freed`) may be underestimated for files
+          that are shared between dead store paths through hard links
           (see [`auto-optimise-store`](#conf-auto-optimise-store)).
 
-          When this is `0` or `1`, or when `--max-freed` is given, dead
-          store paths are deleted in place, one at a time. Background
-          deletion is not supported on FreeBSD.
+          When this is `0` or `1`, dead store paths are deleted in place, one
+          at a time. Background deletion is not supported on FreeBSD.
         )",
     };
 

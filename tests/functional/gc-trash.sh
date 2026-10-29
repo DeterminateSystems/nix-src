@@ -45,9 +45,9 @@ for p in "${garbage[@]}"; do
 done
 noTrash
 
-# `max-freed` is respected exactly (garbage is then deleted in place):
-# each garbage path is a bit bigger than 1 MiB, so deleting one is
-# enough.
+# `max-freed` is respected exactly, even though paths are deleted in
+# the background: each garbage path is a bit bigger than 1 MiB, so
+# deleting one is enough.
 addGarbage
 nix-store --gc --max-freed 1M --option gc-delete-threads 4
 remaining=0
@@ -58,8 +58,9 @@ done
 noTrash
 nix-store --gc
 
-# `max-freed` is also respected for invalid paths: each one frees 400
-# bytes, so three of them are needed.
+# `max-freed` is also respected for garbage whose size isn't known in
+# advance, such as invalid paths: each one frees 400 bytes, so three of
+# them are needed.
 for i in $(seq 1 20); do
     d=$NIX_STORE_DIR/$(printf '%032d' "$i")-invalid-$i
     mkdir "$d"
