@@ -15,7 +15,20 @@
     {
 
       # https://flake.parts/options/git-hooks-nix#options
+      # TODO(cole-h): DSP and normal Nixpkgs have disagreeing versions of nixfmt, where one wants
+      # to format something the other changes.
+      pre-commit.check.enable = false;
       pre-commit.settings = {
+        # `self.outPath` from git-hooks-nix's flake-module is not path-normalized,
+        # so when this flake is evaluated via `packaging/secure-packages` (whose
+        # `inputs.nix.url = "../.."`), it expands to `.../source/packaging/secure-packages/../..`,
+        # which breaks the stdenv unpackPhase. Use a clean relative path instead.
+        rootSrc = lib.mkForce (
+          builtins.path {
+            name = "source";
+            path = ../.;
+          }
+        );
         hooks = {
           # Conflicts are usually found by other checks, but not those in docs,
           # and potentially other places.
@@ -101,6 +114,7 @@
               # Don't format vendored code
               ''^doc/manual/redirects\.js$''
               ''^doc/manual/theme/highlight\.js$''
+              ''^src/libfetchers/builtin-flake-registry\.json$''
             ];
           };
           shellcheck = {

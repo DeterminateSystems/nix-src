@@ -7,12 +7,19 @@
 #include "nix/util/signals.hh"
 #include "nix/util/callback.hh"
 
+#include <nlohmann/json.hpp>
+
 namespace nix {
 
 PathSubstitutionGoal::PathSubstitutionGoal(
-    const StorePath & storePath, Worker & worker, RepairFlag repair, std::optional<ContentAddress> ca)
+    const StorePath & storePath,
+    Worker & worker,
+    bool pathRequired,
+    RepairFlag repair,
+    std::optional<ContentAddress> ca)
     : Goal(worker, init())
     , storePath(storePath)
+    , pathRequired(pathRequired)
     , repair(repair)
     , ca(ca)
 {
@@ -24,6 +31,15 @@ PathSubstitutionGoal::PathSubstitutionGoal(
 PathSubstitutionGoal::~PathSubstitutionGoal()
 {
     cleanup();
+}
+
+Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failure failure, ActivityId act)
+{
+    auto res = Goal::doneFailure(result, std::move(failure));
+
+    logger->result(act, resBuildResult, nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+
+    return res;
 }
 
 Goal::Co PathSubstitutionGoal::init()
@@ -40,6 +56,20 @@ Goal::Co PathSubstitutionGoal::init()
     if (worker.store.config.getReadOnly())
         throw Error(
             "cannot substitute path '%s' - no write access to the Nix store", worker.store.printStorePath(storePath));
+
+    /* Covers the lifetime of this goal, including querying
+       substituters and the actual substitution. Note that the
+       progress bar only shows the `actSubstitute` activity, which
+       denotes that the actual substitution is happening. */
+    Activity act(
+        *logger,
+        lvlDebug,
+        "SubstitutionGoal",
+        std::to_array<std::pair<std::string_view, Logger::Field>>({
+            {"nix.store.path", worker.store.printStorePath(storePath)},
+        }),
+        "",
+        worker.actSubstitutions.id);
 
     auto subs = worker.getSubstituters();
 
@@ -73,7 +103,12 @@ Goal::Co PathSubstitutionGoal::init()
 
         try {
             info = co_await AsyncCallback<ref<const ValidPathInfo>>(
-                [sub, path = subPath.value_or(storePath)](auto cb) { sub->queryPathInfo(path, std::move(cb)); });
+                [&act, sub, path = subPath.value_or(storePath)](auto cb) {
+                    /* Note: narrowly scoped so that the `PushActivity`
+                       does not extend across a suspension point. */
+                    PushActivity pact(act.id);
+                    sub->queryPathInfo(path, std::move(cb));
+                });
         } catch (InvalidPath &) {
             continue;
         } catch (SubstituterDisabled & e) {
@@ -127,13 +162,13 @@ Goal::Co PathSubstitutionGoal::init()
            paths referenced by this one. */
         for (auto & i : info->references)
             if (i != storePath) /* ignore self-references */
-                waitees.insert(worker.makePathSubstitutionGoal(i));
+                waitees.insert(worker.makePathSubstitutionGoal(i, pathRequired));
 
         co_await await(std::move(waitees));
 
         // FIXME: consider returning boolean instead of passing in reference
         bool out = false; // is mutated by tryToRun
-        co_await tryToRun(subPath ? *subPath : storePath, sub, info, out);
+        co_await tryToRun(subPath ? *subPath : storePath, sub, info, out, act.id);
         substituterFailed = substituterFailed || out;
     }
 
@@ -155,17 +190,22 @@ Goal::Co PathSubstitutionGoal::init()
        In that case the calling derivation should just do a
        build. */
     co_return doneFailure(
-        substituterFailed ? ecFailed : ecNoSubstituters,
+        substituterFailed || pathRequired ? ecFailed : ecNoSubstituters,
         BuildResult::Failure{{
             .status = BuildResult::Failure::NoSubstituters,
             .msg = HintFmt(
                 "path '%s' is required, but there is no substituter that can build it",
                 worker.store.printStorePath(storePath)),
-        }});
+        }},
+        act.id);
 }
 
 Goal::Co PathSubstitutionGoal::tryToRun(
-    StorePath subPath, nix::ref<Store> sub, std::shared_ptr<const ValidPathInfo> info, bool & substituterFailed)
+    StorePath subPath,
+    nix::ref<Store> sub,
+    std::shared_ptr<const ValidPathInfo> info,
+    bool & substituterFailed,
+    ActivityId parentAct)
 {
     trace("all references realised");
 
@@ -176,7 +216,8 @@ Goal::Co PathSubstitutionGoal::tryToRun(
                 .status = BuildResult::Failure::DependencyFailed,
                 .msg = HintFmt(
                     "some references of path '%s' could not be realised", worker.store.printStorePath(storePath)),
-            }});
+            }},
+            parentAct);
     }
 
     for (auto & i : info->references)
@@ -204,7 +245,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
     auto maintainRunningSubstitutions = std::make_unique<MaintainCount<uint64_t>>(worker.runningSubstitutions);
     worker.updateProgress();
 
-    auto promise = std::promise<void>();
+    auto promise = std::promise<std::shared_ptr<const ValidPathInfo>>();
     auto future = promise.get_future();
 
     /* Be careful with ownership. cleanup() doesn't signal the worker thread
@@ -218,7 +259,8 @@ Goal::Co PathSubstitutionGoal::tryToRun(
                        repair = repair,
                        sub,
                        maybeWaker = worker.getCrossThreadWaker(),
-                       maybeWorkerStore = worker.store.weak_from_this()]() mutable {
+                       maybeWorkerStore = worker.store.weak_from_this(),
+                       parentAct]() mutable {
         try {
             ReceiveInterrupts receiveInterrupts;
 
@@ -230,12 +272,12 @@ Goal::Co PathSubstitutionGoal::tryToRun(
             Activity act(
                 *logger,
                 actSubstitute,
-                Logger::Fields{workerStore->printStorePath(storePath), sub->config.getHumanReadableURI()});
+                Logger::Fields{workerStore->printStorePath(storePath), sub->config.getHumanReadableURI()},
+                parentAct);
             PushActivity pact(act.id);
 
-            copyStorePath(*sub, *workerStore, subPath, repair, sub->config.isTrusted ? NoCheckSigs : CheckSigs);
-
-            promise.set_value();
+            promise.set_value(
+                copyStorePath(*sub, *workerStore, subPath, repair, sub->config.isTrusted ? NoCheckSigs : CheckSigs));
         } catch (...) {
             promise.set_exception(std::current_exception());
         }
@@ -258,8 +300,12 @@ Goal::Co PathSubstitutionGoal::tryToRun(
     thr.join();
     worker.childTerminated(this);
 
+    std::shared_ptr<const Provenance> provenance;
+
     try {
-        future.get();
+        auto info = future.get();
+        if (info)
+            provenance = info->provenance;
     } catch (std::exception & e) {
         /* Cause the parent build to fail unless --fallback is given,
            or the substitute has disappeared. The latter case behaves
@@ -300,7 +346,12 @@ Goal::Co PathSubstitutionGoal::tryToRun(
 
     worker.updateProgress();
 
-    co_return doneSuccess(BuildResult::Success{.status = BuildResult::Success::Substituted});
+    auto success = BuildResult::Success{.status = BuildResult::Success::Substituted, .provenance = provenance};
+
+    logger->result(
+        parentAct, resBuildResult, nlohmann::json(KeyedBuildResult({success}, DerivedPath::Opaque{storePath})));
+
+    co_return doneSuccess(std::move(success));
 }
 
 void PathSubstitutionGoal::cleanup()

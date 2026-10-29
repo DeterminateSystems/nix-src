@@ -42,11 +42,6 @@ let
     let
 
       result = ''
-        > **Warning** \
-        > This program is
-        > [**experimental**](@docroot@/development/experimental-features.md#xp-feature-nix-command)
-        > and its interface is subject to change.
-
         # Name
 
         `${command}` - ${details.description}
@@ -81,7 +76,11 @@ let
       subcommands = if length categories > 1 then listCategories else listSubcommands details.commands;
 
       categories = sort (x: y: x.id < y.id) (
-        unique (map (cmd: cmd.category) (attrValues details.commands))
+        unique (
+          map (cmd: { inherit (cmd.category) id description; }) (
+            builtins.filter (cmd: cmd.category.id != 103) (attrValues details.commands)
+          )
+        )
       );
 
       listCategories = concatStrings (map showCategory categories);
@@ -89,7 +88,7 @@ let
       showCategory = cat: ''
         **${toString cat.description}:**
 
-        ${listSubcommands (filterAttrs (n: v: v.category == cat) details.commands)}
+        ${listSubcommands (filterAttrs (n: v: v.category.id == cat.id) details.commands)}
       '';
 
       listSubcommands = cmds: concatStrings (attrValues (mapAttrs showSubcommand cmds));

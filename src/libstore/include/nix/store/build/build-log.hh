@@ -11,11 +11,11 @@
 namespace nix {
 
 /**
- * Line buffering and log tracking for build output.
+ * @brief Line buffering and log tracking for build output.
  *
  * This class handles:
  * - Owning the build Activity for logging
- * - Buffering partial lines (handling \r and \n)
+ * - Buffering partial lines (handling \\r and \\n)
  * - Maintaining a tail of recent log lines (for error messages)
  * - Processing JSON log messages via handleJSONLogMessage
  *
@@ -30,6 +30,8 @@ private:
     std::list<std::string> logTail;
     std::string currentLogLine;
     size_t currentLogLinePos = 0; // to handle carriage return
+
+    bool pendingCR = false; // defer '\r' so "\r\n" is treated as a line terminator
 
     void flushLine();
 

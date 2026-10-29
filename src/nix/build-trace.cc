@@ -16,11 +16,6 @@ struct CmdRealisation : NixMultiCommand
     {
         return "manipulate a Nix build trace";
     }
-
-    Category category() override
-    {
-        return catUtility;
-    }
 };
 
 static auto rCmdRealisation = registerCommand2<CmdRealisation>({"store", "build-trace"});
@@ -37,11 +32,6 @@ struct CmdRealisationInfo : BuiltPathsCommand, MixJSON
         return
 #include "build-trace/info.md"
             ;
-    }
-
-    Category category() override
-    {
-        return catSecondary;
     }
 
     void run(ref<Store> store, BuiltPaths && paths, BuiltPaths && rootPaths) override

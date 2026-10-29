@@ -73,6 +73,28 @@ CgroupStats getCgroupStats(const std::filesystem::path & cgroup)
         }
     }
 
+    /* Compute the cgroup equivalent of RSS, i.e. anonymous memory plus page cache pages that are mapped into a
+       process. This counts each page only once, unlike summing the RSS of the processes in the cgroup. We don't use
+       memory.current because that includes all page cache charged to the cgroup (e.g. files read or written by the
+       build), which can dwarf the memory actually used by the processes. Note that pages charged to another
+       cgroup (e.g. shared libraries first loaded elsewhere) are not counted. */
+    auto memstatPath = cgroup / "memory.stat";
+
+    if (pathExists(memstatPath)) {
+        std::optional<uint64_t> anon, fileMapped;
+        for (auto & line : tokenizeString<std::vector<std::string>>(readFile(memstatPath), "\n")) {
+            std::string_view anonPrefix = "anon ";
+            if (hasPrefix(line, anonPrefix))
+                anon = string2Int<uint64_t>(line.substr(anonPrefix.size()));
+
+            std::string_view fileMappedPrefix = "file_mapped ";
+            if (hasPrefix(line, fileMappedPrefix))
+                fileMapped = string2Int<uint64_t>(line.substr(fileMappedPrefix.size()));
+        }
+        if (anon && fileMapped)
+            stats.memory = *anon + *fileMapped;
+    }
+
     return stats;
 }
 
@@ -172,6 +194,25 @@ CanonPath getRootCgroup()
 {
     static auto rootCgroup = getCurrentCgroup();
     return rootCgroup;
+}
+
+std::set<pid_t> getPidsInCgroup(const std::filesystem::path & cgroup)
+{
+    if (!pathExists(cgroup))
+        return {};
+
+    auto procsFile = cgroup / "cgroup.procs";
+
+    std::set<pid_t> result;
+
+    for (auto & pidStr : tokenizeString<std::vector<std::string>>(readFile(procsFile))) {
+        if (auto o = string2Int<pid_t>(pidStr))
+            result.insert(*o);
+        else
+            throw Error("invalid PID '%s'", pidStr);
+    }
+
+    return result;
 }
 
 } // namespace nix::linux

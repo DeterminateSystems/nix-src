@@ -32,14 +32,9 @@ static auto rCmdFormatter = registerCommand<CmdFormatter>("formatter");
 /** Common implementation bits for the `nix formatter` subcommands. */
 struct MixFormatter : SourceExprCommand
 {
-    Strings getDefaultFlakeAttrPaths() override
+    StringSet getRoles() override
     {
-        return Strings{"formatter." + settings.thisSystem.get()};
-    }
-
-    Strings getDefaultFlakeAttrPathPrefixes() override
-    {
-        return Strings{};
+        return {"nix-fmt"};
     }
 };
 
@@ -62,11 +57,6 @@ struct CmdFormatterRun : MixFormatter, MixJSON
         return
 #include "formatter-run.md"
             ;
-    }
-
-    Category category() override
-    {
-        return catSecondary;
     }
 
     void run(ref<Store> store) override
@@ -124,11 +114,6 @@ struct CmdFormatterBuild : MixFormatter, MixOutLinkByDefault
         return
 #include "formatter-build.md"
             ;
-    }
-
-    Category category() override
-    {
-        return catSecondary;
     }
 
     void run(ref<Store> store) override

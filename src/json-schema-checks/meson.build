@@ -59,6 +59,17 @@ schemas = [
     ],
   },
   {
+    'stem' : 'provenance',
+    'schema' : schema_dir / 'provenance-v1.yaml',
+    'files' : [
+      'build.json',
+      'copied.json',
+      'subpath.json',
+      'fetchurl.json',
+      'unknown.json',
+    ],
+  },
+  {
     'stem' : 'deriving-path',
     'schema' : schema_dir / 'deriving-path-v1.yaml',
     'files' : [

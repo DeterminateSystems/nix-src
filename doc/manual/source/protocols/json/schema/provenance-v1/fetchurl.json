@@ -1,0 +1,4 @@
+{
+    "type": "fetchurl",
+    "url": "https://ftp.gnu.org/gnu/hello/hello-2.12.2.tar.gz"
+}

@@ -14,14 +14,24 @@ std::shared_ptr<Registry> Registry::read(const Settings & settings, const Source
 {
     debug("reading registry '%s'", path);
 
-    auto registry = std::make_shared<Registry>(type);
-
     if (!path.pathExists())
         return std::make_shared<Registry>(type);
 
     try {
+        return read(settings, path.to_string(), path.readFile(), type);
+    } catch (Error & e) {
+        warn("cannot read flake registry '%s': %s", path, e.what());
+        return std::make_shared<Registry>(type);
+    }
+}
 
-        auto json = nlohmann::json::parse(path.readFile());
+std::shared_ptr<Registry>
+Registry::read(const Settings & settings, std::string_view whence, std::string_view jsonStr, RegistryType type)
+{
+    auto registry = std::make_shared<Registry>(type);
+
+    try {
+        auto json = nlohmann::json::parse(jsonStr);
 
         auto version = json.value("version", 0);
 
@@ -29,11 +39,8 @@ std::shared_ptr<Registry> Registry::read(const Settings & settings, const Source
             for (auto & i : json["flakes"]) {
                 auto toAttrs = jsonToAttrs(i["to"]);
                 Attrs extraAttrs;
-                auto j = toAttrs.find("dir");
-                if (j != toAttrs.end()) {
-                    extraAttrs.insert(*j);
-                    toAttrs.erase(j);
-                }
+                if (auto nh = toAttrs.extract("dir"))
+                    extraAttrs.insert(std::move(nh));
                 auto exact = i.find("exact");
                 registry->entries.push_back(
                     Entry{
@@ -45,12 +52,10 @@ std::shared_ptr<Registry> Registry::read(const Settings & settings, const Source
         }
 
         else
-            throw Error("flake registry '%s' has unsupported version %d", path, version);
+            warn("flake registry '%s' has unsupported version %d", whence, version);
 
     } catch (nlohmann::json::exception & e) {
-        warn("cannot parse flake registry '%s': %s", path, e.what());
-    } catch (Error & e) {
-        warn("cannot read flake registry '%s': %s", path, e.what());
+        warn("cannot parse flake registry '%s': %s", whence, e.what());
     }
 
     return registry;
@@ -139,25 +144,39 @@ void overrideRegistry(const Input & from, const Input & to, const Attrs & extraA
 static std::shared_ptr<Registry> getGlobalRegistry(const Settings & settings, Store & store)
 {
     static auto reg = [&]() {
-        auto path = settings.flakeRegistry.get();
-        if (path == "") {
-            return std::make_shared<Registry>(Registry::Global); // empty registry
-        }
+        try {
+            auto path = settings.flakeRegistry.get();
+            if (path == "") {
+                return std::make_shared<Registry>(Registry::Global); // empty registry
+            }
 
-        return Registry::read(
-            settings,
-            [&] -> SourcePath {
-                std::filesystem::path fsPath{path};
-                if (!fsPath.is_absolute()) {
-                    auto storePath = downloadFile(store, settings, path, "flake-registry.json").storePath;
-                    if (auto store2 = dynamic_cast<LocalFSStore *>(&store))
-                        store2->addPermRoot(storePath, (getCacheDir() / "flake-registry.json").string());
-                    return {store.requireStoreObjectAccessor(storePath)};
-                } else {
-                    return SourcePath{getFSSourceAccessor(), CanonPath{fsPath.string()}}.resolveSymlinks();
-                }
-            }(),
-            Registry::Global);
+            return Registry::read(
+                settings,
+                [&] -> SourcePath {
+                    std::filesystem::path fsPath{path};
+                    if (!fsPath.is_absolute()) {
+                        auto storePath = downloadFile(store, settings, path, "flake-registry.json").storePath;
+                        if (auto store2 = dynamic_cast<LocalFSStore *>(&store))
+                            store2->addPermRoot(storePath, (getCacheDir() / "flake-registry.json").string());
+                        return {store.requireStoreObjectAccessor(storePath)};
+                    } else {
+                        return SourcePath{getFSSourceAccessor(), CanonPath{fsPath.string()}}.resolveSymlinks();
+                    }
+                }(),
+                Registry::Global);
+        } catch (Error & e) {
+            warn(
+                "cannot fetch global flake registry '%s', will use builtin fallback registry: %s",
+                settings.flakeRegistry.get(),
+                e.info().msg);
+            // Use builtin registry as fallback
+            return Registry::read(
+                settings,
+                "builtin flake registry",
+#include "builtin-flake-registry.json.gen.hh"
+                ,
+                Registry::Global);
+        }
     }();
 
     return reg;

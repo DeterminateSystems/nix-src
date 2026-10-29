@@ -41,6 +41,15 @@ std::optional<std::string> getEnvNonEmpty(const std::string & key);
 std::optional<OsString> getEnvOsNonEmpty(const OsString & key);
 
 /**
+ * Get an environment variable that is supposed to contain an absolute
+ * path, such as `$HOME` or `$XDG_CACHE_HOME`. Returns nullopt if the
+ * variable is not set, is empty or is a relative path, so that callers
+ * fall back to their default rather than resolving the path relative
+ * to the current directory.
+ */
+std::optional<std::filesystem::path> getEnvOsAbsPath(const OsString & key);
+
+/**
  * Get the entire environment.
  */
 StringMap getEnv();

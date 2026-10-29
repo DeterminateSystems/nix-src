@@ -1,0 +1,39 @@
+{
+    "buildHost": "builder-1",
+    "drv": "lhj2ix9nrbw9wjab4ywsg9xvc86fm8in-hello-2.12.2.drv",
+    "next": {
+        "meta": {
+            "description": "Program that produces a familiar, friendly greeting",
+            "license": {
+                "free": true,
+                "spdxId": "GPL-3.0-or-later"
+            }
+        },
+        "next": {
+            "flakeOutput": "packages.x86_64-linux.default",
+            "next": {
+                "next": {
+                    "attrs": {
+                        "lastModified": 1760000000,
+                        "owner": "NixOS",
+                        "repo": "nixpkgs",
+                        "rev": "0b4defa2584313f3b781240b29d61f6f9f7e0df3",
+                        "type": "github"
+                    },
+                    "type": "tree"
+                },
+                "subpath": "/flake.nix",
+                "type": "subpath"
+            },
+            "pure": true,
+            "type": "flake"
+        },
+        "type": "derivation"
+    },
+    "output": "out",
+    "system": "x86_64-linux",
+    "tags": {
+        "ci-job": "https://ci.example.org/jobs/1234"
+    },
+    "type": "build"
+}

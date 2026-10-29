@@ -13,6 +13,7 @@
 #include "nix/store/store-registration.hh"
 #include "nix/store/filetransfer.hh"
 #include "nix/util/finally.hh"
+#include "nix/util/json-utils.hh"
 #include "nix/main/loggers.hh"
 #include "nix/cmd/markdown.hh"
 #include "nix/util/memory-source-accessor.hh"
@@ -22,23 +23,40 @@
 #include "nix/expr/eval-cache.hh"
 #include "nix/flake/flake.hh"
 #include "nix/flake/settings.hh"
+#include "nix/util/exit.hh"
+#include "nix/util/sentry.hh"
 
 #include "self-exe.hh"
 #include "crash-handler.hh"
+#include "otel-logger.hh"
 #include "cli-config-private.hh"
 
+#include <charconv>
 #include <sys/types.h>
 #include <nlohmann/json.hpp>
+#if HAVE_SENTRY
+#  include <sentry.h>
+#endif
+
+#if HAVE_MIMALLOC
+#  include <mimalloc.h>
+#endif
 
 #ifndef _WIN32
 #  include <sys/socket.h>
 #  include <ifaddrs.h>
 #  include <netdb.h>
 #  include <netinet/in.h>
+#  include <signal.h>
+#  include <sys/resource.h>
 #endif
 
 #ifdef __linux__
 #  include "nix/util/linux-namespaces.hh"
+#endif
+
+#ifdef __APPLE__
+#  include <mach/mach.h>
 #endif
 
 #include "nix/util/strings.hh"
@@ -86,6 +104,22 @@ static bool haveInternet()
 #endif
 }
 
+static void disableNet()
+{
+    // FIXME: should check for command line overrides only.
+    if (!settings.getWorkerSettings().useSubstitutes.overridden)
+        // FIXME: should not disable local substituters (like file:///).
+        settings.getWorkerSettings().useSubstitutes = false;
+    if (!fetchSettings.tarballTtl.overridden)
+        fetchSettings.tarballTtl = std::numeric_limits<unsigned int>::max();
+    if (!settings.getNarInfoDiskCacheSettings().ttlMeta.overridden)
+        settings.getNarInfoDiskCacheSettings().ttlMeta = std::numeric_limits<unsigned int>::max();
+    if (!fileTransferSettings.tries.overridden)
+        fileTransferSettings.tries = 0;
+    if (!fileTransferSettings.connectTimeout.overridden)
+        fileTransferSettings.connectTimeout = 1;
+}
+
 std::string programPath;
 
 struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
@@ -102,6 +136,7 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
         categories.clear();
         categories[catHelp] = "Help commands";
         categories[Command::catDefault] = "Main commands";
+        categories[Command::catUndocumented] = "Undocumented commands";
         categories[catSecondary] = "Infrequently used commands";
         categories[catUtility] = "Utility/scripting commands";
         categories[catNixInstallation] = "Commands for upgrading or troubleshooting your Nix installation";
@@ -119,7 +154,6 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             .description = "Print full build logs on standard error.",
             .category = loggingCategory,
             .handler = {[&]() { logger->setPrintBuildLogs(true); }},
-            .experimentalFeature = Xp::NixCommand,
         });
 
         addFlag({
@@ -135,7 +169,6 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             .description = "Disable substituters and consider all previously downloaded files up-to-date.",
             .category = miscCategory,
             .handler = {[&]() { useNet = false; }},
-            .experimentalFeature = Xp::NixCommand,
         });
 
         addFlag({
@@ -143,7 +176,6 @@ struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
             .description = "Consider all previously downloaded files out-of-date.",
             .category = miscCategory,
             .handler = {[&]() { refresh = true; }},
-            .experimentalFeature = Xp::NixCommand,
         });
 
         aliases = {
@@ -366,20 +398,69 @@ struct CmdHelpStores : Command
 
 static auto rCmdHelpStores = registerCommand<CmdHelpStores>("help-stores");
 
+static void terminateHandler()
+{
+    // Add the exception type and message to the Sentry crash report.
+    auto ex = std::current_exception();
+    if (ex) {
+        try {
+            std::rethrow_exception(ex);
+        } catch (BaseError & e) {
+            try {
+                nix::setSentryTag("terminate_exception_type", typeid(e).name());
+                nix::setSentryTag("terminate_exception_msg", e.message().c_str());
+            } catch (...) {
+            }
+        } catch (const std::exception & e) {
+            try {
+                nix::setSentryTag("terminate_exception_type", typeid(e).name());
+                nix::setSentryTag("terminate_exception_msg", e.what());
+            } catch (...) {
+            }
+        }
+    }
+
+    onTerminate();
+}
+
 void mainWrapped(int argc, char ** argv)
 {
     savedArgv = argv;
 
-    registerCrashHandler();
-
     /* The chroot helper needs to be run before any threads have been
-       started. */
+       started (including Sentry's worker thread). */
 #ifndef _WIN32
     if (argc > 0 && argv[0] == chrootHelperName) {
         chrootHelper(argc, argv);
         return;
     }
 #endif
+
+#if HAVE_MIMALLOC
+    /* Make allocation failures print a proper error message instead
+       of aborting silently. Note that the `std::new_handler` installed
+       by `initLibUtil()` does not suffice, since mimalloc's `operator
+       new` override never sees it: libmimalloc is linked with
+       `-Bsymbolic`, so its weak null stub of `std::get_new_handler()`
+       shadows the real one from libstdc++. Register this before
+       `initLibUtil()` so allocation failures during initialization
+       are handled as well. */
+    mi_register_error(
+        [](int err, void *) {
+            if (err == ENOMEM || err == EOVERFLOW)
+                outOfMemory();
+            /* EFAULT means mimalloc detected heap corruption (e.g. a
+               double free) in secure mode; don't continue with a
+               corrupted heap. EINVAL (bad pointer passed to
+               `mi_free()`) is non-fatal, so just return. */
+            if (err == EFAULT)
+                panic("mimalloc detected heap corruption");
+        },
+        nullptr);
+#endif
+
+    /* This must be called before Sentry since both initialize OpenSSL. */
+    initLibUtil();
 
     /* Set the build hook location
 
@@ -394,6 +475,123 @@ void mainWrapped(int argc, char ** argv)
         });
 
     initNix();
+
+    /* Initialize Sentry only after initNix(), i.e. after
+       startSignalHandlerThread() has blocked SIGINT etc. in the
+       calling thread. The worker threads spawned by `sentry_init()`
+       inherit that signal mask; if they were started earlier, the
+       kernel could deliver a Ctrl-C's SIGINT to one of them, where its
+       default disposition would kill the process immediately (without
+       printing an error or restoring the terminal cursor). */
+    bool sentryEnabled = false;
+
+#if HAVE_SENTRY
+    auto sentryEndpoint = getEnv("NIX_SENTRY_ENDPOINT");
+
+    if (!sentryEndpoint && getEnv("DETSYS_IDS_TELEMETRY") != "disabled") {
+        try {
+            auto p = nixConfDir() / "sentry-endpoint";
+            if (pathExists(p))
+                sentryEndpoint = trim(readFile(p));
+        } catch (...) {
+            ignoreExceptionExceptInterrupt();
+        }
+    }
+
+    /* Sentry needs an absolute path for its database. Otherwise we'd
+       create a `.cache/nix/sentry` directory in the current directory
+       (or `.sentry-native` if we don't set a path at all). */
+    std::optional<std::filesystem::path> sentryDatabaseDir;
+    if (sentryEndpoint && sentryEndpoint != "") {
+        try {
+            auto dir = getCacheDir() / "sentry";
+            if (dir.is_absolute())
+                sentryDatabaseDir = std::move(dir);
+        } catch (...) {
+            ignoreExceptionExceptInterrupt(lvlDebug);
+        }
+    }
+
+    if (sentryDatabaseDir) {
+        sentry_options_t * options = sentry_options_new();
+        sentry_options_set_dsn(options, sentryEndpoint->c_str());
+        sentry_options_set_database_path(options, sentryDatabaseDir->string().c_str());
+        sentry_options_set_release(options, fmt("nix@%s", determinateNixVersion).c_str());
+        sentry_options_set_traces_sample_rate(options, 0);
+        sentry_options_set_auto_session_tracking(options, false);
+        sentry_options_set_handler_path(options, CRASHPAD_HANDLER_PATH);
+        /* Record the Nix call depth in crash reports, to help
+           diagnose stack overflows (e.g. whether we overflowed before
+           reaching `max-call-depth`). This runs in the signal handler,
+           so avoid the regular allocator. */
+        sentry_options_set_on_crash(
+            options,
+            [](const sentry_ucontext_t *, sentry_value_t event, sentry_hint_t *, void *) {
+                auto tags = sentry_value_get_by_key(event, "tags");
+                if (sentry_value_is_null(tags)) {
+                    tags = sentry_value_new_object();
+                    sentry_value_set_by_key(event, "tags", tags);
+                }
+                char buf[24];
+                auto res = std::to_chars(buf, buf + sizeof(buf), CallDepth::callDepth);
+                sentry_value_set_by_key(tags, "call_depth", sentry_value_new_string_n(buf, res.ptr - buf));
+                return event;
+            },
+            nullptr);
+        sentry_init(options);
+        setSentryTag = [](const char * key, const char * value) { sentry_set_tag(key, value); };
+        setSentryTag("nix_command", argc > 0 ? std::string(baseNameOf(argv[0])).c_str() : "");
+#  ifndef _WIN32
+        /* Record the stack size hard limit, to help diagnose stack
+           overflows: if it's lower than what the evaluator asks for
+           via `ensureStackSizeAtLeast()`, the stack can't be grown to
+           that size. */
+        if (struct rlimit limit; getrlimit(RLIMIT_STACK, &limit) == 0)
+            setSentryTag(
+                "stack_hard_limit",
+                limit.rlim_max == RLIM_INFINITY ? "unlimited" : std::to_string(limit.rlim_max).c_str());
+#  endif
+        std::set_terminate(terminateHandler);
+        sentryEnabled = true;
+
+        /* Reset SIGQUIT, for which `sentry_init()` installed a crash
+           handler, to its default disposition: SIGQUIT is a
+           user-initiated "quit with core dump" action (e.g. Ctrl-\ at
+           a terminal), not a crash, so it should not be reported. */
+        struct sigaction act;
+        sigemptyset(&act.sa_mask);
+        act.sa_flags = 0;
+#  ifdef __APPLE__
+        /* On macOS, crashpad doesn't catch crashes via signal
+           handlers, but via the task's Mach exception ports, and the
+           kernel sends EXC_CRASH to those when the process is killed
+           by a signal that dumps core, such as SIGQUIT, even if its
+           disposition is SIG_DFL. So detach crashpad's exception
+           ports (like restoreProcessContext() does) before dying from
+           SIGQUIT. The re-raised signal is delivered when the handler
+           returns. */
+        act.sa_handler = [](int) {
+            task_set_exception_ports(
+                mach_task_self(), EXC_MASK_ALL | EXC_MASK_CRASH, MACH_PORT_NULL, EXCEPTION_DEFAULT, THREAD_STATE_NONE);
+            signal(SIGQUIT, SIG_DFL);
+            raise(SIGQUIT);
+        };
+#  else
+        act.sa_handler = SIG_DFL;
+#  endif
+        if (sigaction(SIGQUIT, &act, 0))
+            throw SysError("handling SIGQUIT");
+    }
+
+    Finally cleanupSentry([&]() {
+        if (sentryEnabled)
+            sentry_shutdown();
+    });
+#endif
+
+    if (!sentryEnabled)
+        registerCrashHandler();
+
     initGC();
     flakeSettings.configureEvalSettings(evalSettings);
 
@@ -401,8 +599,6 @@ void mainWrapped(int argc, char ** argv)
     if (isRootUser())
         tryEnterPrivateMountNamespace();
 #endif
-
-    Finally f([] { logger->stop(); });
 
     programPath = argv[0];
     auto programName = std::string(baseNameOf(programPath));
@@ -417,8 +613,18 @@ void mainWrapped(int argc, char ** argv)
     }
 
     {
-        if (auto legacy = get(RegisterLegacyCommand::commands(), programName))
+        if (auto legacy = get(RegisterLegacyCommand::commands(), programName)) {
+            /* Legacy commands don't have subcommands, so we can set up
+               the root span right away. Note that they parse their
+               arguments themselves, so unlike for the commands below,
+               `--option` cannot configure tracing here. The daemon and
+               the build hook are the exceptions: they install their
+               own logger, so they set up tracing themselves. */
+            if (programName != "nix-daemon" && programName != "build-remote") {
+                initOtel(programName, programName, getEnv("TRACEPARENT").value_or(""));
+            }
             return (*legacy)(argc, argv);
+        }
     }
 
     evalSettings.pureEval = true;
@@ -444,10 +650,11 @@ void mainWrapped(int argc, char ** argv)
 
     if (argc == 2 && std::string(argv[1]) == "__dump-language") {
         experimentalFeatureSettings.experimentalFeatures = {
-            Xp::Flakes,
             Xp::FetchClosure,
             Xp::DynamicDerivations,
             Xp::FetchTree,
+            Xp::BakedDerivations,
+            Xp::Provenance,
         };
         evalSettings.pureEval = false;
         auto statePtr = std::make_shared<EvalState>(
@@ -479,6 +686,8 @@ void mainWrapped(int argc, char ** argv)
             b["type"] = showType(info.type, false);
             if (info.impureOnly)
                 b["impure-only"] = true;
+            if (info.experimentalFeature)
+                b["experimental-feature"] = info.experimentalFeature;
             builtinsJson[name] = std::move(b);
         }
         logger->cout("%s", builtinsJson);
@@ -491,22 +700,35 @@ void mainWrapped(int argc, char ** argv)
     }
 
     Finally printCompletions([&]() {
-        if (args.completions) {
-            switch (args.completions->type) {
-            case Completions::Type::Normal:
-                logger->cout("normal");
-                break;
-            case Completions::Type::Filenames:
-                logger->cout("filenames");
-                break;
-            case Completions::Type::Attrs:
-                logger->cout("attrs");
-                break;
+        /* Don't let a failure to print completions (e.g. EPIPE because
+           the shell closed its end of the pipe) propagate, since this
+           may run while another exception is being unwound. */
+        try {
+            if (args.completions) {
+                switch (args.completions->type) {
+                case Completions::Type::Normal:
+                    logger->cout("normal");
+                    break;
+                case Completions::Type::Filenames:
+                    logger->cout("filenames");
+                    break;
+                case Completions::Type::Attrs:
+                    logger->cout("attrs");
+                    break;
+                }
+                for (auto & s : args.completions->completions)
+                    logger->cout(s.completion + "\t" + trim(s.description));
             }
-            for (auto & s : args.completions->completions)
-                logger->cout(s.completion + "\t" + trim(s.description));
+        } catch (...) {
+            ignoreExceptionInDestructor();
         }
     });
+
+    if (getEnv("NIX_GET_COMPLETIONS"))
+        /* Avoid fetching stuff during tab completion. We have to this
+           early because we haven't checked `haveInternet()` yet
+           (below). */
+        disableNet();
 
     try {
         auto isNixCommand = programName.ends_with("nix");
@@ -519,16 +741,19 @@ void mainWrapped(int argc, char ** argv)
 
     applyJSONLogger();
 
+    printTalkative("Nix %s", version());
+
+    std::vector<std::string> subcommand;
+    MultiCommand * command = &args;
+    while (command) {
+        if (command && command->command) {
+            subcommand.push_back(command->command->first);
+            command = dynamic_cast<MultiCommand *>(&*command->command->second);
+        } else
+            break;
+    }
+
     if (args.helpRequested) {
-        std::vector<std::string> subcommand;
-        MultiCommand * command = &args;
-        while (command) {
-            if (command && command->command) {
-                subcommand.push_back(command->command->first);
-                command = dynamic_cast<MultiCommand *>(&*command->command->second);
-            } else
-                break;
-        }
         showHelp(subcommand, args);
         return;
     }
@@ -544,27 +769,21 @@ void mainWrapped(int argc, char ** argv)
     if (!args.command)
         throw UsageError("no subcommand specified");
 
-    experimentalFeatureSettings.require(args.command->second->experimentalFeature());
+    {
+        MultiCommand * command = &args;
+        while (command && command->command) {
+            experimentalFeatureSettings.require(command->command->second->experimentalFeature());
+            command = dynamic_cast<MultiCommand *>(&*command->command->second);
+        }
+    }
 
     if (args.useNet && !haveInternet()) {
         warn("you don't have Internet access; disabling some network-dependent features");
         args.useNet = false;
     }
 
-    if (!args.useNet) {
-        // FIXME: should check for command line overrides only.
-        if (!settings.getWorkerSettings().useSubstitutes.overridden)
-            settings.getWorkerSettings().useSubstitutes = false;
-        if (!fetchSettings.tarballTtl.overridden)
-            fetchSettings.tarballTtl = std::numeric_limits<unsigned int>::max();
-        if (!fileTransferSettings.tries.overridden)
-            fileTransferSettings.tries = 0;
-        if (!fileTransferSettings.connectTimeout.overridden)
-            fileTransferSettings.connectTimeout = 1;
-        auto & ttlMeta = settings.getNarInfoDiskCacheSettings().ttlMeta;
-        if (!ttlMeta.overridden)
-            ttlMeta = std::numeric_limits<unsigned int>::max();
-    }
+    if (!args.useNet)
+        disableNet();
 
     if (args.refresh) {
         fetchSettings.tarballTtl = 0;
@@ -575,6 +794,21 @@ void mainWrapped(int argc, char ** argv)
 
     if (args.command->second->forceImpureByDefault() && !evalSettings.pureEval.overridden) {
         evalSettings.pureEval = false;
+    }
+
+    setSentryTag("nix_subcommand", concatStringsSep(" ", subcommand).c_str());
+
+    /* Map activities to OpenTelemetry spans, under a root span named
+       after the subcommand. Note: this must happen after
+       `parseCmdline()`, so that `--option` can configure tracing. The
+       daemon is the exception: it sets up tracing itself, per
+       connection, parented to the client's trace.
+
+       The root span is parented to the trace context in `TRACEPARENT`,
+       if any, so that a parent process (such as `nix` running
+       `build-remote`) can include us in its trace. */
+    if (subcommand != std::vector<std::string>{"daemon"}) {
+        initOtel(programName, "nix " + concatStringsSep(" ", subcommand), getEnv("TRACEPARENT").value_or(""));
     }
 
     try {
@@ -591,7 +825,14 @@ void mainWrapped(int argc, char ** argv)
 
 int main(int argc, char ** argv)
 {
+    using namespace nix;
+
     // The CLI has a more detailed version than the libraries; see nixVersion.
     nix::nixVersion = NIX_CLI_VERSION;
-    return nix::handleExceptions(argv[0], [&]() { nix::mainWrapped(argc, argv); });
+
+    auto status = nix::handleExceptions(argv[0], [&]() { nix::mainWrapped(argc, argv); });
+
+    /* Don't run static destructors, since they race with threads
+       that may still be running. */
+    nix::quickExit(status);
 }

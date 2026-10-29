@@ -65,14 +65,23 @@ check_human_readable "$STORE_INFO"
 check_human_readable "$LEGACY_STORE_INFO"
 
 if [[ -v NIX_DAEMON_PACKAGE ]] && isDaemonNewer "2.7.0pre20220126"; then
-    DAEMON_VERSION=$("$NIX_DAEMON_PACKAGE"/bin/nix daemon --version | cut -d' ' -f3)
+    DAEMON_VERSION=$("$NIX_DAEMON_PACKAGE"/bin/nix daemon --version | sed 's/.*) //')
     echo "$STORE_INFO" | grep "Version: $DAEMON_VERSION"
     [[ "$(echo "$STORE_INFO_JSON" | jq -r ".version")" == "$DAEMON_VERSION" ]]
 fi
 
 
-expect 127 NIX_REMOTE=unix:"$PWD"/store nix store info || \
+expect 1 env NIX_REMOTE=unix:"$PWD"/store nix store info || \
     fail "nix store info on a non-existent store should fail"
+
+# With `--json`, the (partial) result is printed even if connecting to
+# the store fails. A failure to print it (here EPIPE, since the reader
+# of the pipe has already exited) must not crash Nix.
+exec {closedPipe}> >(true)
+wait $!
+expect 1 env NIX_REMOTE=unix:"$PWD"/store nix store info --json >&"$closedPipe" || \
+    fail "nix store info --json on a non-existent store with a failing stdout should fail cleanly"
+exec {closedPipe}>&-
 
 TODO_NixOS
 

@@ -30,6 +30,16 @@ struct GitAccessorOptions
 {
     bool exportIgnore = false;
     bool smudgeLfs = false;
+    bool submodules = false; // Currently implemented in GitInputScheme rather than GitAccessor
+
+    /**
+     * Whether to export the repository using Nix < 2.20 semantics, i.e. using `git archive` or
+     * `git checkout` (which apply Git filters, `export-ignore` and `export-subst`) rather than
+     * libgit2. Currently implemented in GitInputScheme rather than GitAccessor.
+     */
+    bool legacy = false;
+
+    std::string makeFingerprint(const Hash & rev) const;
 };
 
 struct GitRepo
@@ -41,6 +51,12 @@ struct GitRepo
         bool create = false;
         bool bare = false;
         bool packfilesOnly = false;
+        /**
+         * Whether to avoid finding deltas when writing packfiles. It's an
+         * expensive operation, which should be avoided if no benefit is
+         * expected from possible deduplication in the same packfile.
+         */
+        bool dontFindDeltas = false;
     };
 
     static ref<GitRepo> openRepo(const std::filesystem::path & path, Options options);

@@ -61,6 +61,11 @@ public:
     {
     }
 
+    bool includeInProvenance() override
+    {
+        return true;
+    }
+
     // FIXME extend daemon protocol, move implementation to RemoteStore
     std::optional<std::string> getBuildLogExact(const StorePath & path) override
     {
@@ -201,7 +206,7 @@ public:
     std::filesystem::path addPermRoot(const StorePath & path, const std::filesystem::path & gcRoot) override
     {
         auto conn(getConnection());
-        conn->to << WorkerProto::Op::AddPermRoot;
+        conn->startOp(WorkerProto::Op::AddPermRoot);
         WorkerProto::write(*this, *conn, path);
         WorkerProto::write(*this, *conn, gcRoot.string());
         conn.processStderr();
