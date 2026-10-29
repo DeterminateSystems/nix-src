@@ -58,6 +58,41 @@ public:
         "Amount of reserved disk space for the garbage collector.",
     };
 
+    Setting<unsigned int> deleteThreads{
+        this,
+        4,
+        "gc-delete-threads",
+        R"(
+          The number of threads that the garbage collector uses to delete
+          garbage from the Nix store.
+
+          When this is greater than 1, the garbage collector atomically
+          moves each dead store path into a temporary trash directory
+          inside the Nix store (named `.gc-trash-*`) and deletes it in the
+          background, while it continues looking for garbage. Deleting
+          several store paths concurrently can make garbage collection
+          faster on storage with a high latency per operation, such as
+          network block storage. The number of paths waiting in the trash
+          directory is bounded. Trash left behind by an interrupted
+          garbage collection is deleted by the next one.
+
+          The default of 4 suits shared or IOPS-capped volumes, where more
+          threads mostly add I/O pressure on other users of the device
+          without making garbage collection faster. Raise it (for example
+          to 8 or 16) on dedicated local NVMe storage or on uncontended
+          high-IOPS volumes.
+
+          With more than one thread, the amount of freed space reported
+          may be underestimated for files that are shared between dead
+          store paths through hard links
+          (see [`auto-optimise-store`](#conf-auto-optimise-store)).
+
+          When this is `0` or `1`, or when `--max-freed` is given, dead
+          store paths are deleted in place, one at a time. Background
+          deletion is not supported on FreeBSD.
+        )",
+    };
+
     Setting<bool> keepOutputs{
         this,
         false,

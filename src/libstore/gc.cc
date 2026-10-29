@@ -12,6 +12,7 @@
 #include "nix/util/util.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/file-system-at.hh"
+#include "nix/util/thread-pool.hh"
 #include "nix/store/posix-fs-canonicalise.hh"
 
 #include "store-config-private.hh"
@@ -433,6 +434,31 @@ void LocalStore::findRuntimeRoots(Roots & roots, bool censor)
 struct GCLimitReached
 {};
 
+/* Move/rename path 'src' to 'dst'. Temporarily make 'src' writable if
+   it's a directory and we're not root (to be able to update the
+   directory's parent link ".."). Unlike `std::filesystem::rename()`,
+   this throws `SysError`. Named differently from `movePath()` in
+   derivation-builder.cc, since unity builds compile both in one unit. */
+static void moveDeadPath(const std::filesystem::path & src, const std::filesystem::path & dst)
+{
+    auto st = lstat(src);
+
+    bool changePerm = geteuid() && S_ISDIR(st.st_mode) && !(st.st_mode & S_IWUSR);
+
+    if (changePerm)
+        chmod(src, st.st_mode | S_IWUSR);
+
+    if (::rename(src.c_str(), dst.c_str()) == -1) {
+        auto savedErrno = errno;
+        if (changePerm)
+            ::chmod(src.c_str(), st.st_mode);
+        throw SysError(savedErrno, "renaming %1% to %2%", PathFmt(src), PathFmt(dst));
+    }
+
+    if (changePerm)
+        chmod(dst, st.st_mode);
+}
+
 void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 {
     const auto & gcSettings = config->getLocalSettings().getGCSettings();
@@ -625,7 +651,161 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
     if (auto p = getEnv("_NIX_TEST_GC_SYNC_2"))
         readFile(*p);
 
-    /* Throw GCLimitReached if we've deleted enough garbage. */
+    /* State for deleting garbage in background threads (see the
+       `gc-delete-threads` setting). Each dead path is atomically
+       renamed into a trash directory inside the store directory before
+       we stop synchronising with GC clients on it (see `pending`), so
+       that a client that wants to re-create it never sees a partially
+       deleted path. The trash is then deleted by a thread pool, which
+       hides the latency of the file system and the underlying storage.
+
+       Since only one garbage collector can hold the GC lock at a time,
+       and the pool is shut down before we release it, any other trash
+       directory is left over from an interrupted garbage collection. It
+       is deleted when we encounter it in the store directory. */
+    const std::string trashPrefix = ".gc-trash";
+    std::optional<std::filesystem::path> trashDir;
+    std::vector<std::filesystem::path> staleTrashDirs;
+    bool canMoveToTrash = true;
+
+    struct AsyncDeletions
+    {
+        /* Number of paths that have been enqueued for deletion but whose
+           deletion hasn't finished yet. */
+        size_t inFlight = 0;
+        uint64_t bytesFreed = 0;
+        /* Whether a background deletion has thrown an exception. */
+        bool failed = false;
+    };
+
+    Sync<AsyncDeletions> asyncDeletions_;
+    std::condition_variable asyncDeletionDone;
+
+    /* Bound the number of paths waiting in the trash directory, so that
+       an interrupted garbage collection leaves little trash behind. Note
+       that `ThreadPool` only starts a new thread if there are more
+       pending work items than threads, so we need `2 * threads`
+       in-flight paths to keep all threads busy. */
+    const size_t deleteThreads = gcSettings.deleteThreads;
+    const size_t maxInFlight = 2 * deleteThreads;
+
+    /* With `max-freed`, we delete garbage in place, since we'd need to
+       know in advance how much space a background deletion will free. */
+    const bool haveMaxFreed = options.maxFreed != std::numeric_limits<uint64_t>::max();
+
+    /* Note: this must be destroyed before anything that its work items
+       refer to, and before we release the GC lock. Since `process()`
+       runs work items on the calling thread too, we need one more
+       thread than the number of background threads. */
+    std::optional<ThreadPool> deletePool;
+    if (shouldDelete && deleteThreads > 1 && canDeleteGarbageInBackground())
+        deletePool.emplace(deleteThreads + 1);
+
+    /* Atomically move `realPath` into the trash directory and return its
+       new location, or return `std::nullopt` if the path must be deleted
+       in place. */
+    auto moveToTrash = [&](const std::filesystem::path & realPath) -> std::optional<std::filesystem::path> {
+        if (!deletePool || !canMoveToTrash)
+            return std::nullopt;
+
+        if (!trashDir) {
+            try {
+                trashDir = createTempDir(config->realStoreDir.get(), trashPrefix, 0700);
+            } catch (SysError & e) {
+                /* E.g. ENOSPC. */
+                printInfo("note: can't create a trash directory, deleting garbage in place: %s", e.msg());
+                canMoveToTrash = false;
+                return std::nullopt;
+            }
+        }
+
+        auto trashPath = *trashDir / realPath.filename();
+        try {
+            moveDeadPath(realPath, trashPath);
+        } catch (SysError & e) {
+            /* E.g. ENOSPC, or the path doesn't exist. */
+            debug("can't move %s to the trash directory, deleting it in place: %s", PathFmt(realPath), e.msg());
+            return std::nullopt;
+        }
+        return trashPath;
+    };
+
+    /* Rethrow the exception of a failed background deletion. */
+    auto rethrowDeletionFailure = [&]() {
+        deletePool->process();
+        unreachable();
+    };
+
+    /* Wait until at most `n` background deletions are in flight. */
+    auto waitForDeletions = [&](size_t n) {
+        bool failed;
+        {
+            auto state(asyncDeletions_.lock());
+            while (state->inFlight > n && !state->failed) {
+                checkInterrupt();
+                state.wait_for(asyncDeletionDone, std::chrono::milliseconds(100));
+            }
+            failed = state->failed;
+        }
+        if (failed)
+            rethrowDeletionFailure();
+    };
+
+    /* Delete `path` in a background thread. The caller must first call
+       `waitForDeletions(maxInFlight - 1)` to bound the number of
+       paths in the trash directory. `lock`, if set, is released once
+       the path has been deleted. */
+    auto deleteInBackground =
+        [&](std::filesystem::path path, bool isKnownPath, std::shared_ptr<AutoCloseFD> lock = nullptr) {
+            asyncDeletions_.lock()->inFlight++;
+
+            try {
+                deletePool->enqueue([&, path{std::move(path)}, isKnownPath, lock]() mutable {
+                    uint64_t bytesFreed = 0;
+                    bool success = false;
+                    Finally done([&]() {
+                        lock.reset();
+                        auto state(asyncDeletions_.lock());
+                        state->inFlight--;
+                        state->bytesFreed += bytesFreed;
+                        if (!success)
+                            state->failed = true;
+                        asyncDeletionDone.notify_one();
+                    });
+                    /* Synchronisation point for testing, see
+                       tests/functional/gc-trash.sh. */
+                    if (auto p = getEnv("_NIX_TEST_GC_SYNC_DELETE"))
+                        readFile(*p);
+                    deleteStorePath(path, bytesFreed, isKnownPath);
+                    success = true;
+                });
+            } catch (ThreadPoolShutDown &) {
+                /* A background deletion failed in the meantime. */
+                rethrowDeletionFailure();
+            }
+        };
+
+    /* Wait for all background deletions to finish, and remove the trash
+       directories. */
+    auto finishBackgroundDeletions = [&]() {
+        if (!deletePool)
+            return;
+
+        deletePool->process();
+        results.bytesFreed += asyncDeletions_.lock()->bytesFreed;
+
+        if (trashDir)
+            staleTrashDirs.push_back(*trashDir);
+        for (auto & dir : staleTrashDirs) {
+            uint64_t bytesFreed = 0;
+            deleteStorePath(dir, bytesFreed, false);
+            results.bytesFreed += bytesFreed;
+        }
+    };
+
+    /* Throw GCLimitReached if we've deleted enough garbage. Since we
+       don't delete garbage in the background with `max-freed`,
+       `results.bytesFreed` is up to date. */
     auto checkMaxFreed = [&]() {
         if (results.bytesFreed > options.maxFreed) {
             printInfo("deleted more than %d bytes; stopping", options.maxFreed);
@@ -637,6 +817,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
        must call `checkMaxFreed()` afterwards. */
     auto deleteFromStore = [&](std::string_view baseName, bool isKnownPath) {
         assert(!std::filesystem::path(baseName).is_absolute());
+
         /* Using `std::string` since this is the logical store dir. Hopefully that is the right choice. */
         std::string path = storeDir + "/" + std::string(baseName);
         auto realPath = config->realStoreDir.get() / std::string(baseName);
@@ -647,12 +828,13 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
            holding the lock until we've deleted the directory,
            otherwise createTempDirInStore() in another process could
            acquire the lock and start using the directory while we're
-           deleting it. */
-        AutoCloseFD tmpDirFd;
+           deleting it. If the directory is deleted in the background,
+           the background deletion releases the lock. */
+        std::shared_ptr<AutoCloseFD> tmpDirFd;
         if (baseName.find("tmp-", 0) == 0) {
             /* TODO Reconsider whether Follow is the right choice, here */
-            tmpDirFd = openDirectory(realPath, FinalSymlink::Follow);
-            if (!tmpDirFd || !lockFile(tmpDirFd.get(), ltWrite, false)) {
+            tmpDirFd = std::make_shared<AutoCloseFD>(openDirectory(realPath, FinalSymlink::Follow));
+            if (!*tmpDirFd || !lockFile(tmpDirFd->get(), ltWrite, false)) {
                 debug("skipping locked tempdir %s", PathFmt(realPath));
                 return;
             }
@@ -670,10 +852,46 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
            reuse that corrupt path. */
         deletePath(unpackedMarkerFor(realPath));
 
-        uint64_t bytesFreed = 0;
-        deleteStorePath(realPath, bytesFreed, isKnownPath);
+        /* Don't move leftover sandbox directories, since `deletePath()`
+           recognises file systems mounted below them (on FreeBSD) by
+           their original location. */
+        bool inBackground = deletePool && !haveMaxFreed && !baseName.ends_with(".chroot");
 
-        results.bytesFreed += bytesFreed;
+        if (inBackground)
+            waitForDeletions(maxInFlight - 1);
+
+        if (auto trashPath = inBackground ? moveToTrash(realPath) : std::nullopt)
+            deleteInBackground(std::move(*trashPath), isKnownPath, std::move(tmpDirFd));
+        else {
+            uint64_t bytesFreed = 0;
+            deleteStorePath(realPath, bytesFreed, isKnownPath);
+            results.bytesFreed += bytesFreed;
+        }
+    };
+
+    /* Helper function that deletes a trash directory left over by an
+       interrupted garbage collection, deleting its entries in
+       parallel. Not used with `max-freed`, since we delete garbage in
+       place then. */
+    auto deleteStaleTrash = [&](const std::string & name) {
+        auto realPath = config->realStoreDir.get() / name;
+        auto st = maybeLstat(realPath);
+        if (!st || !S_ISDIR(st->st_mode))
+            return deleteFromStore(name, false);
+
+        auto path = storeDir + "/" + name;
+        printInfo("deleting '%s' left over by an interrupted garbage collection", path);
+        results.paths.insert(path);
+
+        /* We need to be able to remove the entries. */
+        chmodIfNeeded(realPath, S_IRWXU, S_IRWXU);
+
+        for (auto & entry : DirectoryIterator{realPath}) {
+            checkInterrupt();
+            waitForDeletions(maxInFlight - 1);
+            deleteInBackground(entry.path(), false);
+        }
+        staleTrashDirs.push_back(realPath);
     };
 
     boost::unordered_flat_map<StorePath, StorePathSet, std::hash<StorePath>> referrersCache;
@@ -936,11 +1154,14 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                     while (errno = 0, dirent = readdir(dir.get())) {
                         checkInterrupt();
                         std::string name = dirent->d_name;
-                        if (name == "." || name == ".." || name == linksName)
+                        if (name == "." || name == ".." || name == linksName
+                            || (trashDir && name == trashDir->filename()))
                             continue;
 
                         if (auto storePath = maybeParseStorePath(storeDir + "/" + name))
                             maybeDeleteReferrersClosure(*storePath);
+                        else if (deletePool && !haveMaxFreed && name.starts_with(trashPrefix))
+                            deleteStaleTrash(name);
                         else {
                             deleteFromStore(name, false);
                             checkMaxFreed();
@@ -950,7 +1171,21 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
             },
             options.pathsToDelete);
     } catch (GCLimitReached & e) {
+    } catch (...) {
+        /* Finish deleting the paths that we already moved to the trash
+           directory, unless we've been interrupted or a background
+           deletion has failed. */
+        if (deletePool && !isInterrupted() && !asyncDeletions_.lock()->failed) {
+            try {
+                finishBackgroundDeletions();
+            } catch (...) {
+                ignoreExceptionExceptInterrupt();
+            }
+        }
+        throw;
     }
+
+    finishBackgroundDeletions();
 
     if (options.action == GCOptions::gcReturnLive) {
         for (auto & i : alive)
