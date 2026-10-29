@@ -13,24 +13,36 @@ on:
       - published
 
 permissions:
-  id-token: "write"
   contents: "read"
-  pull-requests: "write"
-  statuses: "write"
-  deployments: "write"
 
 jobs:
   eval:
     runs-on: UbuntuLatest32Cores128G
+    permissions:
+      contents: "read"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - run: nix flake show --all-systems --json
+      - name: Audit GitHub Actions with zizmor
+        env:
+          # Enables zizmor's online audits (e.g. impostor-commit).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: nix develop --command zizmor --format github .github
 
   build_x86_64-linux:
-    uses: ./.github/workflows/build.yml
+    uses: $/.github/workflows/build.yml
+    # The `manual` job in build.yml needs these to deploy the manual to Netlify,
+    # and every job needs `id-token` to authenticate to FlakeHub.
+    permissions:
+      id-token: "write"
+      contents: "read"
+      pull-requests: "write"
+      statuses: "write"
+      deployments: "write"
     # Determinate Secure Packages is a private flake dependency that external
     # (fork) contributors can't access, so only build it for non-fork PRs.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'DeterminateSystems/nix-src'
@@ -51,7 +63,13 @@ jobs:
       sentry_project: ${{ secrets.SENTRY_PROJECT }}
 
   build_x86_64-linux_no_dsp:
-    uses: ./.github/workflows/build.yml
+    uses: $/.github/workflows/build.yml
+    permissions:
+      id-token: "write"
+      contents: "read"
+      pull-requests: "write"
+      statuses: "write"
+      deployments: "write"
     # Build the non-DSP flake in the merge queue, on tags, and for external (fork) PRs,
     # which can't access Determinate Secure Packages.
     if: github.event_name == 'merge_group' || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != 'DeterminateSystems/nix-src')
@@ -71,7 +89,13 @@ jobs:
       sentry_project: ${{ secrets.SENTRY_PROJECT }}
 
   build_aarch64-linux:
-    uses: ./.github/workflows/build.yml
+    uses: $/.github/workflows/build.yml
+    permissions:
+      id-token: "write"
+      contents: "read"
+      pull-requests: "write"
+      statuses: "write"
+      deployments: "write"
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'DeterminateSystems/nix-src'
     with:
       system: aarch64-linux
@@ -84,7 +108,13 @@ jobs:
       sentry_project: ${{ secrets.SENTRY_PROJECT }}
 
   build_aarch64-linux_no_dsp:
-    uses: ./.github/workflows/build.yml
+    uses: $/.github/workflows/build.yml
+    permissions:
+      id-token: "write"
+      contents: "read"
+      pull-requests: "write"
+      statuses: "write"
+      deployments: "write"
     if: github.event_name == 'merge_group' || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != 'DeterminateSystems/nix-src')
     with:
       flake: .
@@ -99,7 +129,13 @@ jobs:
       sentry_project: ${{ secrets.SENTRY_PROJECT }}
 
   build_aarch64-darwin:
-    uses: ./.github/workflows/build.yml
+    uses: $/.github/workflows/build.yml
+    permissions:
+      id-token: "write"
+      contents: "read"
+      pull-requests: "write"
+      statuses: "write"
+      deployments: "write"
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'DeterminateSystems/nix-src'
     with:
       system: aarch64-darwin
@@ -112,7 +148,13 @@ jobs:
       sentry_project: ${{ secrets.SENTRY_PROJECT }}
 
   build_aarch64-darwin_no_dsp:
-    uses: ./.github/workflows/build.yml
+    uses: $/.github/workflows/build.yml
+    permissions:
+      id-token: "write"
+      contents: "read"
+      pull-requests: "write"
+      statuses: "write"
+      deployments: "write"
     if: github.event_name == 'merge_group' || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != 'DeterminateSystems/nix-src')
     with:
       flake: .
@@ -128,6 +170,9 @@ jobs:
 
   success:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: "write"
+      contents: "read"
     needs:
       - eval
       - build_x86_64-linux
@@ -149,7 +194,9 @@ jobs:
           contains(needs.*.result, 'failure') ||
           contains(needs.*.result, 'cancelled')
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-cache-action@main
 
@@ -228,14 +275,16 @@ jobs:
     # NOTE(cole-h): we need always() here because if any of the needs jobs are skipped (this is
     # transitive as well, so if any of success's needs jobs are skipped, like the *_no_dsp ones
     # usually are on release), this gets skipped too...
-    if: (always() && github.repository == 'DeterminateSystems/nix-src' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/')))
+    if: (always() && needs.success.result == 'success' && github.repository == 'DeterminateSystems/nix-src' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/')))
     environment: ${{ github.event_name == 'release' && 'production' || '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: DeterminateSystems/flakehub-push@main
         with:

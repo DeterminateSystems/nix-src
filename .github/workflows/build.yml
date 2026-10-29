@@ -53,6 +53,14 @@ on:
       sentry_project:
         required: false
 
+permissions:
+  id-token: "write"
+  contents: "read"
+
+env:
+  FLAKE_REF: ${{ inputs.flake }}
+  SYSTEM: ${{ inputs.system }}
+
 jobs:
   build:
     if: ${{ inputs.if }}
@@ -61,15 +69,17 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
         with:
           extra-conf: |
             extra-experimental-features = provenance
       - uses: DeterminateSystems/flakehub-cache-action@main
-      - run: nix build ${{ inputs.flake }}#packages.${{ inputs.system }}.default .#packages.${{ inputs.system }}.binaryTarball --no-link -L
-      - run: nix build ${{ inputs.flake }}#packages.${{ inputs.system }}.binaryTarball --out-link tarball
-      - run: nix build ${{ inputs.flake }}#^debug,out
+      - run: nix build "$FLAKE_REF#packages.$SYSTEM.default" ".#packages.$SYSTEM.binaryTarball" --no-link -L
+      - run: nix build "$FLAKE_REF#packages.$SYSTEM.binaryTarball" --out-link tarball
+      - run: nix build "$FLAKE_REF#^debug,out"
       - name: Upload debug info to Sentry
         run: ./maintainers/upload-debug-info-to-sentry.py --debug-dir ./result-debug ./result/bin/nix
         if: env.SENTRY_AUTH_TOKEN != ''
@@ -77,7 +87,7 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.sentry_auth_token }}
           SENTRY_ORG: ${{ secrets.sentry_org }}
           SENTRY_PROJECT: ${{ secrets.sentry_project }}
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: inputs.upload_artifacts
         with:
           name: ${{ inputs.system }}
@@ -90,13 +100,15 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
         with:
           extra-conf: |
             extra-experimental-features = provenance
       - uses: DeterminateSystems/flakehub-cache-action@main
-      - run: nix build ${{ inputs.flake }}#packages.${{ inputs.system }}.nix-cli-static --no-link -L
+      - run: nix build "$FLAKE_REF#packages.$SYSTEM.nix-cli-static" --no-link -L
 
   test:
     if: ${{ inputs.if && inputs.run_tests}}
@@ -106,13 +118,15 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
         with:
           extra-conf: |
             extra-experimental-features = provenance
       - uses: DeterminateSystems/flakehub-cache-action@main
-      - run: nix flake check --keep-going ${{ inputs.flake }} -L --system ${{ inputs.system }}
+      - run: nix flake check --keep-going "$FLAKE_REF" -L --system "$SYSTEM"
 
   # Run and test the new build system.
   nix_make:
@@ -120,7 +134,9 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
         with:
           extra-conf: |
@@ -133,7 +149,9 @@ jobs:
     needs: build
     runs-on: ${{ inputs.runner_for_virt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
         with:
           extra-conf: |
@@ -141,10 +159,10 @@ jobs:
       - uses: DeterminateSystems/flakehub-cache-action@main
       - run: |
           nix build -L \
-            ${{ inputs.flake }}#hydraJobs.tests.functional_user \
-            ${{ inputs.flake }}#hydraJobs.tests.githubFlakes \
-            ${{ inputs.flake }}#hydraJobs.tests.nix-docker \
-            ${{ inputs.flake }}#hydraJobs.tests.tarballFlakes \
+            "$FLAKE_REF#hydraJobs.tests.functional_user" \
+            "$FLAKE_REF#hydraJobs.tests.githubFlakes" \
+            "$FLAKE_REF#hydraJobs.tests.nix-docker" \
+            "$FLAKE_REF#hydraJobs.tests.tarballFlakes" \
             ;
 
   vm_tests_all:
@@ -152,7 +170,9 @@ jobs:
     needs: build
     runs-on: ${{ inputs.runner_for_virt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
         with:
           extra-conf: |
@@ -160,11 +180,11 @@ jobs:
       - uses: DeterminateSystems/flakehub-cache-action@main
       - run: |
           tests=$(nix flake show --json \
-            | jq -r '
+            | jq -r --arg flake "$FLAKE_REF" '
               .inventory.hydraJobs.output.children.tests.children
               | with_entries(select(.value | has("derivation")))
               | keys[]
-              | "${{ inputs.flake }}#hydraJobs.tests." + .')
+              | $flake + "#hydraJobs.tests." + .')
 
           if [ -z "$tests" ]; then
             echo "error: no tests found in hydraJobs.tests"
@@ -211,17 +231,21 @@ jobs:
 
     steps:
       - name: Checkout nix
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Checkout flake-regressions
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: NixOS/flake-regressions
           path: flake-regressions
+          persist-credentials: false
       - name: Checkout flake-regressions-data
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: NixOS/flake-regressions-data
           path: flake-regressions/tests
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
         with:
           # The installer enables parallel evaluation by default; only the
@@ -247,7 +271,7 @@ jobs:
             mkdir -p "${NSC_CACHE_PATH}/nix/xdg-cache"
             export XDG_CACHE_HOME="${NSC_CACHE_PATH}/nix/xdg-cache"
           fi
-          nix build ${{ inputs.flake }} -L --out-link ./new-nix
+          nix build "$FLAKE_REF" -L --out-link ./new-nix
           export PATH=$(pwd)/new-nix/bin:$PATH
           [[ $(type -p nix) = $(pwd)/new-nix/bin/nix ]]
 
@@ -267,14 +291,19 @@ jobs:
             NIX_REMOTE=/tmp/nix flake-regressions/eval-all.sh
           fi
       - name: Collect flake regression statistics
+        env:
+          NIX_CONFIG_UNDER_TEST: ${{ matrix.nix_config }}
+          FLAKE_REGRESSION_GLOB: ${{ matrix.glob }}
+          RETRIED: ${{ steps.run.outputs.retried }}
+          JOB_INDEX: ${{ strategy.job-index }}
         run: |
           ./maintainers/flake-regression-stats.py collect \
             --tests-dir flake-regressions/tests \
-            --nix-config "${{ matrix.nix_config }}" \
-            --glob "${{ matrix.glob }}" \
-            ${{ steps.run.outputs.retried == 'true' && '--retried' || '' }} \
-            --output flake-regression-stats-${{ strategy.job-index }}.json
-      - uses: actions/upload-artifact@v6
+            --nix-config "$NIX_CONFIG_UNDER_TEST" \
+            --glob "$FLAKE_REGRESSION_GLOB" \
+            ${RETRIED:+--retried} \
+            --output "flake-regression-stats-$JOB_INDEX.json"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           # Artifact names cannot contain the '*' in the glob, so use the job index.
           name: flake-regression-stats-${{ inputs.system }}-${{ strategy.job-index }}
@@ -285,7 +314,9 @@ jobs:
     if: needs.flake_regressions.result == 'success'
     runs-on: ${{ inputs.runner_small }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -296,9 +327,9 @@ jobs:
         run: |
           ./maintainers/flake-regression-stats.py aggregate \
             --input-dir flake-regression-stats \
-            --output flake-regression-stats-${{ inputs.system }}.json \
+            --output "flake-regression-stats-$SYSTEM.json" \
             --summary "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: flake-regression-stats-${{ inputs.system }}
           path: flake-regression-stats-${{ inputs.system }}.json
@@ -315,7 +346,9 @@ jobs:
       deployments: "write"
     steps:
       - name: Checkout nix
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@main
         with:
           extra-conf: |
@@ -323,8 +356,8 @@ jobs:
       - uses: DeterminateSystems/flakehub-cache-action@main
       - name: Build manual
         if: inputs.system == 'x86_64-linux'
-        run: nix build ${{ inputs.flake }}#hydraJobs.manual
-      - uses: nwtgck/actions-netlify@v4.0
+        run: nix build "$FLAKE_REF#hydraJobs.manual"
+      - uses: nwtgck/actions-netlify@d22a32a27c918fe470bbc562e984f80ec48c2668 # v4.0.0
         if: inputs.publish_manual && inputs.system == 'x86_64-linux'
         with:
           publish-dir: "./result/share/doc/nix/manual"

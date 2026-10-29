@@ -318,6 +318,7 @@ nixComponents.callPackage (
               (pkgs.writeScriptBin "pre-commit-hooks-install" modular.pre-commit.settings.installationScript)
               pkgs.buildPackages.nixfmt
               pkgs.buildPackages.shellcheck
+              pkgs.buildPackages.zizmor
               pkgs.buildPackages.include-what-you-use
             ]
             ++ lib.optional stdenv.hostPlatform.isUnix pkgs.buildPackages.gdb
