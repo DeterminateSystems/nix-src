@@ -38,22 +38,57 @@ void DarwinDerivationBuilder::prepareSandbox()
     pathsInChroot = getPathsInSandbox();
 }
 
-void DarwinDerivationBuilder::setUser()
+void DarwinDerivationBuilder::fillChildSpec(BuilderChildSpec & spec)
 {
-    DerivationBuilderImpl::setUser();
+    auto paths = pathsInChroot;
 
+    /* Add all our input paths to the chroot */
+    if (useSandbox)
+        for (auto & i : inputPaths) {
+            auto p = store.printStorePath(i);
+            paths.insert_or_assign(p, ChrootPath{.source = p});
+        }
+
+    Strings scratchOutputPaths;
+    for (auto & [_, path] : scratchOutputs)
+        scratchOutputPaths.push_back(store.printStorePath(path));
+
+    /* The tmpDir in scope points at the temporary build directory for our derivation. Some packages try different
+       mechanisms to find temporary directories, so we want to open up a broader place for them to put their files,
+       if needed. */
+    std::filesystem::path globalTmpDir = canonPath(defaultTempDir().native(), true);
+
+    /* They don't like trailing slashes on subpath directives */
+    std::string globalTmpDirStr = globalTmpDir.native();
+    while (!globalTmpDirStr.empty() && globalTmpDirStr.back() == '/')
+        globalTmpDirStr.pop_back();
+
+    spec.darwinSandbox = BuilderChildSpec::DarwinSandbox{
+        .useSandbox = useSandbox,
+        .pathsInChroot = std::move(paths),
+        .logViolations = store.config->getLocalSettings().darwinLogSandboxViolations,
+        .privateNetwork = derivationType.isSandboxed(),
+        .scratchOutputPaths = std::move(scratchOutputPaths),
+        .additionalSandboxProfile = drvOptions.additionalSandboxProfile,
+        .tmpDir = tmpDir,
+        .globalTmpDir = std::move(globalTmpDirStr),
+        .allowLocalNetworking = drvOptions.allowLocalNetworking,
+        .disableSandbox = getEnv("_NIX_TEST_NO_SANDBOX") == "1",
+        .platform = drv.platform,
+    };
+}
+
+void enterDarwinSandbox(const std::string & storeDir, const BuilderChildSpec::DarwinSandbox & sandbox)
+{
     /* This has to appear before import statements. */
     std::string sandboxProfile = "(version 1)\n";
 
-    if (useSandbox) {
+    if (sandbox.useSandbox) {
 
         /* Lots and lots and lots of file functions freak out if they can't stat their full ancestry */
         StringSet ancestry;
 
-        /* We build the ancestry before adding all inputPaths to the store because we know they'll
-           all have the same parents (the store), and there might be lots of inputs. This isn't
-           particularly efficient... I doubt it'll be a bottleneck in practice */
-        for (auto & i : pathsInChroot) {
+        for (auto & i : sandbox.pathsInChroot) {
             std::filesystem::path cur = i.first;
             while (cur != "/") {
                 cur = cur.parent_path();
@@ -63,21 +98,15 @@ void DarwinDerivationBuilder::setUser()
 
         /* And we want the store in there regardless of how empty pathsInChroot. We include the innermost
            path component this time, since it's typically /nix/store and we care about that. */
-        std::filesystem::path cur = store.storeDir;
+        std::filesystem::path cur = storeDir;
         while (cur != "/") {
             ancestry.insert(cur.native());
             cur = cur.parent_path();
         }
 
-        /* Add all our input paths to the chroot */
-        for (auto & i : inputPaths) {
-            auto p = store.printStorePath(i);
-            pathsInChroot.insert_or_assign(p, ChrootPath{.source = p});
-        }
-
         /* Violations will go to the syslog if you set this. Unfortunately the destination does not appear to be
          * configurable */
-        if (store.config->getLocalSettings().darwinLogSandboxViolations) {
+        if (sandbox.logViolations) {
             sandboxProfile += "(deny default)\n";
         } else {
             sandboxProfile += "(deny default (with no-log))\n";
@@ -87,15 +116,15 @@ void DarwinDerivationBuilder::setUser()
 #include "sandbox-defaults.sb"
             ;
 
-        if (!derivationType.isSandboxed())
+        if (!sandbox.privateNetwork)
             sandboxProfile +=
 #include "sandbox-network.sb"
                 ;
 
         /* Add the output paths we'll use at build-time to the chroot */
         sandboxProfile += "(allow file-read* file-write* process-exec\n";
-        for (auto & [_, path] : scratchOutputs)
-            sandboxProfile += fmt("\t(subpath \"%s\")\n", store.printStorePath(path));
+        for (auto & path : sandbox.scratchOutputPaths)
+            sandboxProfile += fmt("\t(subpath \"%s\")\n", path);
 
         sandboxProfile += ")\n";
 
@@ -107,7 +136,7 @@ void DarwinDerivationBuilder::setUser()
         // See https://github.com/NixOS/nix/issues/4119
         // We split our allow groups approximately at half the actual limit, 1 << 16
         const size_t breakpoint = sandboxProfile.length() + (1 << 14);
-        for (auto & i : pathsInChroot) {
+        for (auto & i : sandbox.pathsInChroot) {
 
             if (i.first != i.second.source)
                 throw Error(
@@ -146,7 +175,7 @@ void DarwinDerivationBuilder::setUser()
         }
         sandboxProfile += ")\n";
 
-        sandboxProfile += drvOptions.additionalSandboxProfile;
+        sandboxProfile += sandbox.additionalSandboxProfile;
     } else
         sandboxProfile +=
 #include "sandbox-minimal.sb"
@@ -155,23 +184,13 @@ void DarwinDerivationBuilder::setUser()
     debug("Generated sandbox profile:");
     debug(sandboxProfile);
 
-    /* The tmpDir in scope points at the temporary build directory for our derivation. Some packages try different
-       mechanisms to find temporary directories, so we want to open up a broader place for them to put their files,
-       if needed. */
-    std::filesystem::path globalTmpDir = canonPath(defaultTempDir().native(), true);
-
-    /* They don't like trailing slashes on subpath directives */
-    std::string globalTmpDirStr = globalTmpDir.native();
-    while (!globalTmpDirStr.empty() && globalTmpDirStr.back() == '/')
-        globalTmpDirStr.pop_back();
-
-    if (getEnv("_NIX_TEST_NO_SANDBOX") != "1") {
+    if (!sandbox.disableSandbox) {
         Strings sandboxArgs;
         sandboxArgs.push_back("_NIX_BUILD_TOP");
-        sandboxArgs.push_back(tmpDir.native());
+        sandboxArgs.push_back(sandbox.tmpDir.native());
         sandboxArgs.push_back("_GLOBAL_TMP_DIR");
-        sandboxArgs.push_back(globalTmpDirStr);
-        if (drvOptions.allowLocalNetworking) {
+        sandboxArgs.push_back(sandbox.globalTmpDir);
+        if (sandbox.allowLocalNetworking) {
             sandboxArgs.push_back("_ALLOW_LOCAL_NETWORKING");
             sandboxArgs.push_back("1");
         }
@@ -185,7 +204,8 @@ void DarwinDerivationBuilder::setUser()
     }
 }
 
-void DarwinDerivationBuilder::execBuilder(const Strings & args, const Strings & envStrs)
+void execDarwinBuilder(
+    const std::string & platform, const std::filesystem::path & builder, const Strings & args, const Strings & envStrs)
 {
     posix_spawnattr_t attrp;
 
@@ -195,20 +215,19 @@ void DarwinDerivationBuilder::execBuilder(const Strings & args, const Strings & 
     if (posix_spawnattr_setflags(&attrp, POSIX_SPAWN_SETEXEC))
         throw SysError("failed to initialize builder");
 
-    if (drv.platform == "aarch64-darwin") {
+    if (platform == "aarch64-darwin") {
         // Unset kern.curproc_arch_affinity so we can escape Rosetta
         int affinity = 0;
         sysctlbyname("kern.curproc_arch_affinity", NULL, NULL, &affinity, sizeof(affinity));
 
         cpu_type_t cpu = CPU_TYPE_ARM64;
         posix_spawnattr_setbinpref_np(&attrp, 1, &cpu, NULL);
-    } else if (drv.platform == "x86_64-darwin") {
+    } else if (platform == "x86_64-darwin") {
         cpu_type_t cpu = CPU_TYPE_X86_64;
         posix_spawnattr_setbinpref_np(&attrp, 1, &cpu, NULL);
     }
 
-    posix_spawn(
-        NULL, drv.builder.c_str(), NULL, &attrp, stringsToCharPtrs(args).data(), stringsToCharPtrs(envStrs).data());
+    posix_spawn(NULL, builder.c_str(), NULL, &attrp, stringsToCharPtrs(args).data(), stringsToCharPtrs(envStrs).data());
 }
 
 void DarwinDerivationBuilder::cleanupSysVIPCForUser(uid_t uid)

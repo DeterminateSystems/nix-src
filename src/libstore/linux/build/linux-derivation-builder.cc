@@ -76,9 +76,9 @@ static int move_mount(int sourceDirFd, const char * source, int destDirFd, const
 
 namespace nix {
 
-void setupSeccomp(const LocalSettings & localSettings)
+void setupSeccomp(bool filterSyscalls, bool allowNewPrivileges)
 {
-    if (!localSettings.filterSyscalls)
+    if (!filterSyscalls)
         return;
 
 #if HAVE_SECCOMP
@@ -166,7 +166,7 @@ void setupSeccomp(const LocalSettings & localSettings)
         || seccomp_rule_add(ctx, SCMP_ACT_ERRNO(ENOTSUP), SCMP_SYS(fsetxattr), 0) != 0)
         throw SysError("unable to add seccomp rule");
 
-    if (seccomp_attr_set(ctx, SCMP_FLTATR_CTL_NNP, localSettings.allowNewPrivileges ? 0 : 1) != 0)
+    if (seccomp_attr_set(ctx, SCMP_FLTATR_CTL_NNP, allowNewPrivileges ? 0 : 1) != 0)
         throw SysError("unable to set 'no new privileges' seccomp attribute");
 
     if (seccomp_load(ctx) != 0)
@@ -396,18 +396,28 @@ static void doBind(
 
 static const std::filesystem::path procPath = "/proc";
 
-void LinuxDerivationBuilder::enterChroot()
+void LinuxDerivationBuilder::fillChildSpec(BuilderChildSpec & spec)
 {
     auto & localSettings = store.config->getLocalSettings();
 
+    spec.linuxSecurity = BuilderChildSpec::LinuxSecurity{
+        .allowNewPrivileges = localSettings.allowNewPrivileges,
+        .filterSyscalls = localSettings.filterSyscalls,
+        .impersonateLinux26 = localSettings.impersonateLinux26,
+        .platform = drv.platform,
+    };
+}
+
+void applyLinuxSecurity(const BuilderChildSpec::LinuxSecurity & security)
+{
     /* Set the NO_NEW_PRIVS before doing seccomp/landlock setup.
        landlock_restrict_self requires either NO_NEW_PRIVS or CAP_SYS_ADMIN.
        With user namespaces we do get CAP_SYS_ADMIN. */
-    if (!localSettings.allowNewPrivileges)
+    if (!security.allowNewPrivileges)
         if (::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1)
             throw SysError("failed to set PR_SET_NO_NEW_PRIVS");
 
-    setupSeccomp(localSettings);
+    setupSeccomp(security.filterSyscalls, security.allowNewPrivileges);
 
 #if DO_LANDLOCK
     try {
@@ -422,8 +432,8 @@ void LinuxDerivationBuilder::enterChroot()
 #endif
 
     linux::setPersonality({
-        .system = drv.platform,
-        .impersonateLinux26 = localSettings.impersonateLinux26,
+        .system = security.platform,
+        .impersonateLinux26 = security.impersonateLinux26,
     });
 }
 
@@ -505,12 +515,6 @@ void ChrootLinuxDerivationBuilder::prepareSandbox()
 
 void ChrootLinuxDerivationBuilder::startChild()
 {
-    RunChildArgs args{
-#if NIX_WITH_AWS_AUTH
-        .awsCredentials = preResolveAwsCredentials(),
-#endif
-    };
-
     /* Set up private namespaces for the build:
 
         - The PID namespace causes the build to start as PID 1.
@@ -538,19 +542,14 @@ void ChrootLinuxDerivationBuilder::startChild()
         - The UTS namespace ensures that builders see a hostname of
           localhost rather than the actual hostname.
 
-       We use a helper process to do the clone() to work around
-       clone() being broken in multi-threaded programs due to
-       at-fork handlers not being run. Note that we use
-       CLONE_PARENT to ensure that the real builder is parented to
-       us.
+       The builder is created by the spawner, since clone() is broken
+       in multi-threaded programs due to at-fork handlers not being
+       run.
     */
 
     userNamespaceSync.create();
 
     usingUserNamespace = userNamespacesSupported();
-
-    Pipe sendPid;
-    sendPid.create();
 
     /* If we're using a cgroup, create the builder directly in it.
        Migrating it afterwards via `cgroup.procs` is expensive, since
@@ -563,55 +562,35 @@ void ChrootLinuxDerivationBuilder::startChild()
             throw SysError("opening cgroup %s", PathFmt(*cgroup));
     }
 
-    Pid helper = startProcess([&]() {
-        sendPid.readSide.close();
+    SpawnOptions options{
+        .linuxCloneFlags = CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWIPC | CLONE_NEWUTS,
+        .cgroupFd = cgroupFd.get(),
+        /* Drop additional groups because we can't do it after we've
+           created the new user namespace. */
+        .dropSupplementaryGroups = true,
+        .requireDropSupplementaryGroups = store.config->getLocalSettings().requireDropSupplementaryGroups,
+    };
+    if (derivationType.isSandboxed())
+        options.linuxCloneFlags |= CLONE_NEWNET;
+    if (usingUserNamespace)
+        options.linuxCloneFlags |= CLONE_NEWUSER;
 
-        /* We need to open the slave early, before
-           CLONE_NEWUSER. Otherwise we get EPERM when running as
-           root. */
-        openSlave();
+    auto spec = makeChildSpec();
 
+    {
+        /* We need to open the slave before CLONE_NEWUSER. Otherwise
+           we get EPERM when running as root. */
+        auto slave = openSlaveNoDup();
+        std::array<Descriptor, 2> fds{slave.get(), userNamespaceSync.readSide.get()};
         try {
-            /* Drop additional groups here because we can't do it
-               after we've created the new user namespace. */
-            if (setgroups(0, 0) == -1) {
-                if (errno != EPERM)
-                    throw SysError("setgroups failed");
-                if (store.config->getLocalSettings().requireDropSupplementaryGroups)
-                    throw Error(
-                        "setgroups failed. Set the require-drop-supplementary-groups option to false to skip this step.");
-            }
-
-            ProcessOptions options;
-            options.cloneFlags = CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWIPC | CLONE_NEWUTS | CLONE_PARENT | SIGCHLD;
-            if (derivationType.isSandboxed())
-                options.cloneFlags |= CLONE_NEWNET;
-            if (usingUserNamespace)
-                options.cloneFlags |= CLONE_NEWUSER;
-            if (cgroupFd)
-                options.cgroupFd = cgroupFd.get();
-
-            pid_t child = startProcess([this, args = std::move(args)]() { runChild(std::move(args)); }, options);
-
-            writeFull(sendPid.writeSide.get(), fmt("%d\n", child));
-            _exit(0);
-        } catch (...) {
-            handleChildException(true);
-            _exit(1);
+            pid = spawnBuilderChild(spec, fds, options);
+        } catch (Error & e) {
+            if (options.requireDropSupplementaryGroups)
+                e.addTrace(
+                    {},
+                    "if this is due to setgroups failing, set the require-drop-supplementary-groups option to false to skip this step");
+            throw;
         }
-    });
-
-    sendPid.writeSide.close();
-
-    if (auto status = helper.wait(); !statusOk(status)) {
-        // Ensure the slave side of the pseudoterminal has been opened at least once so that reading from the master
-        // doesn't hang.
-        openSlaveNoDup();
-
-        processSandboxSetupMessages();
-
-        // Only reached if the child process didn't send an exception.
-        throw Error("unable to start build process: %s", statusToString(status));
     }
 
     userNamespaceSync.readSide = -1;
@@ -632,10 +611,6 @@ void ChrootLinuxDerivationBuilder::startChild()
         userNamespaceSync.writeSide = -1;
     });
 
-    FdSource sendPidSource(sendPid.readSide.get());
-    auto ss = tokenizeString<std::vector<std::string>>(sendPidSource.readLine());
-    assert(ss.size() == 1);
-    pid = string2Int<pid_t>(ss[0]).value();
     auto thisProcPath = procPath / std::to_string(static_cast<pid_t>(pid));
 
     if (usingUserNamespace) {
@@ -695,16 +670,89 @@ void ChrootLinuxDerivationBuilder::startChild()
     userNamespaceSyncDone = true;
 }
 
-void ChrootLinuxDerivationBuilder::enterChroot()
+void ChrootLinuxDerivationBuilder::fillChildSpec(BuilderChildSpec & spec)
 {
-    userNamespaceSync.writeSide = -1;
+    LinuxDerivationBuilder::fillChildSpec(spec);
 
-    if (readLine(userNamespaceSync.readSide.get()) != "1")
+    /* Switch to the sandbox uid/gid in the user namespace, which
+       corresponds to the build user or calling user in the parent
+       namespace. */
+    spec.credentials = BuilderChildSpec::Credentials{
+        .uid = sandboxUid(),
+        .gid = sandboxGid(),
+    };
+
+    auto paths = pathsInChroot;
+
+    /* Set up a nearly empty /dev, unless the user asked to
+       bind-mount the host /dev. */
+    bool minimalDev = !paths.contains("/dev");
+    Strings ss;
+    if (minimalDev) {
+        ss.push_back("/dev/full");
+        if (systemFeatures.count("kvm")) {
+            if (pathExists("/dev/kvm")) {
+                ss.push_back("/dev/kvm");
+            } else {
+                warn(
+                    "KVM is enabled in system-features but /dev/kvm is not available. "
+                    "QEMU builds may fall back to slow emulation. "
+                    "Consider removing 'kvm' from system-features in nix.conf if KVM is not supported on this system.");
+            }
+        }
+        ss.push_back("/dev/null");
+        ss.push_back("/dev/random");
+        ss.push_back("/dev/tty");
+        ss.push_back("/dev/urandom");
+        ss.push_back("/dev/zero");
+    }
+
+    /* Fixed-output derivations typically need to access the
+       network, so give them access to /etc/resolv.conf and so
+       on. */
+    if (!derivationType.isSandboxed()) {
+        /* N.B. it is realistic that these paths might not exist. It
+           happens when testing Nix building fixed-output derivations
+           within a pure derivation. */
+        for (auto & path : {"/etc/resolv.conf", "/etc/services", "/etc/hosts"})
+            if (pathExists(path))
+                ss.push_back(path);
+
+        if (auto & caFile = fileTransferSettings.caFile.get()) {
+            if (pathExists(*caFile))
+                paths.try_emplace("/etc/ssl/certs/ca-certificates.crt", canonPath(caFile->native(), true), true);
+        }
+    }
+
+    for (auto & i : ss) {
+        // For backwards-compatibility, resolve all the symlinks in the
+        // chroot paths.
+        auto canonicalPath = canonPath(i, true);
+        paths.emplace(i, canonicalPath);
+    }
+
+    spec.linuxSandbox = BuilderChildSpec::LinuxSandbox{
+        .chrootRootDir = chrootRootDir,
+        .pathsInChroot = std::move(paths),
+        .privateNetwork = derivationType.isSandboxed(),
+        .minimalDev = minimalDev,
+        .mountSys = buildUser && buildUser->getUIDCount() != 1,
+        .makeEtcReadOnly = !drvOptions.useUidRange(drv),
+        .unshareCgroup = cgroup.has_value(),
+        .shmSize = store.config->getLocalSettings().sandboxShmSize,
+    };
+}
+
+void enterLinuxSandbox(
+    const std::string & storeDir, const BuilderChildSpec::LinuxSandbox & sandbox, Descriptor userNamespaceSync)
+{
+    auto & chrootRootDir = sandbox.chrootRootDir;
+    auto & pathsInChroot = sandbox.pathsInChroot;
+
+    if (readLine(userNamespaceSync) != "1")
         throw Error("user namespace initialisation failed");
 
-    userNamespaceSync.readSide = -1;
-
-    if (derivationType.isSandboxed()) {
+    if (sandbox.privateNetwork) {
 
         /* Initialise the loopback interface. */
         AutoCloseFD fd(socket(PF_INET, SOCK_DGRAM, IPPROTO_IP));
@@ -751,7 +799,7 @@ void ChrootLinuxDerivationBuilder::enterChroot()
 
        Marking chrootRootDir as MS_SHARED causes pivot_root()
        to fail with EINVAL. Don't know why. */
-    std::filesystem::path chrootStoreDir = chrootRootDir / std::filesystem::path(store.storeDir).relative_path();
+    std::filesystem::path chrootStoreDir = chrootRootDir / std::filesystem::path(storeDir).relative_path();
 
     if (mount(chrootStoreDir.c_str(), chrootStoreDir.c_str(), 0, MS_BIND, 0) == -1)
         throw SysError("unable to bind mount the Nix store at %1%", PathFmt(chrootStoreDir));
@@ -759,63 +807,23 @@ void ChrootLinuxDerivationBuilder::enterChroot()
     if (mount(0, chrootStoreDir.c_str(), 0, MS_SHARED, 0) == -1)
         throw SysError("unable to make %s shared", PathFmt(chrootStoreDir));
 
-    /* Set up a nearly empty /dev, unless the user asked to
-       bind-mount the host /dev. */
-    Strings ss;
-    if (pathsInChroot.find("/dev") == pathsInChroot.end()) {
+    /* Set up a nearly empty /dev. The device nodes have been added
+       to `pathsInChroot` by the parent. */
+    if (sandbox.minimalDev) {
         createDirs(chrootRootDir / "dev" / "shm");
         createDirs(chrootRootDir / "dev" / "pts");
-        ss.push_back("/dev/full");
-        if (systemFeatures.count("kvm")) {
-            if (pathExists("/dev/kvm")) {
-                ss.push_back("/dev/kvm");
-            } else {
-                warn(
-                    "KVM is enabled in system-features but /dev/kvm is not available. "
-                    "QEMU builds may fall back to slow emulation. "
-                    "Consider removing 'kvm' from system-features in nix.conf if KVM is not supported on this system.");
-            }
-        }
-        ss.push_back("/dev/null");
-        ss.push_back("/dev/random");
-        ss.push_back("/dev/tty");
-        ss.push_back("/dev/urandom");
-        ss.push_back("/dev/zero");
         createSymlink("/proc/self/fd", chrootRootDir / "dev" / "fd");
         createSymlink("/proc/self/fd/0", chrootRootDir / "dev" / "stdin");
         createSymlink("/proc/self/fd/1", chrootRootDir / "dev" / "stdout");
         createSymlink("/proc/self/fd/2", chrootRootDir / "dev" / "stderr");
     }
 
-    /* Fixed-output derivations typically need to access the
-       network, so give them access to /etc/resolv.conf and so
-       on. */
-    if (!derivationType.isSandboxed()) {
+    if (!sandbox.privateNetwork) {
         // Only use nss functions to resolve hosts and
         // services. Don’t use it for anything else that may
         // be configured for this system. This limits the
         // potential impurities introduced in fixed-outputs.
         writeFile(chrootRootDir / "etc" / "nsswitch.conf", "hosts: files dns\nservices: files\n");
-
-        /* N.B. it is realistic that these paths might not exist. It
-           happens when testing Nix building fixed-output derivations
-           within a pure derivation. */
-        for (auto & path : {"/etc/resolv.conf", "/etc/services", "/etc/hosts"})
-            if (pathExists(path))
-                ss.push_back(path);
-
-        if (auto & caFile = fileTransferSettings.caFile.get()) {
-            if (pathExists(*caFile))
-                pathsInChroot.try_emplace(
-                    "/etc/ssl/certs/ca-certificates.crt", canonPath(caFile->native(), true), true);
-        }
-    }
-
-    for (auto & i : ss) {
-        // For backwards-compatibility, resolve all the symlinks in the
-        // chroot paths.
-        auto canonicalPath = canonPath(i, true);
-        pathsInChroot.emplace(i, canonicalPath);
     }
 
     /* We really do have to reopen the dirfd in the child, otherwise move_mount dies with EINVAL. */
@@ -852,7 +860,7 @@ void ChrootLinuxDerivationBuilder::enterChroot()
         throw SysError("mounting /proc");
 
     /* Mount sysfs on /sys. */
-    if (buildUser && buildUser->getUIDCount() != 1) {
+    if (sandbox.mountSys) {
         createDirs(chrootRootDir / "sys");
         if (mount("none", (chrootRootDir / "sys").c_str(), "sysfs", 0, 0) == -1)
             throw SysError("mounting /sys");
@@ -861,12 +869,7 @@ void ChrootLinuxDerivationBuilder::enterChroot()
     /* Mount a new tmpfs on /dev/shm to ensure that whatever
        the builder puts in /dev/shm is cleaned up automatically. */
     if (pathExists("/dev/shm")
-        && mount(
-               "none",
-               (chrootRootDir / "dev" / "shm").c_str(),
-               "tmpfs",
-               0,
-               fmt("size=%s", store.config->getLocalSettings().sandboxShmSize).c_str())
+        && mount("none", (chrootRootDir / "dev" / "shm").c_str(), "tmpfs", 0, fmt("size=%s", sandbox.shmSize).c_str())
                == -1)
         throw SysError("mounting /dev/shm");
 
@@ -891,7 +894,7 @@ void ChrootLinuxDerivationBuilder::enterChroot()
     }
 
     /* Make /etc unwritable */
-    if (!drvOptions.useUidRange(drv))
+    if (sandbox.makeEtcReadOnly)
         chmod(chrootRootDir / "etc", 0555);
 
     /* Unshare this mount namespace. This is necessary because
@@ -910,7 +913,7 @@ void ChrootLinuxDerivationBuilder::enterChroot()
     /* Unshare the cgroup namespace. This means
        /proc/self/cgroup will show the child's cgroup as '/'
        rather than whatever it is in the parent. */
-    if (cgroup && unshare(CLONE_NEWCGROUP) == -1)
+    if (sandbox.unshareCgroup && unshare(CLONE_NEWCGROUP) == -1)
         throw SysError("unsharing cgroup namespace");
 
     /* Do the chroot(). */
@@ -931,21 +934,6 @@ void ChrootLinuxDerivationBuilder::enterChroot()
 
     if (rmdir("real-root") == -1)
         throw SysError("cannot remove real-root directory");
-
-    LinuxDerivationBuilder::enterChroot();
-}
-
-void ChrootLinuxDerivationBuilder::setUser()
-{
-    preserveDeathSignal([this]() {
-        /* Switch to the sandbox uid/gid in the user namespace,
-           which corresponds to the build user or calling user in
-           the parent namespace. */
-        if (setgid(sandboxGid()) == -1)
-            throw SysError("setgid failed");
-        if (setuid(sandboxUid()) == -1)
-            throw SysError("setuid failed");
-    });
 }
 
 SingleDrvOutputs ChrootLinuxDerivationBuilder::unprepareBuild()

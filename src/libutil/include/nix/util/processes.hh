@@ -21,6 +21,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <optional>
 #include <chrono>
@@ -29,6 +30,7 @@ namespace nix {
 
 struct Sink;
 struct Source;
+struct SpawnerChild;
 
 class Pid
 {
@@ -37,6 +39,11 @@ class Pid
     bool separatePG = false;
     int killSignal = SIGKILL;
     std::chrono::milliseconds killTimeout{0};
+    /**
+     * Set if this is a child of the spawner rather than of this
+     * process (see spawner.hh).
+     */
+    std::shared_ptr<SpawnerChild> spawnerChild;
 #else
     AutoCloseFD pid = INVALID_DESCRIPTOR;
 #endif
@@ -48,6 +55,7 @@ public:
     Pid & operator=(Pid && other) noexcept;
 #ifndef _WIN32
     Pid(pid_t pid);
+    Pid(pid_t pid, std::shared_ptr<SpawnerChild> spawnerChild);
     void operator=(pid_t pid);
     operator pid_t();
 #else
@@ -81,6 +89,7 @@ public:
         swap(lhs.separatePG, rhs.separatePG);
         swap(lhs.killSignal, rhs.killSignal);
         swap(lhs.killTimeout, rhs.killTimeout);
+        swap(lhs.spawnerChild, rhs.spawnerChild);
 #else
         swap(lhs.pid, rhs.pid);
 #endif

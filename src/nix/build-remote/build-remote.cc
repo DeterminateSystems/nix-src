@@ -92,20 +92,8 @@ static int main_build_remote(int argc, char ** argv)
 
         /* Read the parent's settings. The parent sends the settings of
            all `Config`s, not just `Settings`, so apply them
-           accordingly. Only apply those that differ from ours, though:
-           we've read the same configuration files, so the rest are
-           defaults, and setting a deprecated setting warns even if
-           it's to its default. (Note that we can't just have the
-           parent send its overridden settings: things like `--store`
-           set the setting without marking it as overridden.) */
-        std::map<std::string, Config::SettingInfo> ourSettings;
-        globalConfig.getSettings(ourSettings);
-        while (readInt(source)) {
-            auto name = readString(source);
-            auto value = readString(source);
-            if (auto i = ourSettings.find(name); i == ourSettings.end() || i->second.value != value)
-                globalConfig.set(name, value);
-        }
+           accordingly. */
+        applyGlobalSettings(source);
 
         auto maxBuildJobs = settings.getWorkerSettings().maxBuildJobs;
         settings.getWorkerSettings().maxBuildJobs.set("1"); // hack to make tests with local?root= work

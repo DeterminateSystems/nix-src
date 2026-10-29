@@ -1,11 +1,14 @@
 #include "nix/store/globals.hh"
 #include "nix/store/store-open.hh"
 #include "nix/store/build-result.hh"
+#include "nix/util/spawner.hh"
 #include <iostream>
 
 int main(int argc, char ** argv)
 {
     using namespace nix;
+
+    runSpawnerIfRequested();
 
     try {
         if (argc != 2) {

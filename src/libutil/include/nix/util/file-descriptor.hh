@@ -320,6 +320,11 @@ namespace unix {
 void closeExtraFDs();
 
 /**
+ * Close all file descriptors greater than or equal to `firstFd`.
+ */
+void closeFDsFrom(int firstFd);
+
+/**
  * Set the close-on-exec flag for the given file descriptor.
  */
 void closeOnExec(Descriptor fd);

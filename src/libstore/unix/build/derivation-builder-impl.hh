@@ -6,6 +6,8 @@
 #include "nix/store/local-store.hh"
 #include "nix/store/user-lock.hh"
 
+#include "builder-child.hh"
+
 namespace nix {
 
 /**
@@ -268,9 +270,9 @@ protected:
 
     /**
      * Open the slave side of the pseudoterminal and use it as stderr.
-     * FIXME: This is called in the child. It should really be called in the parent (except for the dup to stderr),
-     * since if the child fails before opening the slave, the parent will hang forever reading from the master. However,
-     * opening the slave in the parent causes random failures on macOS. See c536e00c9deeac58bc4b3299dbc702604c32adbe.
+     * This is called in the child by builders that don't use the
+     * spawner. Note that opening the slave in the parent causes
+     * random failures on macOS. See c536e00c9deeac58bc4b3299dbc702604c32adbe.
      */
     void openSlave()
     {
@@ -281,9 +283,34 @@ protected:
 
     /**
      * Called by prepareBuild() to start the child process for the
-     * build. Must set `pid`. The child must call runChild().
+     * build. Must set `pid`. By default, the child is created by the
+     * spawner (see `spawnBuilderChild()`), unless `canUseSpawner()`
+     * returns false, in which case it's forked and calls runChild().
      */
     virtual void startChild();
+
+    /**
+     * Whether the child can be created by the spawner. This requires
+     * that the child's behaviour is fully described by
+     * `makeChildSpec()`, i.e. that the builder doesn't override the
+     * child-side virtual methods (`enterChroot()`, `setUser()`,
+     * `execBuilder()`).
+     */
+    virtual bool canUseSpawner()
+    {
+        return true;
+    }
+
+    /**
+     * Compute the description of the child process of the build.
+     */
+    BuilderChildSpec makeChildSpec();
+
+    /**
+     * Called by `makeChildSpec()` to fill in the platform-specific
+     * parts of the child spec.
+     */
+    virtual void fillChildSpec(BuilderChildSpec & spec) {}
 
 #if NIX_WITH_AWS_AUTH
     /**
@@ -349,19 +376,10 @@ protected:
     void writeBuilderFile(const std::string & name, std::string_view contents);
 
     /**
-     * Arguments passed to runChild().
+     * Run the builder's process in a forked child, using the virtual
+     * methods below to set up the build environment.
      */
-    struct RunChildArgs
-    {
-#if NIX_WITH_AWS_AUTH
-        std::optional<AwsCredentials> awsCredentials;
-#endif
-    };
-
-    /**
-     * Run the builder's process.
-     */
-    void runChild(RunChildArgs args);
+    void runChild(const BuilderChildSpec & spec);
 
     /**
      * Move the current process into the chroot, if any. Called early

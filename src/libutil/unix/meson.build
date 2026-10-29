@@ -81,6 +81,7 @@ sources += files(
   'muxable-pipe.cc',
   'processes.cc',
   'signals.cc',
+  'spawner.cc',
   'users.cc',
   'xdg-dirs.cc',
 )
