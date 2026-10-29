@@ -703,13 +703,33 @@ std::optional<AwsCredentials> DerivationBuilderImpl::preResolveAwsCredentials()
 }
 #endif
 
-void DerivationBuilderImpl::startChild()
+DerivationBuilderImpl::RunChildArgs DerivationBuilderImpl::makeRunChildArgs()
 {
     RunChildArgs args{
 #if NIX_WITH_AWS_AUTH
         .awsCredentials = preResolveAwsCredentials(),
 #endif
     };
+
+    if (drv.isBuiltin() && drv.builder == "builtin:fetchurl") {
+        try {
+            args.netrcData = readFile(fileTransferSettings.netrcFile.get());
+        } catch (SystemError &) {
+        }
+
+        if (auto & caFile = fileTransferSettings.caFile.get())
+            try {
+                args.caFileData = readFile(*caFile);
+            } catch (SystemError &) {
+            }
+    }
+
+    return args;
+}
+
+void DerivationBuilderImpl::startChild()
+{
+    RunChildArgs args = makeRunChildArgs();
 
     pid = startProcess([this, args = std::move(args)]() {
         openSlave();
@@ -1005,25 +1025,14 @@ void DerivationBuilderImpl::runChild(RunChildArgs args)
            different uid and/or in a sandbox). */
         BuiltinBuilderContext ctx{
             .drv = drv,
+            .netrcData = std::move(args.netrcData),
+            .caFileData = std::move(args.caFileData),
             .hashedMirrors = settings.getLocalSettings().hashedMirrors,
             .tmpDirInSandbox = tmpDirInSandbox(),
 #if NIX_WITH_AWS_AUTH
             .awsCredentials = args.awsCredentials,
 #endif
         };
-
-        if (drv.isBuiltin() && drv.builder == "builtin:fetchurl") {
-            try {
-                ctx.netrcData = readFile(fileTransferSettings.netrcFile.get());
-            } catch (SystemError &) {
-            }
-
-            if (auto & caFile = fileTransferSettings.caFile.get())
-                try {
-                    ctx.caFileData = readFile(*caFile);
-                } catch (SystemError &) {
-                }
-        }
 
         enterChroot();
 
