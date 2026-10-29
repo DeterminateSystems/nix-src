@@ -17,6 +17,38 @@ std::string getUserName();
  * @return the given user's home directory from /etc/passwd.
  */
 std::filesystem::path getHomeOf(uid_t userId);
+
+/**
+ * An entry from the user database.
+ */
+struct PasswdEntry
+{
+    std::string name;
+    uid_t uid;
+    gid_t gid;
+    std::string home;
+};
+
+/**
+ * An entry from the group database.
+ */
+struct GroupEntry
+{
+    std::string name;
+    gid_t gid;
+    std::vector<std::string> members;
+};
+
+/**
+ * Look up a user or group. Unlike `getpwnam()` etc., these are
+ * thread-safe.
+ *
+ * @return `std::nullopt` if the user or group doesn't exist.
+ */
+std::optional<PasswdEntry> getUserByName(const std::string & name);
+std::optional<PasswdEntry> getUserById(uid_t uid);
+std::optional<GroupEntry> getGroupByName(const std::string & name);
+std::optional<GroupEntry> getGroupById(gid_t gid);
 #endif
 
 /**
