@@ -625,8 +625,16 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
     if (auto p = getEnv("_NIX_TEST_GC_SYNC_2"))
         readFile(*p);
 
-    /* Helper function that deletes a path from the store and throws
-       GCLimitReached if we've deleted enough garbage. */
+    /* Throw GCLimitReached if we've deleted enough garbage. */
+    auto checkMaxFreed = [&]() {
+        if (results.bytesFreed > options.maxFreed) {
+            printInfo("deleted more than %d bytes; stopping", options.maxFreed);
+            throw GCLimitReached();
+        }
+    };
+
+    /* Helper function that deletes a path from the store. The caller
+       must call `checkMaxFreed()` afterwards. */
     auto deleteFromStore = [&](std::string_view baseName, bool isKnownPath) {
         assert(!std::filesystem::path(baseName).is_absolute());
         /* Using `std::string` since this is the logical store dir. Hopefully that is the right choice. */
@@ -662,15 +670,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
            reuse that corrupt path. */
         deletePath(unpackedMarkerFor(realPath));
 
-        uint64_t bytesFreed;
+        uint64_t bytesFreed = 0;
         deleteStorePath(realPath, bytesFreed, isKnownPath);
 
         results.bytesFreed += bytesFreed;
-
-        if (results.bytesFreed > options.maxFreed) {
-            printInfo("deleted more than %d bytes; stopping", options.maxFreed);
-            throw GCLimitReached();
-        }
     };
 
     boost::unordered_flat_map<StorePath, StorePathSet, std::hash<StorePath>> referrersCache;
@@ -849,24 +852,30 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                     }
                     shared->pending = hashPart;
                 }
-                Finally resetPending([&]() {
-                    auto shared(_shared.lock());
-                    shared->pending.reset();
-                    wakeup.notify_all();
-                });
-                try {
-                    invalidatePathChecked(path);
-                    deleteFromStore(path.to_string(), true);
-                    referrersCache.erase(path);
-                } catch (PathInUse & e) {
-                    // If we end up here, it's likely a new occurrence
-                    // of https://github.com/NixOS/nix/issues/11923
-                    printError("BUG: %s", e.what());
-                    /* The path is still valid, so it and its closure
-                       are alive. */
-                    dead.erase(path);
-                    markAlive(path);
+                {
+                    Finally resetPending([&]() {
+                        auto shared(_shared.lock());
+                        shared->pending.reset();
+                        wakeup.notify_all();
+                    });
+                    try {
+                        invalidatePathChecked(path);
+                        deleteFromStore(path.to_string(), true);
+                        referrersCache.erase(path);
+                    } catch (PathInUse & e) {
+                        // If we end up here, it's likely a new occurrence
+                        // of https://github.com/NixOS/nix/issues/11923
+                        printError("BUG: %s", e.what());
+                        /* The path is still valid, so it and its closure
+                           are alive. */
+                        dead.erase(path);
+                        markAlive(path);
+                        continue;
+                    }
                 }
+                /* Check the limit only after releasing GC clients
+                   waiting for this path. */
+                checkMaxFreed();
             }
         }
     };
@@ -932,8 +941,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
                         if (auto storePath = maybeParseStorePath(storeDir + "/" + name))
                             maybeDeleteReferrersClosure(*storePath);
-                        else
+                        else {
                             deleteFromStore(name, false);
+                            checkMaxFreed();
+                        }
                     }
                 },
             },
