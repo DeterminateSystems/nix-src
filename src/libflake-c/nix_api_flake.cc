@@ -185,9 +185,10 @@ nix_locked_flake * nix_flake_lock(
     nix_clear_err(context);
     try {
         eval_state->state.resetFileCache();
-        auto lockedFlake = nix::make_ref<nix::flake::LockedFlake>(nix::flake::lockFlake(
-            *flakeSettings->settings, eval_state->state, *flakeReference->flakeRef, *flags->lockFlags));
-        return new nix_locked_flake{lockedFlake};
+        std::shared_ptr<nix::flake::LockedFlake> lockedFlake(
+            nix::flake::lockFlake(
+                *flakeSettings->settings, eval_state->state, *flakeReference->flakeRef, *flags->lockFlags));
+        return new nix_locked_flake{nix::ref(lockedFlake)};
     }
     NIXC_CATCH_ERRS_NULL
 }
@@ -203,7 +204,7 @@ nix_value * nix_locked_flake_get_output_attrs(
     nix_clear_err(context);
     try {
         auto v = nix_alloc_value(context, evalState);
-        nix::flake::callFlake(evalState->state, *lockedFlake->lockedFlake, *v->value);
+        nix::flake::callFlake(evalState->state, lockedFlake->lockedFlake.get_ptr(), *v->value);
         return v;
     }
     NIXC_CATCH_ERRS_NULL
