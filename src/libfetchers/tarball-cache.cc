@@ -1046,7 +1046,7 @@ ref<TarballCache> Settings::getTarballCache() const
 {
     auto tarballCache(_tarballCache.lock());
     if (!*tarballCache)
-        *tarballCache = TarballCache::open(getCacheDir() / "tarball-cache-v3.sqlite").get_ptr();
+        *tarballCache = TarballCache::open(getCacheDir() / "tarball-cache-detsys-v1.sqlite").get_ptr();
     return ref<TarballCache>(*tarballCache);
 }
 
