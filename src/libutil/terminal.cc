@@ -2,6 +2,7 @@
 #include "nix/util/environment-variables.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/error.hh"
+#include "nix/util/base-n.hh"
 
 #ifdef _WIN32
 #  include <io.h>
@@ -13,6 +14,8 @@
 #endif
 #include <unistd.h>
 #include <widechar_width.h>
+#include <nlohmann/json.hpp>
+#include <span>
 #include <cstdlib> // for ptsname and ptsname_r
 
 namespace {
@@ -62,6 +65,94 @@ inline std::pair<int, size_t> charWidthUTF8Helper(std::string_view s)
 } // namespace
 
 namespace nix {
+
+namespace {
+
+std::string sanitizeStatusMessage(std::string_view s)
+{
+    constexpr size_t maxLen = 200;
+
+    // big enough to gather context after sanitization
+    constexpr size_t maxInput = 4096;
+
+    if (s.size() > maxInput) {
+        size_t cut = maxInput;
+
+        // don't end the window in the middle of a utf-8 sequence
+        while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xc0) == 0x80)
+            --cut;
+
+        s = s.substr(0, cut);
+    }
+
+    // re-use nlohmann's utf-8 sanitizer instead of handwriting one
+    auto valid =
+        nlohmann::json::parse(
+            nlohmann::json(filterANSIEscapes(s, true)).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace))
+            .get<std::string>();
+
+    // remove control characters that OSC 7501 doesn't allow
+    std::string res;
+
+    for (size_t i = 0; i < valid.size(); ++i) {
+        auto c = static_cast<unsigned char>(valid[i]);
+
+        if (c < 0x20 || c == 0x7f)
+            continue;
+
+        if (c == 0xc2 && i + 1 < valid.size() && static_cast<unsigned char>(valid[i + 1]) >= 0x80
+            && static_cast<unsigned char>(valid[i + 1]) <= 0x9f) {
+            ++i;
+            continue;
+        }
+
+        res += valid[i];
+    }
+
+    // ensure that utf-8 sequences aren't cutoff
+    if (res.size() > maxLen) {
+        size_t cut = maxLen;
+
+        while (cut > 0 && (static_cast<unsigned char>(res[cut]) & 0xc0) == 0x80)
+            --cut;
+
+        res.resize(cut);
+    }
+
+    return res;
+}
+
+constexpr std::string_view programStateName(ProgramState state) noexcept
+{
+    switch (state) {
+    case ProgramState::Idle:
+        return "idle";
+    case ProgramState::Working:
+        return "working";
+    case ProgramState::Done:
+        return "done";
+    case ProgramState::Blocked:
+        return "blocked";
+    case ProgramState::Error:
+        return "error";
+    }
+    return "unknown";
+}
+
+constexpr std::string_view programStatusKindName(ProgramStatusKind kind) noexcept
+{
+    switch (kind) {
+    case ProgramStatusKind::Permission:
+        return "permission";
+    case ProgramStatusKind::Question:
+        return "question";
+    case ProgramStatusKind::Auth:
+        return "auth";
+    }
+    return "unknown";
+}
+
+} // namespace
 
 bool isTTY(Descriptor fd)
 {
@@ -156,6 +247,49 @@ std::string filterANSIEscapes(std::string_view s, bool filterAll, unsigned int w
         }
     }
     return t;
+}
+
+std::string makeProgramStatusReport(
+    ProgramState state,
+    std::string_view id,
+    std::string_view msg,
+    std::optional<uint64_t> progress,
+    std::optional<ProgramStatusKind> kind)
+{
+    auto name = programStateName(state);
+
+    std::string report = "\e]7501;state=";
+    report += name;
+
+    if (state == ProgramState::Blocked && kind) {
+        report += ":kind=";
+        report += programStatusKindName(*kind);
+    }
+
+    if (!id.empty()) {
+        report += ":id=";
+        report += id;
+    }
+
+    report += ":app=nix";
+
+    if (progress)
+        report += ":progress=" + std::to_string(std::min<uint64_t>(*progress, 100));
+
+    if (auto m = sanitizeStatusMessage(msg); !m.empty())
+        report += ":msg=" + base64::encode(std::as_bytes(std::span(m)));
+
+    report += "\e\\";
+    return report;
+}
+
+std::string makeProgramStatusClearReport(std::string_view id)
+{
+    assert(!id.empty());
+    std::string report = "\e]7501;state=clear:id=";
+    report += id;
+    report += "\e\\";
+    return report;
 }
 
 //////////////////////////////////////////////////////////////////////
