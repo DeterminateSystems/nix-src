@@ -297,4 +297,10 @@ void chown(const std::filesystem::path & path, uid_t owner, gid_t group)
         throw SysError("changing ownership of %s", PathFmt(path));
 }
 
+void renameFile(const std::filesystem::path & src, const std::filesystem::path & dst)
+{
+    if (::rename(src.c_str(), dst.c_str()) == -1)
+        throw SysError("renaming %1% to %2%", PathFmt(src), PathFmt(dst));
+}
+
 } // namespace nix
