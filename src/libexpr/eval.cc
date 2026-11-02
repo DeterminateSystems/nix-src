@@ -2610,6 +2610,104 @@ EvalState::tryAttrsToString(const PosIdx pos, Value & v, NixStringContext & cont
     return {};
 }
 
+/* The functions below are the less common paths of
+   EvalState::coerceToString(). They are kept out of line because their
+   locals would otherwise be part of its stack frame on every call. In
+   particular, std::to_string() on an integer puts a 201-byte table on
+   the stack. */
+
+[[gnu::noinline]]
+static std::string intToString(NixInt::Inner n)
+{
+    return std::to_string(n);
+}
+
+[[gnu::noinline]]
+static std::string floatToString(NixFloat n)
+{
+    return std::to_string(n);
+}
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void throwCannotCoerce(EvalState & state, Value & v, PosIdx pos, std::string_view errorCtx)
+{
+    state.error<TypeError>("cannot coerce %1% to a string: %2%", showType(v), ValuePrinter(state, v, errorPrintOptions))
+        .withTrace(pos, errorCtx)
+        .debugThrow();
+}
+
+[[gnu::noinline, gnu::cold]]
+static BackedStringView coerceExternalToString(
+    EvalState & state,
+    PosIdx pos,
+    Value & v,
+    NixStringContext & context,
+    std::string_view errorCtx,
+    bool coerceMore,
+    bool copyToStore)
+{
+    try {
+        return v.external()->coerceToString(state, pos, context, coerceMore, copyToStore);
+    } catch (Error & e) {
+        e.addTrace(nullptr, errorCtx);
+        throw;
+    }
+}
+
+[[gnu::noinline]]
+static BackedStringView
+coercePathToString(EvalState & state, PosIdx pos, Value & v, NixStringContext & context, bool copyToStore)
+{
+    if (copyToStore) {
+        return state.store->printStorePath(state.copyPathToStore(context, v.path(), v.determinePos(pos)));
+    } else {
+        auto path = v.path();
+        if (path.accessor == state.rootFS && state.store->isInStore(path.path.abs())) {
+            try {
+                context.insert(
+                    NixStringContextElem::Path{.storePath = state.store->toStorePath(path.path.abs()).first});
+            } catch (Error &) {
+            }
+        }
+        return std::string(path.path.abs());
+    }
+}
+
+[[gnu::noinline]]
+static BackedStringView coerceListToString(
+    EvalState & state,
+    PosIdx pos,
+    Value & v,
+    NixStringContext & context,
+    std::string_view errorCtx,
+    bool coerceMore,
+    bool copyToStore,
+    bool canonicalizePath)
+{
+    std::string result;
+    auto listView = v.listView();
+    for (auto [n, v2] : enumerate(listView)) {
+        try {
+            result += *state.coerceToString(
+                pos,
+                *v2,
+                context,
+                "while evaluating one element of the list",
+                coerceMore,
+                copyToStore,
+                canonicalizePath);
+        } catch (Error & e) {
+            e.addTrace(state.positions[pos], errorCtx);
+            throw;
+        }
+        if (n < v.listSize() - 1
+            /* !!! not quite correct */
+            && (!v2->isList() || v2->listSize() != 0))
+            result += " ";
+    }
+    return result;
+}
+
 BackedStringView EvalState::coerceToString(
     const PosIdx pos,
     Value & v,
@@ -2636,18 +2734,8 @@ BackedStringView EvalState::coerceToString(
             // FIXME: hack to preserve path literals that end in a
             // slash, as in /foo/${x}.
             return v.pathStrView();
-        } else if (copyToStore) {
-            return store->printStorePath(copyPathToStore(context, v.path(), v.determinePos(pos)));
-        } else {
-            auto path = v.path();
-            if (path.accessor == rootFS && store->isInStore(path.path.abs())) {
-                try {
-                    context.insert(NixStringContextElem::Path{.storePath = store->toStorePath(path.path.abs()).first});
-                } catch (Error &) {
-                }
-            }
-            return std::string(path.path.abs());
         }
+        return coercePathToString(*this, pos, v, context, copyToStore);
     }
 
     if (v.type() == nAttrs) {
@@ -2655,23 +2743,13 @@ BackedStringView EvalState::coerceToString(
         if (maybeString)
             return std::move(*maybeString);
         auto i = v.attrs()->get(s.outPath);
-        if (!i) {
-            error<TypeError>(
-                "cannot coerce %1% to a string: %2%", showType(v), ValuePrinter(*this, v, errorPrintOptions))
-                .withTrace(pos, errorCtx)
-                .debugThrow();
-        }
+        if (!i)
+            throwCannotCoerce(*this, v, pos, errorCtx);
         return coerceToString(pos, *i->value, context, errorCtx, coerceMore, copyToStore, canonicalizePath);
     }
 
-    if (v.type() == nExternal) {
-        try {
-            return v.external()->coerceToString(*this, pos, context, coerceMore, copyToStore);
-        } catch (Error & e) {
-            e.addTrace(nullptr, errorCtx);
-            throw;
-        }
-    }
+    if (v.type() == nExternal)
+        return coerceExternalToString(*this, pos, v, context, errorCtx, coerceMore, copyToStore);
 
     if (coerceMore) {
         /* Note that `false' is represented as an empty string for
@@ -2681,41 +2759,17 @@ BackedStringView EvalState::coerceToString(
         if (v.type() == nBool && !v.boolean())
             return "";
         if (v.type() == nInt)
-            return std::to_string(v.integer().value);
+            return intToString(v.integer().value);
         if (v.type() == nFloat)
-            return std::to_string(v.fpoint());
+            return floatToString(v.fpoint());
         if (v.type() == nNull)
             return "";
 
-        if (v.isList()) {
-            std::string result;
-            auto listView = v.listView();
-            for (auto [n, v2] : enumerate(listView)) {
-                try {
-                    result += *coerceToString(
-                        pos,
-                        *v2,
-                        context,
-                        "while evaluating one element of the list",
-                        coerceMore,
-                        copyToStore,
-                        canonicalizePath);
-                } catch (Error & e) {
-                    e.addTrace(positions[pos], errorCtx);
-                    throw;
-                }
-                if (n < v.listSize() - 1
-                    /* !!! not quite correct */
-                    && (!v2->isList() || v2->listSize() != 0))
-                    result += " ";
-            }
-            return result;
-        }
+        if (v.isList())
+            return coerceListToString(*this, pos, v, context, errorCtx, coerceMore, copyToStore, canonicalizePath);
     }
 
-    error<TypeError>("cannot coerce %1% to a string: %2%", showType(v), ValuePrinter(*this, v, errorPrintOptions))
-        .withTrace(pos, errorCtx)
-        .debugThrow();
+    throwCannotCoerce(*this, v, pos, errorCtx);
 }
 
 StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePath & path, PosIdx pos)
