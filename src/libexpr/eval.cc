@@ -1246,20 +1246,37 @@ void EvalState::eval(Expr * e, Value & v)
     e->eval(*this, baseEnv, v);
 }
 
+/* The cold paths of EvalState::evalBool(). They are kept out of line
+   because their temporaries would otherwise be part of its stack frame
+   on every call. */
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void throwNotBool(EvalState & state, Value & v, Env & env, Expr & e, PosIdx pos)
+{
+    state
+        .error<TypeError>(
+            "expected a Boolean but found %1%: %2%", showType(v), ValuePrinter(state, v, errorPrintOptions))
+        .atPos(pos)
+        .withFrame(env, e)
+        .debugThrow();
+}
+
+[[gnu::noinline, gnu::cold]]
+static void addEvalTrace(EvalState & state, Error & e, PosIdx pos, std::string_view errorCtx)
+{
+    e.addTrace(state.positions[pos], errorCtx);
+}
+
 inline bool EvalState::evalBool(Env & env, Expr * e, const PosIdx pos, std::string_view errorCtx)
 {
     try {
         Value v;
         e->eval(*this, env, v);
         if (v.type() != nBool)
-            error<TypeError>(
-                "expected a Boolean but found %1%: %2%", showType(v), ValuePrinter(*this, v, errorPrintOptions))
-                .atPos(pos)
-                .withFrame(env, *e)
-                .debugThrow();
+            throwNotBool(*this, v, env, *e, pos);
         return v.boolean();
     } catch (Error & e) {
-        e.addTrace(positions[pos], errorCtx);
+        addEvalTrace(*this, e, pos, errorCtx);
         throw;
     }
 }
