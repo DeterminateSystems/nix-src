@@ -702,6 +702,22 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                 todo.push(path);
         };
 
+        /* Mark `p` and its closure as alive. To avoid traversing
+           shared dependencies once for every root, this doesn't
+           descend into paths that are already alive. So don't add a
+           path to `alive` before its closure has been marked.
+
+           `alive` can still contain paths whose closure isn't
+           marked: a root that isn't valid has no edges to follow, and
+           if it becomes valid while we're running, we may not notice
+           because lookups of invalid paths are cached. For the same
+           reason, the traversal below can throw `InvalidPath` if the
+           closure refers to a path that became valid in the
+           meantime. This doesn't cause paths that are still
+           referenced to be deleted: a path is only deleted if the
+           referrers walk doesn't reach a live path, and
+           `invalidatePathChecked()` refuses to invalidate a path that
+           has valid referrers. */
         auto markAlive = [&](const StorePath & p) {
             alive.insert(p);
             if (auto sync = std::exchange(markAliveSync, std::nullopt))
@@ -719,9 +735,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                         [](const GCOptions::SpecificPaths &) {},
                     },
                     options.pathsToDelete);
-                computeFSClosure(
-                    p,
+                computePartialFSClosure(
+                    {p},
                     closure,
+                    [&](const StorePath & q) { return alive.contains(q); },
                     /* flipDirection */ false,
                     includeOutputs,
                     includeDerivers);
@@ -771,8 +788,9 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                         printStorePath(start),
                         *i->second.begin());
                 debug("cannot delete '%s' because it's a root", printStorePath(*path));
+                markAlive(*path);
                 alive.insert(start);
-                return markAlive(*path);
+                return;
             }
 
             static bool inTest = getEnv("_NIX_IN_TEST").has_value();
@@ -793,8 +811,9 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                    that would block every client registering a
                    temporary root. */
                 if (isTempRoot) {
+                    markAlive(*path);
                     alive.insert(start);
-                    return markAlive(*path);
+                    return;
                 }
             }
 
