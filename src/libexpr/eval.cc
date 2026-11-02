@@ -908,13 +908,16 @@ void EvalState::addErrorTrace(Error & e, const PosIdx pos, const Args &... forma
     e.addTrace(positions[pos], HintFmt(formatArgs...));
 }
 
+/* This is kept out of line because its temporaries would otherwise be
+   part of the stack frame of its callers on every call, even when not
+   using the debugger. */
 template<typename... Args>
-static std::unique_ptr<DebugTraceStacker> makeDebugTraceStacker(
-    EvalState & state, Expr & expr, Env & env, std::variant<Pos, PosIdx> pos, const Args &... formatArgs)
+[[gnu::noinline, gnu::cold]]
+static std::unique_ptr<DebugTraceStacker>
+makeDebugTraceStacker(EvalState & state, Expr & expr, Env & env, PosIdx pos, const Args &... formatArgs)
 {
     return std::make_unique<DebugTraceStacker>(
-        state,
-        DebugTrace{.pos = std::move(pos), .expr = expr, .env = env, .hint = HintFmt(formatArgs...), .isError = false});
+        state, DebugTrace{.pos = pos, .expr = expr, .env = env, .hint = HintFmt(formatArgs...), .isError = false});
 }
 
 DebugTraceStacker::DebugTraceStacker(EvalState & evalState, DebugTrace t)
