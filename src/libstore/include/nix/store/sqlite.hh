@@ -157,6 +157,13 @@ struct SQLiteStmt
         bool next();
 
         std::string getStr(int col);
+
+        /**
+         * Return the contents of a blob (or text) column. The result is
+         * only valid until the next call to `next()` or until this
+         * `Use` is destroyed.
+         */
+        std::string_view getBlob(int col);
         int64_t getInt(int col);
         bool isNull(int col);
     };

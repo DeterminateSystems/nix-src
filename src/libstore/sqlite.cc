@@ -270,6 +270,13 @@ std::string SQLiteStmt::Use::getStr(int col)
     return s;
 }
 
+std::string_view SQLiteStmt::Use::getBlob(int col)
+{
+    auto data = (const char *) sqlite3_column_blob(stmt, col);
+    /* Note: `sqlite3_column_blob()` returns null for zero-length blobs. */
+    return data ? std::string_view(data, sqlite3_column_bytes(stmt, col)) : std::string_view();
+}
+
 int64_t SQLiteStmt::Use::getInt(int col)
 {
     // FIXME: detect nulls?

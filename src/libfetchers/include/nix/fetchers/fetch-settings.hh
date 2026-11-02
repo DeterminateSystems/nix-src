@@ -13,7 +13,6 @@
 
 namespace nix {
 
-struct GitRepo;
 struct SrcToStore;
 
 } // namespace nix
@@ -21,6 +20,7 @@ struct SrcToStore;
 namespace nix::fetchers {
 
 struct Cache;
+struct TarballCache;
 
 struct Settings : public Config
 {
@@ -155,7 +155,7 @@ struct Settings : public Config
 
     ref<Cache> getCache() const;
 
-    ref<GitRepo> getTarballCache() const;
+    ref<TarballCache> getTarballCache() const;
 
     /**
      * In-memory cache for calls to fetchToStore(); maps source paths to their store
@@ -171,7 +171,7 @@ private:
 
     mutable Sync<std::shared_ptr<Cache>> _cache;
 
-    mutable Sync<std::shared_ptr<GitRepo>> _tarballCache;
+    mutable Sync<std::shared_ptr<TarballCache>> _tarballCache;
 };
 
 } // namespace nix::fetchers
