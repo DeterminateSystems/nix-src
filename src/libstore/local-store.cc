@@ -1252,6 +1252,9 @@ void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, Repai
     /* Now that the content address / signed NAR contents is checked, we can move the path into place.
         TODO: We should use atomic exchange (RENAME_EXCHANGE and renamex_np with RENAME_SWAP) if possible. */
 
+    /* The contents are about to change, so a previous unpacking can't be reused. */
+    deletePath(unpackedMarkerFor(realPath));
+
     /* Delete the path for good measure even if not repairing. */
     deletePath(realPath);
 
@@ -1567,6 +1570,9 @@ StorePath LocalStore::addToStoreFromDump(
 
         /* The path may have been created by another process in the meantime, so check again. */
         if (repair || !isValidPathUncached(dstPath)) {
+
+            /* The contents are about to change, so a previous unpacking can't be reused. */
+            deletePath(unpackedMarkerFor(realPath));
 
             deletePath(realPath);
 
