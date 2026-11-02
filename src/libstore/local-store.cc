@@ -1148,6 +1148,31 @@ static bool existsAndIsOwnedBySelf(const std::filesystem::path & path)
     return true;
 }
 
+/**
+ * Move a path that was restored in a temporary directory in the store to its
+ * final location. The caller must canonicalise `realPath` afterwards, since
+ * the fallback below doesn't preserve permissions.
+ */
+static void moveTempPathIntoStore(const std::filesystem::path & tempPath, const std::filesystem::path & realPath)
+{
+    try {
+        renameFile(tempPath, realPath);
+    } catch (const SystemError & e) {
+        if (!e.is(std::errc::cross_device_link))
+            throw;
+
+        /* This can happen even though both paths are on the same filesystem, e.g. with overlayfs
+           (https://github.com/NixOS/nix/issues/6262). So we can't copy to a temporary location and rename that to
+           `realPath`, since that rename would fail in the same way. Copy directly to `realPath` instead. */
+        warn("can't rename %s as %s, copying instead", PathFmt(tempPath), PathFmt(realPath));
+        RestoreSink copySink{/*startFsync=*/false};
+        copySink.dstPath = realPath;
+        AutoDelete delRealPath(realPath);
+        copyRecursive(*makeFSSourceAccessor(tempPath), CanonPath::root, copySink, CanonPath::root);
+        delRealPath.cancel();
+    }
+}
+
 void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, RepairFlag repair)
 {
     const LocalSettings & localSettings = config->getLocalSettings();
@@ -1231,7 +1256,7 @@ void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, Repai
     deletePath(realPath);
 
     /* Move the temporary path we restored above. */
-    moveFile(tempPath, realPath);
+    moveTempPathIntoStore(tempPath, realPath);
 
     /* Clean up the staging directory. */
     delTempDir.deletePath();
@@ -1563,7 +1588,7 @@ StorePath LocalStore::addToStoreFromDump(
                 }
             } else {
                 /* Move the temporary path we restored above. */
-                moveFile(tempPath, realPath);
+                moveTempPathIntoStore(tempPath, realPath);
             }
 
             /* For computing the nar hash. In recursive SHA-256 mode, this
