@@ -1146,6 +1146,8 @@ private:
     typedef boost::concurrent_flat_map<PosIdx, size_t, std::hash<PosIdx>> AttrSelects;
     const ref<AttrSelects> attrSelects;
 
+    void incrAttrSelect(PosIdx pos);
+
     friend struct ExprOpUpdate;
     friend struct ExprOpConcatLists;
     friend struct ExprVar;

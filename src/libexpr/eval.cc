@@ -977,7 +977,7 @@ void Value::mkPath(const SourcePath & path, EvalMemory & mem)
         forceAttrs(*env->values[0], fromWith->pos, "while evaluating the first subexpression of a with expression");
         if (auto j = env->values[0]->attrs()->get(var.name)) {
             if (countCalls) [[unlikely]]
-                attrSelects->try_emplace_or_visit(j->pos, 1, [](auto & i) { i.second++; });
+                incrAttrSelect(j->pos);
             return j->value;
         }
         if (!fromWith->parentWith) [[unlikely]]
@@ -1484,6 +1484,68 @@ static std::string showAttrSelectionPath(EvalState & state, Env & env, std::span
     return out.str();
 }
 
+[[gnu::noinline, gnu::cold]]
+void EvalState::incrAttrSelect(PosIdx pos)
+{
+    attrSelects->try_emplace_or_visit(pos, 1, [](auto & i) { i.second++; });
+}
+
+/* The functions below, and EvalState::incrAttrSelect() above, are the
+   cold paths of ExprSelect::eval(). They are kept out of line because
+   their locals would otherwise be part of its stack frame on every
+   call, which limits how long a chain of selections through thunks can
+   get before overflowing the stack. */
+
+[[gnu::noinline, gnu::cold]]
+static std::unique_ptr<DebugTraceStacker> makeSelectDebugTraceStacker(EvalState & state, ExprSelect & expr, Env & env)
+{
+    return makeDebugTraceStacker(
+        state,
+        expr,
+        env,
+        expr.getPos(),
+        "while evaluating the attribute '%1%'",
+        showAttrSelectionPath(state, env, expr.getAttrPath()));
+}
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void throwAttrMissing(EvalState & state, Env & env, ExprSelect & expr, Value & vAttrs, Symbol name)
+{
+    StringSet allAttrNames;
+    for (auto & attr : *vAttrs.attrs())
+        allAttrNames.insert(std::string(state.symbols[attr.name]));
+    auto suggestions = Suggestions::bestMatches(allAttrNames, state.symbols[name]);
+    state.error<EvalError>("attribute '%1%' missing", state.symbols[name])
+        .atPos(expr.pos)
+        .withSuggestions(suggestions)
+        .withFrame(env, expr)
+        .debugThrow();
+}
+
+[[gnu::noinline, gnu::cold]]
+static bool isDerivationInternalPos(EvalState & state, PosIdx pos)
+{
+    auto posr = state.positions[pos];
+    auto origin = std::get_if<SourcePath>(&posr.origin);
+    return origin && *origin == state.derivationInternal;
+}
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void rethrowWithAttrTrace(EvalState & state, Env & env, ExprSelect & expr, std::exception_ptr error, PosIdx pos)
+{
+    /* Show the attribute path outside of the catch handler: it
+       evaluates dynamic attribute names, which may force thunks and
+       thereby suspend the current fiber, which is not allowed while an
+       exception is being handled. */
+    auto attrPath = showAttrSelectionPath(state, env, expr.getAttrPath());
+    try {
+        std::rethrow_exception(error);
+    } catch (Error & e) {
+        state.addErrorTrace(e, pos, "while evaluating the attribute '%1%'", attrPath);
+        throw;
+    }
+}
+
 void ExprSelect::eval(EvalState & state, Env & env, Value & v)
 {
     Value vTmp;
@@ -1495,14 +1557,7 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
     std::exception_ptr error;
 
     try {
-        auto dts = state.debugRepl ? makeDebugTraceStacker(
-                                         state,
-                                         *this,
-                                         env,
-                                         getPos(),
-                                         "while evaluating the attribute '%1%'",
-                                         showAttrSelectionPath(state, env, getAttrPath()))
-                                   : nullptr;
+        auto dts = state.debugRepl ? makeSelectDebugTraceStacker(state, *this, env) : nullptr;
 
         for (auto & i : getAttrPath()) {
             state.nrLookups++;
@@ -1516,22 +1571,13 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
                 }
             } else {
                 state.forceAttrs(*vAttrs, pos, "while selecting an attribute");
-                if (!(j = vAttrs->attrs()->get(name))) {
-                    StringSet allAttrNames;
-                    for (auto & attr : *vAttrs->attrs())
-                        allAttrNames.insert(std::string(state.symbols[attr.name]));
-                    auto suggestions = Suggestions::bestMatches(allAttrNames, state.symbols[name]);
-                    state.error<EvalError>("attribute '%1%' missing", state.symbols[name])
-                        .atPos(pos)
-                        .withSuggestions(suggestions)
-                        .withFrame(env, *this)
-                        .debugThrow();
-                }
+                if (!(j = vAttrs->attrs()->get(name)))
+                    throwAttrMissing(state, env, *this, *vAttrs, name);
             }
             vAttrs = j->value;
             pos2 = j->pos;
             if (state.countCalls)
-                state.attrSelects->try_emplace_or_visit(pos2, 1, [](auto & i) { i.second++; });
+                state.incrAttrSelect(pos2);
         }
 
         state.forceValue(*vAttrs, pos2 ? pos2 : this->pos);
@@ -1539,26 +1585,13 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
     } catch (Error &) {
         if (!pos2)
             throw;
-        auto pos2r = state.positions[pos2];
-        auto origin = std::get_if<SourcePath>(&pos2r.origin);
-        if (origin && *origin == state.derivationInternal)
+        if (isDerivationInternalPos(state, pos2))
             throw;
         error = std::current_exception();
     }
 
-    if (error) {
-        /* Show the attribute path outside of the catch handler: it
-           evaluates dynamic attribute names, which may force thunks
-           and thereby suspend the current fiber, which is not allowed
-           while an exception is being handled. */
-        auto attrPath = showAttrSelectionPath(state, env, getAttrPath());
-        try {
-            std::rethrow_exception(error);
-        } catch (Error & e) {
-            state.addErrorTrace(e, pos2, "while evaluating the attribute '%1%'", attrPath);
-            throw;
-        }
-    }
+    if (error)
+        rethrowWithAttrTrace(state, env, *this, error, pos2);
 
     v = *vAttrs;
 }
