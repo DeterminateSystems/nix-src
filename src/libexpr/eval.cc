@@ -1644,6 +1644,166 @@ void ExprLambda::eval(EvalState & state, Env & env, Value & v)
 
 [[gnu::tls_model("initial-exec")]] thread_local size_t CallDepth::callDepth = 0;
 
+/* The functions below, and EvalState::incrPrimOpCall(), are the paths
+   of EvalState::callFunction() that aren't needed for calling a lambda.
+   They are kept out of line because their locals would otherwise be
+   part of its stack frame on every call, which limits the depth of Nix
+   function calls before overflowing the stack. */
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void throwMissingArgument(EvalState & state, ExprLambda & lambda, const Env & env, Symbol name, PosIdx pos)
+{
+    state
+        .error<TypeError>(
+            "function '%1%' called without required argument '%2%'",
+            (lambda.name ? std::string(state.symbols[lambda.name]) : "anonymous lambda"),
+            state.symbols[name])
+        .atPos(lambda.pos)
+        .withTrace(pos, "from call site")
+        .withFrame(env, lambda)
+        .debugThrow();
+}
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void
+throwUnexpectedArgument(EvalState & state, ExprLambda & lambda, const Env & env, const Bindings & attrs, PosIdx pos)
+{
+    auto formals = lambda.getFormals();
+    for (auto & i : attrs)
+        if (!formals->has(i.name)) {
+            StringSet formalNames;
+            for (auto & formal : formals->formals)
+                formalNames.insert(std::string(state.symbols[formal.name]));
+            auto suggestions = Suggestions::bestMatches(formalNames, state.symbols[i.name]);
+            state
+                .error<TypeError>(
+                    "function '%1%' called with unexpected argument '%2%'",
+                    (lambda.name ? std::string(state.symbols[lambda.name]) : "anonymous lambda"),
+                    state.symbols[i.name])
+                .atPos(lambda.pos)
+                .withTrace(pos, "from call site")
+                .withSuggestions(suggestions)
+                .withFrame(env, lambda)
+                .debugThrow();
+        }
+    unreachable();
+}
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void throwNotAFunction(EvalState & state, Value & v, PosIdx pos)
+{
+    state
+        .error<TypeError>(
+            "attempt to call something which is not a function but %1%: %2%",
+            showType(v),
+            ValuePrinter(state, v, errorPrintOptions))
+        .atPos(pos)
+        .debugThrow();
+}
+
+[[gnu::noinline, gnu::cold]]
+static std::unique_ptr<DebugTraceStacker> makeLambdaDebugTraceStacker(EvalState & state, ExprLambda & lambda, Env & env)
+{
+    return makeDebugTraceStacker(
+        state,
+        *lambda.body,
+        env,
+        lambda.pos,
+        "while calling %s",
+        lambda.name ? concatStrings("'", state.symbols[lambda.name], "'") : "anonymous lambda");
+}
+
+[[gnu::noinline, gnu::cold]]
+static void addCallSiteTrace(EvalState & state, Error & e, PosIdx pos)
+{
+    if (pos)
+        e.addTrace(state.positions[pos], "from call site");
+}
+
+[[gnu::noinline, gnu::cold]]
+static void addLambdaCallTrace(EvalState & state, Error & e, ExprLambda & lambda, PosIdx pos)
+{
+    if (loggerSettings.showTrace.get()) {
+        state.addErrorTrace(
+            e,
+            lambda.pos,
+            "while calling %s",
+            lambda.name ? concatStrings("'", state.symbols[lambda.name], "'") : "anonymous lambda");
+        if (pos)
+            state.addErrorTrace(e, pos, "from call site");
+    }
+}
+
+/**
+ * Store in `vRes` the tPrimOpApp chain that applies `vCur` to `args`.
+ */
+[[gnu::noinline]]
+static void makeAppChain(EvalState & state, Value & vCur, std::span<Value *> args, Value & vRes)
+{
+    for (auto arg : args) {
+        auto fun2 = state.allocValue();
+        *fun2 = vCur;
+        vCur.reset();
+        vCur.mkPrimOpApp(fun2, arg);
+    }
+    vRes = vCur;
+}
+
+/**
+ * Call a primop whose first `argsDone` arguments are in the tPrimOpApp
+ * chain `vCur`, with the remaining `argsLeft` arguments from `args`.
+ */
+[[gnu::noinline]]
+static void callPrimOpApp(
+    EvalState & state,
+    Value & vCur,
+    const PrimOp & fn,
+    size_t argsDone,
+    size_t argsLeft,
+    std::span<Value *> args,
+    PosIdx pos)
+{
+    Value * vArgs[maxPrimOpArity];
+    auto n = argsDone;
+    for (Value * arg = &vCur; arg->isPrimOpApp(); arg = arg->primOpApp().left)
+        vArgs[--n] = arg->primOpApp().right;
+
+    for (size_t i = 0; i < argsLeft; ++i)
+        vArgs[argsDone + i] = args[i];
+
+    try {
+        // TODO:
+        // 1. Unify this and the code in callFunction(). Heavily redundant.
+        // 2. Create a fake env (arg1, arg2, etc.) and a fake expr (arg1: arg2: etc: builtins.name arg1 arg2
+        // etc)
+        //    so the debugger allows to inspect the wrong parameters passed to the builtin.
+        auto pos2 = vCur.determinePos(noPos);
+        vCur.reset();
+        fn.impl(state, pos2, vArgs, vCur);
+    } catch (Error & e) {
+        if (fn.addTrace)
+            state.addErrorTrace(e, pos, "while calling the '%1%' builtin", fn.name);
+        throw;
+    }
+}
+
+[[gnu::noinline]]
+static void callFunctor(EvalState & state, Value & vCur, const Attr & functor, Value * arg, PosIdx pos)
+{
+    /* 'vCur' may be allocated on the stack of the calling function, but
+       for functors we may keep a reference, so heap-allocate a copy and
+       use that instead. */
+    Value * args2[] = {state.allocValue(), arg};
+    *args2[0] = vCur;
+    vCur.reset();
+    try {
+        state.callFunction(*functor.value, args2, vCur, functor.pos);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while calling a functor (an attribute set with a '__functor' attribute)");
+        throw;
+    }
+}
+
 void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes, const PosIdx pos)
 {
     auto _level = addCallDepth(pos);
@@ -1660,16 +1820,6 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
     forceValue(fun, pos);
 
     Value vCur = fun;
-
-    auto makeAppChain = [&]() {
-        for (auto arg : args) {
-            auto fun2 = allocValue();
-            *fun2 = vCur;
-            vCur.reset();
-            vCur.mkPrimOpApp(fun2, arg);
-        }
-        vRes = vCur;
-    };
 
     const Attr * functor;
 
@@ -1689,8 +1839,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                 try {
                     forceAttrs(*args[0], lambda.pos, "while evaluating the value passed for the lambda argument");
                 } catch (Error & e) {
-                    if (pos)
-                        e.addTrace(positions[pos], "from call site");
+                    addCallSiteTrace(*this, e, pos);
                     throw;
                 }
 
@@ -1704,16 +1853,8 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                 for (auto & i : formals->formals) {
                     auto j = args[0]->attrs()->get(i.name);
                     if (!j) {
-                        if (!i.def) {
-                            error<TypeError>(
-                                "function '%1%' called without required argument '%2%'",
-                                (lambda.name ? std::string(symbols[lambda.name]) : "anonymous lambda"),
-                                symbols[i.name])
-                                .atPos(lambda.pos)
-                                .withTrace(pos, "from call site")
-                                .withFrame(*vCur.lambda().env, lambda)
-                                .debugThrow();
-                        }
+                        if (!i.def)
+                            throwMissingArgument(*this, lambda, *vCur.lambda().env, i.name, pos);
                         env2.values[displ++] = i.def->maybeThunk(*this, env2);
                     } else {
                         attrsUsed++;
@@ -1723,27 +1864,10 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
                 /* Check that each actual argument is listed as a formal
                    argument (unless the attribute match specifies a `...'). */
-                if (!formals->ellipsis && attrsUsed != args[0]->attrs()->size()) {
+                if (!formals->ellipsis && attrsUsed != args[0]->attrs()->size())
                     /* Nope, so show the first unexpected argument to the
                        user. */
-                    for (auto & i : *args[0]->attrs())
-                        if (!formals->has(i.name)) {
-                            StringSet formalNames;
-                            for (auto & formal : formals->formals)
-                                formalNames.insert(std::string(symbols[formal.name]));
-                            auto suggestions = Suggestions::bestMatches(formalNames, symbols[i.name]);
-                            error<TypeError>(
-                                "function '%1%' called with unexpected argument '%2%'",
-                                (lambda.name ? std::string(symbols[lambda.name]) : "anonymous lambda"),
-                                symbols[i.name])
-                                .atPos(lambda.pos)
-                                .withTrace(pos, "from call site")
-                                .withSuggestions(suggestions)
-                                .withFrame(*vCur.lambda().env, lambda)
-                                .debugThrow();
-                        }
-                    unreachable();
-                }
+                    throwUnexpectedArgument(*this, lambda, *vCur.lambda().env, *args[0]->attrs(), pos);
             } else {
                 env2.values[displ++] = args[0];
             }
@@ -1754,28 +1878,12 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
             /* Evaluate the body. */
             try {
-                auto dts = debugRepl
-                               ? makeDebugTraceStacker(
-                                     *this,
-                                     *lambda.body,
-                                     env2,
-                                     lambda.pos,
-                                     "while calling %s",
-                                     lambda.name ? concatStrings("'", symbols[lambda.name], "'") : "anonymous lambda")
-                               : nullptr;
+                auto dts = debugRepl ? makeLambdaDebugTraceStacker(*this, lambda, env2) : nullptr;
 
                 vCur.reset();
                 lambda.body->eval(*this, env2, vCur);
             } catch (Error & e) {
-                if (loggerSettings.showTrace.get()) {
-                    addErrorTrace(
-                        e,
-                        lambda.pos,
-                        "while calling %s",
-                        lambda.name ? concatStrings("'", symbols[lambda.name], "'") : "anonymous lambda");
-                    if (pos)
-                        addErrorTrace(e, pos, "from call site");
-                }
+                addLambdaCallTrace(*this, e, lambda, pos);
                 throw;
             }
 
@@ -1788,7 +1896,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
             if (args.size() < argsLeft) {
                 /* We don't have enough arguments, so create a tPrimOpApp chain. */
-                makeAppChain();
+                makeAppChain(*this, vCur, args, vRes);
                 return;
             } else {
                 /* We have all the arguments, so call the primop. */
@@ -1796,7 +1904,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
                 nrPrimOpCalls++;
                 if (countCalls)
-                    primOpCalls->try_emplace_or_visit(fn->name, 1, [](auto & i) { i.second++; });
+                    incrPrimOpCall(fn->name);
 
                 try {
                     auto pos = vCur.determinePos(noPos);
@@ -1827,70 +1935,38 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
             if (args.size() < argsLeft) {
                 /* We still don't have enough arguments, so extend the tPrimOpApp chain. */
-                makeAppChain();
+                makeAppChain(*this, vCur, args, vRes);
                 return;
             } else {
                 /* We have all the arguments, so call the primop with
                    the previous and new arguments. */
-
-                Value * vArgs[maxPrimOpArity];
-                auto n = argsDone;
-                for (Value * arg = &vCur; arg->isPrimOpApp(); arg = arg->primOpApp().left)
-                    vArgs[--n] = arg->primOpApp().right;
-
-                for (size_t i = 0; i < argsLeft; ++i)
-                    vArgs[argsDone + i] = args[i];
-
                 auto fn = primOp->primOp();
                 nrPrimOpCalls++;
                 if (countCalls)
-                    primOpCalls->try_emplace_or_visit(fn->name, 1, [](auto & i) { i.second++; });
+                    incrPrimOpCall(fn->name);
 
-                try {
-                    // TODO:
-                    // 1. Unify this and above code. Heavily redundant.
-                    // 2. Create a fake env (arg1, arg2, etc.) and a fake expr (arg1: arg2: etc: builtins.name arg1 arg2
-                    // etc)
-                    //    so the debugger allows to inspect the wrong parameters passed to the builtin.
-                    auto pos = vCur.determinePos(noPos);
-                    vCur.reset();
-                    fn->impl(*this, pos, vArgs, vCur);
-                } catch (Error & e) {
-                    if (fn->addTrace)
-                        addErrorTrace(e, pos, "while calling the '%1%' builtin", fn->name);
-                    throw;
-                }
+                callPrimOpApp(*this, vCur, *fn, argsDone, argsLeft, args, pos);
 
                 args = args.subspan(argsLeft);
             }
         }
 
         else if (vCur.type() == nAttrs && (functor = vCur.attrs()->get(s.functor))) {
-            /* 'vCur' may be allocated on the stack of the calling
-               function, but for functors we may keep a reference, so
-               heap-allocate a copy and use that instead. */
-            Value * args2[] = {allocValue(), args[0]};
-            *args2[0] = vCur;
-            vCur.reset();
-            try {
-                callFunction(*functor->value, args2, vCur, functor->pos);
-            } catch (Error & e) {
-                e.addTrace(positions[pos], "while calling a functor (an attribute set with a '__functor' attribute)");
-                throw;
-            }
+            callFunctor(*this, vCur, *functor, args[0], pos);
             args = args.subspan(1);
         }
 
         else
-            error<TypeError>(
-                "attempt to call something which is not a function but %1%: %2%",
-                showType(vCur),
-                ValuePrinter(*this, vCur, errorPrintOptions))
-                .atPos(pos)
-                .debugThrow();
+            throwNotAFunction(*this, vCur, pos);
     }
 
     vRes = vCur;
+}
+
+[[gnu::noinline, gnu::cold]]
+void EvalState::incrPrimOpCall(const std::string & name)
+{
+    primOpCalls->try_emplace_or_visit(name, 1, [](auto & i) { i.second++; });
 }
 
 void ExprCall::eval(EvalState & state, Env & env, Value & v)

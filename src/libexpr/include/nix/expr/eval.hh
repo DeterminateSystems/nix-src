@@ -1143,6 +1143,8 @@ private:
 
     void incrFunctionCall(ExprLambda * fun);
 
+    void incrPrimOpCall(const std::string & name);
+
     typedef boost::concurrent_flat_map<PosIdx, size_t, std::hash<PosIdx>> AttrSelects;
     const ref<AttrSelects> attrSelects;
 
