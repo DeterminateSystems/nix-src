@@ -82,20 +82,39 @@ void appendLE(std::string & s, T n)
     s.append((const char *) buf, sizeof(T));
 }
 
+/**
+ * Read a little-endian integer from the start of `s` and advance `s` past it.
+ */
 template<typename T>
-T readLE(std::string_view s, size_t offset)
+T readLE(std::string_view & s)
 {
-    if (offset + sizeof(T) > s.size())
+    if (s.size() < sizeof(T))
         throw Error("tarball cache contains a truncated value");
-    return readLittleEndian<T>((const unsigned char *) s.data() + offset);
+    auto n = readLittleEndian<T>((const unsigned char *) s.data());
+    s.remove_prefix(sizeof(T));
+    return n;
 }
 
-Hash toOid(std::string_view s)
+/**
+ * Read `n` bytes from the start of `s` and advance `s` past them.
+ */
+std::string_view readBytes(std::string_view & s, size_t n)
+{
+    if (s.size() < n)
+        throw Error("tarball cache contains a truncated value");
+    auto res = s.substr(0, n);
+    s.remove_prefix(n);
+    return res;
+}
+
+/**
+ * Read a Git object ID from the start of `s` and advance `s` past it.
+ */
+Hash readOid(std::string_view & s)
 {
     Hash oid(HashAlgorithm::SHA1);
-    if (s.size() != oid.hashSize)
-        throw Error("tarball cache contains an object ID of %d bytes", s.size());
-    memcpy(oid.hash, s.data(), oid.hashSize);
+    auto bytes = readBytes(s, oid.hashSize);
+    memcpy(oid.hash, bytes.data(), oid.hashSize);
     return oid;
 }
 
@@ -301,21 +320,15 @@ struct TarballCacheImpl : TarballCache, std::enable_shared_from_this<TarballCach
         if (!stmt.next())
             throw Error("tree '%s' is missing from the tarball cache", treeHash.gitRev());
         auto data = stmt.getBlob(0);
-        size_t pos = 0;
-        while (pos < data.size()) {
-            auto rawMode = readLE<uint32_t>(data, pos);
-            pos += 4;
+        while (!data.empty()) {
+            auto rawMode = readLE<uint32_t>(data);
             auto mode = git::decodeMode(rawMode);
             if (!mode)
                 throw Error("tarball cache contains an entry with unknown mode %o", rawMode);
-            auto nameLen = readLE<uint16_t>(data, pos);
-            pos += 2;
-            if (pos + nameLen + 20 > data.size())
-                throw Error("tarball cache contains a truncated tree");
-            std::string name(data.substr(pos, nameLen));
-            pos += nameLen;
-            dir->emplace(std::move(name), Entry{.mode = *mode, .oid = toOid(data.substr(pos, 20))});
-            pos += 20;
+            auto nameLen = readLE<uint16_t>(data);
+            std::string name(readBytes(data, nameLen));
+            auto oid = readOid(data);
+            dir->emplace(std::move(name), Entry{.mode = *mode, .oid = oid});
         }
         return dir;
     }
