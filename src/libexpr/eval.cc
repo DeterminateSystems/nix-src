@@ -908,13 +908,16 @@ void EvalState::addErrorTrace(Error & e, const PosIdx pos, const Args &... forma
     e.addTrace(positions[pos], HintFmt(formatArgs...));
 }
 
+/* This is kept out of line because its temporaries would otherwise be
+   part of the stack frame of its callers on every call, even when not
+   using the debugger. */
 template<typename... Args>
-static std::unique_ptr<DebugTraceStacker> makeDebugTraceStacker(
-    EvalState & state, Expr & expr, Env & env, std::variant<Pos, PosIdx> pos, const Args &... formatArgs)
+[[gnu::noinline, gnu::cold]]
+static std::unique_ptr<DebugTraceStacker>
+makeDebugTraceStacker(EvalState & state, Expr & expr, Env & env, PosIdx pos, const Args &... formatArgs)
 {
     return std::make_unique<DebugTraceStacker>(
-        state,
-        DebugTrace{.pos = std::move(pos), .expr = expr, .env = env, .hint = HintFmt(formatArgs...), .isError = false});
+        state, DebugTrace{.pos = pos, .expr = expr, .env = env, .hint = HintFmt(formatArgs...), .isError = false});
 }
 
 DebugTraceStacker::DebugTraceStacker(EvalState & evalState, DebugTrace t)
@@ -977,7 +980,7 @@ void Value::mkPath(const SourcePath & path, EvalMemory & mem)
         forceAttrs(*env->values[0], fromWith->pos, "while evaluating the first subexpression of a with expression");
         if (auto j = env->values[0]->attrs()->get(var.name)) {
             if (countCalls) [[unlikely]]
-                attrSelects->try_emplace_or_visit(j->pos, 1, [](auto & i) { i.second++; });
+                incrAttrSelect(j->pos);
             return j->value;
         }
         if (!fromWith->parentWith) [[unlikely]]
@@ -1243,20 +1246,37 @@ void EvalState::eval(Expr * e, Value & v)
     e->eval(*this, baseEnv, v);
 }
 
+/* The cold paths of EvalState::evalBool(). They are kept out of line
+   because their temporaries would otherwise be part of its stack frame
+   on every call. */
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void throwNotBool(EvalState & state, Value & v, Env & env, Expr & e, PosIdx pos)
+{
+    state
+        .error<TypeError>(
+            "expected a Boolean but found %1%: %2%", showType(v), ValuePrinter(state, v, errorPrintOptions))
+        .atPos(pos)
+        .withFrame(env, e)
+        .debugThrow();
+}
+
+[[gnu::noinline, gnu::cold]]
+static void addEvalTrace(EvalState & state, Error & e, PosIdx pos, std::string_view errorCtx)
+{
+    e.addTrace(state.positions[pos], errorCtx);
+}
+
 inline bool EvalState::evalBool(Env & env, Expr * e, const PosIdx pos, std::string_view errorCtx)
 {
     try {
         Value v;
         e->eval(*this, env, v);
         if (v.type() != nBool)
-            error<TypeError>(
-                "expected a Boolean but found %1%: %2%", showType(v), ValuePrinter(*this, v, errorPrintOptions))
-                .atPos(pos)
-                .withFrame(env, *e)
-                .debugThrow();
+            throwNotBool(*this, v, env, *e, pos);
         return v.boolean();
     } catch (Error & e) {
-        e.addTrace(positions[pos], errorCtx);
+        addEvalTrace(*this, e, pos, errorCtx);
         throw;
     }
 }
@@ -1484,6 +1504,68 @@ static std::string showAttrSelectionPath(EvalState & state, Env & env, std::span
     return out.str();
 }
 
+[[gnu::noinline, gnu::cold]]
+void EvalState::incrAttrSelect(PosIdx pos)
+{
+    attrSelects->try_emplace_or_visit(pos, 1, [](auto & i) { i.second++; });
+}
+
+/* The functions below, and EvalState::incrAttrSelect() above, are the
+   cold paths of ExprSelect::eval(). They are kept out of line because
+   their locals would otherwise be part of its stack frame on every
+   call, which limits how long a chain of selections through thunks can
+   get before overflowing the stack. */
+
+[[gnu::noinline, gnu::cold]]
+static std::unique_ptr<DebugTraceStacker> makeSelectDebugTraceStacker(EvalState & state, ExprSelect & expr, Env & env)
+{
+    return makeDebugTraceStacker(
+        state,
+        expr,
+        env,
+        expr.getPos(),
+        "while evaluating the attribute '%1%'",
+        showAttrSelectionPath(state, env, expr.getAttrPath()));
+}
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void throwAttrMissing(EvalState & state, Env & env, ExprSelect & expr, Value & vAttrs, Symbol name)
+{
+    StringSet allAttrNames;
+    for (auto & attr : *vAttrs.attrs())
+        allAttrNames.insert(std::string(state.symbols[attr.name]));
+    auto suggestions = Suggestions::bestMatches(allAttrNames, state.symbols[name]);
+    state.error<EvalError>("attribute '%1%' missing", state.symbols[name])
+        .atPos(expr.pos)
+        .withSuggestions(suggestions)
+        .withFrame(env, expr)
+        .debugThrow();
+}
+
+[[gnu::noinline, gnu::cold]]
+static bool isDerivationInternalPos(EvalState & state, PosIdx pos)
+{
+    auto posr = state.positions[pos];
+    auto origin = std::get_if<SourcePath>(&posr.origin);
+    return origin && *origin == state.derivationInternal;
+}
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void rethrowWithAttrTrace(EvalState & state, Env & env, ExprSelect & expr, std::exception_ptr error, PosIdx pos)
+{
+    /* Show the attribute path outside of the catch handler: it
+       evaluates dynamic attribute names, which may force thunks and
+       thereby suspend the current fiber, which is not allowed while an
+       exception is being handled. */
+    auto attrPath = showAttrSelectionPath(state, env, expr.getAttrPath());
+    try {
+        std::rethrow_exception(error);
+    } catch (Error & e) {
+        state.addErrorTrace(e, pos, "while evaluating the attribute '%1%'", attrPath);
+        throw;
+    }
+}
+
 void ExprSelect::eval(EvalState & state, Env & env, Value & v)
 {
     Value vTmp;
@@ -1495,14 +1577,7 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
     std::exception_ptr error;
 
     try {
-        auto dts = state.debugRepl ? makeDebugTraceStacker(
-                                         state,
-                                         *this,
-                                         env,
-                                         getPos(),
-                                         "while evaluating the attribute '%1%'",
-                                         showAttrSelectionPath(state, env, getAttrPath()))
-                                   : nullptr;
+        auto dts = state.debugRepl ? makeSelectDebugTraceStacker(state, *this, env) : nullptr;
 
         for (auto & i : getAttrPath()) {
             state.nrLookups++;
@@ -1516,22 +1591,13 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
                 }
             } else {
                 state.forceAttrs(*vAttrs, pos, "while selecting an attribute");
-                if (!(j = vAttrs->attrs()->get(name))) {
-                    StringSet allAttrNames;
-                    for (auto & attr : *vAttrs->attrs())
-                        allAttrNames.insert(std::string(state.symbols[attr.name]));
-                    auto suggestions = Suggestions::bestMatches(allAttrNames, state.symbols[name]);
-                    state.error<EvalError>("attribute '%1%' missing", state.symbols[name])
-                        .atPos(pos)
-                        .withSuggestions(suggestions)
-                        .withFrame(env, *this)
-                        .debugThrow();
-                }
+                if (!(j = vAttrs->attrs()->get(name)))
+                    throwAttrMissing(state, env, *this, *vAttrs, name);
             }
             vAttrs = j->value;
             pos2 = j->pos;
             if (state.countCalls)
-                state.attrSelects->try_emplace_or_visit(pos2, 1, [](auto & i) { i.second++; });
+                state.incrAttrSelect(pos2);
         }
 
         state.forceValue(*vAttrs, pos2 ? pos2 : this->pos);
@@ -1539,26 +1605,13 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
     } catch (Error &) {
         if (!pos2)
             throw;
-        auto pos2r = state.positions[pos2];
-        auto origin = std::get_if<SourcePath>(&pos2r.origin);
-        if (origin && *origin == state.derivationInternal)
+        if (isDerivationInternalPos(state, pos2))
             throw;
         error = std::current_exception();
     }
 
-    if (error) {
-        /* Show the attribute path outside of the catch handler: it
-           evaluates dynamic attribute names, which may force thunks
-           and thereby suspend the current fiber, which is not allowed
-           while an exception is being handled. */
-        auto attrPath = showAttrSelectionPath(state, env, getAttrPath());
-        try {
-            std::rethrow_exception(error);
-        } catch (Error & e) {
-            state.addErrorTrace(e, pos2, "while evaluating the attribute '%1%'", attrPath);
-            throw;
-        }
-    }
+    if (error)
+        rethrowWithAttrTrace(state, env, *this, error, pos2);
 
     v = *vAttrs;
 }
@@ -1608,6 +1661,166 @@ void ExprLambda::eval(EvalState & state, Env & env, Value & v)
 
 [[gnu::tls_model("initial-exec")]] thread_local size_t CallDepth::callDepth = 0;
 
+/* The functions below, and EvalState::incrPrimOpCall(), are the paths
+   of EvalState::callFunction() that aren't needed for calling a lambda.
+   They are kept out of line because their locals would otherwise be
+   part of its stack frame on every call, which limits the depth of Nix
+   function calls before overflowing the stack. */
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void throwMissingArgument(EvalState & state, ExprLambda & lambda, const Env & env, Symbol name, PosIdx pos)
+{
+    state
+        .error<TypeError>(
+            "function '%1%' called without required argument '%2%'",
+            (lambda.name ? std::string(state.symbols[lambda.name]) : "anonymous lambda"),
+            state.symbols[name])
+        .atPos(lambda.pos)
+        .withTrace(pos, "from call site")
+        .withFrame(env, lambda)
+        .debugThrow();
+}
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void
+throwUnexpectedArgument(EvalState & state, ExprLambda & lambda, const Env & env, const Bindings & attrs, PosIdx pos)
+{
+    auto formals = lambda.getFormals();
+    for (auto & i : attrs)
+        if (!formals->has(i.name)) {
+            StringSet formalNames;
+            for (auto & formal : formals->formals)
+                formalNames.insert(std::string(state.symbols[formal.name]));
+            auto suggestions = Suggestions::bestMatches(formalNames, state.symbols[i.name]);
+            state
+                .error<TypeError>(
+                    "function '%1%' called with unexpected argument '%2%'",
+                    (lambda.name ? std::string(state.symbols[lambda.name]) : "anonymous lambda"),
+                    state.symbols[i.name])
+                .atPos(lambda.pos)
+                .withTrace(pos, "from call site")
+                .withSuggestions(suggestions)
+                .withFrame(env, lambda)
+                .debugThrow();
+        }
+    unreachable();
+}
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void throwNotAFunction(EvalState & state, Value & v, PosIdx pos)
+{
+    state
+        .error<TypeError>(
+            "attempt to call something which is not a function but %1%: %2%",
+            showType(v),
+            ValuePrinter(state, v, errorPrintOptions))
+        .atPos(pos)
+        .debugThrow();
+}
+
+[[gnu::noinline, gnu::cold]]
+static std::unique_ptr<DebugTraceStacker> makeLambdaDebugTraceStacker(EvalState & state, ExprLambda & lambda, Env & env)
+{
+    return makeDebugTraceStacker(
+        state,
+        *lambda.body,
+        env,
+        lambda.pos,
+        "while calling %s",
+        lambda.name ? concatStrings("'", state.symbols[lambda.name], "'") : "anonymous lambda");
+}
+
+[[gnu::noinline, gnu::cold]]
+static void addCallSiteTrace(EvalState & state, Error & e, PosIdx pos)
+{
+    if (pos)
+        e.addTrace(state.positions[pos], "from call site");
+}
+
+[[gnu::noinline, gnu::cold]]
+static void addLambdaCallTrace(EvalState & state, Error & e, ExprLambda & lambda, PosIdx pos)
+{
+    if (loggerSettings.showTrace.get()) {
+        state.addErrorTrace(
+            e,
+            lambda.pos,
+            "while calling %s",
+            lambda.name ? concatStrings("'", state.symbols[lambda.name], "'") : "anonymous lambda");
+        if (pos)
+            state.addErrorTrace(e, pos, "from call site");
+    }
+}
+
+/**
+ * Store in `vRes` the tPrimOpApp chain that applies `vCur` to `args`.
+ */
+[[gnu::noinline]]
+static void makeAppChain(EvalState & state, Value & vCur, std::span<Value *> args, Value & vRes)
+{
+    for (auto arg : args) {
+        auto fun2 = state.allocValue();
+        *fun2 = vCur;
+        vCur.reset();
+        vCur.mkPrimOpApp(fun2, arg);
+    }
+    vRes = vCur;
+}
+
+/**
+ * Call a primop whose first `argsDone` arguments are in the tPrimOpApp
+ * chain `vCur`, with the remaining `argsLeft` arguments from `args`.
+ */
+[[gnu::noinline]]
+static void callPrimOpApp(
+    EvalState & state,
+    Value & vCur,
+    const PrimOp & fn,
+    size_t argsDone,
+    size_t argsLeft,
+    std::span<Value *> args,
+    PosIdx pos)
+{
+    Value * vArgs[maxPrimOpArity];
+    auto n = argsDone;
+    for (Value * arg = &vCur; arg->isPrimOpApp(); arg = arg->primOpApp().left)
+        vArgs[--n] = arg->primOpApp().right;
+
+    for (size_t i = 0; i < argsLeft; ++i)
+        vArgs[argsDone + i] = args[i];
+
+    try {
+        // TODO:
+        // 1. Unify this and the code in callFunction(). Heavily redundant.
+        // 2. Create a fake env (arg1, arg2, etc.) and a fake expr (arg1: arg2: etc: builtins.name arg1 arg2
+        // etc)
+        //    so the debugger allows to inspect the wrong parameters passed to the builtin.
+        auto pos2 = vCur.determinePos(noPos);
+        vCur.reset();
+        fn.impl(state, pos2, vArgs, vCur);
+    } catch (Error & e) {
+        if (fn.addTrace)
+            state.addErrorTrace(e, pos, "while calling the '%1%' builtin", fn.name);
+        throw;
+    }
+}
+
+[[gnu::noinline]]
+static void callFunctor(EvalState & state, Value & vCur, const Attr & functor, Value * arg, PosIdx pos)
+{
+    /* 'vCur' may be allocated on the stack of the calling function, but
+       for functors we may keep a reference, so heap-allocate a copy and
+       use that instead. */
+    Value * args2[] = {state.allocValue(), arg};
+    *args2[0] = vCur;
+    vCur.reset();
+    try {
+        state.callFunction(*functor.value, args2, vCur, functor.pos);
+    } catch (Error & e) {
+        e.addTrace(state.positions[pos], "while calling a functor (an attribute set with a '__functor' attribute)");
+        throw;
+    }
+}
+
 void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes, const PosIdx pos)
 {
     auto _level = addCallDepth(pos);
@@ -1624,16 +1837,6 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
     forceValue(fun, pos);
 
     Value vCur = fun;
-
-    auto makeAppChain = [&]() {
-        for (auto arg : args) {
-            auto fun2 = allocValue();
-            *fun2 = vCur;
-            vCur.reset();
-            vCur.mkPrimOpApp(fun2, arg);
-        }
-        vRes = vCur;
-    };
 
     const Attr * functor;
 
@@ -1653,8 +1856,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                 try {
                     forceAttrs(*args[0], lambda.pos, "while evaluating the value passed for the lambda argument");
                 } catch (Error & e) {
-                    if (pos)
-                        e.addTrace(positions[pos], "from call site");
+                    addCallSiteTrace(*this, e, pos);
                     throw;
                 }
 
@@ -1668,16 +1870,8 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                 for (auto & i : formals->formals) {
                     auto j = args[0]->attrs()->get(i.name);
                     if (!j) {
-                        if (!i.def) {
-                            error<TypeError>(
-                                "function '%1%' called without required argument '%2%'",
-                                (lambda.name ? std::string(symbols[lambda.name]) : "anonymous lambda"),
-                                symbols[i.name])
-                                .atPos(lambda.pos)
-                                .withTrace(pos, "from call site")
-                                .withFrame(*vCur.lambda().env, lambda)
-                                .debugThrow();
-                        }
+                        if (!i.def)
+                            throwMissingArgument(*this, lambda, *vCur.lambda().env, i.name, pos);
                         env2.values[displ++] = i.def->maybeThunk(*this, env2);
                     } else {
                         attrsUsed++;
@@ -1687,27 +1881,10 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
                 /* Check that each actual argument is listed as a formal
                    argument (unless the attribute match specifies a `...'). */
-                if (!formals->ellipsis && attrsUsed != args[0]->attrs()->size()) {
+                if (!formals->ellipsis && attrsUsed != args[0]->attrs()->size())
                     /* Nope, so show the first unexpected argument to the
                        user. */
-                    for (auto & i : *args[0]->attrs())
-                        if (!formals->has(i.name)) {
-                            StringSet formalNames;
-                            for (auto & formal : formals->formals)
-                                formalNames.insert(std::string(symbols[formal.name]));
-                            auto suggestions = Suggestions::bestMatches(formalNames, symbols[i.name]);
-                            error<TypeError>(
-                                "function '%1%' called with unexpected argument '%2%'",
-                                (lambda.name ? std::string(symbols[lambda.name]) : "anonymous lambda"),
-                                symbols[i.name])
-                                .atPos(lambda.pos)
-                                .withTrace(pos, "from call site")
-                                .withSuggestions(suggestions)
-                                .withFrame(*vCur.lambda().env, lambda)
-                                .debugThrow();
-                        }
-                    unreachable();
-                }
+                    throwUnexpectedArgument(*this, lambda, *vCur.lambda().env, *args[0]->attrs(), pos);
             } else {
                 env2.values[displ++] = args[0];
             }
@@ -1718,28 +1895,12 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
             /* Evaluate the body. */
             try {
-                auto dts = debugRepl
-                               ? makeDebugTraceStacker(
-                                     *this,
-                                     *lambda.body,
-                                     env2,
-                                     lambda.pos,
-                                     "while calling %s",
-                                     lambda.name ? concatStrings("'", symbols[lambda.name], "'") : "anonymous lambda")
-                               : nullptr;
+                auto dts = debugRepl ? makeLambdaDebugTraceStacker(*this, lambda, env2) : nullptr;
 
                 vCur.reset();
                 lambda.body->eval(*this, env2, vCur);
             } catch (Error & e) {
-                if (loggerSettings.showTrace.get()) {
-                    addErrorTrace(
-                        e,
-                        lambda.pos,
-                        "while calling %s",
-                        lambda.name ? concatStrings("'", symbols[lambda.name], "'") : "anonymous lambda");
-                    if (pos)
-                        addErrorTrace(e, pos, "from call site");
-                }
+                addLambdaCallTrace(*this, e, lambda, pos);
                 throw;
             }
 
@@ -1752,7 +1913,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
             if (args.size() < argsLeft) {
                 /* We don't have enough arguments, so create a tPrimOpApp chain. */
-                makeAppChain();
+                makeAppChain(*this, vCur, args, vRes);
                 return;
             } else {
                 /* We have all the arguments, so call the primop. */
@@ -1760,7 +1921,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
                 nrPrimOpCalls++;
                 if (countCalls)
-                    primOpCalls->try_emplace_or_visit(fn->name, 1, [](auto & i) { i.second++; });
+                    incrPrimOpCall(fn->name);
 
                 try {
                     auto pos = vCur.determinePos(noPos);
@@ -1791,70 +1952,38 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
 
             if (args.size() < argsLeft) {
                 /* We still don't have enough arguments, so extend the tPrimOpApp chain. */
-                makeAppChain();
+                makeAppChain(*this, vCur, args, vRes);
                 return;
             } else {
                 /* We have all the arguments, so call the primop with
                    the previous and new arguments. */
-
-                Value * vArgs[maxPrimOpArity];
-                auto n = argsDone;
-                for (Value * arg = &vCur; arg->isPrimOpApp(); arg = arg->primOpApp().left)
-                    vArgs[--n] = arg->primOpApp().right;
-
-                for (size_t i = 0; i < argsLeft; ++i)
-                    vArgs[argsDone + i] = args[i];
-
                 auto fn = primOp->primOp();
                 nrPrimOpCalls++;
                 if (countCalls)
-                    primOpCalls->try_emplace_or_visit(fn->name, 1, [](auto & i) { i.second++; });
+                    incrPrimOpCall(fn->name);
 
-                try {
-                    // TODO:
-                    // 1. Unify this and above code. Heavily redundant.
-                    // 2. Create a fake env (arg1, arg2, etc.) and a fake expr (arg1: arg2: etc: builtins.name arg1 arg2
-                    // etc)
-                    //    so the debugger allows to inspect the wrong parameters passed to the builtin.
-                    auto pos = vCur.determinePos(noPos);
-                    vCur.reset();
-                    fn->impl(*this, pos, vArgs, vCur);
-                } catch (Error & e) {
-                    if (fn->addTrace)
-                        addErrorTrace(e, pos, "while calling the '%1%' builtin", fn->name);
-                    throw;
-                }
+                callPrimOpApp(*this, vCur, *fn, argsDone, argsLeft, args, pos);
 
                 args = args.subspan(argsLeft);
             }
         }
 
         else if (vCur.type() == nAttrs && (functor = vCur.attrs()->get(s.functor))) {
-            /* 'vCur' may be allocated on the stack of the calling
-               function, but for functors we may keep a reference, so
-               heap-allocate a copy and use that instead. */
-            Value * args2[] = {allocValue(), args[0]};
-            *args2[0] = vCur;
-            vCur.reset();
-            try {
-                callFunction(*functor->value, args2, vCur, functor->pos);
-            } catch (Error & e) {
-                e.addTrace(positions[pos], "while calling a functor (an attribute set with a '__functor' attribute)");
-                throw;
-            }
+            callFunctor(*this, vCur, *functor, args[0], pos);
             args = args.subspan(1);
         }
 
         else
-            error<TypeError>(
-                "attempt to call something which is not a function but %1%: %2%",
-                showType(vCur),
-                ValuePrinter(*this, vCur, errorPrintOptions))
-                .atPos(pos)
-                .debugThrow();
+            throwNotAFunction(*this, vCur, pos);
     }
 
     vRes = vCur;
+}
+
+[[gnu::noinline, gnu::cold]]
+void EvalState::incrPrimOpCall(const std::string & name)
+{
+    primOpCalls->try_emplace_or_visit(name, 1, [](auto & i) { i.second++; });
 }
 
 void ExprCall::eval(EvalState & state, Env & env, Value & v)
@@ -2481,6 +2610,104 @@ EvalState::tryAttrsToString(const PosIdx pos, Value & v, NixStringContext & cont
     return {};
 }
 
+/* The functions below are the less common paths of
+   EvalState::coerceToString(). They are kept out of line because their
+   locals would otherwise be part of its stack frame on every call. In
+   particular, std::to_string() on an integer puts a 201-byte table on
+   the stack. */
+
+[[gnu::noinline]]
+static std::string intToString(NixInt::Inner n)
+{
+    return std::to_string(n);
+}
+
+[[gnu::noinline]]
+static std::string floatToString(NixFloat n)
+{
+    return std::to_string(n);
+}
+
+[[noreturn, gnu::noinline, gnu::cold]]
+static void throwCannotCoerce(EvalState & state, Value & v, PosIdx pos, std::string_view errorCtx)
+{
+    state.error<TypeError>("cannot coerce %1% to a string: %2%", showType(v), ValuePrinter(state, v, errorPrintOptions))
+        .withTrace(pos, errorCtx)
+        .debugThrow();
+}
+
+[[gnu::noinline, gnu::cold]]
+static BackedStringView coerceExternalToString(
+    EvalState & state,
+    PosIdx pos,
+    Value & v,
+    NixStringContext & context,
+    std::string_view errorCtx,
+    bool coerceMore,
+    bool copyToStore)
+{
+    try {
+        return v.external()->coerceToString(state, pos, context, coerceMore, copyToStore);
+    } catch (Error & e) {
+        e.addTrace(nullptr, errorCtx);
+        throw;
+    }
+}
+
+[[gnu::noinline]]
+static BackedStringView
+coercePathToString(EvalState & state, PosIdx pos, Value & v, NixStringContext & context, bool copyToStore)
+{
+    if (copyToStore) {
+        return state.store->printStorePath(state.copyPathToStore(context, v.path(), v.determinePos(pos)));
+    } else {
+        auto path = v.path();
+        if (path.accessor == state.rootFS && state.store->isInStore(path.path.abs())) {
+            try {
+                context.insert(
+                    NixStringContextElem::Path{.storePath = state.store->toStorePath(path.path.abs()).first});
+            } catch (Error &) {
+            }
+        }
+        return std::string(path.path.abs());
+    }
+}
+
+[[gnu::noinline]]
+static BackedStringView coerceListToString(
+    EvalState & state,
+    PosIdx pos,
+    Value & v,
+    NixStringContext & context,
+    std::string_view errorCtx,
+    bool coerceMore,
+    bool copyToStore,
+    bool canonicalizePath)
+{
+    std::string result;
+    auto listView = v.listView();
+    for (auto [n, v2] : enumerate(listView)) {
+        try {
+            result += *state.coerceToString(
+                pos,
+                *v2,
+                context,
+                "while evaluating one element of the list",
+                coerceMore,
+                copyToStore,
+                canonicalizePath);
+        } catch (Error & e) {
+            e.addTrace(state.positions[pos], errorCtx);
+            throw;
+        }
+        if (n < v.listSize() - 1
+            /* !!! not quite correct */
+            && (!v2->isList() || v2->listSize() != 0))
+            result += " ";
+    }
+    return result;
+}
+
 BackedStringView EvalState::coerceToString(
     const PosIdx pos,
     Value & v,
@@ -2507,18 +2734,8 @@ BackedStringView EvalState::coerceToString(
             // FIXME: hack to preserve path literals that end in a
             // slash, as in /foo/${x}.
             return v.pathStrView();
-        } else if (copyToStore) {
-            return store->printStorePath(copyPathToStore(context, v.path(), v.determinePos(pos)));
-        } else {
-            auto path = v.path();
-            if (path.accessor == rootFS && store->isInStore(path.path.abs())) {
-                try {
-                    context.insert(NixStringContextElem::Path{.storePath = store->toStorePath(path.path.abs()).first});
-                } catch (Error &) {
-                }
-            }
-            return std::string(path.path.abs());
         }
+        return coercePathToString(*this, pos, v, context, copyToStore);
     }
 
     if (v.type() == nAttrs) {
@@ -2526,23 +2743,13 @@ BackedStringView EvalState::coerceToString(
         if (maybeString)
             return std::move(*maybeString);
         auto i = v.attrs()->get(s.outPath);
-        if (!i) {
-            error<TypeError>(
-                "cannot coerce %1% to a string: %2%", showType(v), ValuePrinter(*this, v, errorPrintOptions))
-                .withTrace(pos, errorCtx)
-                .debugThrow();
-        }
+        if (!i)
+            throwCannotCoerce(*this, v, pos, errorCtx);
         return coerceToString(pos, *i->value, context, errorCtx, coerceMore, copyToStore, canonicalizePath);
     }
 
-    if (v.type() == nExternal) {
-        try {
-            return v.external()->coerceToString(*this, pos, context, coerceMore, copyToStore);
-        } catch (Error & e) {
-            e.addTrace(nullptr, errorCtx);
-            throw;
-        }
-    }
+    if (v.type() == nExternal)
+        return coerceExternalToString(*this, pos, v, context, errorCtx, coerceMore, copyToStore);
 
     if (coerceMore) {
         /* Note that `false' is represented as an empty string for
@@ -2552,41 +2759,17 @@ BackedStringView EvalState::coerceToString(
         if (v.type() == nBool && !v.boolean())
             return "";
         if (v.type() == nInt)
-            return std::to_string(v.integer().value);
+            return intToString(v.integer().value);
         if (v.type() == nFloat)
-            return std::to_string(v.fpoint());
+            return floatToString(v.fpoint());
         if (v.type() == nNull)
             return "";
 
-        if (v.isList()) {
-            std::string result;
-            auto listView = v.listView();
-            for (auto [n, v2] : enumerate(listView)) {
-                try {
-                    result += *coerceToString(
-                        pos,
-                        *v2,
-                        context,
-                        "while evaluating one element of the list",
-                        coerceMore,
-                        copyToStore,
-                        canonicalizePath);
-                } catch (Error & e) {
-                    e.addTrace(positions[pos], errorCtx);
-                    throw;
-                }
-                if (n < v.listSize() - 1
-                    /* !!! not quite correct */
-                    && (!v2->isList() || v2->listSize() != 0))
-                    result += " ";
-            }
-            return result;
-        }
+        if (v.isList())
+            return coerceListToString(*this, pos, v, context, errorCtx, coerceMore, copyToStore, canonicalizePath);
     }
 
-    error<TypeError>("cannot coerce %1% to a string: %2%", showType(v), ValuePrinter(*this, v, errorPrintOptions))
-        .withTrace(pos, errorCtx)
-        .debugThrow();
+    throwCannotCoerce(*this, v, pos, errorCtx);
 }
 
 StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePath & path, PosIdx pos)
