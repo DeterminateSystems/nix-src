@@ -36,8 +36,26 @@ waitForCrashDump() {
     return 1
 }
 
-for type in segfault assert logic-error panic terminate abort; do
+# Sentry rejects crash dumps that are bigger than 200 MiB. When the
+# stack pointer of the crashed thread is unusable (e.g. after a stack
+# overflow), crashpad captures the signal stack instead, along with the
+# rest of its mapping and any adjacent readable mappings, so a signal
+# stack on the heap gives a crash dump of the size of the heap.
+maxCrashDumpSize=$((200 * 1024 * 1024))
+
+checkCrashDumpSize() {
+    local size
+    size=$(wc -c < "${envelopes[0]}")
+    if ((size > maxCrashDumpSize)); then
+        fail "Crash dump ${envelopes[0]} is $size bytes, which is more than Sentry accepts ($maxCrashDumpSize bytes)"
+    fi
+}
+
+for type in segfault assert logic-error panic terminate abort stack-overflow; do
     if [[ $type = logic-error && $(uname) = Darwin ]]; then continue; fi
+    # On macOS, crashpad catches crashes out of process rather than with
+    # a signal handler, so the signal stack doesn't matter there.
+    if [[ $type = stack-overflow && $(uname) != Linux ]]; then continue; fi
 
     rm -rf "$sentryDir"
 
@@ -46,7 +64,23 @@ for type in segfault assert logic-error panic terminate abort; do
     if ! waitForCrashDump; then
         fail "No crash dump found in $sentryDir after crash"
     fi
+    checkCrashDumpSize
 done
+
+# A stack overflow on a fiber of an evaluator worker thread must also
+# produce a crash dump, which requires the worker thread to have an
+# alternate signal stack. The crash dump includes the entire 60 MiB
+# stack of the fiber.
+if [[ $(uname) = Linux ]]; then
+    rm -rf "$sentryDir"
+
+    (! nix eval --eval-cores 4 --json --file ./fiber-stack-overflow.nix)
+
+    if ! waitForCrashDump; then
+        fail "No crash dump found in $sentryDir after a stack overflow on a fiber"
+    fi
+    checkCrashDumpSize
+fi
 
 rm -rf "$sentryDir"
 
