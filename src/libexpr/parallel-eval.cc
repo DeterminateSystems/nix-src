@@ -2,6 +2,7 @@
 #include "nix/expr/parallel-eval.hh"
 #include "nix/store/globals.hh"
 #include "nix/expr/primops.hh"
+#include "nix/util/current-process.hh"
 
 #include <boost/context/fiber.hpp>
 #include <boost/context/protected_fixedsize_stack.hpp>
@@ -370,6 +371,20 @@ void Executor::createWorker()
        since they only run the scheduler loop; the actual evaluation
        happens on fibers, which have their own stacks. */
     worker->thread = std::thread([this, w]() {
+#ifndef _WIN32
+        /* Give the worker an alternate signal stack, so that signal
+           handlers installed with `SA_ONSTACK` can run when a fiber on
+           this thread overflows its stack; without one, the kernel
+           kills the process without running them. This matters for
+           the stack overflow handler (see `detectStackOverflow()`) and,
+           on Linux, for Sentry's crash handler. (On macOS, crashpad
+           catches crashes out of process via Mach exception ports.) */
+        try {
+            ensureSignalStack();
+        } catch (SysError &) {
+            ignoreExceptionExceptInterrupt();
+        }
+#endif
 #if NIX_USE_BOEHMGC
         /* Register the worker thread with the garbage collector. This
            is not for the sake of the worker stack (which holds no GC

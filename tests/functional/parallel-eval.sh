@@ -37,3 +37,11 @@ in
 NIX
 
 expectStderr 1 nix eval --eval-cores 4 --json --file "$TEST_ROOT/select-dynamic-attr.nix" | grepQuiet "while evaluating the attribute 'b.c.\"4499998500000\"'"
+
+# A stack overflow on a fiber must be reported as such, rather than
+# killing Nix with SIGSEGV. This requires the worker thread running the
+# fiber to have an alternate signal stack. (The stack overflow handler
+# only recognises overflows on x86_64 Linux.)
+if [[ $(uname -ms) = "Linux x86_64" ]]; then
+    expectStderr 1 nix eval --eval-cores 4 --json --file ./fiber-stack-overflow.nix | grepQuiet "stack overflow (possible infinite recursion)"
+fi
