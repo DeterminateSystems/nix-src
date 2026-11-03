@@ -13,6 +13,12 @@
 #include "nix/util/sync.hh"
 #include <math.h>
 
+#ifndef _WIN32
+#  include <signal.h>
+#  include <sys/mman.h>
+#  include <unistd.h>
+#endif
+
 #ifdef __APPLE__
 #  include <mach-o/dyld.h>
 #  include <mach/mach.h>
@@ -96,6 +102,70 @@ void ensureStackSizeAtLeast(size_t stackSize)
                     .str());
         }
     }
+}
+
+namespace {
+
+/**
+ * The alternate signal stack of a thread, allocated by
+ * `ensureSignalStack()`. It has a guard page on either side: the lower
+ * one turns an overflow of the signal stack into a crash rather than
+ * memory corruption, and both keep crash reporters (which capture a
+ * thread's stack from the stack pointer to the end of its mapping,
+ * including adjacent readable mappings) from capturing unrelated
+ * memory when the stack pointer of the crashed thread is unusable.
+ */
+struct SignalStack
+{
+    static constexpr size_t size = 64 * 1024;
+
+    /**
+     * The start of the mapping, i.e. of the lower guard page.
+     */
+    char * mem = nullptr;
+
+    ~SignalStack()
+    {
+        if (!mem)
+            return;
+        size_t pageSize = getpagesize();
+        /* Stop using the stack before unmapping it, unless something
+           else has replaced it in the meantime. */
+        stack_t ss{}, old{};
+        ss.ss_flags = SS_DISABLE;
+        if (sigaltstack(&ss, &old) == 0 && old.ss_sp != mem + pageSize)
+            sigaltstack(&old, nullptr);
+        munmap(mem, size + 2 * pageSize);
+    }
+};
+
+thread_local SignalStack signalStack;
+
+} // namespace
+
+void ensureSignalStack()
+{
+    size_t pageSize = getpagesize();
+
+    if (!signalStack.mem) {
+        auto mem = static_cast<char *>(
+            mmap(nullptr, SignalStack::size + 2 * pageSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+        if (mem == MAP_FAILED)
+            throw SysError("allocating the alternate signal stack");
+        if (mprotect(mem + pageSize, SignalStack::size, PROT_READ | PROT_WRITE) != 0) {
+            SysError error("allocating the alternate signal stack");
+            munmap(mem, SignalStack::size + 2 * pageSize);
+            throw error;
+        }
+        signalStack.mem = mem;
+    }
+
+    stack_t ss{};
+    ss.ss_sp = signalStack.mem + pageSize;
+    ss.ss_size = SignalStack::size;
+    ss.ss_flags = 0;
+    if (sigaltstack(&ss, nullptr) != 0)
+        throw SysError("setting the alternate signal stack");
 }
 #endif
 

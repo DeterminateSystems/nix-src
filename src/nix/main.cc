@@ -539,6 +539,18 @@ void mainWrapped(int argc, char ** argv)
             },
             nullptr);
         sentry_init(options);
+#  ifdef __linux__
+        /* `sentry_init()` replaced the alternate signal stack of this
+           thread (see `detectStackOverflow()`) with a heap allocation.
+           If a thread's stack pointer is unusable when it crashes (e.g.
+           after a stack overflow), crashpad captures the signal stack
+           instead, from the signal handler's stack pointer to the end of
+           its mapping and any adjacent readable mappings, which for a
+           heap allocation can be a 1 GiB heap arena. Sentry then rejects
+           the crash report for being too big. So switch back to our own
+           signal stack, which is just as big but has guard pages. */
+        ensureSignalStack();
+#  endif
         setSentryTag = [](const char * key, const char * value) { sentry_set_tag(key, value); };
         setSentryTag("nix_command", argc > 0 ? std::string(baseNameOf(argv[0])).c_str() : "");
 #  ifndef _WIN32

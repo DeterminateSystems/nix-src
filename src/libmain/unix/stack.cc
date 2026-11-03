@@ -1,4 +1,5 @@
 #include "nix/util/error.hh"
+#include "nix/util/current-process.hh"
 #include "nix/main/shared.hh"
 
 #include <cstring>
@@ -46,16 +47,11 @@ void detectStackOverflow()
 #if defined(SA_SIGINFO) && defined(SA_ONSTACK)
     /* Install a SIGSEGV handler to detect stack overflows.  This
        requires an alternative stack, otherwise the signal cannot be
-       delivered when we're out of stack space. */
-    stack_t stack;
-    stack.ss_size = 4096 * 4 + MINSIGSTKSZ;
-    static auto stackBuf = std::make_unique<std::vector<char>>(stack.ss_size);
-    stack.ss_sp = stackBuf->data();
-    if (!stack.ss_sp)
-        throw Error("cannot allocate alternative stack");
-    stack.ss_flags = 0;
-    if (sigaltstack(&stack, 0) == -1)
-        throw SysError("cannot set alternative stack");
+       delivered when we're out of stack space. Note that this only
+       gives the calling thread an alternative stack; other threads
+       that can overflow their stack need to call
+       ensureSignalStack() themselves. */
+    ensureSignalStack();
 
     struct sigaction act;
     sigfillset(&act.sa_mask);

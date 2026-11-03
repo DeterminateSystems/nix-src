@@ -32,6 +32,20 @@ unsigned int getMaxCPU();
  * @note Not thread safe. Calls to this should be wrapped in a std::call_once.
  */
 void ensureStackSizeAtLeast(size_t stackSize);
+
+/**
+ * Make the calling thread use an alternate signal stack (see
+ * `sigaltstack(2)`) allocated by Nix, replacing any alternate signal
+ * stack set up by someone else. Signal handlers installed with
+ * `SA_ONSTACK` (such as the stack overflow handler installed by
+ * `detectStackOverflow()`, or Sentry's crash handler) can only run on
+ * a thread that has run out of stack if the thread has an alternate
+ * signal stack. Threads don't inherit the alternate signal stack of
+ * the thread that created them, so every thread that can overflow its
+ * stack (e.g. the evaluator's worker threads) has to call this. The
+ * stack is freed when the thread exits.
+ */
+void ensureSignalStack();
 #endif
 
 /**
