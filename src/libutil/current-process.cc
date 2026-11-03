@@ -117,7 +117,27 @@ namespace {
  */
 struct SignalStack
 {
-    static constexpr size_t size = 64 * 1024;
+    /**
+     * The size of the stack, without the guard pages: 64 KiB (like
+     * Sentry's signal stack), or the size recommended by the C
+     * library, if that's bigger. The latter is a multiple of the size
+     * of the kernel's signal frame, which depends on the CPU's register
+     * state, e.g. it's more than 64 KiB on arm64 with the largest
+     * streaming vector length of SME.
+     */
+    static size_t getSize()
+    {
+        static const size_t size = []() {
+            size_t size = 64 * 1024;
+#  ifdef _SC_SIGSTKSZ
+            if (auto n = sysconf(_SC_SIGSTKSZ); n > 0)
+                size = std::max(size, static_cast<size_t>(n));
+#  endif
+            size_t pageSize = getpagesize();
+            return (size + pageSize - 1) / pageSize * pageSize;
+        }();
+        return size;
+    }
 
     /**
      * The start of the mapping, i.e. of the lower guard page.
@@ -135,7 +155,7 @@ struct SignalStack
         ss.ss_flags = SS_DISABLE;
         if (sigaltstack(&ss, &old) == 0 && old.ss_sp != mem + pageSize)
             sigaltstack(&old, nullptr);
-        munmap(mem, size + 2 * pageSize);
+        munmap(mem, getSize() + 2 * pageSize);
     }
 };
 
@@ -149,12 +169,12 @@ void ensureSignalStack()
 
     if (!signalStack.mem) {
         auto mem = static_cast<char *>(
-            mmap(nullptr, SignalStack::size + 2 * pageSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+            mmap(nullptr, SignalStack::getSize() + 2 * pageSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
         if (mem == MAP_FAILED)
             throw SysError("allocating the alternate signal stack");
-        if (mprotect(mem + pageSize, SignalStack::size, PROT_READ | PROT_WRITE) != 0) {
+        if (mprotect(mem + pageSize, SignalStack::getSize(), PROT_READ | PROT_WRITE) != 0) {
             SysError error("allocating the alternate signal stack");
-            munmap(mem, SignalStack::size + 2 * pageSize);
+            munmap(mem, SignalStack::getSize() + 2 * pageSize);
             throw error;
         }
         signalStack.mem = mem;
@@ -162,7 +182,7 @@ void ensureSignalStack()
 
     stack_t ss{};
     ss.ss_sp = signalStack.mem + pageSize;
-    ss.ss_size = SignalStack::size;
+    ss.ss_size = SignalStack::getSize();
     ss.ss_flags = 0;
     if (sigaltstack(&ss, nullptr) != 0)
         throw SysError("setting the alternate signal stack");
