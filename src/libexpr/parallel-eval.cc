@@ -2,9 +2,15 @@
 #include "nix/expr/parallel-eval.hh"
 #include "nix/store/globals.hh"
 #include "nix/expr/primops.hh"
+#include "nix/util/current-process.hh"
 
 #include <boost/context/fiber.hpp>
 #include <boost/context/protected_fixedsize_stack.hpp>
+
+#ifndef _WIN32
+#  include <sys/mman.h>
+#  include <unistd.h>
+#endif
 
 #include <optional>
 #include <unordered_map>
@@ -131,6 +137,56 @@ struct Executor::Fiber
     }
 };
 
+#ifndef _WIN32
+/**
+ * Allocate a fiber stack. Like `boost::context::protected_fixedsize_stack`,
+ * it has a guard page below it, which turns a stack overflow into a
+ * crash. But it also has one above it. Crash reporters (e.g. crashpad)
+ * capture a thread's stack from its stack pointer to the end of the
+ * stack's mapping, including any adjacent readable anonymous mappings.
+ * So without the upper guard page, the crash dump of a fiber's crash
+ * could include whatever happens to be mapped right above its stack,
+ * e.g. the stacks of other threads or the heap, which can make it too
+ * big for Sentry.
+ *
+ * As with `protected_fixedsize_stack`, the size of the returned
+ * `stack_context` includes the lower guard page (but not the upper
+ * one).
+ */
+static boost::context::stack_context allocateFiberStack()
+{
+    size_t pageSize = getpagesize();
+    size_t size = (evalStackSize + pageSize - 1) / pageSize * pageSize;
+    auto mem = static_cast<char *>(mmap(nullptr, size + 2 * pageSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    if (mem == MAP_FAILED)
+        throw SysError("allocating a fiber stack");
+    if (mprotect(mem + pageSize, size, PROT_READ | PROT_WRITE) != 0) {
+        SysError error("allocating a fiber stack");
+        munmap(mem, size + 2 * pageSize);
+        throw error;
+    }
+    boost::context::stack_context sctx;
+    sctx.size = size + pageSize;
+    sctx.sp = mem + sctx.size;
+    return sctx;
+}
+
+static void freeFiberStack(boost::context::stack_context & sctx)
+{
+    munmap(static_cast<char *>(sctx.sp) - sctx.size, sctx.size + getpagesize());
+}
+#else
+static boost::context::stack_context allocateFiberStack()
+{
+    return boost::context::protected_fixedsize_stack(evalStackSize).allocate();
+}
+
+static void freeFiberStack(boost::context::stack_context & sctx)
+{
+    boost::context::protected_fixedsize_stack(evalStackSize).deallocate(sctx);
+}
+#endif
+
 struct Executor::StackPool
 {
     struct State
@@ -159,7 +215,7 @@ struct Executor::StackPool
         }
 #endif
         for (auto & sctx : state->stacks)
-            boost::context::protected_fixedsize_stack(evalStackSize).deallocate(sctx);
+            freeFiberStack(sctx);
     }
 };
 
@@ -196,7 +252,7 @@ struct PooledStackAllocator
             }
         }
         executor.nrFiberStacksAllocated++;
-        auto sctx = boost::context::protected_fixedsize_stack(evalStackSize).allocate();
+        auto sctx = allocateFiberStack();
 #if NIX_USE_BOEHMGC
         auto gs = new GC_stack{};
         gs->base = sctx.sp;
@@ -370,6 +426,20 @@ void Executor::createWorker()
        since they only run the scheduler loop; the actual evaluation
        happens on fibers, which have their own stacks. */
     worker->thread = std::thread([this, w]() {
+#ifndef _WIN32
+        /* Give the worker an alternate signal stack, so that signal
+           handlers installed with `SA_ONSTACK` can run when a fiber on
+           this thread overflows its stack; without one, the kernel
+           kills the process without running them. This matters for
+           the stack overflow handler (see `detectStackOverflow()`) and,
+           on Linux, for Sentry's crash handler. (On macOS, crashpad
+           catches crashes out of process via Mach exception ports.) */
+        try {
+            ensureSignalStack();
+        } catch (SysError &) {
+            ignoreExceptionExceptInterrupt();
+        }
+#endif
 #if NIX_USE_BOEHMGC
         /* Register the worker thread with the garbage collector. This
            is not for the sake of the worker stack (which holds no GC
