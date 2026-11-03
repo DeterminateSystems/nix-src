@@ -703,12 +703,11 @@ void DerivationBuilderImpl::startChild()
 #ifdef __APPLE__
     /* On macOS, the slave must be opened in the child (see
        c536e00c9deeac58bc4b3299dbc702604c32adbe). */
-    spec.ptySlaveName = getPtsName(builderOut.get());
-    pid = spawnBuilderChild(spec, {}, {});
+    pid = spawnBuilderChild(spec, getPtsName(builderOut.get()), {}, {});
 #else
     auto slave = openSlaveNoDup();
     std::array<Descriptor, 1> fds{slave.get()};
-    pid = spawnBuilderChild(spec, fds, {});
+    pid = spawnBuilderChild(spec, std::nullopt, fds, {});
 #endif
 }
 
@@ -728,8 +727,12 @@ BuilderChildSpec DerivationBuilderImpl::makeChildSpec()
         spec.envStrs.push_back(rewriteStrings(i.first + "=" + i.second, inputRewrites));
 
     if (drv.isBuiltin()) {
+        StringSink drvSink;
+        writeDerivation(drvSink, store, drv);
+
         BuilderChildSpec::Builtin builtin{
-            .drv = drv,
+            .drv = std::move(drvSink.s),
+            .drvName = drv.name,
             .hashedMirrors = settings.getLocalSettings().hashedMirrors,
 #if NIX_WITH_AWS_AUTH
             .awsCredentials = preResolveAwsCredentials(),

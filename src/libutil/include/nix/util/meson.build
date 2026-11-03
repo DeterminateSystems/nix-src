@@ -83,6 +83,7 @@ headers = [ config_pub_h ] + files(
   'repair-flag.hh',
   'sentry.hh',
   'serialise.hh',
+  'wire-serialise.hh',
   'signals.hh',
   'signature/local-keys.hh',
   'signature/signer.hh',

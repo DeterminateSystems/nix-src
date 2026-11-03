@@ -583,7 +583,7 @@ void ChrootLinuxDerivationBuilder::startChild()
         auto slave = openSlaveNoDup();
         std::array<Descriptor, 2> fds{slave.get(), userNamespaceSync.readSide.get()};
         try {
-            pid = spawnBuilderChild(spec, fds, options);
+            pid = spawnBuilderChild(spec, std::nullopt, fds, options);
         } catch (Error & e) {
             if (options.requireDropSupplementaryGroups)
                 e.addTrace(

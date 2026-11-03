@@ -268,10 +268,12 @@ static AwsCredentials getCredentialsFromProvider(std::shared_ptr<Aws::Crt::Auth:
                 sessionTokenStr = std::string(sessionToken.data(), sessionToken.size());
             }
 
-            prom->set_value(AwsCredentials(
-                std::string(accessKeyId.data(), accessKeyId.size()),
-                std::string(secretAccessKey.data(), secretAccessKey.size()),
-                sessionTokenStr));
+            prom->set_value(
+                AwsCredentials{
+                    .accessKeyId = std::string(accessKeyId.data(), accessKeyId.size()),
+                    .secretAccessKey = std::string(secretAccessKey.data(), secretAccessKey.size()),
+                    .sessionToken = sessionTokenStr,
+                });
         }
     });
 

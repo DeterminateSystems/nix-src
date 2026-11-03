@@ -17,6 +17,9 @@ namespace nix {
  * parent and passed to the child, which may be created by the spawner
  * (see spawner.hh) and therefore doesn't have access to the parent's
  * state.
+ *
+ * This is serialised using `writeWire()`, so all of its fields must
+ * be serialisable (see wire-serialise.hh).
  */
 struct BuilderChildSpec
 {
@@ -32,16 +35,16 @@ struct BuilderChildSpec
 
     std::filesystem::path tmpDirInSandbox;
 
-    /**
-     * If set, the child opens the pseudoterminal slave by name rather
-     * than receiving it as a file descriptor. This is needed on macOS
-     * (see c536e00c9deeac58bc4b3299dbc702604c32adbe).
-     */
-    std::optional<std::string> ptySlaveName;
-
     struct Builtin
     {
-        BasicDerivation drv;
+        /**
+         * The derivation, serialised by `writeDerivation()`, and its
+         * name. The child parses it after applying `settings`, since
+         * parsing depends on settings such as experimental features.
+         */
+        std::string drv;
+        std::string drvName;
+
         std::map<std::string, std::string> outputs;
         std::string netrcData;
         std::string caFileData;
@@ -149,10 +152,6 @@ struct BuilderChildSpec
 
     std::optional<DarwinSandbox> darwinSandbox;
 #endif
-
-    void write(Sink & sink) const;
-
-    static BuilderChildSpec read(Source & source);
 };
 
 /**
@@ -187,11 +186,19 @@ struct BuilderChildHooks
 
 /**
  * Start the child side of a build via the spawner. `fds` are the
- * pseudoterminal slave (unless `spec.ptySlaveName` is set) and, for
+ * pseudoterminal slave (unless `ptySlaveName` is set) and, for
  * sandboxed Linux builds, the read side of the user namespace
  * synchronisation pipe.
+ *
+ * If `ptySlaveName` is set, the child opens the pseudoterminal slave
+ * by name rather than receiving it as a file descriptor. This is
+ * needed on macOS (see c536e00c9deeac58bc4b3299dbc702604c32adbe).
  */
-Pid spawnBuilderChild(const BuilderChildSpec & spec, std::span<const Descriptor> fds, const SpawnOptions & options);
+Pid spawnBuilderChild(
+    const BuilderChildSpec & spec,
+    const std::optional<std::string> & ptySlaveName,
+    std::span<const Descriptor> fds,
+    const SpawnOptions & options);
 
 /**
  * Open the pseudoterminal slave with the specified name, and put it in

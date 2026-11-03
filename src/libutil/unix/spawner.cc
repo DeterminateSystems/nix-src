@@ -9,6 +9,7 @@
 #include "nix/util/sync.hh"
 #include "nix/util/unix-domain-socket.hh"
 #include "nix/util/util.hh"
+#include "nix/util/wire-serialise.hh"
 
 #include <atomic>
 #include <future>
@@ -122,38 +123,6 @@ RegisterSpawnOp::RegisterSpawnOp(std::string name, Main main)
     assert(inserted);
 }
 
-static void writeSpawnOptions(Sink & sink, const SpawnOptions & options)
-{
-    sink << (uint64_t) options.dieWithParent << (uint64_t) options.setSid
-         << (options.chdir ? options.chdir->string() : "") << (uint64_t) options.linuxCloneFlags
-         << (uint64_t) (options.cgroupFd != INVALID_DESCRIPTOR) << (uint64_t) options.dropSupplementaryGroups
-         << (uint64_t) options.requireDropSupplementaryGroups << options.errorPrefix;
-}
-
-/**
- * The options as received by the spawner. `cgroupFd` is passed as the
- * last file descriptor of the message.
- */
-struct ReceivedSpawnOptions : SpawnOptions
-{
-    bool hasCgroupFd = false;
-};
-
-static ReceivedSpawnOptions readSpawnOptions(Source & source)
-{
-    ReceivedSpawnOptions options;
-    options.dieWithParent = readNum<uint64_t>(source);
-    options.setSid = readNum<uint64_t>(source);
-    if (auto chdir = readString(source); !chdir.empty())
-        options.chdir = chdir;
-    options.linuxCloneFlags = readNum<int>(source);
-    options.hasCgroupFd = readNum<uint64_t>(source);
-    options.dropSupplementaryGroups = readNum<uint64_t>(source);
-    options.requireDropSupplementaryGroups = readNum<uint64_t>(source);
-    options.errorPrefix = readString(source);
-    return options;
-}
-
 //////////////////////////////////////////////////////////////////////
 // The spawner process.
 
@@ -220,7 +189,7 @@ struct Server
 
     void handleSpawn(Message & msg);
 
-    pid_t startChild(const ReceivedSpawnOptions & options, Descriptor cgroupFd, fun<void()> childMain);
+    pid_t startChild(const SpawnOptions & options, fun<void()> childMain);
 
     void handleRelease(Message & msg);
 
@@ -301,20 +270,24 @@ void Server::handleSpawn(Message & msg)
     try {
         auto name = readString(source);
         auto childVerbosity = (Verbosity) readNum<unsigned int>(source);
-        auto options = readSpawnOptions(source);
+        auto options = readWire<SpawnOptions>(source);
         auto args = readString(source);
 
         auto op = spawnOps().find(name);
         if (op == spawnOps().end())
             throw SpawnerError("unknown spawner operation '%s'", name);
 
+        /* The cgroup file descriptor, if any, is passed as the last
+           file descriptor of the message. `options.cgroupFd` is the
+           parent's file descriptor number, so replace it by ours. */
         AutoCloseFD cgroupFd;
-        if (options.hasCgroupFd) {
+        if (options.cgroupFd != INVALID_DESCRIPTOR) {
             if (msg.fds.empty())
                 throw SpawnerError("missing cgroup file descriptor");
             cgroupFd = std::move(msg.fds.back());
             msg.fds.pop_back();
         }
+        options.cgroupFd = cgroupFd.get();
 
         /* If the child creates a new session, don't reply until it
            has done so. Otherwise the parent could try to kill the
@@ -324,7 +297,7 @@ void Server::handleSpawn(Message & msg)
         if (options.setSid)
             sessionCreated.create();
 
-        auto pid = startChild(options, cgroupFd.get(), [&]() {
+        auto pid = startChild(options, [&]() {
             /* Undo the spawner's state. */
             signal(SIGCHLD, SIG_DFL);
             control.close();
@@ -367,13 +340,13 @@ void Server::handleSpawn(Message & msg)
     }
 }
 
-pid_t Server::startChild(const ReceivedSpawnOptions & options, Descriptor cgroupFd, fun<void()> childMain)
+pid_t Server::startChild(const SpawnOptions & options, fun<void()> childMain)
 {
     ProcessOptions processOptions;
     processOptions.errorPrefix = options.errorPrefix;
     processOptions.dieWithParent = options.dieWithParent;
     processOptions.cloneFlags = options.linuxCloneFlags;
-    processOptions.cgroupFd = cgroupFd;
+    processOptions.cgroupFd = options.cgroupFd;
 
 #ifdef __linux__
     /* Supplementary groups can't be dropped inside a new user
@@ -881,7 +854,7 @@ Pid RegisterSpawnOp::spawn(
 
     StringSink payload;
     payload << requestId << name << (uint64_t) verbosity;
-    writeSpawnOptions(payload, options);
+    writeWire(payload, options);
     payload << args.s;
 
     std::vector<Descriptor> allFds(fds.begin(), fds.end());

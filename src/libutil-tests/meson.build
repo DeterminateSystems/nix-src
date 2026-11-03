@@ -103,6 +103,7 @@ sources = files(
   'url.cc',
   'users.cc',
   'util.cc',
+  'wire-serialise.cc',
   'xml-writer.cc',
 )
 
