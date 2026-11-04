@@ -56,6 +56,7 @@ headers = [ config_pub_h ] + files(
   'fun.hh',
   'git.hh',
   'hash.hh',
+  'hdiff-patch.hh',
   'hilite.hh',
   'json-impls.hh',
   'json-non-null.hh',
@@ -90,6 +91,7 @@ headers = [ config_pub_h ] + files(
   'sort.hh',
   'source-accessor.hh',
   'source-path.hh',
+  'spilling-sink.hh',
   'split.hh',
   'std-hash.hh',
   'strings-inline.hh',
@@ -109,4 +111,5 @@ headers = [ config_pub_h ] + files(
   'util.hh',
   'variant-wrapper.hh',
   'xml-writer.hh',
+  'zstd-patch.hh',
 )

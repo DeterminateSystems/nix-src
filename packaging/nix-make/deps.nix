@@ -91,6 +91,14 @@ in
     pkgconfig = [ "libzstd" ];
   }
   {
+    prefix = "hdiffpatch/";
+    pkg = [
+      deps.hdiffpatch
+      deps.zstd
+    ];
+    pkgconfig = [ "hdiffpatch" ];
+  }
+  {
     prefix = "libcpuid/";
     pkg = deps.libcpuid;
     pkgconfig = [ "libcpuid" ];

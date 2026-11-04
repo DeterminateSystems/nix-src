@@ -132,6 +132,7 @@ suites = [
       'multiple-outputs-substitute-failure.sh',
       'multiple-outputs.sh',
       'nar-access.sh',
+      'nario-diff.sh',
       'nars.sh',
       'nested-sandboxing.sh',
       'nix-build.sh',

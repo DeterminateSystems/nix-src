@@ -254,6 +254,8 @@ scope: {
 
   wasmtime = pkgs.callPackage ./wasmtime.nix { };
 
+  hdiffpatch = pkgs.callPackage ./hdiffpatch.nix { };
+
   sentry-native = (pkgs.callPackage ./sentry-native.nix { }).override {
     # Avoid having two curls in our closure.
     inherit (scope) curl;
