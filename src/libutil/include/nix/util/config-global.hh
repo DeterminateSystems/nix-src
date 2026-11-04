@@ -34,4 +34,24 @@ public:
 
 extern GlobalConfig globalConfig;
 
+struct Sink;
+struct Source;
+
+/**
+ * Serialise the settings of all registered `Config`s, e.g. to pass
+ * them to a child process.
+ */
+void writeGlobalSettings(Sink & sink);
+
+/**
+ * Read settings written by `writeGlobalSettings()` and apply them.
+ * Only those that differ from ours are applied: the rest are
+ * presumably defaults (or set by the same configuration files), and
+ * setting a deprecated setting warns even if it's to its default.
+ * (Note that the sender can't just send its overridden settings:
+ * things like `--store` set the setting without marking it as
+ * overridden.)
+ */
+void applyGlobalSettings(Source & source);
+
 } // namespace nix

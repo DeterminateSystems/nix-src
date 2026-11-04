@@ -11,6 +11,8 @@
 #include "nix/store/build/goal.hh"
 #include "nix/store/build/build-log.hh"
 
+#include <future>
+
 namespace nix {
 
 using std::map;
@@ -67,6 +69,14 @@ private:
     const BuildMode buildMode;
 
     std::unique_ptr<MaintainCount<uint64_t>> mcRunningBuilds;
+
+    /**
+     * The result of `DerivationBuilder::startBuild()`, which runs on a
+     * builder start thread. Since that thread uses the builder, which
+     * lives in the coroutine frame, we have to wait for it before the
+     * frame is destroyed.
+     */
+    std::future<std::optional<Descriptor>> pendingBuilderStart;
 
     std::string key() override;
 

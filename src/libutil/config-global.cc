@@ -1,4 +1,5 @@
 #include "nix/util/config-global.hh"
+#include "nix/util/serialise.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -69,5 +70,26 @@ GlobalConfig::Register::Register(Config * config)
 ExperimentalFeatureSettings experimentalFeatureSettings;
 
 static GlobalConfig::Register rSettings(&experimentalFeatureSettings);
+
+void writeGlobalSettings(Sink & sink)
+{
+    std::map<std::string, Config::SettingInfo> settings;
+    globalConfig.getSettings(settings);
+    for (auto & setting : settings)
+        sink << 1 << setting.first << setting.second.value;
+    sink << 0;
+}
+
+void applyGlobalSettings(Source & source)
+{
+    std::map<std::string, Config::SettingInfo> ourSettings;
+    globalConfig.getSettings(ourSettings);
+    while (readInt(source)) {
+        auto name = readString(source);
+        auto value = readString(source);
+        if (auto i = ourSettings.find(name); i == ourSettings.end() || i->second.value != value)
+            globalConfig.set(name, value);
+    }
+}
 
 } // namespace nix

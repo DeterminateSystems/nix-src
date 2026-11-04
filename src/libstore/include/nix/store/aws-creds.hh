@@ -22,16 +22,6 @@ struct AwsCredentials
     std::string accessKeyId;
     std::string secretAccessKey;
     std::optional<std::string> sessionToken;
-
-    AwsCredentials(
-        const std::string & accessKeyId,
-        const std::string & secretAccessKey,
-        const std::optional<std::string> & sessionToken = std::nullopt)
-        : accessKeyId(accessKeyId)
-        , secretAccessKey(secretAccessKey)
-        , sessionToken(sessionToken)
-    {
-    }
 };
 
 class AwsAuthError final : public CloneableError<AwsAuthError, Error>
