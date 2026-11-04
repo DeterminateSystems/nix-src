@@ -263,44 +263,6 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 
 <!-- Determinate Nix version 3.24.2 -->
 
-* libstore-tests: Fix flaky StorePath property test by @edolstra in [DeterminateSystems/nix-src#734](https://github.com/DeterminateSystems/nix-src/pull/734)
+* The cache of unpacked tarballs is a SQLite database (`~/.cache/nix/tarball-cache-detsys-v1.sqlite`) rather than a bare Git repository, which makes imports faster and more reliable under concurrency. [DeterminateSystems/nix-src#646](https://github.com/DeterminateSystems/nix-src/pull/646)
 
-* flake_regressions: Combine globs into fewer, longer jobs by @edolstra in [DeterminateSystems/nix-src#735](https://github.com/DeterminateSystems/nix-src/pull/735)
-
-* nix top: Show %CPU for builds/processes that are new since the last update by @edolstra in [DeterminateSystems/nix-src#736](https://github.com/DeterminateSystems/nix-src/pull/736)
-
-* LocalStore: Throw an error if ca-derivations is enabled after opening by @edolstra in [DeterminateSystems/nix-src#733](https://github.com/DeterminateSystems/nix-src/pull/733)
-
-* libstore-tests: Align the flaky StorePath test fix with upstream by @edolstra in [DeterminateSystems/nix-src#737](https://github.com/DeterminateSystems/nix-src/pull/737)
-
-* Create the builder directly in its cgroup by @edolstra in [DeterminateSystems/nix-src#738](https://github.com/DeterminateSystems/nix-src/pull/738)
-
-* packaging/nix-make: Support aarch64-linux and aarch64-darwin by @lucperkins in [DeterminateSystems/nix-src#740](https://github.com/DeterminateSystems/nix-src/pull/740)
-
-* Don't print current activities when interrupted by @edolstra in [DeterminateSystems/nix-src#744](https://github.com/DeterminateSystems/nix-src/pull/744)
-
-* Fix narrowing error in doCloneIntoCgroup() by @edolstra in [DeterminateSystems/nix-src#743](https://github.com/DeterminateSystems/nix-src/pull/743)
-
-* Don't start the build activity before the build has started by @edolstra in [DeterminateSystems/nix-src#745](https://github.com/DeterminateSystems/nix-src/pull/745)
-
-* GitHub Actions pinning by @lucperkins in [DeterminateSystems/nix-src#475](https://github.com/DeterminateSystems/nix-src/pull/475)
-
-* Use reentrant user/group database lookups by @edolstra in [DeterminateSystems/nix-src#741](https://github.com/DeterminateSystems/nix-src/pull/741)
-
-* Pin GitHub Actions and audit workflows with zizmor by @lucperkins in [DeterminateSystems/nix-src#746](https://github.com/DeterminateSystems/nix-src/pull/746)
-
-* Fix crash in restricted store queryRealisationUncached by @edolstra in [DeterminateSystems/nix-src#748](https://github.com/DeterminateSystems/nix-src/pull/748)
-
-* LegacySSHStore: Don't throw from queryRealisationUncached() by @edolstra in [DeterminateSystems/nix-src#747](https://github.com/DeterminateSystems/nix-src/pull/747)
-
-* Replace the Git-based tarball cache by a SQLite database by @edolstra in [DeterminateSystems/nix-src#646](https://github.com/DeterminateSystems/nix-src/pull/646)
-
-* Fix the abort when renaming a path into the store returns EXDEV by @edolstra in [DeterminateSystems/nix-src#751](https://github.com/DeterminateSystems/nix-src/pull/751)
-
-* Shrink the stack frames of hot evaluator functions by @edolstra in [DeterminateSystems/nix-src#752](https://github.com/DeterminateSystems/nix-src/pull/752)
-
-* libutil: Use libproc for closing leaked FDs in closeExtraFDs by @edolstra in [DeterminateSystems/nix-src#753](https://github.com/DeterminateSystems/nix-src/pull/753)
-
-* DirectoryIterator: Don't ignore errors while reading a directory by @edolstra in [DeterminateSystems/nix-src#754](https://github.com/DeterminateSystems/nix-src/pull/754)
-
-* Fix missing and oversized crash dumps for stack overflows by @edolstra in [DeterminateSystems/nix-src#755](https://github.com/DeterminateSystems/nix-src/pull/755)
+* The evaluator uses much less stack space, so deeply recursive Nix expressions can go roughly twice as deep before overflowing the stack. [DeterminateSystems/nix-src#752](https://github.com/DeterminateSystems/nix-src/pull/752)
