@@ -1,0 +1,912 @@
+#include <boost/unordered/unordered_flat_set.hpp>
+#include <nlohmann/json.hpp>
+#include <assert.h>
+#include <boost/unordered/unordered_flat_set_fwd.hpp>
+#include <nlohmann/detail/iterators/iter_impl.hpp>
+#include <nlohmann/detail/iterators/iteration_proxy.hpp>
+#include <nlohmann/json_fwd.hpp>
+#include <algorithm>
+#include <iomanip>
+#include <iterator>
+#include <ctime>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "nix/fetchers/fetch-settings.hh"
+#include "nix/flake/flake.hh"
+#include "flake-impl.hh"
+#include "nix/util/sync.hh"
+#include "nix/flake/settings.hh"
+#include "nix/expr/eval.hh"
+#include "nix/expr/nixexpr.hh"
+#include "nix/store/store-api.hh"
+#include "nix/fetchers/input-cache.hh"
+#include "nix/util/finally.hh"
+#include "nix/util/canon-path.hh"
+#include "nix/util/strings.hh"
+#include "nix/fetchers/attrs.hh"
+#include "nix/fetchers/fetchers.hh"
+#include "nix/flake/flakeref.hh"
+#include "nix/store/path.hh"
+#include "nix/util/ansicolor.hh"
+#include "nix/util/error.hh"
+#include "nix/util/fmt.hh"
+#include "nix/util/json-utils.hh"
+#include "nix/util/logging.hh"
+#include "nix/util/ref.hh"
+#include "nix/util/types.hh"
+#include "nix/util/util.hh"
+
+namespace nix {
+class Store;
+} // namespace nix
+
+namespace nix::flake {
+
+static FlakeRef
+getFlakeRef(const fetchers::Settings & fetchSettings, const nlohmann::json & json, const char * attr, const char * info)
+{
+    auto i = json.find(attr);
+    if (i != json.end()) {
+        auto attrs = fetchers::jsonToAttrs(*i);
+        // FIXME: remove when we drop support for version 5.
+        if (info) {
+            auto j = json.find(info);
+            if (j != json.end()) {
+                for (auto k : fetchers::jsonToAttrs(*j))
+                    attrs.insert_or_assign(k.first, k.second);
+            }
+        }
+        return FlakeRef::fromAttrs(fetchSettings, attrs);
+    }
+
+    throw Error("attribute '%s' missing in lock file", attr);
+}
+
+struct LockedNode;
+
+/**
+ * A node in the lock file. It has outgoing edges to other nodes (its
+ * inputs). Only the root node has this type; all other nodes have
+ * type LockedNode.
+ */
+struct Node : std::enable_shared_from_this<Node>
+{
+    typedef std::variant<ref<LockedNode>, InputAttrPath> Edge;
+
+    std::map<FlakeId, Edge> inputs;
+
+    virtual ~Node() {}
+};
+
+/**
+ * A non-root node in the lock file.
+ */
+struct LockedNode : Node
+{
+    FlakeRef lockedRef, originalRef;
+    bool isFlake = true;
+    bool buildTime = false;
+    std::optional<InputAttrPath> parentInputAttrPath;
+
+    /**
+     * The source path of this node, if it has been fetched. Set by
+     * `lockFlakeV7()` for nodes fetched during locking, and by
+     * `LockedFlakeV7::getSourcePath()` for nodes fetched on
+     * demand.
+     */
+    mutable Sync<std::optional<SourcePath>> sourcePath;
+
+    LockedNode(
+        const FlakeRef & lockedRef,
+        const FlakeRef & originalRef,
+        bool isFlake = true,
+        bool buildTime = false,
+        std::optional<InputAttrPath> parentInputAttrPath = {})
+        : lockedRef(std::move(lockedRef))
+        , originalRef(std::move(originalRef))
+        , isFlake(isFlake)
+        , buildTime(buildTime)
+        , parentInputAttrPath(std::move(parentInputAttrPath))
+    {
+    }
+
+    LockedNode(const fetchers::Settings & fetchSettings, const nlohmann::json & json)
+        : lockedRef(getFlakeRef(fetchSettings, json, "locked", "info")) // FIXME: remove "info"
+        , originalRef(getFlakeRef(fetchSettings, json, "original", nullptr))
+        , isFlake(json.find("flake") != json.end() ? (bool) json["flake"] : true)
+        , buildTime(json.find("buildTime") != json.end() ? (bool) json["buildTime"] : false)
+        , parentInputAttrPath(
+              json.find("parent") != json.end() ? (std::optional<InputAttrPath>) json["parent"] : std::nullopt)
+    {
+        if (!lockedRef.input.isLocked(fetchSettings) && !lockedRef.input.isRelative()) {
+            if (lockedRef.input.getNarHash())
+                warn(
+                    "Lock file entry '%s' is unlocked (e.g. lacks a Git revision) but is checked by NAR hash. "
+                    "This is not reproducible and will break after garbage collection or when shared.",
+                    lockedRef.to_string());
+            else
+                throw Error(
+                    "Lock file contains unlocked input '%s'. Use '--allow-dirty-locks' to accept this lock file.",
+                    fetchers::attrsToJSON(lockedRef.input.toAttrs()));
+        }
+
+        // For backward compatibility, lock file entries are implicitly final.
+        assert(!lockedRef.input.attrs.contains("__final"));
+        lockedRef.input.attrs.insert_or_assign("__final", Explicit<bool>(true));
+    }
+};
+
+/**
+ * The old graph-based lock file format (versions 5-7).
+ */
+struct LockFileV7
+{
+    ref<Node> root = make_ref<Node>();
+
+    /**
+     * The version of the lock file this was parsed from (5-7), or 7
+     * for new lock files.
+     */
+    unsigned int version = 7;
+
+    LockFileV7() {};
+
+    LockFileV7(const fetchers::Settings & fetchSettings, const nlohmann::json & json, std::string_view path)
+    {
+        auto version = json.value("version", 0);
+        if (version < 5 || version > 7)
+            throw Error("lock file '%s' has unsupported version %d", path, version);
+
+        this->version = version;
+
+        std::string rootKey = json["root"];
+        std::map<std::string, ref<Node>> nodeMap{{rootKey, root}};
+
+        [&](this const auto & getInputs, Node & node, const nlohmann::json & jsonNode) {
+            if (jsonNode.find("inputs") == jsonNode.end())
+                return;
+            for (auto & i : jsonNode["inputs"].items()) {
+                if (i.value().is_array()) { // FIXME: remove, obsolete
+                    InputAttrPath path;
+                    for (auto & j : i.value())
+                        path.push_back(j);
+                    node.inputs.insert_or_assign(i.key(), path);
+                } else {
+                    std::string inputKey = i.value();
+                    auto k = nodeMap.find(inputKey);
+                    if (k == nodeMap.end()) {
+                        auto & nodes = json["nodes"];
+                        auto jsonNode2 = nodes.find(inputKey);
+                        if (jsonNode2 == nodes.end())
+                            throw Error("lock file references missing node '%s'", inputKey);
+                        auto input = make_ref<LockedNode>(fetchSettings, *jsonNode2);
+                        k = nodeMap.insert_or_assign(inputKey, input).first;
+                        getInputs(*input, *jsonNode2);
+                    }
+                    if (auto child = k->second.dynamic_pointer_cast<LockedNode>())
+                        node.inputs.insert_or_assign(i.key(), ref(child));
+                    else
+                        // FIXME: replace by follows node
+                        throw Error("lock file contains cycle to root node");
+                }
+            }
+        }(*root, json["nodes"][rootKey]);
+
+        // FIXME: check that there are no cycles in version >= 7. Cycles
+        // between inputs are only possible using 'follows' indirections.
+        // Once we drop support for version <= 6, we can simplify the code
+        // a bit since we don't need to worry about cycles.
+    }
+
+    nlohmann::json toJSON() const
+    {
+        nlohmann::json nodes;
+        std::map<ref<const Node>, std::string> nodeKeys;
+        boost::unordered_flat_set<std::string> keys;
+
+        auto dumpNode = [&](this auto & dumpNode, std::string key, ref<const Node> node) -> std::string {
+            auto k = nodeKeys.find(node);
+            if (k != nodeKeys.end())
+                return k->second;
+
+            if (!keys.insert(key).second) {
+                for (int n = 2;; ++n) {
+                    auto k = fmt("%s_%d", key, n);
+                    if (keys.insert(k).second) {
+                        key = k;
+                        break;
+                    }
+                }
+            }
+
+            nodeKeys.insert_or_assign(node, key);
+
+            auto n = nlohmann::json::object();
+
+            if (!node->inputs.empty()) {
+                auto inputs = nlohmann::json::object();
+                for (auto & i : node->inputs) {
+                    if (auto child = std::get_if<0>(&i.second)) {
+                        inputs[i.first] = dumpNode(i.first, *child);
+                    } else if (auto follows = std::get_if<1>(&i.second)) {
+                        auto arr = nlohmann::json::array();
+                        for (auto & x : *follows)
+                            arr.push_back(x);
+                        inputs[i.first] = std::move(arr);
+                    }
+                }
+                n["inputs"] = std::move(inputs);
+            }
+
+            if (auto lockedNode = node.dynamic_pointer_cast<const LockedNode>()) {
+                n["original"] = fetchers::attrsToJSON(lockedNode->originalRef.toAttrs());
+                n["locked"] = fetchers::attrsToJSON(lockedNode->lockedRef.toAttrs());
+                assert(lockedNode->lockedRef.input.isFinal() || lockedNode->lockedRef.input.isRelative());
+                if (!lockedNode->isFlake)
+                    n["flake"] = false;
+                if (lockedNode->buildTime)
+                    n["buildTime"] = true;
+                if (lockedNode->parentInputAttrPath)
+                    n["parent"] = *lockedNode->parentInputAttrPath;
+            }
+
+            nodes[key] = std::move(n);
+
+            return key;
+        };
+
+        nlohmann::json json;
+        json["version"] = 7;
+        json["root"] = dumpNode("root", root);
+        json["nodes"] = std::move(nodes);
+
+        return json;
+    }
+
+    /**
+     * Check whether this lock file has any unlocked or non-final
+     * inputs. If so, return one.
+     */
+    std::optional<FlakeRef> isUnlocked(const fetchers::Settings & fetchSettings) const
+    {
+        std::set<ref<const Node>> nodes;
+
+        [&](this const auto & visit, ref<const Node> node) {
+            if (!nodes.insert(node).second)
+                return;
+            for (auto & i : node->inputs)
+                if (auto child = std::get_if<0>(&i.second))
+                    visit(*child);
+        }(root);
+
+        /* Return whether the input is either locked, or, if
+           `allow-dirty-locks` is enabled, it has a NAR hash. In the
+           latter case, we can verify the input but we may not be able to
+           fetch it from anywhere. */
+        auto isConsideredLocked = [&](const fetchers::Input & input) {
+            return input.isLocked(fetchSettings) || (fetchSettings.allowDirtyLocks && input.getNarHash());
+        };
+
+        for (auto & i : nodes) {
+            if (i == ref<const Node>(root))
+                continue;
+            auto node = i.dynamic_pointer_cast<const LockedNode>();
+            if (node && (!isConsideredLocked(node->lockedRef.input) || !node->lockedRef.input.isFinal())
+                && !node->lockedRef.input.isRelative())
+                return node->lockedRef;
+        }
+
+        return {};
+    }
+
+    bool operator==(const LockFileV7 & other) const
+    {
+        // FIXME: slow
+        return toJSON() == other.toJSON();
+    }
+
+    /**
+     * Return the node denoted by `path`, which must be fully
+     * resolved: an error is thrown if it passes through a 'follows'
+     * edge. Returns null if the input doesn't exist.
+     */
+    std::shared_ptr<Node> findInput(const InputAttrPath & path) const
+    {
+        std::shared_ptr<Node> pos = root.get_ptr();
+
+        for (const auto & [n, elem] : enumerate(path)) {
+            auto i = get(pos->inputs, elem);
+            if (!i)
+                return nullptr;
+            if (auto node = std::get_if<0>(&*i))
+                pos = node->get_ptr();
+            else
+                throw Error(
+                    "input attribute path '%s' contains unresolved 'follows' input '%s'",
+                    printInputAttrPath(path),
+                    printInputAttrPath({path.begin(), path.begin() + n + 1}));
+        }
+
+        return pos;
+    }
+
+    std::map<InputAttrPath, Node::Edge> getAllInputs() const
+    {
+        std::set<ref<Node>> done;
+        std::map<InputAttrPath, Node::Edge> res;
+
+        [&](this const auto & recurse, const InputAttrPath & prefix, ref<Node> node) {
+            if (!done.insert(node).second)
+                return;
+
+            for (auto & [id, input] : node->inputs) {
+                auto inputAttrPath(prefix);
+                inputAttrPath.push_back(id);
+                res.emplace(inputAttrPath, input);
+                if (auto child = std::get_if<0>(&input))
+                    recurse(inputAttrPath, *child);
+            }
+        }({}, root);
+
+        return res;
+    }
+};
+
+struct LockedFlakeV7 : LockedFlake
+{
+    /**
+     * The lock file in the old graph-based format (versions 5-7).
+     */
+    LockFileV7 lockFile;
+
+    LockedFlakeV7(Flake && flake, LockFileV7 && lockFile)
+        : LockedFlake(std::move(flake))
+        , lockFile(std::move(lockFile))
+    {
+    }
+
+    /**
+     * Construct from the JSON contents of a lock file (which must be
+     * null if the lock file doesn't exist).
+     */
+    LockedFlakeV7(
+        const fetchers::Settings & fetchSettings, Flake flake, const nlohmann::json & json, std::string_view path)
+        : LockedFlake(std::move(flake))
+        , lockFile(json.is_null() ? LockFileV7() : LockFileV7(fetchSettings, json, path))
+    {
+    }
+
+    std::map<FlakeId, std::optional<InputAttrPath>>
+    getInputTargets(EvalState & state, const InputAttrPath & prefix) const override
+    {
+        auto node = lockFile.findInput(prefix);
+        if (!node)
+            throw Error("flake input '%s' does not exist", printInputAttrPath(prefix));
+
+        std::map<FlakeId, std::optional<InputAttrPath>> res;
+
+        for (auto & [id, input] : node->inputs) {
+            if (std::get_if<0>(&input))
+                res.emplace(id, std::nullopt);
+            else
+                res.emplace(id, std::get<1>(input));
+        }
+
+        return res;
+    }
+
+    std::optional<InputInfo> findInput(EvalState & state, const InputAttrPath & path) const override
+    {
+        if (auto node = std::dynamic_pointer_cast<const LockedNode>(lockFile.findInput(path)))
+            return InputInfo{
+                .lockedRef = node->lockedRef,
+                .isFlake = node->isFlake,
+                .buildTime = node->buildTime,
+                .parentInputAttrPath = node->parentInputAttrPath,
+            };
+        return std::nullopt;
+    }
+
+    SourcePath getSourcePath(EvalState & state, const InputAttrPath & inputAttrPath) const override
+    {
+        /* The root node. */
+        if (inputAttrPath.empty())
+            return flake.path.parent();
+
+        auto node = lockFile.findInput(inputAttrPath);
+        if (!node)
+            throw Error("flake input '%s' does not exist", printInputAttrPath(inputAttrPath));
+
+        auto lockedNode = std::dynamic_pointer_cast<LockedNode>(node);
+        assert(lockedNode);
+
+        {
+            auto sourcePath(lockedNode->sourcePath.lock());
+            if (*sourcePath)
+                return **sourcePath;
+        }
+
+        /* Note: we fetch without holding the `sourcePath` lock, so
+           concurrent calls don't get serialized. Racing fetches of the
+           same node are harmless since they produce the same path. */
+        auto path = [&]() -> SourcePath {
+            if (auto relativePath = lockedNode->lockedRef.input.isRelative()) {
+                /* Resolve relative path inputs against the source path of
+                   their parent flake. */
+                auto parentPath = getSourcePath(state, lockedNode->parentInputAttrPath.value());
+                return {parentPath.accessor, CanonPath(relativePath->string(), parentPath.path)};
+            } else {
+                /* Note: `lockedRef` is a copy since `mountInput()` may
+                   modify the input (e.g. adding a `narHash` attribute). */
+                auto lockedRef = lockedNode->lockedRef;
+                auto accessor =
+                    state.inputCache
+                        ->getAccessor(state.fetchSettings, *state.store, lockedRef.input, fetchers::UseRegistries::No)
+                        .accessor;
+                return state.storePath(
+                           state.mountInput(lockedRef.input, lockedNode->lockedRef.input, accessor, true, true))
+                       / CanonPath(lockedRef.subdir);
+            }
+        }();
+
+        *lockedNode->sourcePath.lock() = path;
+
+        return path;
+    }
+
+    std::optional<FlakeRef> isUnlocked(const fetchers::Settings & fetchSettings) const override
+    {
+        return lockFile.isUnlocked(fetchSettings);
+    }
+
+    unsigned int version() const override
+    {
+        return lockFile.version;
+    }
+
+    std::map<InputAttrPath, LockEntry> getAllLockEntries(bool fetchTransitive) const override
+    {
+        /* Note: `fetchTransitive` is irrelevant, since a version 7
+           lock file already contains all transitive locks. */
+        std::map<InputAttrPath, LockEntry> res;
+
+        for (auto & [path, edge] : lockFile.getAllInputs()) {
+            if (auto node = std::get_if<0>(&edge))
+                res.emplace(path, (*node)->lockedRef);
+            else
+                res.emplace(path, std::get<1>(edge));
+        }
+
+        return res;
+    }
+
+    nlohmann::json toJSON() const override
+    {
+        return lockFile.toJSON();
+    }
+};
+
+static LockFileV7 readLockFile(const fetchers::Settings & fetchSettings, const SourcePath & lockFilePath)
+{
+    if (!lockFilePath.pathExists())
+        return LockFileV7();
+
+    auto json = [&] {
+        try {
+            return nlohmann::json::parse(lockFilePath.readFile());
+        } catch (const nlohmann::json::parse_error & e) {
+            throw Error("Could not parse '%s': %s", lockFilePath, e.what());
+        }
+    }();
+
+    return LockFileV7(fetchSettings, json, fmt("%s", lockFilePath));
+}
+
+std::unique_ptr<LockedFlake> parseLockFileV7(
+    const fetchers::Settings & fetchSettings, Flake flake, const nlohmann::json & json, std::string_view path)
+{
+    return std::make_unique<LockedFlakeV7>(fetchSettings, std::move(flake), json, path);
+}
+
+LockFlakeResult lockFlakeV7(
+    const Settings & settings,
+    EvalState & state,
+    const LockFlags & lockFlags,
+    Flake flake,
+    const LockedFlake & _oldLockFile)
+{
+    /* If the old lock file is not a version 7 lock file (e.g. when
+       migrating from version 8), ignore it. */
+    auto oldLockedFlake = dynamic_cast<const LockedFlakeV7 *>(&_oldLockFile);
+    LockFileV7 emptyLockFile;
+    auto & oldLockFile = oldLockedFlake ? oldLockedFlake->lockFile : emptyLockFile;
+
+    auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
+    auto useRegistriesInputs = useRegistries ? fetchers::UseRegistries::Limited : fetchers::UseRegistries::No;
+
+    struct OverrideTarget
+    {
+        FlakeInput input;
+        SourcePath sourcePath;
+        std::optional<InputAttrPath> parentInputAttrPath; // FIXME: rename to inputAttrPathPrefix?
+    };
+
+    std::map<NonEmptyInputAttrPath, OverrideTarget> overrides;
+    std::set<NonEmptyInputAttrPath> explicitCliOverrides;
+    std::set<NonEmptyInputAttrPath> overridesUsed;
+    std::set<InputAttrPath> updatesUsed;
+
+    for (auto & i : lockFlags.inputOverrides) {
+        overrides.emplace(
+            i.first,
+            OverrideTarget{
+                .input = FlakeInput{.ref = i.second},
+                /* Note: any relative overrides
+                   (e.g. `--override-input B/C "path:./foo/bar"`)
+                   are interpreted relative to the top-level
+                   flake. */
+                .sourcePath = flake.path,
+            });
+        explicitCliOverrides.insert(i.first);
+    }
+
+    LockFileV7 newLockFile;
+
+    std::vector<FlakeRef> parents;
+
+    std::function<void(
+        const FlakeInputs & flakeInputs,
+        ref<Node> node,
+        const InputAttrPath & inputAttrPathPrefix,
+        std::shared_ptr<const Node> oldNode,
+        const InputAttrPath & followsPrefix,
+        const SourcePath & sourcePath,
+        bool trustLock)>
+        computeLocks;
+
+    computeLocks = [&](
+                       /* The inputs of this node, either from flake.nix or
+                          flake.lock. */
+                       const FlakeInputs & flakeInputs,
+                       /* The node whose locks are to be updated.*/
+                       ref<Node> node,
+                       /* The path to this node in the lock file graph. */
+                       const InputAttrPath & inputAttrPathPrefix,
+                       /* The old node, if any, from which locks can be
+                          copied. */
+                       std::shared_ptr<const Node> oldNode,
+                       /* The prefix relative to which 'follows' should be
+                          interpreted. When a node is initially locked, it's
+                          relative to the node's flake; when it's already locked,
+                          it's relative to the root of the lock file. */
+                       const InputAttrPath & followsPrefix,
+                       /* The source path of this node's flake. */
+                       const SourcePath & sourcePath,
+                       bool trustLock) {
+        debug("computing lock file node '%s'", printInputAttrPath(inputAttrPathPrefix));
+
+        /* Get the overrides (i.e. attributes of the form
+           'inputs.nixops.inputs.nixpkgs.url = ...'). */
+        auto addOverrides =
+            [&](this const auto & addOverrides, const FlakeInput & input, const InputAttrPath & prefix) -> void {
+            for (auto & [idOverride, inputOverride] : input.overrides) {
+                auto inputAttrPath = NonEmptyInputAttrPath::append(prefix, idOverride);
+                if (inputOverride.ref || inputOverride.follows)
+                    overrides.emplace(
+                        inputAttrPath,
+                        OverrideTarget{
+                            .input = inputOverride,
+                            .sourcePath = sourcePath,
+                            .parentInputAttrPath = inputAttrPathPrefix});
+                addOverrides(inputOverride, inputAttrPath);
+            }
+        };
+
+        for (auto & [id, input] : flakeInputs) {
+            auto inputAttrPath(inputAttrPathPrefix);
+            inputAttrPath.push_back(id);
+            addOverrides(input, inputAttrPath);
+        }
+
+        /* Check whether this input has overrides for a
+           non-existent input. */
+        for (auto [inputAttrPath, inputOverride] : overrides) {
+            auto follow = inputAttrPath.inputName();
+            auto inputAttrPath2 = inputAttrPath.parent();
+            if (inputAttrPath2 == inputAttrPathPrefix && !flakeInputs.count(follow))
+                warn(
+                    "input '%s' has an override for a non-existent input '%s'",
+                    printInputAttrPath(inputAttrPathPrefix),
+                    follow);
+        }
+
+        /* Go over the flake inputs, resolve/fetch them if
+           necessary (i.e. if they're new or the flakeref changed
+           from what's in the lock file). */
+        for (auto & [id, input2] : flakeInputs) {
+            auto nonEmptyInputAttrPath = NonEmptyInputAttrPath::append(inputAttrPathPrefix, id);
+            auto inputAttrPath = nonEmptyInputAttrPath.get();
+            auto inputAttrPathS = printInputAttrPath(inputAttrPath);
+            debug("computing input '%s'", inputAttrPathS);
+
+            try {
+
+                /* Do we have an override for this input from one of the
+                   ancestors? */
+                auto i = overrides.find(nonEmptyInputAttrPath);
+                bool hasOverride = i != overrides.end();
+                bool hasCliOverride = explicitCliOverrides.contains(nonEmptyInputAttrPath);
+                if (hasOverride)
+                    overridesUsed.insert(nonEmptyInputAttrPath);
+                auto input = hasOverride ? i->second.input : input2;
+
+                /* Resolve relative 'path:' inputs relative to
+                   the source path of the overrider. */
+                auto overriddenSourcePath = hasOverride ? i->second.sourcePath : sourcePath;
+
+                /* Respect the "flakeness" of the input even if we
+                   override it. */
+                if (hasOverride)
+                    input.isFlake = input2.isFlake;
+
+                /* Resolve 'follows' later (since it may refer to an input
+                   path we haven't processed yet. */
+                if (input.follows) {
+                    InputAttrPath target;
+
+                    target.insert(target.end(), input.follows->begin(), input.follows->end());
+
+                    debug("input '%s' follows '%s'", inputAttrPathS, printInputAttrPath(target));
+                    node->inputs.insert_or_assign(id, target);
+                    continue;
+                }
+
+                if (!input.ref)
+                    input.ref =
+                        FlakeRef::fromAttrs(state.fetchSettings, {{"type", "indirect"}, {"id", std::string(id)}});
+
+                auto overriddenParentPath = input.ref->input.isRelative()
+                                                ? std::optional<InputAttrPath>(
+                                                      hasOverride ? i->second.parentInputAttrPath : inputAttrPathPrefix)
+                                                : std::nullopt;
+
+                auto resolveRelativePath = [&]() -> std::optional<SourcePath> {
+                    if (auto relativePath = input.ref->input.isRelative()) {
+                        return SourcePath{
+                            overriddenSourcePath.accessor,
+                            CanonPath(relativePath->string(), overriddenSourcePath.path.parent().value())};
+                    } else
+                        return std::nullopt;
+                };
+
+                /* Get the input flake, resolve 'path:./...'
+                   flakerefs relative to the parent flake. */
+                auto getInputFlake = [&](const FlakeRef & ref, const fetchers::UseRegistries useRegistries) {
+                    if (auto resolvedPath = resolveRelativePath()) {
+                        return readFlake(state, ref, ref, ref, *resolvedPath, inputAttrPath);
+                    } else {
+                        return getFlake(state, ref, useRegistriesInputs, inputAttrPath, true);
+                    }
+                };
+
+                /* Do we have an entry in the existing lock file?
+                   And the input is not in updateInputs? */
+                std::shared_ptr<LockedNode> oldLock;
+
+                updatesUsed.insert(inputAttrPath);
+
+                if (oldNode && !(lockFlags.inputUpdates && lockFlags.inputUpdates->count(nonEmptyInputAttrPath)))
+                    if (auto oldLock2 = get(oldNode->inputs, id))
+                        if (auto oldLock3 = std::get_if<0>(&*oldLock2))
+                            oldLock = *oldLock3;
+
+                if (oldLock && oldLock->originalRef.canonicalize() == input.ref->canonicalize()
+                    && oldLock->parentInputAttrPath == overriddenParentPath && !hasCliOverride) {
+                    debug("keeping existing input '%s'", inputAttrPathS);
+
+                    /* Copy the input from the old lock since its flakeref
+                       didn't change and there is no override from a
+                       higher level flake. */
+                    auto childNode = make_ref<LockedNode>(
+                        oldLock->lockedRef,
+                        oldLock->originalRef,
+                        oldLock->isFlake,
+                        oldLock->buildTime,
+                        oldLock->parentInputAttrPath);
+
+                    node->inputs.insert_or_assign(id, childNode);
+
+                    /* If we have this input in updateInputs, then we
+                       must fetch the flake to update it. */
+                    auto mustRefetch = false;
+
+                    if (lockFlags.inputUpdates) {
+                        auto lb = lockFlags.inputUpdates->lower_bound(nonEmptyInputAttrPath);
+
+                        mustRefetch = lb != lockFlags.inputUpdates->end() && lb->get().size() > inputAttrPath.size()
+                                      && std::equal(inputAttrPath.begin(), inputAttrPath.end(), lb->get().begin());
+                    }
+
+                    FlakeInputs fakeInputs;
+
+                    if (!mustRefetch) {
+                        /* No need to fetch this flake, we can be
+                           lazy. However there may be new overrides on the
+                           inputs of this flake, so we need to check
+                           those. */
+                        for (auto & i : oldLock->inputs) {
+                            if (auto lockedNode = std::get_if<0>(&i.second)) {
+                                fakeInputs.emplace(
+                                    i.first,
+                                    FlakeInput{
+                                        .ref = (*lockedNode)->originalRef,
+                                        .isFlake = (*lockedNode)->isFlake,
+                                    });
+                            } else if (auto follows = std::get_if<1>(&i.second)) {
+                                if (!trustLock) {
+                                    // It is possible that the flake has changed,
+                                    // so we must confirm all the follows that are in the lock file are also in the
+                                    // flake.
+                                    auto overridePath = NonEmptyInputAttrPath::append(nonEmptyInputAttrPath, i.first);
+                                    auto o = overrides.find(overridePath);
+                                    // If the override disappeared, we have to refetch the flake,
+                                    // since some of the inputs may not be present in the lock file.
+                                    if (o == overrides.end()) {
+                                        mustRefetch = true;
+                                        // There's no point populating the rest of the fake inputs,
+                                        // since we'll refetch the flake anyways.
+                                        break;
+                                    }
+                                }
+                                auto absoluteFollows(followsPrefix);
+                                absoluteFollows.insert(absoluteFollows.end(), follows->begin(), follows->end());
+                                fakeInputs.emplace(
+                                    i.first,
+                                    FlakeInput{
+                                        .follows = absoluteFollows,
+                                    });
+                            }
+                        }
+                    }
+
+                    if (mustRefetch) {
+                        auto inputFlake = getInputFlake(oldLock->lockedRef, useRegistriesInputs);
+                        *childNode->sourcePath.lock() = inputFlake.path.parent();
+                        computeLocks(
+                            inputFlake.inputs,
+                            childNode,
+                            inputAttrPath,
+                            oldLock,
+                            followsPrefix,
+                            inputFlake.path,
+                            false);
+                    } else {
+                        computeLocks(fakeInputs, childNode, inputAttrPath, oldLock, followsPrefix, sourcePath, true);
+                    }
+
+                } else {
+                    /* We need to create a new lock file entry. So fetch
+                       this input. */
+                    debug("creating new input '%s'", inputAttrPathS);
+
+                    if (!lockFlags.allowUnlocked && !input.ref->input.isLocked(state.fetchSettings)
+                        && !input.ref->input.isRelative())
+                        throw Error("cannot update unlocked flake input '%s' in pure mode", inputAttrPathS);
+
+                    /* Note: in case of an --override-input, we use
+                        the *original* ref (input2.ref) for the
+                        "original" field, rather than the
+                        override. This ensures that the override isn't
+                        nuked the next time we update the lock
+                        file. That is, overrides are sticky unless you
+                        use --no-write-lock-file. */
+                    auto inputIsOverride = explicitCliOverrides.contains(nonEmptyInputAttrPath);
+                    auto ref = (input2.ref && inputIsOverride) ? *input2.ref : *input.ref;
+
+                    if (input.isFlake) {
+                        auto inputFlake = getInputFlake(
+                            *input.ref, inputIsOverride ? fetchers::UseRegistries::All : useRegistriesInputs);
+
+                        auto childNode = make_ref<LockedNode>(
+                            inputFlake.lockedRef, ref, true, input.buildTime, overriddenParentPath);
+
+                        node->inputs.insert_or_assign(id, childNode);
+
+                        /* Guard against circular flake imports. */
+                        for (auto & parent : parents)
+                            if (parent == *input.ref)
+                                throw Error("found circular import of flake '%s'", parent);
+                        parents.push_back(*input.ref);
+                        Finally cleanup([&]() { parents.pop_back(); });
+
+                        /* Recursively process the inputs of this
+                           flake, using its own lock file. */
+                        *childNode->sourcePath.lock() = inputFlake.path.parent();
+                        computeLocks(
+                            inputFlake.inputs,
+                            childNode,
+                            inputAttrPath,
+                            readLockFile(state.fetchSettings, inputFlake.lockFilePath()).root.get_ptr(),
+                            inputAttrPath,
+                            inputFlake.path,
+                            false);
+
+                        warnRegistry(inputAttrPath, *input.ref, inputFlake.resolvedRef, flake.path);
+                    }
+
+                    else {
+                        auto [path, lockedRef] = [&]() -> std::tuple<SourcePath, FlakeRef> {
+                            // Handle non-flake 'path:./...' inputs.
+                            if (auto resolvedPath = resolveRelativePath()) {
+                                return {*resolvedPath, *input.ref};
+                            } else {
+                                auto cachedInput = state.inputCache->getAccessor(
+                                    state.fetchSettings, *state.store, input.ref->input, useRegistriesInputs);
+
+                                auto resolvedRef = FlakeRef(std::move(cachedInput.resolvedInput), input.ref->subdir);
+                                auto lockedRef = FlakeRef(std::move(cachedInput.lockedInput), input.ref->subdir);
+
+                                warnRegistry(inputAttrPath, *input.ref, resolvedRef, flake.path);
+
+                                return {
+                                    state.storePath(state.mountInput(
+                                        lockedRef.input, input.ref->input, cachedInput.accessor, true, true)),
+                                    lockedRef};
+                            }
+                        }();
+
+                        auto childNode =
+                            make_ref<LockedNode>(lockedRef, ref, false, input.buildTime, overriddenParentPath);
+
+                        *childNode->sourcePath.lock() = path;
+
+                        node->inputs.insert_or_assign(id, childNode);
+                    }
+                }
+
+            } catch (Error & e) {
+                e.addTrace({}, "while updating the flake input '%s'", inputAttrPathS);
+                throw;
+            }
+        }
+    };
+
+    computeLocks(
+        flake.inputs,
+        newLockFile.root,
+        {},
+        lockFlags.recreateLockFile || !lockFlags.inputUpdates ? nullptr : oldLockFile.root.get_ptr(),
+        {},
+        flake.path,
+        false);
+
+    auto lockedFlake = std::make_unique<LockedFlakeV7>(std::move(flake), std::move(newLockFile));
+
+    /* Check that the target of every 'follows' input exists. */
+    for (auto & [inputAttrPath, input] : lockedFlake->lockFile.getAllInputs()) {
+        if (auto follows = std::get_if<1>(&input)) {
+            if (!follows->empty() && !lockedFlake->lockFile.findInput(lockedFlake->resolveFollows(state, *follows)))
+                throw Error(
+                    "input '%s' follows a non-existent input '%s'",
+                    printInputAttrPath(inputAttrPath),
+                    printInputAttrPath(*follows));
+        }
+    }
+
+    return {
+        .lockedFlake = std::move(lockedFlake),
+        .overridesUsed = std::move(overridesUsed),
+        .updatesUsed = std::move(updatesUsed),
+    };
+}
+
+} // namespace nix::flake
