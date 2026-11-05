@@ -78,7 +78,7 @@ jobs:
             extra-experimental-features = provenance
       - uses: DeterminateSystems/flakehub-cache-action@main
       - run: nix build "$FLAKE_REF#packages.$SYSTEM.default" ".#packages.$SYSTEM.binaryTarball" --no-link -L
-      - run: nix build "$FLAKE_REF#devShells.$SYSTEM.default" --no-link -L
+      - run: nix develop "$FLAKE_REF#devShells.$SYSTEM.default" -L --command true
       - run: nix build "$FLAKE_REF#packages.$SYSTEM.binaryTarball" --out-link tarball
       - run: nix build "$FLAKE_REF#^debug,out"
       - name: Upload debug info to Sentry
