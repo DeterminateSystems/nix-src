@@ -204,6 +204,15 @@ private:
     void deleteStorePath(const std::filesystem::path & path, uint64_t & bytesFreed, bool isKnownPath) override;
 
     /**
+     * `deleteStorePath` needs the path's original location to find out
+     * which layers it exists in.
+     */
+    bool canDeleteGarbageInBackground() override
+    {
+        return false;
+    }
+
+    /**
      * Deduplicate by removing store objects from the upper layer that
      * are now in the lower layer.
      *

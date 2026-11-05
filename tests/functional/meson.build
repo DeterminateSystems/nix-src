@@ -113,6 +113,7 @@ suites = [
       'gc-concurrent.sh',
       'gc-non-blocking.sh',
       'gc-runtime.sh',
+      'gc-trash.sh',
       'gc.sh',
       'hash-convert.sh',
       'hash-path.sh',
