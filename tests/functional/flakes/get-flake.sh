@@ -27,6 +27,14 @@ expectStderr 0 nix eval "$flake1Dir/subflake#x" | grepQuiet "This may become a f
 [[ $(nix eval "$flake1Dir/subflake#y") = 123 ]]
 
 # Check backward compatibility with getFlake applied to a store path with discarded string context.
+mkdir -p "$flake1Dir/a/b"
+cat > "$flake1Dir/a/b/flake.nix" <<EOF
+{
+  outputs = { self }: { foo = "baz"; };
+}
+EOF
+git -C "$flake1Dir" add a/b/flake.nix
+
 cat > "$flake1Dir/flake.nix" <<EOF
 {
   outputs =
@@ -35,12 +43,19 @@ cat > "$flake1Dir/flake.nix" <<EOF
       flakeOutputs = builtins.getFlake (
         builtins.unsafeDiscardStringContext "path:\${self.sourceInfo}?narHash=\${self.narHash}"
       );
+      subflakeOutputs = builtins.getFlake (
+        builtins.unsafeDiscardStringContext "path:\${self.sourceInfo}?dir=a/b&narHash=\${self.narHash}"
+      );
     in
     {
       foo = "bar";
-      inherit flakeOutputs;
+      inherit flakeOutputs subflakeOutputs;
     };
 }
 EOF
 
 [[ $(nix eval --raw "$flake1Dir#flakeOutputs.foo") = bar ]]
+
+# A multi-component 'dir' used to trigger an assertion failure in CanonPath::push.
+[[ $(nix eval --raw "$flake1Dir#subflakeOutputs.foo") = baz ]]
+[[ $(nix eval --raw --lazy-trees "$flake1Dir#subflakeOutputs.foo") = baz ]]
