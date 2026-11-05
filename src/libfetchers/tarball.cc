@@ -143,7 +143,10 @@ static std::optional<DownloadTarballResult> downloadTarball_(
         }
     }
 
-    Cache::Key cacheKey{"tarball", {{"url", urlS}}};
+    /* Use the canonical encoding of the URL as the cache key, since
+       the same URL can reach us in different encodings (e.g. `+`
+       vs. `%2B`). */
+    Cache::Key cacheKey{"tarball", {{"url", url.to_string()}}};
 
     auto cached = settings.getCache()->lookupExpired(cacheKey);
 
@@ -224,9 +227,16 @@ static std::optional<DownloadTarballResult> downloadTarball_(
             infoAttrs.insert_or_assign("immutableUrl", *res->immutableUrl);
     }
 
-    /* Insert a cache entry for every URL in the redirect chain. */
+    /* Insert a cache entry for every URL in the redirect chain. Curl
+       returns redirect targets verbatim, so canonicalise them. */
     for (auto & url : res->urls) {
-        cacheKey.second.insert_or_assign("url", url);
+        std::string canonicalUrl;
+        try {
+            canonicalUrl = parseURL(url).to_string();
+        } catch (BadURL &) {
+            canonicalUrl = url;
+        }
+        cacheKey.second.insert_or_assign("url", canonicalUrl);
         settings.getCache()->upsert(cacheKey, infoAttrs);
     }
 
