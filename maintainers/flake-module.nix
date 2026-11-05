@@ -15,9 +15,6 @@
     {
 
       # https://flake.parts/options/git-hooks-nix#options
-      # TODO(cole-h): DSP and normal Nixpkgs have disagreeing versions of nixfmt, where one wants
-      # to format something the other changes.
-      pre-commit.check.enable = false;
       pre-commit.settings = {
         # `self.outPath` from git-hooks-nix's flake-module is not path-normalized,
         # so when this flake is evaluated via `packaging/secure-packages` (whose

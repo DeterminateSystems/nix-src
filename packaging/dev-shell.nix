@@ -319,7 +319,9 @@ nixComponents.callPackage (
               pkgs.buildPackages.nixfmt
               pkgs.buildPackages.shellcheck
               pkgs.buildPackages.zizmor
-              pkgs.buildPackages.include-what-you-use
+              # Disabled because it requires a different LLVM version than the default, which
+              # isn't cached in DSP.
+              #pkgs.buildPackages.include-what-you-use
             ]
             ++ lib.optional stdenv.hostPlatform.isUnix pkgs.buildPackages.gdb
             ++ lib.optional (stdenv.cc.isClang && stdenv.hostPlatform == stdenv.buildPlatform) (
