@@ -1,9 +1,7 @@
 {
   description = "The purely functional package manager";
 
-  # Temporarily switch to staging-next-26.05 for the brocolli2shell fix.
-  #inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.2605";
-  inputs.nixpkgs.url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-2605-mirror-staging-next/=0.2605.1017174";
+  inputs.nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.2605";
 
   inputs.nixpkgs-regression.url = "github:NixOS/nixpkgs/215d4d0fd80ca5163643b03a33fde804a29cc1e2";
   inputs.nixpkgs-23-11.url = "github:NixOS/nixpkgs/a62e6edd6d5e1fa0329b8653c801147986f8d446";
