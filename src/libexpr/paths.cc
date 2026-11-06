@@ -61,8 +61,8 @@ std::string EvalState::devirtualize(std::string_view s, const NixStringContext &
 std::string EvalState::computeBaseName(const SourcePath & path, PosIdx pos)
 {
     /* Only check paths that are directly inside the store directory,
-       to avoid the cost of a failing `maybeParseStorePath()` call for
-       every file inside a store path. */
+       to avoid the cost of `maybeParseStorePath()` (which has to
+       canonicalise the path) for every file inside a store path. */
     if (path.accessor == rootFS && path.path.dirOf() == store->storeDir) {
         if (auto storePath = store->maybeParseStorePath(path.path.abs())) {
             debug(

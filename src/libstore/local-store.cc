@@ -1790,10 +1790,8 @@ LocalStore::VerificationResult LocalStore::verifyAllValidPaths(RepairFlag repair
      */
     for (auto & i : DirectoryIterator{config->realStoreDir.get()}) {
         checkInterrupt();
-        try {
-            storePathsInStoreDir.insert({i.path().filename().string()});
-        } catch (BadStorePath &) {
-        }
+        if (auto storePath = StorePath::parse(i.path().filename().string()))
+            storePathsInStoreDir.insert(std::move(*storePath));
     }
 
     /* Check whether all valid paths actually exist. */

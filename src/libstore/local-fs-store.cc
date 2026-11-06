@@ -64,10 +64,11 @@ public:
     }
 
     static std::optional<StorePath> maybeGetStoreObjectPath(const CanonPath & path)
-    try {
-        return getStoreObjectPath(path);
-    } catch (BadStorePath &) {
-        /* FIXME: Stop using exceptions for control flow. */
+    {
+        if (path.isRoot())
+            return std::nullopt;
+        if (auto storePath = StorePath::parse(*path.begin()))
+            return std::move(*storePath);
         return std::nullopt;
     }
 

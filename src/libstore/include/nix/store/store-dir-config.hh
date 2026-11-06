@@ -34,9 +34,18 @@ struct StoreDirConfig
 
     // pure methods
 
+    /**
+     * Parse a store path, i.e. a direct child of the store directory.
+     *
+     * @throws BadStorePath if `path` is not a valid store path.
+     */
     StorePath parseStorePath(std::string_view path) const;
 
-    std::optional<StorePath> maybeParseStorePath(std::string_view path) const;
+    /**
+     * Like `parseStorePath()`, but returns the reason instead of throwing
+     * if `path` is not a valid store path.
+     */
+    std::expected<StorePath, BadStorePathReason> maybeParseStorePath(std::string_view path) const;
 
     std::string printStorePath(const StorePath & path) const;
 

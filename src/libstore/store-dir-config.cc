@@ -6,10 +6,18 @@
 
 namespace nix {
 
-StorePath StoreDirConfig::parseStorePath(std::string_view path) const
+/**
+ * If `path` is (after canonicalisation) a direct child of `storeDir`,
+ * return its base name, which is not validated. If canonicalisation is
+ * needed, the base name is stored in `buf`.
+ */
+static std::expected<std::string_view, BadStorePathReason>
+getStoreBaseName(std::string_view storeDir, std::string_view path, std::string & buf)
 {
+    using enum BadStorePathReason;
+
     if (path.empty())
-        throw BadStorePath("empty path is not a valid store path");
+        return std::unexpected(EmptyPath);
 
     /* Fast path: if `path` is `<storeDir>/<name>` with a `name` that
        doesn't contain a slash and isn't `.` or `..`, then `path` is
@@ -18,7 +26,7 @@ StorePath StoreDirConfig::parseStorePath(std::string_view path) const
     if (path.size() > storeDir.size() + 1 && path.starts_with(storeDir) && path[storeDir.size()] == '/') {
         auto baseName = path.substr(storeDir.size() + 1);
         if (baseName.find('/') == baseName.npos && baseName != "." && baseName != "..")
-            return StorePath(baseName);
+            return baseName;
     }
 
     // On Windows, `/nix/store` is not a canonical path. More broadly it
@@ -26,25 +34,40 @@ StorePath StoreDirConfig::parseStorePath(std::string_view path) const
     // notion of a canonical path at all. For example, it makes to
     // support remote stores whose store dir is a non-native path (e.g.
     // Windows <-> Unix ssh-ing).
-    auto p =
 #ifdef _WIN32
-        std::filesystem::path(path)
+    auto p = std::filesystem::path(path);
 #else
-        canonPath(std::string(path))
+    /* `canonPath()` throws on relative paths. */
+    if (path[0] != '/')
+        return std::unexpected(NotInStore);
+    auto p = canonPath(std::string(path));
 #endif
-        ;
     if (p.parent_path() != storeDir)
-        throw BadStorePath("path %s is not in the Nix store", PathFmt(p));
-    return StorePath(p.filename().string());
+        return std::unexpected(NotInStore);
+    buf = p.filename().string();
+    return buf;
 }
 
-std::optional<StorePath> StoreDirConfig::maybeParseStorePath(std::string_view path) const
+StorePath StoreDirConfig::parseStorePath(std::string_view path) const
 {
-    try {
-        return parseStorePath(path);
-    } catch (Error &) {
-        return {};
+    std::string buf;
+    auto baseName = getStoreBaseName(storeDir, path, buf);
+    if (!baseName) {
+        /* `getStoreBaseName()` only returns these errors. */
+        if (baseName.error() == BadStorePathReason::EmptyPath)
+            throw BadStorePath("empty path is not a valid store path");
+        assert(baseName.error() == BadStorePathReason::NotInStore);
+        throw BadStorePath("path %s is not in the Nix store", PathFmt(std::filesystem::path(path)));
     }
+    /* Throws a `BadStorePath` explaining what's wrong with the base
+       name, if anything. */
+    return StorePath(*baseName);
+}
+
+std::expected<StorePath, BadStorePathReason> StoreDirConfig::maybeParseStorePath(std::string_view path) const
+{
+    std::string buf;
+    return getStoreBaseName(storeDir, path, buf).and_then(StorePath::parse);
 }
 
 bool StoreDirConfig::isStorePath(std::string_view path) const
