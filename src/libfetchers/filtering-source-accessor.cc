@@ -1,8 +1,10 @@
 #include "nix/fetchers/filtering-source-accessor.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/util.hh"
+#include "nix/util/strings.hh"
 
 #include <boost/unordered/concurrent_flat_map.hpp>
+#include <boost/unordered/unordered_flat_set.hpp>
 
 namespace nix {
 
@@ -81,7 +83,62 @@ struct AllowListSourceAccessorImpl : AllowListSourceAccessor
 private:
     void anchor() override {};
 public:
-    SharedSync<std::set<CanonPath>> allowedPrefixes;
+    struct Prefixes
+    {
+        typedef boost::unordered_flat_set<std::string, StringViewHash, std::equal_to<>> Set;
+
+        /**
+         * The allowed prefixes, i.e. paths that are allowed along with
+         * all their descendants.
+         */
+        Set prefixes;
+
+        /**
+         * The strict ancestors of the allowed prefixes. These are
+         * allowed (so that the prefixes can be reached), but their
+         * other descendants are not.
+         */
+        Set ancestors;
+
+        void add(const CanonPath & prefix)
+        {
+            for (auto p = prefix.parent(); p; p = p->parent())
+                /* If `p` is already present, then so are its ancestors. */
+                if (!ancestors.insert(p->abs()).second)
+                    break;
+            prefixes.insert(prefix.abs());
+        }
+
+        /**
+         * Return whether `path` or one of its ancestors is an allowed
+         * prefix.
+         */
+        bool isWithinPrefix(std::string_view path) const
+        {
+            if (prefixes.empty())
+                return false;
+            if (prefixes.contains("/"))
+                return true;
+            /* Check the ancestors of `path` starting with the shortest,
+               since allowed prefixes tend to be short (e.g. store
+               paths). */
+            for (size_t pos = 1;;) {
+                auto slash = path.find('/', pos);
+                if (prefixes.contains(path.substr(0, slash)))
+                    return true;
+                if (slash == path.npos)
+                    return false;
+                pos = slash + 1;
+            }
+        }
+
+        bool isAllowed(std::string_view path) const
+        {
+            return ancestors.contains(path) || isWithinPrefix(path);
+        }
+    };
+
+    SharedSync<Prefixes> allowedPrefixes;
 
     /**
      * Paths that are allowed, but not their descendants. This is
@@ -95,21 +152,23 @@ public:
         const std::unordered_set<CanonPath> & allowedPaths,
         MakeNotAllowedError && makeNotAllowedError)
         : AllowListSourceAccessor(SourcePath(next), std::move(makeNotAllowedError))
-        , allowedPrefixes(allowedPrefixes.begin(), allowedPrefixes.end())
         , allowedPaths(allowedPaths)
     {
+        auto state(this->allowedPrefixes.lock());
+        for (auto & prefix : allowedPrefixes)
+            state->add(prefix);
     }
 
     bool isAllowed(const CanonPath & path) override
     {
         if (!allowedPaths.empty() && allowedPaths.contains(path))
             return true;
-        return path.isAllowed(*allowedPrefixes.readLock());
+        return allowedPrefixes.readLock()->isAllowed(path.abs());
     }
 
     void allowPrefix(CanonPath prefix) override
     {
-        allowedPrefixes.lock()->insert(std::move(prefix));
+        allowedPrefixes.lock()->add(prefix);
     }
 };
 
