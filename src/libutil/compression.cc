@@ -381,6 +381,18 @@ struct ZstdMultiFrameCompressionSink : CompressionSink
     std::vector<char> inbuf;
     bool emittedAnyFrame = false;
     static constexpr uint64_t bytesPerFrame = 16 * 1024 * 1024;
+    /**
+     * Maximum number of zstd worker threads.
+     */
+    static constexpr unsigned maxWorkers = 4;
+    /**
+     * Size of a zstd multi-threading job: one job per worker per frame
+     * at `maxWorkers`.  It deliberately does not depend on the actual
+     * worker count: zstd's output depends on the job size but not on
+     * the number of workers, so the compressed NAR (and thus its file
+     * hash) is the same on every machine with at least 2 CPUs.
+     */
+    static constexpr int jobSize = bytesPerFrame / maxWorkers;
 
     ZstdMultiFrameCompressionSink(Sink & nextSink, bool parallel, int level)
         : nextSink(nextSink)
@@ -397,18 +409,28 @@ struct ZstdMultiFrameCompressionSink : CompressionSink
             if (ncpu == 0)
                 ncpu = std::thread::hardware_concurrency();
             /* Cap nbWorkers: zstd's MT engine splits each frame into
-               per-worker jobs.  With 16 MiB frames, more than ~4
-               workers yields diminishing returns (< 4 MiB per worker)
-               and the thread synchronisation overhead can make
-               compression slower than single-threaded. */
-            if (ncpu > 4)
-                ncpu = 4;
-            if (ncpu > 1)
+               `jobSize` jobs, so more than `maxWorkers` workers would
+               have nothing to do. */
+            if (ncpu > maxWorkers)
+                ncpu = maxWorkers;
+            if (ncpu > 1) {
                 /* Don't checkZstd(): if libzstd was built without
-                   ZSTD_MULTITHREAD this returns an error, but per the
-                   zstd docs the parameter is simply ignored and
+                   ZSTD_MULTITHREAD these return an error, but per the
+                   zstd docs the parameters are simply ignored and
                    compression falls back to single-threaded. */
                 ZSTD_CCtx_setParameter(cctx.get(), ZSTD_c_nbWorkers, ncpu);
+                /* By default zstd makes each job 4 times the window
+                   size: 8 MiB at level 3, and the whole 16 MiB frame
+                   from level 9 up.  So at most 2 workers were ever
+                   busy at level 3, and only 1 from level 9 up.  Use
+                   smaller jobs instead, and let each job reload a full
+                   window of the preceding input (by default 1/8 of a
+                   window up to level 7), so that it sees the same
+                   history as a single-threaded compressor would and
+                   the compression ratio doesn't suffer. */
+                ZSTD_CCtx_setParameter(cctx.get(), ZSTD_c_jobSize, jobSize);
+                ZSTD_CCtx_setParameter(cctx.get(), ZSTD_c_overlapLog, 9);
+            }
         }
     }
 
