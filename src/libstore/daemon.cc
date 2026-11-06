@@ -182,9 +182,10 @@ struct TunnelLogger : public Logger
         std::string_view s,
         ActivityId parent) noexcept override
     {
+        // Older clients may reject actStringly as an unknown activity type.
         if (clientVersion.number < WorkerProto::Version::Number{1, 20}
             || !clientVersion.features.contains(WorkerProto::featureNamedActivities))
-            return Logger::startActivity(act, lvl, name, metadata, s, parent);
+            return startActivity(act, lvl, actUnknown, std::string{s}, {}, parent);
 
         StringSink buf;
         buf << STDERR_START_ACTIVITY_STRINGLY << act << lvl << name << s << metadata.size();

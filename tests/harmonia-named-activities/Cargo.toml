@@ -1,0 +1,9 @@
+[package]
+name = "harmonia-named-activities"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+harmonia-protocol = { git = "https://github.com/nix-community/harmonia.git", tag = "harmonia-v3.3.0" }
+harmonia-store-remote = { git = "https://github.com/nix-community/harmonia.git", tag = "harmonia-v3.3.0" }
+tokio = { version = "1", features = [ "macros", "process", "rt-multi-thread" ] }
