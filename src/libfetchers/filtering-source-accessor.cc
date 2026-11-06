@@ -171,6 +171,11 @@ public:
 
     void allowPrefix(CanonPath prefix) override
     {
+        /* This is called frequently with prefixes that are already
+           allowed (e.g. by `copyPathToStore()`), so avoid taking the
+           write lock in that case. */
+        if (allowedPrefixes.readLock()->prefixes.contains(prefix.abs()))
+            return;
         allowedPrefixes.lock()->add(prefix);
     }
 };
