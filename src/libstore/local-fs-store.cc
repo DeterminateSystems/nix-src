@@ -63,15 +63,6 @@ public:
         return StorePath(*path.begin());
     }
 
-    static std::optional<StorePath> maybeGetStoreObjectPath(const CanonPath & path)
-    {
-        if (path.isRoot())
-            return std::nullopt;
-        if (auto storePath = StorePath::parse(*path.begin()))
-            return std::move(*storePath);
-        return std::nullopt;
-    }
-
     void requireStoreObject(const CanonPath & path)
     {
         requireStoreObject(getStoreObjectPath(path));
@@ -87,10 +78,10 @@ public:
         /* Querying existence should not fail for things like
            `/nix/store/foo.nix`. The store cannot contain such files (unless
            some weird impurities sneak in, but that's UB from nix's PoV). */
-        auto maybeStorePath = maybeGetStoreObjectPath(path);
-        if (!maybeStorePath)
+        auto storePath = StorePath::parse(*path.begin());
+        if (!storePath)
             return std::nullopt;
-        requireStoreObject(*maybeStorePath);
+        requireStoreObject(*storePath);
         return accessor->maybeLstat(path);
     }
 
