@@ -39,11 +39,9 @@ SourceAccessor::Stat FilteringSourceAccessor::lstat(const CanonPath & path)
 SourceAccessor::DirEntries FilteringSourceAccessor::readDirectory(const CanonPath & path)
 {
     checkAccess(path);
-    DirEntries entries;
-    for (auto & entry : next->readDirectory(prefix / path)) {
-        if (isAllowed(path / entry.first))
-            entries.insert(std::move(entry));
-    }
+    auto entries = next->readDirectory(prefix / path);
+    if (!isAllowedRecursively(path))
+        std::erase_if(entries, [&](auto & entry) { return !isAllowed(path / entry.first); });
     return entries;
 }
 
@@ -164,6 +162,11 @@ public:
         if (!allowedPaths.empty() && allowedPaths.contains(path))
             return true;
         return allowedPrefixes.readLock()->isAllowed(path.abs());
+    }
+
+    bool isAllowedRecursively(const CanonPath & path) override
+    {
+        return allowedPrefixes.readLock()->isWithinPrefix(path.abs());
     }
 
     void allowPrefix(CanonPath prefix) override
