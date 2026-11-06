@@ -1684,7 +1684,7 @@ static void basicDerivationFromJson(
     }
 
     if (auto structuredAttrs = get(json, "structuredAttrs"))
-        res.structuredAttrs = StructuredAttrs{*structuredAttrs};
+        res.structuredAttrs = StructuredAttrs::fromJSON(*structuredAttrs);
 }
 
 BasicDerivation

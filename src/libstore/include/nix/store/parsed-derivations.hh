@@ -19,9 +19,32 @@ struct StructuredAttrs
 {
     static constexpr std::string_view envVarName{"__json"};
 
-    nlohmann::json::object_t structuredAttrs;
+    /**
+     * The structured attributes. This is always a JSON object; use
+     * `object()` to access it as a map. It's stored as a
+     * `nlohmann::json` rather than an `object_t` so that it can be
+     * serialised without copying.
+     */
+    nlohmann::json structuredAttrs = nlohmann::json::object();
 
     bool operator==(const StructuredAttrs &) const = default;
+
+    const nlohmann::json::object_t & object() const
+    {
+        return structuredAttrs.get_ref<const nlohmann::json::object_t &>();
+    }
+
+    nlohmann::json::object_t & object()
+    {
+        return structuredAttrs.get_ref<nlohmann::json::object_t &>();
+    }
+
+    /**
+     * Construct from a JSON value, which must be an object.
+     *
+     * @throws Error if `json` is not an object.
+     */
+    static StructuredAttrs fromJSON(nlohmann::json json);
 
     /**
      * Unconditionally parse from a JSON string. Used by `tryExtract`.
