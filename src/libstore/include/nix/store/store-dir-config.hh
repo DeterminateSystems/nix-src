@@ -81,6 +81,13 @@ struct StoreDirConfig
     std::pair<StorePath, CanonPath> toStorePath(std::string_view path) const;
 
     /**
+     * Like `toStorePath()`, but for a canonical path, and returns the
+     * reason instead of throwing if `path` is not inside a valid store
+     * path. Since `path` is canonical, this is a cheap prefix check.
+     */
+    std::expected<std::pair<StorePath, CanonPath>, BadStorePathReason> maybeToStorePath(const CanonPath & path) const;
+
+    /**
      * Constructs a unique store path name.
      */
     StorePath makeStorePath(std::string_view type, std::string_view hash, std::string_view name) const;

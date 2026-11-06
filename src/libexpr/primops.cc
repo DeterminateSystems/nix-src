@@ -2217,12 +2217,11 @@ static void prim_readFile(EvalState & state, const PosIdx pos, Value ** args, Va
             .atPos(pos)
             .debugThrow();
     StorePathSet refs;
-    if (state.store->isInStore(path.path.abs())) {
-        auto storePath = state.store->toStorePath(path.path.abs()).first;
+    if (auto storePath = state.store->maybeToStorePath(path.path)) {
         // Skip virtual paths since they don't have references and
         // don't exist anyway.
-        if (!state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath)))) {
-            if (auto info = state.store->maybeQueryPathInfo(state.store->toStorePath(path.path.abs()).first)) {
+        if (!state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath->first)))) {
+            if (auto info = state.store->maybeQueryPathInfo(storePath->first)) {
                 // Re-scan references to filter down to just the ones that actually occur in the file.
                 auto refsSink = PathRefScanSink::fromPaths(info->references);
                 refsSink << s;

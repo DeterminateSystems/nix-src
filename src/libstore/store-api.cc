@@ -143,6 +143,24 @@ std::pair<StorePath, CanonPath> StoreDirConfig::toStorePath(std::string_view pat
         return {parseStorePath(path.substr(0, slash)), CanonPath{path.substr(slash)}};
 }
 
+std::expected<std::pair<StorePath, CanonPath>, BadStorePathReason>
+StoreDirConfig::maybeToStorePath(const CanonPath & path) const
+{
+    std::string_view s = path.abs();
+    if (s.size() <= storeDir.size() + 1 || !s.starts_with(storeDir) || s[storeDir.size()] != '/')
+        return std::unexpected(BadStorePathReason::NotInStore);
+    auto rest = s.substr(storeDir.size() + 1);
+    auto slash = rest.find('/');
+    return StorePath::parse(rest.substr(0, slash)).transform([&](StorePath && storePath) {
+        return std::pair{
+            std::move(storePath),
+            /* A suffix of a canonical path starting at a slash is
+               canonical. */
+            slash == rest.npos ? CanonPath::root
+                               : CanonPath(CanonPath::unchecked_t(), std::string(rest.substr(slash)))};
+    });
+}
+
 std::filesystem::path Store::followLinksToStore(std::string_view _path) const
 {
     auto path = absPath(std::string(_path));

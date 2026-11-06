@@ -222,6 +222,36 @@ TEST_F(StorePathTest, badStorePathReasons)
     }
 }
 
+TEST_F(StorePathTest, maybeToStorePath)
+{
+    auto expected = store->parseStorePath(STORE_DIR HASH_PART "-foo");
+
+    auto res = store->maybeToStorePath(CanonPath(STORE_DIR HASH_PART "-foo"));
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->first, expected);
+    EXPECT_EQ(res->second, CanonPath::root);
+
+    res = store->maybeToStorePath(CanonPath(STORE_DIR HASH_PART "-foo/bar/xyzzy"));
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->first, expected);
+    EXPECT_EQ(res->second, CanonPath("/bar/xyzzy"));
+
+    using enum BadStorePathReason;
+    for (auto & [s, reason] : std::vector<std::pair<std::string, BadStorePathReason>>{
+             {"/", NotInStore},
+             {"/nix", NotInStore},
+             {"/nix/store", NotInStore},
+             {"/nix/storefoo/" HASH_PART "-foo", NotInStore},
+             {"/foo/store/" HASH_PART "-foo/bar", NotInStore},
+             {STORE_DIR "abc/bar", TooShort},
+             {STORE_DIR HASH_PART "-foo!/bar", NameIllegalCharacter},
+         }) {
+        auto res = store->maybeToStorePath(CanonPath(s));
+        ASSERT_FALSE(res) << s;
+        EXPECT_EQ(res.error(), reason) << s;
+    }
+}
+
 TEST_F(StorePathTest, errorMessages)
 {
     auto parseError = [&](std::string_view s) -> std::string {
