@@ -459,7 +459,9 @@ static void main_nix_build(int argc, char ** argv)
             throw UsageError("nix-shell requires a single derivation");
 
         auto & packageInfo = drvs.front();
-        auto drv = evalStore->derivationFromPath(packageInfo.requireDrvPath());
+        auto drvPath = packageInfo.requireDrvPath();
+        state->waitForPath(drvPath);
+        auto drv = evalStore->derivationFromPath(drvPath);
 
         std::vector<DerivedPath> pathsToBuild;
         RealisedPath::Set pathsToCopy;
@@ -483,6 +485,7 @@ static void main_nix_build(int argc, char ** argv)
                     throw Error("the 'bashInteractive' attribute in <nixpkgs> did not evaluate to a derivation");
 
                 auto bashDrv = drv->requireDrvPath();
+                state->waitForPath(bashDrv);
                 pathsToBuild.push_back(
                     DerivedPath::Built{
                         .drvPath = makeConstantStorePathRef(bashDrv),
@@ -675,7 +678,9 @@ static void main_nix_build(int argc, char ** argv)
 
         restoreProcessContext();
 
+        /* We're about to exec, so end and export any telemetry. */
         logger->stop();
+        logger->flush();
 
         execvp(shell->c_str(), argPtrs.data());
 
@@ -692,6 +697,7 @@ static void main_nix_build(int argc, char ** argv)
 
         for (auto & packageInfo : drvs) {
             auto drvPath = packageInfo.requireDrvPath();
+            state->waitForPath(drvPath);
 
             auto outputName = packageInfo.queryOutputName();
             if (outputName == "")

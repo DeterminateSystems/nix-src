@@ -22,12 +22,9 @@ StructuredAttrs StructuredAttrs::parse(std::string_view encoded)
 std::optional<StructuredAttrs> StructuredAttrs::tryExtract(StringPairs & env)
 {
     /* Parse the __json attribute, if any. */
-    auto jsonAttr = env.find(envVarName);
-    if (jsonAttr != env.end()) {
-        auto encoded = std::move(jsonAttr->second);
-        env.erase(jsonAttr);
-        return parse(encoded);
-    } else
+    if (auto jsonAttr = env.extract(std::string(envVarName)))
+        return parse(jsonAttr.mapped());
+    else
         return {};
 }
 

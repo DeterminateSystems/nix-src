@@ -44,6 +44,10 @@
   testers,
 
   patchedSrc ? null,
+
+  curl,
+  boehmgc,
+  sentry-native,
 }:
 
 let
@@ -66,7 +70,7 @@ let
   };
 
   devdoc = buildEnv {
-    name = "nix-${nix-cli.version}-devdoc";
+    name = "determinate-nix-${nix-cli.version}-devdoc";
     paths = [
       nix-internal-api-docs
       nix-external-api-docs
@@ -75,7 +79,7 @@ let
 
 in
 stdenv.mkDerivation (finalAttrs: {
-  pname = "nix";
+  pname = "determinate-nix";
   version = nix-cli.version;
 
   /**
@@ -93,6 +97,7 @@ stdenv.mkDerivation (finalAttrs: {
     "dev"
     "doc"
     "man"
+    "debug"
   ];
 
   /**
@@ -142,9 +147,18 @@ stdenv.mkDerivation (finalAttrs: {
   installPhase =
     let
       devPaths = lib.mapAttrsToList (_k: lib.getDev) finalAttrs.finalPackage.libs;
+      debugPaths = lib.map (lib.getOutput "debug") (
+        lib.attrValues finalAttrs.finalPackage.libs
+        ++ [
+          nix-cli
+          curl
+          boehmgc
+        ]
+        ++ lib.optional (stdenv.hostPlatform.isLinux && !stdenv.hostPlatform.isStatic) sentry-native
+      );
     in
     ''
-      mkdir -p $out $dev/nix-support
+      mkdir -p $out $dev/nix-support $debug/lib/debug
 
       # Custom files
       echo $libs >> $dev/nix-support/propagated-build-inputs
@@ -155,6 +169,12 @@ stdenv.mkDerivation (finalAttrs: {
 
       for lib in ${lib.escapeShellArgs devPaths}; do
         lndir $lib $dev
+      done
+
+      for d in ${lib.escapeShellArgs debugPaths}; do
+        if [[ -d $d/lib/debug ]]; then
+          lndir $d/lib/debug $debug/lib/debug
+        fi
       done
 
       # Forwarded outputs

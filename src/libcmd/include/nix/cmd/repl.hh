@@ -18,7 +18,8 @@ struct AbstractNixRepl
 
     virtual ~AbstractNixRepl() {}
 
-    typedef std::vector<std::pair<Value *, std::string>> AnnotatedValues;
+    typedef std::vector<std::pair<Value *, std::string>, traceable_allocator<std::pair<Value *, std::string>>>
+        AnnotatedValues;
 
     /**
      * Run a nix executable

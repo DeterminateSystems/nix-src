@@ -111,6 +111,7 @@ struct LockedNode : Node
 {
     FlakeRef lockedRef, originalRef;
     bool isFlake = true;
+    bool buildTime = false;
 
     /* The node relative to which relative source paths
        (e.g. 'path:../foo') are interpreted. */
@@ -120,10 +121,12 @@ struct LockedNode : Node
         const FlakeRef & lockedRef,
         const FlakeRef & originalRef,
         bool isFlake = true,
+        bool buildTime = false,
         std::optional<InputAttrPath> parentInputAttrPath = {})
         : lockedRef(std::move(lockedRef))
         , originalRef(std::move(originalRef))
         , isFlake(isFlake)
+        , buildTime(buildTime)
         , parentInputAttrPath(std::move(parentInputAttrPath))
     {
     }

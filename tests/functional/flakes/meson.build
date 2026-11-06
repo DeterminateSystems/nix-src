@@ -36,6 +36,12 @@ suites += {
     'trace-ifd.sh',
     'get-flake.sh',
     'type-error-fallback.sh',
+    'build-time-flake-inputs.sh',
+    'substitution.sh',
+    'shallow.sh',
+    'provenance.sh',
+    'search.sh',
+    'bake.sh',
   ],
   'workdir' : meson.current_source_dir(),
 }

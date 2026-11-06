@@ -1,12 +1,20 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/file-system-at.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/util.hh"
 
+#ifdef __APPLE__
+#  include <libproc.h> /* For closeExtraFDs. */
+#endif
 #include <fcntl.h>
 #include <unistd.h>
+
 #include <span>
+#include <atomic>
+#include <vector>
 
 #include "util-unix-config-private.hh"
+#include "../file-descriptor-private.hh"
 
 namespace nix {
 
@@ -100,28 +108,67 @@ void unix::closeExtraFDs()
     constexpr int MAX_KEPT_FD = 2;
     static_assert(std::max({STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) == MAX_KEPT_FD);
 
+    /* The logic here is a bit convoluted and platform-dependent.
+     * Keep in mind that this function is free to assume that it's the only thread running
+     * in the process (it's usually called right after fork()-ing).
+     *
+     * - We always keep stdio file descriptors, and close the [MAX_KEPT_FD + 1, ...) range.
+     *
+     * - Attempt platform-specific ways to close the above:
+     *   On Linux (>= 5.9) and FreeBSD, we try close_range syscall.
+     *   If that doesn't work, try /proc/self/fd/ iteration.
+     *   On Darwin, we use libproc to list all open FDs.
+     *
+     * - If none of the above works, do the silliest possible thing and attempt
+     *   closing all FDs below _SC_OPEN_MAX. Keep in mind that it's huge for the
+     *   daemon process, so we really should use something more optimised.
+     */
+
 #if defined(__linux__) || defined(__FreeBSD__)
-    // first try to close_range everything we don't care about. if this
-    // returns an error with these parameters we're running on a kernel
-    // that does not implement close_range (i.e. pre 5.9) and fall back
-    // to the old method. we should remove that though, in some future.
-    if (unix_close_range(MAX_KEPT_FD + 1, ~0U, 0) == 0) {
+    if (unix_close_range(MAX_KEPT_FD + 1, ~0U, 0) == 0)
         return;
-    }
 #endif
 
-#ifdef __linux__
+    /* Platform-specific ways of listing open FDs. */
+#if defined(__linux__) || defined(__APPLE__)
     try {
-        for (auto & s : DirectoryIterator{"/proc/self/fd"}) {
-            checkInterrupt();
-            auto fd = std::stoi(s.path().filename());
-            if (fd > MAX_KEPT_FD) {
-                debug("closing leaked FD %d", fd);
-                close(fd);
-            }
+#  ifdef __linux__
+        /* Don't close while iterating: the listing includes the FD of the directory itself, and
+           closing that would make the next read fail. By the time we do the closing below, that
+           FD is already closed by the iterator, so closing it again is a harmless no-op. */
+        std::vector<int> openFds;
+        for (const auto & s : DirectoryIterator{"/proc/self/fd/"}) {
+            auto fd = string2Int<int>(s.path().filename().native());
+            if (!fd)
+                continue;
+            if (*fd > MAX_KEPT_FD)
+                openFds.push_back(*fd);
         }
+        for (auto fd : openFds)
+            ::close(fd); /* ignore result */
+#  elifdef __APPLE__
+        const auto pid = ::getpid();
+        errno = 0;
+        /* We are the only thread now, so the needed size shouldn't change. The kernel also leaves a bit
+           of slack for the needed space. */
+        int bufSize = ::proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nullptr, 0);
+        /* libproc wrapper converts -1 to 0. */
+        if (bufSize <= 0 && errno != 0)
+            throw SysError("listing open file descriptors");
+        std::vector<::proc_fdinfo> fds;
+        fds.resize(bufSize / sizeof(::proc_fdinfo));
+        errno = 0;
+        bufSize = ::proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds.data(), fds.size() * sizeof(::proc_fdinfo));
+        if (bufSize <= 0 && errno != 0)
+            throw SysError("listing open file descriptors");
+        fds.resize(bufSize / sizeof(::proc_fdinfo));
+        for (const auto & fdinfo : fds)
+            if (fdinfo.proc_fd > MAX_KEPT_FD)
+                ::close(fdinfo.proc_fd); /* ignore result */
+#  endif
         return;
-    } catch (SysError &) {
+    } catch (const SystemError & e) {
+        /* Try the last resort fallback. */
     }
 #endif
 
@@ -184,6 +231,74 @@ void unix::SelfPipe::drain()
                 throw SysError("reading from self-pipe");
         }
     }
+}
+
+bool tryCopyFdRangeFast(Descriptor from, Descriptor to, off_t offset, size_t nbytes, size_t & written)
+{
+#if HAVE_COPY_FILE_RANGE
+
+    /* Otherwise trying block cloning is pretty pointless. Also used to error
+       out on partial copies (unless we happen to hit block alignment boundary,
+       but that seems unlikely to be useful). */
+    assert(written == 0);
+    size_t left = nbytes;
+    static std::atomic_flag copyFileRangeUnsupported = {};
+
+    if (copyFileRangeUnsupported.test(std::memory_order_relaxed))
+        return false;
+
+    while (left) {
+        checkInterrupt();
+
+        ssize_t n = ::copy_file_range(
+            from,
+            &offset,
+            to,
+            nullptr,
+            left,
+            0
+#  ifdef COPY_FILE_RANGE_CLONE /* FreeBSD */
+                | COPY_FILE_RANGE_CLONE
+#  endif
+        );
+
+        /* Reached EOF too early. */
+        if (n == 0)
+            throw EndOfFile(
+                "unexpected end-of-file copying from %1% to %2%",
+                PathFmt(descriptorToPath(from)),
+                PathFmt(descriptorToPath(to)));
+
+        if (n == -1) {
+            if (errno == EINTR)
+                continue; /* Loop over to hit checkInterrupt. */
+
+            if (written == 0 && (errno == EINVAL || errno == EOPNOTSUPP || errno == EXDEV || errno == EBADF)) {
+                /* Retry with fallback. */
+            } else if (written == 0 && errno == ENOSYS) {
+                /* Cache ENOSYS. */
+                copyFileRangeUnsupported.test_and_set();
+            } else {
+                throw SysError([&] {
+                    return HintFmt(
+                        "copying contents of %1% to %2% via copy_file_range",
+                        PathFmt(descriptorToPath(from)),
+                        PathFmt(descriptorToPath(to)));
+                });
+            }
+
+            return false;
+        }
+
+        assert(static_cast<uint64_t>(n) <= left);
+        left -= n;
+        written += n;
+    }
+
+    return true;
+#else
+    return false;
+#endif
 }
 
 } // namespace nix

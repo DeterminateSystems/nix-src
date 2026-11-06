@@ -27,7 +27,17 @@ private:
     const bool compress;
     const Descriptor logFD;
 
-    const ref<const AutoDelete> tmpDir;
+    /**
+     * Temporary directory for the SSH master's control socket and the
+     * known hosts file. Only created if needed, i.e. if we use an SSH
+     * master or have a public host key.
+     */
+    const std::shared_ptr<const AutoDelete> tmpDir;
+
+    /**
+     * Known hosts file containing `sshPublicHostKey`, if set.
+     */
+    const std::optional<std::filesystem::path> knownHostsFile;
 
     struct State
     {
@@ -39,11 +49,11 @@ private:
 
     Sync<State> state_;
 
-    void addCommonSSHOpts(OsStrings & args);
-    bool isMasterRunning();
+    void addCommonSSHOpts(OsStrings & args, std::optional<std::filesystem::path> socketPath);
+    bool isMasterRunning(std::filesystem::path socketPath);
 
 #ifndef _WIN32 // TODO re-enable on Windows, once we can start processes.
-    std::filesystem::path startMaster();
+    std::optional<std::filesystem::path> startMaster();
 #endif
 
 public:

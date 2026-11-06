@@ -328,19 +328,11 @@ void createSymlink(const std::filesystem::path & target, const std::filesystem::
 void replaceSymlink(const std::filesystem::path & target, const std::filesystem::path & link);
 
 /**
- * Similar to 'renameFile', but fallback to a copy+remove if `src` and `dst`
- * are on a different filesystem.
- *
- * Beware that this might not be atomic because of the copy that happens behind
- * the scenes
- */
-void moveFile(const std::filesystem::path & src, const std::filesystem::path & dst);
-
-/**
  * Recursively copy the content of `oldPath` to `newPath`. If `andDelete` is
- * `true`, then also remove `oldPath` (making this equivalent to `moveFile`, but
- * with the guaranty that the destination will be “fresh”, with no stale inode
- * or file descriptor pointing to it).
+ * `true`, then also remove `oldPath`.
+ *
+ * @todo Delete this. This function is prone to TOCTOU races and follows
+ * symlinks in the destination.
  *
  * If contents is set, always create a regular file, even if the source is a
  * link.
@@ -535,6 +527,11 @@ void unlinkIfExists(const std::filesystem::path & path);
 void tryUnlink(const std::filesystem::path & path);
 
 /**
+ * @brief Thin wrapper around ::rename that throws SystemError on errors.
+ */
+void renameFile(const std::filesystem::path & src, const std::filesystem::path & dst);
+
+/**
  * @brief A directory iterator that can be used to iterate over the
  * contents of a directory. It is similar to std::filesystem::directory_iterator
  * but throws NixError on failure instead of std::filesystem::filesystem_error.
@@ -603,6 +600,7 @@ public:
 
 
 private:
+    std::filesystem::path dir_;
     std::filesystem::directory_iterator it_;
 };
 

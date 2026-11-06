@@ -1,5 +1,6 @@
 ///@file
 
+#include "nix/util/current-process.hh"
 #include "nix/util/signals.hh"
 #include "nix/cmd/command.hh"
 #include "nix/main/shared.hh"
@@ -9,6 +10,7 @@
 #include "nix/store/remote-store-connection.hh"
 #include "nix/store/store-open.hh"
 #include "nix/util/serialise.hh"
+#include "nix/util/strings.hh"
 #include "nix/store/globals.hh"
 #include "nix/util/config-global.hh"
 #include "nix/store/derivations.hh"
@@ -16,7 +18,9 @@
 #include "nix/cmd/unix-socket-server.hh"
 #include "nix/store/daemon.hh"
 #include "man-pages.hh"
+#include "otel-logger.hh"
 #include "nix/util/socket.hh"
+#include "nix/util/users.hh"
 
 #include <algorithm>
 #include <climits>
@@ -28,10 +32,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
-#include <sys/select.h>
+#include <poll.h>
 #include <errno.h>
-#include <pwd.h>
-#include <grp.h>
 #include <fcntl.h>
 
 #ifdef __linux__
@@ -39,6 +41,22 @@
 #endif
 
 namespace nix {
+
+/**
+ * Set up distributed tracing for a daemon connection: create a span
+ * covering the connection's lifetime, parented under the trace
+ * context received from the client, if any. No-op unless
+ * OpenTelemetry export is configured.
+ *
+ * Note that `main()` deliberately doesn't set up tracing for the
+ * daemon, so this is where it happens, once per connection (which is
+ * once per process, since connections are served by forked children
+ * or over stdio).
+ */
+static void setupConnectionTelemetry(std::string_view traceparent)
+{
+    initOtel("nix-daemon", "daemon connection", traceparent, /*isServer=*/true);
+}
 
 /**
  * Settings related to authenticating clients for the Nix daemon.
@@ -153,12 +171,9 @@ static void setSigChldAction(bool autoReap)
  *
  * @param group Group the user might be a member of.
  */
-static bool matchUser(std::string_view user, const struct group & gr)
+static bool matchUser(std::string_view user, const GroupEntry & gr)
 {
-    for (char ** mem = gr.gr_mem; *mem; mem++)
-        if (user == std::string_view(*mem))
-            return true;
-    return false;
+    return std::ranges::find(gr.members, user) != gr.members.end();
 }
 
 /**
@@ -188,7 +203,7 @@ matchUser(const std::optional<std::string> & user, const std::optional<std::stri
         if (i.substr(0, 1) == "@") {
             if (group && *group == i.substr(1))
                 return true;
-            struct group * gr = getgrnam(i.c_str() + 1);
+            auto gr = getGroupByName(i.substr(1));
             if (!gr)
                 continue;
             if (user && matchUser(*user, *gr))
@@ -213,13 +228,13 @@ static std::pair<TrustedFlag, std::optional<std::string>> authPeer(const unix::P
 {
     TrustedFlag trusted = NotTrusted;
 
-    auto pw = peer.uid ? getpwuid(*peer.uid) : nullptr;
-    auto user = pw         ? std::optional<std::string>(pw->pw_name)
+    auto pw = peer.uid ? getUserById(*peer.uid) : std::nullopt;
+    auto user = pw         ? std::optional<std::string>(pw->name)
                 : peer.uid ? std::optional(std::to_string(*peer.uid))
                            : std::nullopt;
 
-    auto gr = peer.gid ? getgrgid(*peer.gid) : 0;
-    auto group = gr         ? std::optional<std::string>(gr->gr_name)
+    auto gr = peer.gid ? getGroupById(*peer.gid) : std::nullopt;
+    auto group = gr         ? std::optional<std::string>(gr->name)
                  : peer.gid ? std::optional(std::to_string(*peer.gid))
                             : std::nullopt;
 
@@ -271,12 +286,32 @@ static void daemonLoop(
         auto rootCgroupPath = *cgroupFS / rootCgroup.rel();
         if (!pathExists(rootCgroupPath))
             throw Error("expected cgroup directory %s", PathFmt(rootCgroupPath));
-        auto daemonCgroupPath = rootCgroupPath + "/nix-daemon";
+        auto daemonCgroupPath = rootCgroupPath / "nix-daemon";
         //  Create new sub-cgroup for the daemon.
         if (mkdir(daemonCgroupPath.c_str(), 0755) != 0 && errno != EEXIST)
-            throw SysError("creating cgroup '%s'", daemonCgroupPath);
+            throw SysError("creating cgroup %s", PathFmt(daemonCgroupPath));
         //  Move daemon into the new cgroup.
-        writeFile(daemonCgroupPath + "/cgroup.procs", fmt("%d", getpid()));
+        writeFile(daemonCgroupPath / "cgroup.procs", fmt("%d", getpid()));
+
+        /* Now that the root cgroup has no processes, enable controllers
+           for the per-build sibling cgroups so they get memory/io stats. */
+        try {
+            auto available = tokenizeString<StringSet>(readFile(rootCgroupPath / "cgroup.controllers"));
+            Strings enable;
+            for (auto & c : {"cpu", "memory", "io", "pids"})
+                if (available.count(c))
+                    enable.push_back(fmt("+%s", c));
+            if (!enable.empty())
+                writeFile(rootCgroupPath / "cgroup.subtree_control", concatStringsSep(" ", enable));
+        } catch (SystemError & e) {
+            /* This is what we get when trying to violate the "no internal processes" rule. */
+            if (e.is(std::errc::device_or_resource_busy))
+                warn(
+                    "could not enable cgroup controllers because current cgroup (%s) is not process-free",
+                    PathFmt(rootCgroupPath));
+            else
+                warn("could not enable cgroup controllers for builds: %s", e.ec().message());
+        }
     }
 #endif
 
@@ -339,9 +374,16 @@ static void daemonLoop(
                     trusted = *forceTrustClientOpt;
                 else {
                     peer = unix::getPeerInfo(remote.get());
-                    auto [_trusted, _userName] = authPeer(peer);
-                    trusted = _trusted;
-                    userName = _userName;
+                    try {
+                        auto [_trusted, _userName] = authPeer(peer);
+                        trusted = _trusted;
+                        userName = _userName;
+                    } catch (const Error & e) {
+                        // Don't just hang up on the user.
+                        FdSink sink(remote.get());
+                        sink << WORKER_MAGIC_ACCESS_DENIED;
+                        throw;
+                    }
                 };
 
                 printInfo(
@@ -353,10 +395,11 @@ static void daemonLoop(
                 ProcessOptions options;
                 options.errorPrefix = "unexpected Nix daemon error: ";
                 options.dieWithParent = false;
-                options.runExitHandlers = true;
                 options.allowVfork = false;
                 startProcess(
                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
+                        setInterrupted(false);
+
                         closeListeners();
 
                         // Background the daemon.
@@ -373,16 +416,34 @@ static void daemonLoop(
                         }
 
                         // Handle the connection.
-                        auto store = storeConfig->openStore();
-                        store->init();
-                        processConnection(
-                            std::move(store),
-                            FdSource(remote.get()),
-                            FdSink(remote.get()),
-                            trusted,
-                            RecursiveFlag::NotRecursive);
+                        std::exception_ptr error;
+                        try {
+                            auto store = storeConfig->openStore();
+                            store->init();
+                            processConnection(
+                                std::move(store),
+                                FdSource(remote.get()),
+                                FdSink(remote.get()),
+                                trusted,
+                                RecursiveFlag::NotRecursive,
+                                setupConnectionTelemetry);
+                        } catch (...) {
+                            error = std::current_exception();
+                        }
 
-                        exit(0);
+                        /* End the connection span and export all
+                           telemetry, also if the connection failed.
+                           This has to be done explicitly, since we
+                           don't unwind the stack or run destructors
+                           on exit. */
+                        logger->stop();
+                        logger->flush();
+
+                        /* Reported by startProcess(). */
+                        if (error)
+                            std::rethrow_exception(error);
+
+                        quickExit(0);
                     },
                     options);
             });
@@ -405,23 +466,27 @@ static void forwardStdioConnection(RemoteStore & store)
     int from = conn->from.fd;
     int to = conn->to.fd;
 
-    Socket fromSock = toSocket(from), stdinSock = toSocket(getStandardInput());
-    auto nfds = std::max(fromSock, stdinSock) + 1;
     while (true) {
-        fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(fromSock, &fds);
-        FD_SET(stdinSock, &fds);
-        if (select(nfds, &fds, nullptr, nullptr, nullptr) == -1)
+        struct pollfd pfds[2];
+        pfds[0].fd = from;
+        pfds[0].events = POLLIN;
+        pfds[0].revents = 0;
+        pfds[1].fd = getStandardInput();
+        pfds[1].events = POLLIN;
+        pfds[1].revents = 0;
+        if (poll(pfds, 2, -1) == -1) {
+            if (errno == EINTR)
+                continue;
             throw SysError("waiting for data from client or server");
-        if (FD_ISSET(fromSock, &fds)) {
+        }
+        if (pfds[0].revents) {
             auto res = splice(from, nullptr, STDOUT_FILENO, nullptr, SSIZE_MAX, SPLICE_F_MOVE);
             if (res == -1)
                 throw SysError("splicing data from daemon socket to stdout");
             else if (res == 0)
                 throw EndOfFile("unexpected EOF from daemon socket");
         }
-        if (FD_ISSET(stdinSock, &fds)) {
+        if (pfds[1].revents) {
             auto res = splice(STDIN_FILENO, nullptr, to, nullptr, SSIZE_MAX, SPLICE_F_MOVE);
             if (res == -1)
                 throw SysError("splicing data from stdin to daemon socket");
@@ -442,7 +507,13 @@ static void forwardStdioConnection(RemoteStore & store)
  */
 static void processStdioConnection(ref<Store> store, TrustedFlag trustClient)
 {
-    processConnection(store, FdSource(STDIN_FILENO), FdSink(STDOUT_FILENO), trustClient, daemon::NotRecursive);
+    processConnection(
+        store,
+        FdSource(STDIN_FILENO),
+        FdSink(STDOUT_FILENO),
+        trustClient,
+        daemon::NotRecursive,
+        setupConnectionTelemetry);
 }
 
 /**
@@ -505,6 +576,8 @@ static void runDaemon(
                     processStdioConnection(store, forceTrustClientOpt.value_or(Trusted));
             },
             [&](UnixSocket socketPathOverride) {
+                /* Note: we don't trace in this process; the forked
+                   children set up tracing themselves, per connection. */
                 auto socketPath = std::move(socketPathOverride)
                                       .or_else([&]() -> std::optional<std::filesystem::path> {
                                           return getDaemonSocketPath(*storeConfig);

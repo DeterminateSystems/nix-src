@@ -5,19 +5,9 @@ project(
   license : 'LGPL-2.1-or-later',
 )
 
-# Compute documentation URL based on version and release type
-version = meson.project_version()
-official_release = get_option('official-release')
+fs = import('fs')
 
-if official_release
-  # For official releases, use versioned URL (dropping patch version)
-  version_parts = version.split('.')
-  major_minor = '@0@.@1@'.format(version_parts[0], version_parts[1])
-  doc_url = 'https://nix.dev/manual/nix/@0@'.format(major_minor)
-else
-  # For development builds, use /latest
-  doc_url = 'https://nix.dev/manual/nix/latest'
-endif
+doc_url = 'https://manual.determinate.systems/'
 
 nix = find_program('nix', native : true)
 
@@ -39,7 +29,7 @@ nix_env_for_docs = {
   'NIX_CONFIG' : 'cores = 0',
 }
 
-nix_for_docs = [ nix, '--experimental-features', 'nix-command' ]
+nix_for_docs = [ nix ]
 nix_eval_for_docs_common = nix_for_docs + [
   'eval',
   '-I',
@@ -141,7 +131,7 @@ if get_option('html-manual')
         python.full_path(),
         mdbook.full_path(),
         meson.current_build_dir(),
-        meson.project_version(),
+        fs.read('../../.version-determinate').strip(),
       ),
     ],
     input : [
@@ -303,6 +293,8 @@ nix3_manpages = [
   'nix3-help',
   'nix3-help-stores',
   'nix3-key',
+  'nix3-key-convert-public-to-pem',
+  'nix3-key-convert-secret-to-pem',
   'nix3-key-convert-secret-to-public',
   'nix3-key-generate-secret',
   'nix3-log',
@@ -311,6 +303,10 @@ nix3_manpages = [
   'nix3-nar-dump-path',
   'nix3-nar-ls',
   'nix3-nar-pack',
+  'nix3-nario',
+  'nix3-nario-export',
+  'nix3-nario-import',
+  'nix3-nario-list',
   'nix3-path-info',
   'nix3-print-dev-env',
   'nix3-profile',
@@ -322,6 +318,10 @@ nix3_manpages = [
   'nix3-profile-rollback',
   'nix3-profile-upgrade',
   'nix3-profile-wipe-history',
+  'nix3-provenance',
+  'nix3-provenance-show',
+  'nix3-provenance-verify',
+  'nix3-ps',
   'nix3-registry',
   'nix3-registry-add',
   'nix3-registry-list',
@@ -331,6 +331,7 @@ nix3_manpages = [
   'nix3-repl',
   'nix3-run',
   'nix3-search',
+  'nix3-serve',
   'nix3-store',
   'nix3-store-add',
   'nix3-store-add-file',

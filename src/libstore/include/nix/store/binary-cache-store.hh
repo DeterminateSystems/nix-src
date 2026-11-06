@@ -122,6 +122,16 @@ protected:
     BinaryCacheStore(Config &);
 
     /**
+     * Fetch and parse `nix-cache-info`.
+     */
+    std::map<std::string, std::string> parseNixCacheInfo();
+
+    /**
+     * Apply the known `nix-cache-info` fields from `fields` to this store.
+     */
+    void applyCacheInfoFields(const std::map<std::string, std::string> & fields);
+
+    /**
      * Compute the path to the given realisation
      *
      * It's `${realisationsPrefix}/${drvPath}/${outputName}`.
@@ -129,6 +139,11 @@ protected:
     std::string makeRealisationPath(const DrvOutput & id);
 
 public:
+
+    bool includeInProvenance() override
+    {
+        return true;
+    }
 
     virtual bool fileExists(const std::string & path) = 0;
 
@@ -230,7 +245,8 @@ public:
         ContentAddressMethod hashMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair) override;
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override;
 
     StorePath addToStore(
         std::string_view name,

@@ -6,6 +6,7 @@
 #include "nix/util/signals.hh"
 #include "nix/util/terminal.hh"
 #include "nix/util/position.hh"
+#include "nix/util/sentry.hh"
 
 #include <cinttypes>
 #include <iostream>
@@ -109,7 +110,8 @@ void printCodeLines(std::ostream & out, const std::string & prefix, const Pos & 
 
             out << std::endl << fmt("%1%      |%2%" ANSI_RED "%3%" ANSI_NORMAL, prefix, spaces, arrows);
         }
-    }
+    } else
+        out << std::endl << fmt("%1% %|2$5d|| " ANSI_ITALIC "(empty file)" ANSI_NORMAL, prefix, (errPos.line));
 
     // next line of code.
     if (loc.nextLineOfCode.has_value()) {
@@ -154,9 +156,10 @@ static bool printPosMaybe(std::ostream & oss, std::string_view indent, const std
 {
     bool hasPos = pos && *pos;
     if (hasPos) {
-        oss << indent << ANSI_BLUE << "at " ANSI_WARNING << *pos << ANSI_NORMAL << ":";
+        auto loc = pos->getCodeLines();
+        oss << indent << ANSI_BLUE << "at " ANSI_WARNING << *pos << ANSI_NORMAL << (loc ? ":" : "");
 
-        if (auto loc = pos->getCodeLines()) {
+        if (loc) {
             printCodeLines(oss, "", *pos, *loc);
             oss << "\n";
         }
@@ -445,13 +448,13 @@ static void writeErr(std::string_view buf)
 #ifdef _WIN32
         DWORD n;
         if (!WriteFile(fd, buf.data(), buf.size(), &n, NULL))
-            abort();
+            return;
 #else
         auto n = ::write(fd, buf.data(), buf.size());
         if (n < 0) {
             if (errno == EINTR)
                 continue;
-            abort();
+            return;
         }
 #endif
         buf = buf.substr(n);
@@ -463,7 +466,17 @@ void panic(std::string_view msg)
     writeErr("\n\n" ANSI_RED "terminating due to unexpected unrecoverable internal error: " ANSI_NORMAL);
     writeErr(msg);
     writeErr("\n");
+    setSentryTag("panic_msg", std::string(msg).c_str());
     std::terminate();
+}
+
+void outOfMemory()
+{
+    /* Running out of memory is not a bug, so don't treat it as a
+       crash. Use `_exit()` since the process may not be in a state
+       where destructors and `atexit` handlers can run. */
+    writeErr("\n" ANSI_RED "error:" ANSI_NORMAL " ran out of memory\n");
+    _exit(outOfMemoryExitStatus);
 }
 
 void unreachable(std::source_location loc)
@@ -487,32 +500,37 @@ int handleExceptions(const std::string & programName, fun<void()> body)
 
     ErrorInfo::programName = baseNameOf(programName);
 
-    auto doLog = [&](BaseError & e) {
-        try {
-            logError(e.info());
-        } catch (...) {
-            printError(ANSI_RED "error:" ANSI_NORMAL " Exception while printing an exception.");
-        }
-    };
+    /* Note: this must happen after `printException()` below, so that
+       loggers that record the exception (like the OpenTelemetry
+       logger) can still do so. `flush()` must come after `stop()`,
+       which ends any open spans. */
+    Finally stopLogger([]() {
+        logger->stop();
+        logger->flush();
+    });
 
-    std::string error = ANSI_RED "error:" ANSI_NORMAL " ";
     try {
         body();
-    } catch (Exit & e) {
-        return e.status;
-    } catch (UsageError & e) {
-        doLog(e);
-        printError("Try '%1% --help' for more information.", programName);
-        return 1;
-    } catch (BaseError & e) {
-        doLog(e);
-        return e.info().status;
-    } catch (std::bad_alloc & e) {
-        printError(error + "out of memory");
-        return 1;
-    } catch (std::exception & e) {
-        printError(error + e.what());
-        return 1;
+    } catch (...) {
+        auto ex = std::current_exception();
+
+        /* Report the exception to the logger, which prints it and, in
+           the case of the OpenTelemetry logger, records it on the
+           root span. */
+        logger->printException(ex, programName);
+
+        /* Determine the exit status. */
+        try {
+            std::rethrow_exception(ex);
+        } catch (Exit & e) {
+            return e.status;
+        } catch (UsageError & e) {
+            return 1;
+        } catch (BaseError & e) {
+            return e.info().status;
+        } catch (...) {
+            return 1;
+        }
     }
 
     return 0;

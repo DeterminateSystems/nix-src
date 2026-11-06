@@ -199,6 +199,14 @@ static void extract_archive(TarArchive & archive, const std::filesystem::path & 
 
 #undef NIX_LIBARCHIVE_NATIVE_PATH_FUNC
 
+void unpackTarfile(Source & source, const std::filesystem::path & destDir)
+{
+    auto archive = TarArchive(source);
+
+    createDirs(destDir);
+    extract_archive(archive, destDir);
+}
+
 void unpackTarfile(const std::filesystem::path & tarFile, const std::filesystem::path & destDir)
 {
     auto archive = TarArchive(tarFile);

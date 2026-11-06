@@ -51,7 +51,7 @@ public:
 
     void requireStoreObject(const StorePath & storePath)
     {
-        if (requireValidPath && !store->isValidPath(storePath))
+        if (requireValidPath && !store->maybeQueryPathInfo(storePath))
             throw InvalidPath("path '%1%' is not a valid store path", store->printStorePath(storePath));
     }
 
@@ -61,14 +61,6 @@ public:
         if (path.isRoot())
             throw BadStorePath("path '%1%' is not a valid store path", path);
         return StorePath(*path.begin());
-    }
-
-    static std::optional<StorePath> maybeGetStoreObjectPath(const CanonPath & path)
-    try {
-        return getStoreObjectPath(path);
-    } catch (BadStorePath &) {
-        /* FIXME: Stop using exceptions for control flow. */
-        return std::nullopt;
     }
 
     void requireStoreObject(const CanonPath & path)
@@ -86,10 +78,10 @@ public:
         /* Querying existence should not fail for things like
            `/nix/store/foo.nix`. The store cannot contain such files (unless
            some weird impurities sneak in, but that's UB from nix's PoV). */
-        auto maybeStorePath = maybeGetStoreObjectPath(path);
-        if (!maybeStorePath)
+        auto storePath = StorePath::parse(*path.begin());
+        if (!storePath)
             return std::nullopt;
-        requireStoreObject(*maybeStorePath);
+        requireStoreObject(*storePath);
         return accessor->maybeLstat(path);
     }
 

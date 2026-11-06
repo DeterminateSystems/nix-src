@@ -10,6 +10,7 @@
 #include "nix/util/configuration.hh"
 #include "nix/util/error.hh"
 #include "nix/util/experimental-features.hh"
+#include "nix/util/terminal.hh"
 
 namespace nix {
 
@@ -17,8 +18,6 @@ namespace nix {
 
 TEST(parseFlakeRef, path)
 {
-    experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
-
     fetchers::Settings fetchSettings;
 
     {
@@ -67,8 +66,6 @@ TEST(parseFlakeRef, path)
 
 TEST(parseFlakeRef, GitArchiveInput)
 {
-    experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
-
     fetchers::Settings fetchSettings;
 
     {
@@ -111,7 +108,6 @@ class InputFromURLTest : public ::testing::WithParamInterface<InputFromURLTestCa
 
 TEST_P(InputFromURLTest, attrsAreCorrectAndRoundTrips)
 {
-    experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
     fetchers::Settings fetchSettings;
 
     const auto & testCase = GetParam();
@@ -272,6 +268,42 @@ INSTANTIATE_TEST_SUITE_P(
         }),
     [](const ::testing::TestParamInfo<InputFromURLTestCase> & info) { return info.param.description; });
 
+TEST(parseFlakeRef, nix219CompatRetainsDirInUrlAttr)
+{
+    fetchers::Settings fetchSettings;
+    fetchSettings.nix219Compat = true;
+
+    /* Nix < 2.20 retained the `dir` query parameter in the `url`
+       attribute of input types that have one. */
+    {
+        auto flakeref = parseFlakeRef(fetchSettings, "git+https://example.org/repo?dir=sub");
+        ASSERT_EQ(flakeref.subdir, "sub");
+        ASSERT_EQ(flakeref.toAttrs().at("url"), Attr("https://example.org/repo?dir=sub"));
+    }
+
+    {
+        auto flakeref = parseFlakeRef(fetchSettings, "https://example.org/foo.tar.gz?dir=sub");
+        ASSERT_EQ(flakeref.subdir, "sub");
+        ASSERT_EQ(flakeref.toAttrs().at("url"), Attr("https://example.org/foo.tar.gz?dir=sub"));
+    }
+
+    /* But for input types that don't have a `url` attribute (such as
+       `github`), the `dir` parameter was never part of the input
+       attributes, so it should not cause a parse failure. */
+    {
+        auto flakeref = parseFlakeRef(fetchSettings, "github:NixOS/nix?dir=perl");
+        ASSERT_EQ(flakeref.subdir, "perl");
+        ASSERT_EQ(
+            flakeref.toAttrs(),
+            (fetchers::Attrs{
+                {"dir", Attr("perl")},
+                {"owner", Attr("NixOS")},
+                {"repo", Attr("nix")},
+                {"type", Attr("github")},
+            }));
+    }
+}
+
 TEST(to_string, doesntReencodeUrl)
 {
     fetchers::Settings fetchSettings;
@@ -283,10 +315,26 @@ TEST(to_string, doesntReencodeUrl)
     ASSERT_EQ(unparsed, expected);
 }
 
+TEST(parseFlakeRef, urlInterpretationErrorsAreNotMasked)
+{
+    fetchers::Settings fetchSettings;
+
+    // Errors that occur while interpreting a syntactically valid URL
+    // (such as an unsupported query parameter) should be shown to the
+    // user, rather than causing the flake ref to be reinterpreted as a
+    // path, leading to a confusing "not an absolute path" error.
+    try {
+        parseFlakeRef(fetchSettings, "github:foo/bar?xyzzy=1");
+        FAIL() << "expected parseFlakeRef to throw";
+    } catch (BadURL & e) {
+        auto msg = filterANSIEscapes(e.msg());
+        EXPECT_NE(msg.find("xyzzy"), std::string::npos) << msg;
+        EXPECT_EQ(msg.find("not an absolute path"), std::string::npos) << msg;
+    }
+}
+
 TEST(parseFlakeRef, malformedGithubUrlDoesNotCrash)
 {
-    experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
-
     fetchers::Settings fetchSettings;
 
     // Using ref= instead of rev= with a github: URL should produce an

@@ -1,4 +1,5 @@
 #include "nix/util/compression.hh"
+#include "nix/util/error.hh"
 #include <gtest/gtest.h>
 #include <zstd.h>
 
@@ -29,8 +30,9 @@ TEST_P(CompressionDecompressionTest, roundtrip)
 TEST_P(CompressionDecompressionTest, empty)
 {
     auto compressed = compress(GetParam(), "");
-    if (GetParam() != CompressionAlgo::none)
+    if (GetParam() != CompressionAlgo::none) {
         ASSERT_FALSE(compressed.empty());
+    }
     auto o = decompress(GetParam(), compressed);
     ASSERT_EQ(o, "");
 }
@@ -55,6 +57,35 @@ TEST_P(CompressionDecompressionTest, roundtripsWithSourceAndSink)
     decompressionSink->finish();
 
     ASSERT_EQ(strSink.s.c_str(), dummyInput);
+}
+
+TEST_P(CompressionDecompressionTest, failingSink)
+{
+    /* Like a full disk: every write fails, including the ones made while the compression sink is being destroyed. */
+    struct FailingSink : Sink
+    {
+        void operator()(std::string_view data) override
+        {
+            throw SysError(ENOSPC, "write of %d bytes", data.size());
+        }
+    };
+
+    /* Make the input incompressible enough to produce output before finish(). */
+    std::string input(1024 * 1024, 0);
+    uint32_t x = 1;
+    for (auto & c : input) {
+        x = x * 1664525 + 1013904223;
+        c = x >> 24;
+    }
+
+    FailingSink failingSink;
+    ASSERT_THROW(
+        {
+            auto sink = makeCompressionSink(GetParam(), failingSink);
+            (*sink)(input);
+            sink->finish();
+        },
+        SysError);
 }
 
 INSTANTIATE_TEST_SUITE_P(
