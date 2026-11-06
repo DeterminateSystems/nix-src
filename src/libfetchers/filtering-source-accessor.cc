@@ -3,7 +3,6 @@
 #include "nix/util/util.hh"
 
 #include <boost/unordered/concurrent_flat_map.hpp>
-#include <boost/unordered/concurrent_flat_set.hpp>
 
 namespace nix {
 
@@ -83,7 +82,12 @@ private:
     void anchor() override {};
 public:
     SharedSync<std::set<CanonPath>> allowedPrefixes;
-    boost::concurrent_flat_set<CanonPath> allowedPaths;
+
+    /**
+     * Paths that are allowed, but not their descendants. This is
+     * immutable, so it doesn't need synchronisation.
+     */
+    const std::unordered_set<CanonPath> allowedPaths;
 
     AllowListSourceAccessorImpl(
         ref<SourceAccessor> next,
@@ -92,14 +96,15 @@ public:
         MakeNotAllowedError && makeNotAllowedError)
         : AllowListSourceAccessor(SourcePath(next), std::move(makeNotAllowedError))
         , allowedPrefixes(allowedPrefixes.begin(), allowedPrefixes.end())
-        , allowedPaths(allowedPaths.begin(), allowedPaths.end())
+        , allowedPaths(allowedPaths)
     {
     }
 
     bool isAllowed(const CanonPath & path) override
     {
-        /* Read lock is held for the duration of the full expression if the || doesn't short-circuit. */
-        return allowedPaths.contains(path) || path.isAllowed(*allowedPrefixes.readLock());
+        if (!allowedPaths.empty() && allowedPaths.contains(path))
+            return true;
+        return path.isAllowed(*allowedPrefixes.readLock());
     }
 
     void allowPrefix(CanonPath prefix) override
