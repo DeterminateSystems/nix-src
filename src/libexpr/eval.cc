@@ -1023,12 +1023,11 @@ void EvalState::mkPos(Value & v, PosIdx p)
     auto origin = positions.originOf(p);
     if (auto path = std::get_if<SourcePath>(&origin)) {
         auto attrs = buildBindings(3);
-        if (path->accessor == rootFS && store->isInStore(path->path.abs()))
+        auto storePath = store->maybeToStorePath(path->path);
+        if (path->accessor == rootFS && storePath)
             // FIXME: only do this for virtual store paths?
             attrs.alloc(s.file).mkString(
-                path->path.abs(),
-                {NixStringContextElem::Path{.storePath = store->toStorePath(path->path.abs()).first}},
-                mem);
+                path->path.abs(), {NixStringContextElem::Path{.storePath = std::move(storePath->first)}}, mem);
         else
             attrs.alloc(s.file).mkString(path->path.abs(), mem);
         makePositionThunks(*this, p, attrs.alloc(s.line), attrs.alloc(s.column));
@@ -2662,13 +2661,9 @@ coercePathToString(EvalState & state, PosIdx pos, Value & v, NixStringContext & 
         return state.store->printStorePath(state.copyPathToStore(context, v.path(), v.determinePos(pos)));
     } else {
         auto path = v.path();
-        if (path.accessor == state.rootFS && state.store->isInStore(path.path.abs())) {
-            try {
-                context.insert(
-                    NixStringContextElem::Path{.storePath = state.store->toStorePath(path.path.abs()).first});
-            } catch (Error &) {
-            }
-        }
+        if (path.accessor == state.rootFS)
+            if (auto storePath = state.store->maybeToStorePath(path.path))
+                context.insert(NixStringContextElem::Path{.storePath = std::move(storePath->first)});
         return std::string(path.path.abs());
     }
 }
@@ -3563,9 +3558,9 @@ EvalState::resolveLookupPathPath(const LookupPath::Path & value0, bool initAcces
         /* Allow access to paths in the search path. */
         if (initAccessControl) {
             allowPathLegacy(path.path.abs());
-            if (store->isInStore(path.path.abs())) {
+            if (auto storePath = store->maybeToStorePath(path.path)) {
                 try {
-                    allowClosure(store->toStorePath(path.path.abs()).first);
+                    allowClosure(storePath->first);
                 } catch (InvalidPath &) {
                 }
             }

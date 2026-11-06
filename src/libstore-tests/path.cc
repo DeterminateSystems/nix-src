@@ -37,8 +37,11 @@ static std::regex nameRegex{std::string{nameRegexStr}};
         /* ASSERT_THROW generates a duplicate goto label */                  \
         /* A lambda isolates those labels. */                                \
         [&]() { ASSERT_THROW(store->parseStorePath(str), BadStorePath); }(); \
+        EXPECT_FALSE(store->maybeParseStorePath(str));                       \
+        EXPECT_FALSE(StorePath::parse(HASH_PART "-" STR));                   \
         std::string name{STR};                                               \
         [&]() { ASSERT_THROW(nix::checkName(name), BadStorePathName); }();   \
+        EXPECT_FALSE(nix::validateStorePathName(name));                      \
         EXPECT_FALSE(std::regex_match(name, nameRegex));                     \
     }
 
@@ -58,14 +61,17 @@ TEST_DONT_PARSE(slash, "a/b")
 
 #undef TEST_DONT_PARSE
 
-#define TEST_DO_PARSE(NAME, STR)                            \
-    TEST_F(StorePathTest, good_##NAME)                      \
-    {                                                       \
-        std::string_view str = STORE_DIR HASH_PART "-" STR; \
-        auto p = store->parseStorePath(str);                \
-        std::string name{p.name()};                         \
-        EXPECT_EQ(p.name(), STR);                           \
-        EXPECT_TRUE(std::regex_match(name, nameRegex));     \
+#define TEST_DO_PARSE(NAME, STR)                               \
+    TEST_F(StorePathTest, good_##NAME)                         \
+    {                                                          \
+        std::string_view str = STORE_DIR HASH_PART "-" STR;    \
+        auto p = store->parseStorePath(str);                   \
+        std::string name{p.name()};                            \
+        EXPECT_EQ(p.name(), STR);                              \
+        EXPECT_TRUE(store->maybeParseStorePath(str) == p);     \
+        EXPECT_TRUE(StorePath::parse(HASH_PART "-" STR) == p); \
+        EXPECT_TRUE(nix::validateStorePathName(name));         \
+        EXPECT_TRUE(std::regex_match(name, nameRegex));        \
     }
 
 // 0-9 a-z A-Z + - . _ ? =
@@ -150,6 +156,130 @@ TEST_F(StorePathTest, mustBeDashAfterHashPart)
         EXPECT_THROW(StorePath(hashPart + c + "name"), BadStorePath);
     }
     EXPECT_NO_THROW(StorePath(hashPart + "-" + "name"));
+}
+
+#ifndef _WIN32
+// On Windows, `parseStorePath()` doesn't canonicalise.
+TEST_F(StorePathTest, parseNonCanonical)
+{
+    auto expected = store->parseStorePath(STORE_DIR HASH_PART "-foo");
+    for (auto s : {
+             STORE_DIR HASH_PART "-foo/",
+             STORE_DIR "/" HASH_PART "-foo",
+             STORE_DIR "./" HASH_PART "-foo",
+             STORE_DIR HASH_PART "-foo/bar/..",
+             STORE_DIR HASH_PART "-foo/.",
+             "/nix/../nix/store/" HASH_PART "-foo",
+         })
+        EXPECT_EQ(store->parseStorePath(s), expected) << s;
+}
+#endif
+
+TEST_F(StorePathTest, notAStorePath)
+{
+    for (auto s : {
+             "",
+             "/",
+             "/nix",
+             "/nix/store",
+             "/nix/store/",
+             STORE_DIR HASH_PART "-foo/bar",
+             STORE_DIR HASH_PART "-foo/bar/",
+             STORE_DIR HASH_PART "-foo/..",
+             "/nix/storefoo/" HASH_PART "-foo",
+             "/nix/" HASH_PART "-foo",
+             "/foo/store/" HASH_PART "-foo",
+         }) {
+        EXPECT_THROW(store->parseStorePath(s), BadStorePath) << s;
+        EXPECT_FALSE(store->maybeParseStorePath(s)) << s;
+        EXPECT_FALSE(store->isStorePath(s)) << s;
+    }
+}
+
+TEST_F(StorePathTest, badStorePathReasons)
+{
+    using enum BadStorePathReason;
+    std::vector<std::pair<std::string, BadStorePathReason>> cases{
+        {"", EmptyPath},
+        {"foo", NotInStore},
+        {HASH_PART "-foo", NotInStore},
+        {STORE_DIR HASH_PART "-foo/bar", NotInStore},
+        {"/nix/storefoo/" HASH_PART "-foo", NotInStore},
+        {STORE_DIR "abc", TooShort},
+        {STORE_DIR HASH_PART "_foo", NoDashAfterHash},
+        {STORE_DIR "e1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo", IllegalHashCharacter},
+        {STORE_DIR HASH_PART "-", NameEmpty},
+        {STORE_DIR HASH_PART "-" + std::string(StorePath::MaxPathLen + 1, 'a'), NameTooLong},
+        {STORE_DIR HASH_PART "-..", NameReserved},
+        {STORE_DIR HASH_PART "-.-a", NameReservedComponent},
+        {STORE_DIR HASH_PART "-foo!", NameIllegalCharacter},
+    };
+    for (auto & [s, reason] : cases) {
+        auto res = store->maybeParseStorePath(s);
+        ASSERT_FALSE(res) << s;
+        EXPECT_EQ(res.error(), reason) << s;
+        EXPECT_THROW(store->parseStorePath(s), BadStorePath) << s;
+    }
+}
+
+TEST_F(StorePathTest, maybeToStorePath)
+{
+    auto expected = store->parseStorePath(STORE_DIR HASH_PART "-foo");
+
+    auto res = store->maybeToStorePath(CanonPath(STORE_DIR HASH_PART "-foo"));
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->first, expected);
+    EXPECT_EQ(res->second, CanonPath::root);
+
+    res = store->maybeToStorePath(CanonPath(STORE_DIR HASH_PART "-foo/bar/xyzzy"));
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->first, expected);
+    EXPECT_EQ(res->second, CanonPath("/bar/xyzzy"));
+
+    using enum BadStorePathReason;
+    for (auto & [s, reason] : std::vector<std::pair<std::string, BadStorePathReason>>{
+             {"/", NotInStore},
+             {"/nix", NotInStore},
+             {"/nix/store", NotInStore},
+             {"/nix/storefoo/" HASH_PART "-foo", NotInStore},
+             {"/foo/store/" HASH_PART "-foo/bar", NotInStore},
+             {STORE_DIR "abc/bar", TooShort},
+             {STORE_DIR HASH_PART "-foo!/bar", NameIllegalCharacter},
+         }) {
+        auto res = store->maybeToStorePath(CanonPath(s));
+        ASSERT_FALSE(res) << s;
+        EXPECT_EQ(res.error(), reason) << s;
+    }
+}
+
+TEST_F(StorePathTest, errorMessages)
+{
+    auto parseError = [&](std::string_view s) -> std::string {
+        try {
+            store->parseStorePath(s);
+        } catch (BadStorePath & e) {
+            return e.what();
+        }
+        return "";
+    };
+    auto expectError = [&](std::string_view s, std::string_view expected) {
+        EXPECT_NE(parseError(s).find(expected), std::string::npos) << s << ": " << parseError(s);
+    };
+    expectError("", "empty path is not a valid store path");
+    expectError("/foo/bar", "is not in the Nix store");
+    expectError(STORE_DIR "abc", "is too short to be a valid store path");
+    expectError(STORE_DIR HASH_PART "_foo", "hash part is not followed by a '-'");
+    expectError(STORE_DIR "e1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo", "contains illegal base-32 character");
+    expectError(STORE_DIR HASH_PART "-..", "is not a valid store path: name");
+    expectError(STORE_DIR HASH_PART "-..-a", "first dash-separated component must not be");
+    expectError(STORE_DIR HASH_PART "-foo!", "contains illegal character");
+
+    try {
+        checkName("foo!");
+        FAIL();
+    } catch (BadStorePathName & e) {
+        EXPECT_NE(std::string(e.what()).find("contains illegal character"), std::string::npos);
+    }
 }
 
 /* ----------------------------------------------------------------------------

@@ -199,11 +199,9 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
 
         /* Hack to show the store path if available. */
         std::optional<StorePath> storePath;
-        if (store->isInStore(flake.path.path.abs())) {
-            auto path = store->toStorePath(flake.path.path.abs()).first;
-            if (store->isValidPath(path))
-                storePath = path;
-        }
+        if (auto path = store->maybeToStorePath(flake.path.path))
+            if (store->isValidPath(path->first))
+                storePath = path->first;
 
         if (json) {
             nlohmann::json j;

@@ -300,11 +300,13 @@ static void import(EvalState & state, const PosIdx pos, Value & vPath, Value * v
 
     // FIXME
     auto isValidDerivationInStore = [&]() -> std::optional<StorePath> {
-        if (!state.store->isStorePath(path2))
+        /* Check the extension first, since `isStorePath()` is
+           relatively expensive if it fails. */
+        if (!isDerivation(path2) || !state.store->isStorePath(path2))
             return std::nullopt;
         auto storePath = state.store->parseStorePath(path2);
         state.waitForPath(storePath);
-        if (!(state.store->isValidPath(storePath) && isDerivation(path2)))
+        if (!state.store->isValidPath(storePath))
             return std::nullopt;
         return storePath;
     };
@@ -2215,12 +2217,11 @@ static void prim_readFile(EvalState & state, const PosIdx pos, Value ** args, Va
             .atPos(pos)
             .debugThrow();
     StorePathSet refs;
-    if (state.store->isInStore(path.path.abs())) {
-        auto storePath = state.store->toStorePath(path.path.abs()).first;
+    if (auto storePath = state.store->maybeToStorePath(path.path)) {
         // Skip virtual paths since they don't have references and
         // don't exist anyway.
-        if (!state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath)))) {
-            if (auto info = state.store->maybeQueryPathInfo(state.store->toStorePath(path.path.abs()).first)) {
+        if (!state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath->first)))) {
+            if (auto info = state.store->maybeQueryPathInfo(storePath->first)) {
                 // Re-scan references to filter down to just the ones that actually occur in the file.
                 auto refsSink = PathRefScanSink::fromPaths(info->references);
                 refsSink << s;

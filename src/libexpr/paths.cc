@@ -61,14 +61,14 @@ std::string EvalState::devirtualize(std::string_view s, const NixStringContext &
 std::string EvalState::computeBaseName(const SourcePath & path, PosIdx pos)
 {
     if (path.accessor == rootFS) {
-        if (auto storePath = store->maybeParseStorePath(path.path.abs())) {
+        if (auto storePath = store->maybeToStorePath(path.path); storePath && storePath->second.isRoot()) {
             debug(
                 "Copying '%s' to the store again.\n"
                 "You can make Nix evaluate faster and copy fewer files by replacing `./.` with the `self` flake input, "
                 "or `builtins.path { path = ./.; name = \"source\"; }`.\n",
                 path);
             return std::string(
-                fetchToStore(fetchSettings, *store, path, FetchMode::DryRun, storePath->name()).to_string());
+                fetchToStore(fetchSettings, *store, path, FetchMode::DryRun, storePath->first.name()).to_string());
         }
     }
     return std::string(path.baseName());
