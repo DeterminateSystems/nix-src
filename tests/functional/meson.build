@@ -111,6 +111,7 @@ suites = [
       'gc-auto.sh',
       'gc-closure.sh',
       'gc-concurrent.sh',
+      'gc-mark-alive-unlocked.sh',
       'gc-non-blocking.sh',
       'gc-runtime.sh',
       'gc.sh',
