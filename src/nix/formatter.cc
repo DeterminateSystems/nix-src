@@ -69,7 +69,9 @@ struct CmdFormatterRun : MixFormatter, MixJSON
         auto app = installable.toApp(*evalState).resolve(evalStore, store);
 
         auto maybeFlakeDir = installable_->flakeRef.input.getSourcePath();
-        assert(maybeFlakeDir.has_value());
+        if (!maybeFlakeDir)
+            throw Error(
+                "cannot run the formatter because flake '%s' does not have a local directory", installable_->flakeRef);
         auto flakeDir = maybeFlakeDir.value();
 
         Strings programArgs{app.program.string()};
