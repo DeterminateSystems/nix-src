@@ -300,11 +300,13 @@ static void import(EvalState & state, const PosIdx pos, Value & vPath, Value * v
 
     // FIXME
     auto isValidDerivationInStore = [&]() -> std::optional<StorePath> {
-        if (!state.store->isStorePath(path2))
+        /* Check the extension first, since `isStorePath()` is
+           relatively expensive if it fails. */
+        if (!isDerivation(path2) || !state.store->isStorePath(path2))
             return std::nullopt;
         auto storePath = state.store->parseStorePath(path2);
         state.waitForPath(storePath);
-        if (!(state.store->isValidPath(storePath) && isDerivation(path2)))
+        if (!state.store->isValidPath(storePath))
             return std::nullopt;
         return storePath;
     };

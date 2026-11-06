@@ -152,6 +152,44 @@ TEST_F(StorePathTest, mustBeDashAfterHashPart)
     EXPECT_NO_THROW(StorePath(hashPart + "-" + "name"));
 }
 
+#ifndef _WIN32
+// On Windows, `parseStorePath()` doesn't canonicalise.
+TEST_F(StorePathTest, parseNonCanonical)
+{
+    auto expected = store->parseStorePath(STORE_DIR HASH_PART "-foo");
+    for (auto s : {
+             STORE_DIR HASH_PART "-foo/",
+             STORE_DIR "/" HASH_PART "-foo",
+             STORE_DIR "./" HASH_PART "-foo",
+             STORE_DIR HASH_PART "-foo/bar/..",
+             STORE_DIR HASH_PART "-foo/.",
+             "/nix/../nix/store/" HASH_PART "-foo",
+         })
+        EXPECT_EQ(store->parseStorePath(s), expected) << s;
+}
+#endif
+
+TEST_F(StorePathTest, notAStorePath)
+{
+    for (auto s : {
+             "",
+             "/",
+             "/nix",
+             "/nix/store",
+             "/nix/store/",
+             STORE_DIR HASH_PART "-foo/bar",
+             STORE_DIR HASH_PART "-foo/bar/",
+             STORE_DIR HASH_PART "-foo/..",
+             "/nix/storefoo/" HASH_PART "-foo",
+             "/nix/" HASH_PART "-foo",
+             "/foo/store/" HASH_PART "-foo",
+         }) {
+        EXPECT_THROW(store->parseStorePath(s), BadStorePath) << s;
+        EXPECT_FALSE(store->maybeParseStorePath(s)) << s;
+        EXPECT_FALSE(store->isStorePath(s)) << s;
+    }
+}
+
 /* ----------------------------------------------------------------------------
  * JSON
  * --------------------------------------------------------------------------*/

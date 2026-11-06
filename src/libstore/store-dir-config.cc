@@ -10,6 +10,17 @@ StorePath StoreDirConfig::parseStorePath(std::string_view path) const
 {
     if (path.empty())
         throw BadStorePath("empty path is not a valid store path");
+
+    /* Fast path: if `path` is `<storeDir>/<name>` with a `name` that
+       doesn't contain a slash and isn't `.` or `..`, then `path` is
+       canonical (since `storeDir` is), so we can skip
+       canonicalisation. */
+    if (path.size() > storeDir.size() + 1 && path.starts_with(storeDir) && path[storeDir.size()] == '/') {
+        auto baseName = path.substr(storeDir.size() + 1);
+        if (baseName.find('/') == baseName.npos && baseName != "." && baseName != "..")
+            return StorePath(baseName);
+    }
+
     // On Windows, `/nix/store` is not a canonical path. More broadly it
     // is unclear whether this function should be using the native
     // notion of a canonical path at all. For example, it makes to
