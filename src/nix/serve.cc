@@ -280,8 +280,14 @@ struct CmdServe : StoreCommand
         uint16_t boundPort = info ? info->port : port;
         notice("Listening on http://%s:%d/", listenAddress, boundPort);
 
-        if (portFile)
-            writeFile(*portFile, std::to_string(boundPort) + "\n");
+        if (portFile) {
+            /* Write the port file atomically, so that a process
+               waiting for it to appear never sees it empty. */
+            auto tmpFile = *portFile;
+            tmpFile += ".tmp";
+            writeFile(tmpFile, std::to_string(boundPort) + "\n");
+            renameFile(tmpFile, *portFile);
+        }
 
         /* Wait for Ctrl-C. */
         std::promise<void> interruptPromise;
