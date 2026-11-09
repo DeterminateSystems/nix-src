@@ -593,6 +593,14 @@ void mainWrapped(int argc, char ** argv)
 #  endif
         if (sigaction(SIGQUIT, &act, 0))
             throw SysError("handling SIGQUIT");
+
+        /* `sentry_init()` also installed a crash handler for SIGXFSZ
+           (on Linux), overriding startSignalHandlerThread(). Ignore it
+           again, so that exceeding the file size limit is just an I/O
+           error rather than a crash report. */
+        act.sa_handler = SIG_IGN;
+        if (sigaction(SIGXFSZ, &act, 0))
+            throw SysError("ignoring SIGXFSZ");
     }
 
     Finally cleanupSentry([&]() {

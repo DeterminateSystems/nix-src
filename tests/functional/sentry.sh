@@ -82,6 +82,20 @@ if [[ $(uname) = Linux ]]; then
     checkCrashDumpSize
 fi
 
+# Exceeding the file size limit is an I/O error, not a crash, even
+# though crashpad installs a crash handler for SIGXFSZ. The crashpad
+# handler process inherits the limit, so leave room for a crash dump.
+rm -rf "$sentryDir"
+
+head -c 20000000 /dev/zero > "$TEST_ROOT/big"
+# shellcheck disable=SC2016
+expectStderr 1 bash -c 'ulimit -f 10000; nix nar pack "$1" > "$2"' _ "$TEST_ROOT/big" "$TEST_ROOT/big.nar" \
+    | grepQuiet "File too large"
+
+if waitForCrashDump; then
+    fail "Unexpected crash dump after exceeding the file size limit"
+fi
+
 rm -rf "$sentryDir"
 
 if nix shell --file ./simple.nix --command bash -c 'kill -SEGV $$'; then

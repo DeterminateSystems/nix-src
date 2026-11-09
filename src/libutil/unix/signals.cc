@@ -132,6 +132,8 @@ void unix::triggerInterrupt()
 static sigset_t savedSignalMask;
 static bool savedSignalMaskIsSet = false;
 
+static std::optional<struct sigaction> savedSigxfszAction;
+
 void unix::saveSignalMask()
 {
     if (sigprocmask(SIG_BLOCK, nullptr, &savedSignalMask))
@@ -162,6 +164,17 @@ void unix::startSignalHandlerThread()
     if (pthread_sigmask(SIG_BLOCK, &set, nullptr))
         throw SysError("blocking signals");
 
+    /* Ignore SIGXFSZ, so that a write that exceeds the file size limit
+       (RLIMIT_FSIZE) fails with EFBIG rather than killing the
+       process. */
+    struct sigaction act, oldAct;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+    act.sa_handler = SIG_IGN;
+    if (sigaction(SIGXFSZ, &act, &oldAct))
+        throw SysError("ignoring SIGXFSZ");
+    savedSigxfszAction = oldAct;
+
     std::thread(signalHandlerThread, set).detach();
 }
 
@@ -183,6 +196,10 @@ void unix::restoreSignals()
 
     if (sigprocmask(SIG_SETMASK, &savedSignalMask, nullptr))
         throw SysError("restoring signals");
+
+    /* Ignored signals stay ignored across execve(). */
+    if (savedSigxfszAction && sigaction(SIGXFSZ, &*savedSigxfszAction, nullptr))
+        throw SysError("restoring SIGXFSZ");
 }
 
 namespace {
