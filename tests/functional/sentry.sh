@@ -74,7 +74,7 @@ done
 if [[ $(uname) = Linux ]]; then
     rm -rf "$sentryDir"
 
-    (! nix eval --eval-cores 4 --json --file ./fiber-stack-overflow.nix)
+    (! nix eval --eval-cores 4 --max-call-depth 10000000 --json --file ./fiber-stack-overflow.nix)
 
     if ! waitForCrashDump; then
         fail "No crash dump found in $sentryDir after a stack overflow on a fiber"

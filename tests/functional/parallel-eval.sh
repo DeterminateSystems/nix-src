@@ -43,5 +43,5 @@ expectStderr 1 nix eval --eval-cores 4 --json --file "$TEST_ROOT/select-dynamic-
 # fiber to have an alternate signal stack. (The stack overflow handler
 # only recognises overflows on x86_64 Linux.)
 if [[ $(uname -ms) = "Linux x86_64" ]]; then
-    expectStderr 1 nix eval --eval-cores 4 --json --file ./fiber-stack-overflow.nix | grepQuiet "stack overflow (possible infinite recursion)"
+    expectStderr 1 nix eval --eval-cores 4 --max-call-depth 10000000 --json --file ./fiber-stack-overflow.nix | grepQuiet "stack overflow (possible infinite recursion)"
 fi
