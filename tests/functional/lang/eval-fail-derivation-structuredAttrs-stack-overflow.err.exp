@@ -30,7 +30,7 @@ error:
              |                                                                       ^
            13|     in
 
-       (9995 duplicate frames omitted)
+       (9994 duplicate frames omitted)
 
        … while evaluating attribute 'head'
          at /pwd/lang/eval-fail-derivation-structuredAttrs-stack-overflow.nix:12:66:

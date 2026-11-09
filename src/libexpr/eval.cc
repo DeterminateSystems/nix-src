@@ -1567,6 +1567,12 @@ static void rethrowWithAttrTrace(EvalState & state, Env & env, ExprSelect & expr
 
 void ExprSelect::eval(EvalState & state, Env & env, Value & v)
 {
+    /* A chain of attribute selections through thunks (e.g. overlays
+       doing `x = prev.x`) recurses through here without any function
+       calls, so count selections towards `max-call-depth` to get an
+       error rather than a stack overflow. */
+    auto _level = state.addCallDepth(pos);
+
     Value vTmp;
     PosIdx pos2;
     Value * vAttrs = &vTmp;

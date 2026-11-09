@@ -323,7 +323,18 @@ public:
         "Whether `builtins.traceVerbose` should trace its first argument when evaluated."};
 
     Setting<unsigned int> maxCallDepth{
-        this, 10000, "max-call-depth", "The maximum function call depth to allow before erroring."};
+        this,
+        10000,
+        "max-call-depth",
+        R"(
+          The maximum evaluation depth to allow before failing with the error `stack overflow; max-call-depth exceeded`.
+          This catches deep or infinite recursion before it overflows the stack and crashes Nix.
+
+          Each nested function call and attribute selection counts as one level.
+          So does each level of nesting in operations that traverse values recursively, such as `builtins.deepSeq`, `builtins.toJSON`, `builtins.toXML`, equality tests, string coercion and printing values.
+
+          Raising this limit allows deeper recursion, but if it's too high, Nix can run out of stack space and crash.
+        )"};
 
     Setting<bool> builtinsTraceDebugger{
         this,

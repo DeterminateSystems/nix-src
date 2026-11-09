@@ -1,0 +1,16 @@
+error:
+       … while evaluating the attribute 'x'
+         at /pwd/lang/eval-fail-select-chain-stack-overflow.nix:6:38:
+            5| let
+            6|   chain = builtins.foldl' (acc: _: { x = acc.x; }) { x = 1; } (builtins.genList (x: x) 1000000);
+             |                                      ^
+            7| in
+
+       (10000 duplicate frames omitted)
+
+       error: stack overflow; max-call-depth exceeded
+       at /pwd/lang/eval-fail-select-chain-stack-overflow.nix:6:42:
+            5| let
+            6|   chain = builtins.foldl' (acc: _: { x = acc.x; }) { x = 1; } (builtins.genList (x: x) 1000000);
+             |                                          ^
+            7| in
