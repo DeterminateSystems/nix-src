@@ -1,18 +1,28 @@
 #include "nix/fetchers/git-utils.hh"
 #include "nix/util/file-system.hh"
-#include <gmock/gmock.h>
+#include "nix/util/fs-sink.hh"
+#include "nix/util/tests/gmock-matchers.hh"
+#include "nix/util/serialise.hh"
+#include "nix/util/git.hh"
+
+#include <span>
+#include <tuple>
+#include <array>
+
 #include <git2/global.h>
 #include <git2/repository.h>
 #include <git2/signature.h>
 #include <git2/types.h>
 #include <git2/object.h>
 #include <git2/tag.h>
-#include <gtest/gtest.h>
-#include "nix/util/fs-sink.hh"
-#include "nix/util/serialise.hh"
-
 #include <git2/blob.h>
 #include <git2/tree.h>
+#include <git2/version.h>
+
+#include <zlib.h>
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
 namespace nix::fetchers {
 
@@ -27,8 +37,9 @@ protected:
 public:
     void SetUp() override
     {
-        tmpDir = createTempDir();
-        delTmpDir = std::make_unique<AutoDelete>(tmpDir, true);
+        auto parentDir = createTempDir();
+        delTmpDir = std::make_unique<AutoDelete>(parentDir, true);
+        tmpDir = parentDir / "test-git-repo";
 
         // Create the repo with libgit2
         git_libgit2_init();
@@ -117,9 +128,9 @@ TEST_F(GitUtilsTest, sink_hardlink)
         sink->flush();
         FAIL() << "Expected an exception";
     } catch (const nix::Error & e) {
-        ASSERT_THAT(e.msg(), testing::HasSubstr("does not exist"));
-        ASSERT_THAT(e.msg(), testing::HasSubstr("/hello"));
-        ASSERT_THAT(e.msg(), testing::HasSubstr("foo-1.1/link"));
+        ASSERT_THAT(e.msg(), ::testing::HasSubstr("does not exist"));
+        ASSERT_THAT(e.msg(), ::testing::HasSubstr("/hello"));
+        ASSERT_THAT(e.msg(), ::testing::HasSubstr("foo-1.1/link"));
     }
 };
 
@@ -171,6 +182,135 @@ TEST_F(GitUtilsTest, peel_reference)
 
     git_signature_free(sig);
     git_repository_free(rawRepo);
+}
+
+TEST_F(GitUtilsTest, duplicateTreeEntries)
+{
+    StringSink packSink;
+
+    auto serialiseBigEndian = [](auto x, Sink & sink) {
+        std::array<unsigned char, sizeof(x)> bytes;
+        writeBigEndian(bytes.data(), x);
+        sink(std::string_view(reinterpret_cast<const char *>(bytes.data()), bytes.size()));
+    };
+
+    auto writeObjectPackHeader = [&packSink](int type, std::size_t size) {
+        std::vector<char> bytes;
+        unsigned char byte = type << 4 | (size & 0x0f);
+        size >>= 4;
+
+        while (size) {
+            byte |= 0x80;
+            bytes.push_back(byte);
+            byte = size & 0x7f;
+            size >>= 7;
+        }
+
+        bytes.push_back(byte);
+        packSink(std::string_view(bytes.data(), bytes.size()));
+    };
+
+    /* We don't have a deflate compression sink and seems excessive to write it just for tests.
+       Maybe it the future we might want to write pack files manually to work in constant memory? */
+    auto compressObject = [](std::string_view data) -> std::string {
+        z_stream stream = {};
+        if (deflateInit(&stream, Z_DEFAULT_COMPRESSION) != Z_OK)
+            unreachable();
+        Finally cleanup([&stream] { ::deflateEnd(&stream); });
+        stream.next_in = reinterpret_cast<unsigned char *>(const_cast<char *>(data.data()));
+        stream.avail_in = data.size();
+        auto maxOutputSize = ::deflateBound(&stream, data.size());
+        std::vector<unsigned char> result(maxOutputSize, '\0');
+        stream.next_out = result.data();
+        stream.avail_out = result.size();
+        if (::deflate(&stream, Z_FINISH) != Z_STREAM_END)
+            unreachable();
+        result.resize(result.size() - stream.avail_out);
+        return std::string(result.begin(), result.end());
+    };
+
+    /* https://git-scm.com/docs/pack-format */
+    packSink("PACK");
+    serialiseBigEndian(/*version=*/2u, packSink);
+    serialiseBigEndian(/*numObjects=*/3u, packSink);
+
+    auto writeBlobToPackfile = [&](std::string_view data) -> Hash {
+        HashSink hashSink(HashAlgorithm::SHA1);
+        git::dumpBlobPrefix(data.size(), hashSink);
+        hashSink(data);
+        auto hash = hashSink.finish();
+        writeObjectPackHeader(/*OBJ_BLOB=*/3, data.size());
+        packSink(compressObject(data));
+        return hash.hash;
+    };
+
+    auto writeTreeToPackfile = [&](std::span<const std::tuple<std::string, git::Mode, Hash>> entries) -> Hash {
+        using namespace std::string_literals;
+        std::string tree;
+
+        for (const auto & [name, mode, hash] : entries) {
+            tree += fmt("%o %s\0"s, std::to_underlying(mode), name);
+            tree += std::string_view(reinterpret_cast<const char *>(hash.hash), hash.hashSize);
+        }
+
+        writeObjectPackHeader(/*OBJ_TREE=*/2, tree.size());
+        packSink(compressObject(tree));
+        HashSink treeHashSink(HashAlgorithm::SHA1);
+        treeHashSink(fmt("tree %d\0"s, tree.size()));
+        treeHashSink(tree);
+        return treeHashSink.finish().hash;
+    };
+
+    auto blob1 = writeBlobToPackfile("hi");
+    ASSERT_EQ(blob1.gitRev(), "32f95c0d1244a78b2be1bab8de17906fabb2c4a8");
+    auto blob2 = writeBlobToPackfile("there");
+    ASSERT_EQ(blob2.gitRev(), "c78ee1a5bdf46d22da300b68d50bc45c587c3293");
+    auto tree1 = writeTreeToPackfile(
+        std::to_array<std::tuple<std::string, git::Mode, Hash>>({
+            {"a.txt", git::Mode::Regular, blob1},
+            {"a.txt", git::Mode::Executable, blob2},
+        }));
+    ASSERT_EQ(tree1.gitRev(), "164e45a3d3f73578e4d4f83651b5d0edc4564ba0");
+
+    auto packHash = hashString(HashAlgorithm::SHA1, packSink.s);
+    packSink(std::string_view(reinterpret_cast<const char *>(packHash.hash), packHash.hashSize));
+
+    /* Now that the pack file is built, index it.
+       TODO: If libgit2 ever hardens itself against such pack files we might need to
+       rework the test and write the pack file manually. */
+    ::git_indexer * indexer = nullptr;
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+    ::git_indexer_options indexerOpts = GIT_INDEXER_OPTIONS_INIT;
+    indexerOpts.oid_type = GIT_OID_SHA1;
+#endif
+
+    Finally freeIndexer{[&indexer] { ::git_indexer_free(indexer); }};
+    ASSERT_EQ(
+        ::git_indexer_new(
+            &indexer,
+            (tmpDir / ".git" / "objects" / "pack").string().c_str(),
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+            &indexerOpts
+#else
+            0,
+            nullptr,
+            nullptr
+#endif
+            ),
+        0);
+
+    ::git_indexer_progress progress = {};
+    ASSERT_EQ(::git_indexer_append(indexer, packSink.s.data(), packSink.s.size(), &progress), 0);
+    ASSERT_EQ(::git_indexer_commit(indexer, &progress), 0);
+
+    auto repo = openRepo();
+    auto accessor = repo->getAccessor(tree1, {}, getRepoName());
+    /* FIXME: Reject such trees too. */
+    ASSERT_EQ(accessor->readDirectory(CanonPath::root).size(), 1u);
+    ASSERT_THAT(
+        [&] { accessor->readFile(CanonPath("a.txt")); },
+        ::testing::ThrowsMessage<Error>(
+            testing::HasSubstrIgnoreANSIMatcher("duplicate tree entry 'test-git-repo/a.txt'")));
 }
 
 TEST(GitUtils, isLegalRefName)
