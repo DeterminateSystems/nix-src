@@ -72,6 +72,17 @@ struct FilteringSourceAccessor : SourceAccessor
      * Return `true` iff access to path is allowed.
      */
     virtual bool isAllowed(const CanonPath & path) = 0;
+
+    /**
+     * Return `true` if access to `path` and all its descendants is
+     * allowed. This is an optimisation that allows `readDirectory()`
+     * to skip checking every directory entry, so it's always safe to
+     * return `false`.
+     */
+    virtual bool isAllowedRecursively(const CanonPath & path)
+    {
+        return false;
+    }
 };
 
 /**
