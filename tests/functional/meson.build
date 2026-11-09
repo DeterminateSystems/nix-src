@@ -102,6 +102,7 @@ suites = [
       'fetchPath.sh',
       'fetchTree-file.sh',
       'fetchurl.sh',
+      'file-size-limit.sh',
       'filter-source.sh',
       'fixed-slow-vs-bad.sh',
       'fixed.sh',

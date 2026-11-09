@@ -45,7 +45,8 @@ void _interrupted();
  * Start a thread that handles various signals. Also block those signals
  * on the current thread (and thus any threads created by it).
  * Saves the signal mask before changing the mask to block those signals.
- * See saveSignalMask().
+ * See saveSignalMask(). Also ignores SIGXFSZ, which restoreSignals()
+ * undoes.
  */
 void startSignalHandlerThread();
 
