@@ -8,12 +8,19 @@
 
 namespace nix {
 
+StructuredAttrs StructuredAttrs::fromJSON(nlohmann::json json)
+{
+    if (!json.is_object())
+        throw Error("structured attributes must be a JSON object, but got a JSON %s", json.type_name());
+    return StructuredAttrs{
+        .structuredAttrs = std::move(json),
+    };
+}
+
 StructuredAttrs StructuredAttrs::parse(std::string_view encoded)
 {
     try {
-        return StructuredAttrs{
-            .structuredAttrs = nlohmann::json::parse(encoded),
-        };
+        return fromJSON(nlohmann::json::parse(encoded));
     } catch (std::exception & e) {
         throw Error("cannot process %s attribute: %s", envVarName, e.what());
     }
@@ -30,8 +37,7 @@ std::optional<StructuredAttrs> StructuredAttrs::tryExtract(StringPairs & env)
 
 std::pair<std::string_view, std::string> StructuredAttrs::unparse() const
 {
-    // TODO don't copy the JSON object just to dump it.
-    return {envVarName, static_cast<nlohmann::json>(structuredAttrs).dump()};
+    return {envVarName, structuredAttrs.dump()};
 }
 
 void StructuredAttrs::checkKeyNotInUse(const StringPairs & env)
@@ -102,7 +108,7 @@ nlohmann::json::object_t StructuredAttrs::prepareStructuredAttrs(
     const DerivationOutputs & outputs) const
 {
     /* Copy to then modify */
-    auto json = structuredAttrs;
+    auto json = object();
 
     /* Add an "outputs" object containing the output paths. */
     nlohmann::json outputsJson;
