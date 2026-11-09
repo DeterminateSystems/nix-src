@@ -16,6 +16,67 @@
 
 namespace nix {
 
+struct Worker::BuilderStartPool
+{
+    const size_t maxThreads;
+
+    struct State
+    {
+        std::queue<fun<void()>> pending;
+        size_t idle = 0;
+        bool quit = false;
+    };
+
+    Sync<State> state_;
+
+    std::condition_variable wakeup;
+
+    /* Only accessed by the worker thread. */
+    std::vector<std::thread> threads;
+
+    BuilderStartPool(size_t maxThreads)
+        : maxThreads(maxThreads)
+    {
+    }
+
+    ~BuilderStartPool()
+    {
+        state_.lock()->quit = true;
+        wakeup.notify_all();
+        for (auto & thread : threads)
+            thread.join();
+    }
+
+    void enqueue(fun<void()> work)
+    {
+        auto state(state_.lock());
+        state->pending.push(std::move(work));
+        if (state->idle < state->pending.size() && threads.size() < maxThreads)
+            threads.emplace_back([this]() { run(); });
+        wakeup.notify_one();
+    }
+
+    void run()
+    {
+        ReceiveInterrupts receiveInterrupts;
+
+        while (true) {
+            std::optional<fun<void()>> work;
+            {
+                auto state(state_.lock());
+                state->idle++;
+                state.wait(wakeup, [&]() { return state->quit || !state->pending.empty(); });
+                state->idle--;
+                if (state->quit)
+                    return;
+                work = std::move(state->pending.front());
+                state->pending.pop();
+            }
+            (*work)();
+        }
+    }
+};
+
 Worker::Worker(Store & store, Store & evalStore)
     /* Can't use make_ref, because the constructor is private. */
     : wakerState(ref<Waker>(new Waker{}))
@@ -520,6 +581,14 @@ void Worker::waitForInput()
 std::weak_ptr<Worker::Waker> Worker::getCrossThreadWaker()
 {
     return wakerState.get_ptr();
+}
+
+void Worker::startBuilderAsync(fun<void()> work)
+{
+    if (!builderStartPool)
+        builderStartPool = std::make_unique<BuilderStartPool>(
+            std::max(1U, std::min((unsigned int) settings.maxBuildJobs, std::thread::hardware_concurrency())));
+    builderStartPool->enqueue(std::move(work));
 }
 
 void Worker::Waker::wakeAll(Worker & worker)

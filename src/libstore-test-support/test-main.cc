@@ -2,6 +2,9 @@
 
 #include "nix/store/globals.hh"
 #include "nix/util/logging.hh"
+#ifndef _WIN32
+#  include "nix/util/spawner.hh"
+#endif
 
 #include "nix/store/tests/test-main.hh"
 
@@ -9,6 +12,10 @@ namespace nix {
 
 int testMainForBuidingPre(int argc, char ** argv)
 {
+#ifndef _WIN32
+    runSpawnerIfRequested();
+#endif
+
     if (argc > 1 && std::string_view(argv[1]) == "__build-remote") {
         printError("test-build-remote: not supported in libexpr unit tests");
         return EXIT_FAILURE;
