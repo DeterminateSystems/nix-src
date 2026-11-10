@@ -30,7 +30,9 @@
 #include "nix/store/async-path-writer.hh"
 #include "nix/expr/parallel-eval.hh"
 
+NIX_INCOMPLETE_SWITCH_BEGIN
 #include "parser-tab.hh"
+NIX_INCOMPLETE_SWITCH_END
 
 #include <algorithm>
 #include <cstddef>
@@ -167,9 +169,7 @@ std::string_view showType(ValueType type, bool withArticle)
 
 std::string showType(const Value & v)
 {
-// Allow selecting a subset of enum values
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch-enum"
+    NIX_INCOMPLETE_SWITCH_BEGIN
     switch (v.getInternalType()) {
     case tString:
         return v.context() ? "a string with context" : "a string";
@@ -186,14 +186,12 @@ std::string showType(const Value & v)
     default:
         return std::string(showType(v.type()));
     }
-#pragma GCC diagnostic pop
+    NIX_INCOMPLETE_SWITCH_END
 }
 
 PosIdx Value::determinePos(const PosIdx pos) const
 {
-// Allow selecting a subset of enum values
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch-enum"
+    NIX_INCOMPLETE_SWITCH_BEGIN
     switch (getInternalType()) {
     case tAttrs:
         return attrs()->pos;
@@ -207,7 +205,7 @@ PosIdx Value::determinePos(const PosIdx pos) const
     default:
         return pos;
     }
-#pragma GCC diagnostic pop
+    NIX_INCOMPLETE_SWITCH_END
 }
 
 template<>
