@@ -9,8 +9,13 @@ namespace nix {
 
 struct SrcToStore
 {
+    /* Note: the key identifies the source accessor by its number
+       rather than by a reference to it, since the cache must not
+       keep accessors (and thus the stores they may refer to) alive:
+       it's owned by the global `fetchSettings`, so it's never
+       destroyed. */
     boost::concurrent_flat_map<
-        std::tuple<SourcePath, ContentAddressMethod::Raw, std::string>,
+        std::tuple<size_t, CanonPath, ContentAddressMethod::Raw, std::string>,
         std::tuple<StorePath, Hash, FetchMode>>
         cache;
 };
@@ -51,7 +56,7 @@ std::pair<StorePath, Hash> fetchToStore2(
     PathFilter * filter,
     RepairFlag repair)
 {
-    auto srcToStoreKey = std::make_tuple(path, method.raw, std::string(name));
+    auto srcToStoreKey = std::make_tuple(path.accessor->number, path.path, method.raw, std::string(name));
 
     if (!filter) {
         auto dstPathCached = getConcurrent(settings.srcToStore->cache, srcToStoreKey);
