@@ -33,10 +33,10 @@ inline void * EvalMemory::allocBytes(size_t count)
     size_t res = 0;
 
     if (__builtin_mul_overflow(count, sizeof(T), &res)) [[unlikely]]
-        throw std::bad_alloc();
+        outOfMemory();
 
     if (__builtin_add_overflow(res, N, &res)) [[unlikely]]
-        throw std::bad_alloc();
+        outOfMemory();
 
     return allocBytes(res);
 }
