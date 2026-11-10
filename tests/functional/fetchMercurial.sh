@@ -106,3 +106,15 @@ echo paris > "$repo"/hello
 # Passing a `name` argument should be reflected in the output path
 path5=$(nix eval -vvvvv --impure --refresh --raw --expr "(builtins.fetchMercurial { url = \"file://$repo\"; name = \"foo\"; } ).outPath")
 [[ $path5 =~ -foo$ ]]
+
+# Fetch a revision on a branch whose name contains a space.
+hg branch --cwd "$repo" 'a b'
+hg commit --cwd "$repo" -m 'Bla4'
+rev4=$(hg log --cwd "$repo" -r tip --template '{node}')
+[[ $(nix eval --impure --raw --expr "(builtins.fetchMercurial { url = \"file://$repo\"; rev = \"$rev4\"; }).branch") = 'a b' ]]
+
+# A ref is evaluated as a revset, which can match zero or more revisions.
+expectStderr 1 nix eval --impure --expr "builtins.fetchMercurial { url = \"file://$repo\"; rev = \"0+1\"; }" \
+    | grepQuiet "'0+1' does not identify exactly one revision"
+expectStderr 1 nix eval --impure --expr "builtins.fetchMercurial { url = \"file://$repo\"; rev = \"0-0\"; }" \
+    | grepQuiet "'0-0' does not identify exactly one revision"
