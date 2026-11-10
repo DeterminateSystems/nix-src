@@ -430,7 +430,7 @@ path_start
         /* add back in the trailing '/' to the first segment */
         if (literal.size() > 1 && literal.back() == '/')
           path += '/';
-        $$ = state->exprs.add<ExprPath>(state->exprs.alloc, state->rootFS, path);
+        $$ = state->exprs.addPath(state->rootFS, path);
     } else {
         /* check for short path literals */
         diagnose(state->settings.lintShortPathLiterals, [&](bool) -> std::optional<ParseError> {
@@ -446,7 +446,7 @@ path_start
         /* add back in the trailing '/' to the first segment */
         if (literal.size() > 1 && literal.back() == '/')
           path += '/';
-        $$ = state->exprs.add<ExprPath>(state->exprs.alloc, state->basePath.accessor, path);
+        $$ = state->exprs.addPath(state->basePath.accessor, path);
     }
   }
   | HPATH {
@@ -468,7 +468,7 @@ path_start
     if (literal.size() > 1 && literal.back() == '/')
         path += '/';
 
-    $$ = state->exprs.add<ExprPath>(state->exprs.alloc, state->rootFS, path);
+    $$ = state->exprs.addPath(state->rootFS, path);
   }
   ;
 
