@@ -1009,13 +1009,20 @@ TEST_F(PrimOpTest, genericClosure_not_strict)
 TEST_F(PrimOpTest, genListOverflow)
 {
     // Test multiplication overflow detection. Shifting out the upper bits would
-    // leave us with a zero size - that should be caught.
+    // leave us with a zero size - that should be caught. Running out of memory
+    // terminates the process (see `outOfMemory()`), so use a death test.
     if (sizeof(void *) == 8) {
         // (1 << 61) * 8
-        ASSERT_THROW({ eval("builtins.genList (x: x) 2305843009213693952"); }, std::bad_alloc);
+        ASSERT_EXIT(
+            { eval("builtins.genList (x: x) 2305843009213693952"); },
+            ::testing::ExitedWithCode(outOfMemoryExitStatus),
+            "ran out of memory");
     } else if (sizeof(void *) == 4) {
         // (1 << 30) * 4
-        ASSERT_THROW({ eval("builtins.genList (x: x) 1073741824"); }, std::bad_alloc);
+        ASSERT_EXIT(
+            { eval("builtins.genList (x: x) 1073741824"); },
+            ::testing::ExitedWithCode(outOfMemoryExitStatus),
+            "ran out of memory");
     }
 }
 

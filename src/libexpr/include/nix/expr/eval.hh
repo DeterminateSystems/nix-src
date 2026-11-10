@@ -344,7 +344,7 @@ public:
 
     /**
      * Allocates @p count * sizeof(T) + N contiguous bytes.
-     * @throws bad_alloc if the computation would overflow.
+     * Calls `outOfMemory()` if the computation would overflow.
      */
     template<typename T, std::size_t N = 0>
     inline void * allocBytes(size_t count);
