@@ -159,6 +159,7 @@ suites = [
       'readfile-context.sh',
       'recursive.sh',
       'referrers.sh',
+      'remote-store-max-connections.sh',
       'remote-store.sh',
       'repair.sh',
       'repl.sh',

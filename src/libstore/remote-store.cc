@@ -287,7 +287,8 @@ asio::awaitable<void> RemoteStore::queryPathInfos(
         co_return;
 
     {
-        auto conn(getConnection());
+        std::optional<ConnectionHandle> conn_(getConnection());
+        auto & conn = *conn_;
 
         if (conn->protoVersion.features.contains(WorkerProto::featureQueryPathInfos)) {
             auto cacheResult = [&](const StorePath & path, std::shared_ptr<const ValidPathInfo> info) {
@@ -316,6 +317,13 @@ asio::awaitable<void> RemoteStore::queryPathInfos(
                 cacheResult(path, nullptr);
                 results.emplace_back(path, nullptr);
             }
+
+            /* Release the connection before invoking the callback,
+               which may use this store again (e.g. computeFSClosure()
+               recursively calls queryPathInfos() from it). Holding
+               the connection would deadlock once the connection pool
+               is exhausted. */
+            conn_.reset();
 
             callback(std::move(results));
 
