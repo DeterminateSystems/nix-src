@@ -73,7 +73,13 @@ scope: {
           NIX_CFLAGS_COMPILE = toString (
             [
               "-DINITIAL_MARK_STACK_SIZE=1048576"
-              "-DGC_MANY_BLOCKS_DEFAULT=64"
+              # Number of heap blocks (4 KiB each) handed to a thread's
+              # free list per refill. Larger values reduce contention on
+              # the allocation lock, but every (thread, object kind,
+              # size class) holds such a batch, which is counted as
+              # allocated and touched immediately. 64 wasted hundreds
+              # of MiB with parallel evaluation.
+              "-DGC_MANY_BLOCKS_DEFAULT=8"
               # Disable black-listing (avoiding allocation on pages that
               # false pointers refer to). The black lists are hash
               # tables covering 8 GiB of address space; on larger heaps
