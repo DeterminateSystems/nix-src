@@ -109,6 +109,11 @@ rec {
             # Same for all components; nix-util is an arbitrary pick
             (nix.appendPatches [ pkgs.emptyFile ]).libs.nix-util.src;
         };
+  }
+  // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+    harmonia-named-activities = pkgs.callPackage ../../../tests/harmonia-named-activities {
+      nix = packages'.nix-cli;
+    };
   };
 
   disable =
