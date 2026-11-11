@@ -22,5 +22,5 @@ storePath=$(
     "
 )
 
-[[ "$storePath" == "$NIX_STORE_DIR"/*-deep-store-copy ]]
+[[ "$storePath" == "${NIX_STORE_DIR:-/nix/store}"/*-deep-store-copy ]]
 diff "$file" "$storePath"
