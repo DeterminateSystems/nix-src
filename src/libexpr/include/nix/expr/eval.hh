@@ -209,6 +209,12 @@ struct RegexCache;
 
 ref<RegexCache> makeRegexCache();
 
+struct MemoiseCache;
+
+ref<MemoiseCache> makeMemoiseCache();
+
+void clearMemoiseCache(MemoiseCache & cache);
+
 struct DebugTrace
 {
     /* WARNING: Converting PosIdx -> Pos should be done with extra care. This is
@@ -519,6 +525,11 @@ private:
      * Cache used by prim_match().
      */
     const ref<RegexCache> regexCache;
+
+    /**
+     * Cache used by prim_memoise().
+     */
+    const ref<MemoiseCache> memoiseCache;
 
 public:
 
@@ -1116,6 +1127,8 @@ private:
     Counter nrListConcats;
     Counter nrPrimOpCalls;
     Counter nrFunctionCalls;
+    Counter nrMemoiseHits;
+    Counter nrMemoiseMisses;
 
 public:
     // Buffers allocated in Wasm guests on behalf of host functions (e.g. `read_file_v2`).
@@ -1161,6 +1174,7 @@ private:
     friend void prim_getAttr(EvalState & state, const PosIdx pos, Value ** args, Value & v);
     friend void prim_match(EvalState & state, const PosIdx pos, Value ** args, Value & v);
     friend void prim_split(EvalState & state, const PosIdx pos, Value ** args, Value & v);
+    friend void prim_memoise(EvalState & state, const PosIdx pos, Value ** args, Value & v);
 
     friend struct Value;
     friend class ListBuilder;
