@@ -34,6 +34,8 @@ runCommand "nix-test-runner"
             jq
             git
             mercurial
+            # For the OpenTelemetry collector in `otel.sh`.
+            python3
             unixtools.script
           ]
           # Linux only, as in package.nix: a static shell for the sandboxing
