@@ -16,12 +16,7 @@ in
   {
     prefix = "google/cloud/";
     pkg = with deps; [
-      (google-cloud-cpp.override {
-        apis = [
-          "storage"
-          "universe_domain"
-        ];
-      })
+      google-cloud-cpp
       # google-cloud-cpp does not propagate its pkg-config dependencies.
       abseil-cpp
       crc32c

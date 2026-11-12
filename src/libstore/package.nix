@@ -102,12 +102,7 @@ mkMesonLibrary (finalAttrs: {
   ++ lib.optional stdenv.hostPlatform.isFreeBSD freebsd.libjail
   ++ lib.optional withAWS aws-crt-cpp
   ++ lib.optionals withGCS [
-    (google-cloud-cpp.override {
-      apis = [
-        "storage"
-        "universe_domain"
-      ];
-    })
+    google-cloud-cpp
     # google-cloud-cpp does not propagate its pkg-config dependencies.
     abseil-cpp
     crc32c

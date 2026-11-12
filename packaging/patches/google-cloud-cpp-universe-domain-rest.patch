@@ -1,0 +1,15 @@
+The universe_domain library only links common and rest_internal. Classify it as
+REST-only so enabling it does not also build the gRPC and protobuf utilities.
+
+diff --git a/cmake/GoogleCloudCppFeatures.cmake b/cmake/GoogleCloudCppFeatures.cmake
+--- a/cmake/GoogleCloudCppFeatures.cmake
++++ b/cmake/GoogleCloudCppFeatures.cmake
+@@ -30,7 +30,7 @@ set(GOOGLE_CLOUD_CPP_LEGACY_FEATURES
+ # `google_cloud_cpp_grpc_utils`.
+ set(GOOGLE_CLOUD_CPP_NO_GRPC_FEATURES
+     # cmake-format: sort
+-    "experimental-bigquery_rest" "mocks" "oauth2" "storage")
++    "experimental-bigquery_rest" "mocks" "oauth2" "storage" "universe_domain")
+ 
+ set(GOOGLE_CLOUD_CPP_EXPERIMENTAL_LIBRARIES
+     # cmake-format: sort
