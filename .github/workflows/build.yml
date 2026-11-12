@@ -109,7 +109,7 @@ jobs:
           extra-conf: |
             extra-experimental-features = provenance
       - uses: DeterminateSystems/flakehub-cache-action@main
-      - run: nix build "$FLAKE_REF#packages.$SYSTEM.nix-cli-static" --no-link -L
+      - run: nix build "$FLAKE_REF#packages.$SYSTEM.nix-everything-static" --no-link -L
 
   test:
     if: ${{ inputs.if && inputs.run_tests}}
