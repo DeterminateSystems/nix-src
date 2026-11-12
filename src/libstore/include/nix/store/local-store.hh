@@ -423,6 +423,28 @@ public:
     virtual void deleteStorePath(const std::filesystem::path & path, uint64_t & bytesFreed, bool isKnownPath);
 
     /**
+     * Whether `collectGarbage` may delete dead store paths in
+     * background threads (see the `gc-delete-threads` setting). If so,
+     * each dead path is first renamed into a trash directory inside the
+     * real store directory, and `deleteStorePath` is then called on its
+     * location in the trash directory rather than on its original
+     * location.
+     *
+     * Stores whose `deleteStorePath` depends on the original location
+     * of the path must return false. This is also the case on FreeBSD,
+     * where `deletePath()` recognises file systems mounted below a path
+     * by their original location.
+     */
+    virtual bool canDeleteGarbageInBackground()
+    {
+#ifdef __FreeBSD__
+        return false;
+#else
+        return true;
+#endif
+    }
+
+    /**
      * Optimise the disk space usage of the Nix store by hard-linking
      * files with the same contents.
      */
