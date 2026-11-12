@@ -173,7 +173,9 @@ struct CmdServe : StoreCommand
                 auto & state = *static_cast<State *>(cls);
 
                 /* For testing: send the NAR in chunks of about 10% of
-                   its size, spread out over this many seconds. */
+                   its size, spread out over this many seconds. Note
+                   that this blocks the daemon's only thread, so it
+                   stalls all other requests as well. */
                 static auto narDuration =
                     string2Float<double>(getEnv("_NIX_TEST_NIX_SERVE_NAR_DURATION").value_or("")).value_or(0);
                 if (narDuration > 0) {
