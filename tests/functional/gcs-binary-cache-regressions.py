@@ -36,6 +36,7 @@ class GCSRegressions(unittest.TestCase):
 
     def test_interrupt_stops_retries(self):
         marker = server_dir / "interrupted"
+        release = server_dir / "release-interrupted"
         with subprocess.Popen(
             ["nix", "store", "info", "--store", "gs://interrupted/cache"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -47,10 +48,15 @@ class GCSRegressions(unittest.TestCase):
                     self.assertLess(time.monotonic(), deadline, "Nix never contacted the test server")
                     time.sleep(0.01)
                 process.send_signal(signal.SIGINT)
+                release.touch()
                 _, stderr = process.communicate(timeout=5)
                 self.assertNotEqual(process.returncode, 0, stderr)
-                self.assertIn("interrupted", stderr)
+                self.assertIn("interrupted by the user", stderr)
+                requests = [json.loads(line) for line in (server_dir / "requests").read_text().splitlines()]
+                attempts = [r for r in requests if "/b/interrupted/" in r["path"]]
+                self.assertEqual(len(attempts), 1, f"GCS retried after SIGINT: {attempts}")
             finally:
+                release.touch()
                 if process.poll() is None:
                     process.kill()
                     process.communicate()

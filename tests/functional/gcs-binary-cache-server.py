@@ -8,6 +8,7 @@ import json
 import pathlib
 import re
 import sys
+import time
 import urllib.parse
 import uuid
 
@@ -84,6 +85,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if "/b/interrupted/" in url.path:
             (self.server.root / "interrupted").touch()
+            # Hold the failure response until the test has sent SIGINT.
+            deadline = time.monotonic() + 5
+            while not (self.server.root / "release-interrupted").exists():
+                assert time.monotonic() < deadline, "test did not release the interrupted request"
+                time.sleep(0.01)
             return self.reply(503, {"error": {"code": 503, "message": "retry until interrupted"}})
 
         if self.command == "GET" and "/o/" in url.path:
