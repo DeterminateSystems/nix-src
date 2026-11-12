@@ -175,6 +175,13 @@ struct curlFileTransfer : public FileTransfer
     std::random_device rd;
     std::mt19937 mt19937;
 
+    /**
+     * When any transfer last made progress, i.e. sent or received
+     * data, or finished after having been assigned a connection.
+     * Only accessed from the worker thread.
+     */
+    std::chrono::steady_clock::time_point lastProgress;
+
     struct TransferItem : public std::enable_shared_from_this<TransferItem>, public FileTransfer::Item
     {
         curlFileTransfer & fileTransfer;
@@ -198,6 +205,18 @@ struct curlFileTransfer : public FileTransfer
         /* Don't start this download until the specified time point
            has been reached. */
         std::chrono::steady_clock::time_point embargo;
+
+        /**
+         * When the current attempt was handed to curl.
+         */
+        std::chrono::steady_clock::time_point attemptStartTime;
+
+        /**
+         * If the preceding attempts timed out while waiting for a
+         * connection (see `waitedForConnection()`), when the first of
+         * those attempts was handed to curl.
+         */
+        std::optional<std::chrono::steady_clock::time_point> waitingForConnectionSince;
 
         curlSList requestHeaders;
 
@@ -376,6 +395,8 @@ struct curlFileTransfer : public FileTransfer
 
         size_t writeCallback(void * contents, size_t size, size_t nmemb) noexcept
         try {
+            fileTransfer.lastProgress = std::chrono::steady_clock::now();
+
             size_t realSize = size * nmemb;
             result.bodySize += realSize;
 
@@ -418,6 +439,8 @@ struct curlFileTransfer : public FileTransfer
 
         size_t headerCallback(void * contents, size_t size, size_t nmemb) noexcept
         try {
+            fileTransfer.lastProgress = std::chrono::steady_clock::now();
+
             size_t realSize = size * nmemb;
             std::string line((char *) contents, realSize);
             printMsg(lvlVomit, "got header for '%s': %s", request.displayUri(), trim(line));
@@ -552,6 +575,8 @@ struct curlFileTransfer : public FileTransfer
 
         size_t readCallback(char * buffer, size_t size, size_t nitems) noexcept
         try {
+            fileTransfer.lastProgress = std::chrono::steady_clock::now();
+
             auto data = request.data;
             return data->source->read(buffer, nitems * size);
         } catch (EndOfFile &) {
@@ -623,6 +648,7 @@ struct curlFileTransfer : public FileTransfer
 
             curl_easy_reset(req);
 
+            attemptStartTime = std::chrono::steady_clock::now();
             bytesReceived = 0;
 
             /* Start an activity for this HTTP request. Note that
@@ -813,6 +839,11 @@ struct curlFileTransfer : public FileTransfer
         {
             auto finishTime = std::chrono::steady_clock::now();
 
+            /* If this transfer had a connection, it's now available to
+               other transfers. */
+            if (!neverConnected())
+                fileTransfer.lastProgress = finishTime;
+
             auto httpStatus = getHTTPStatus();
 
             debug(
@@ -949,8 +980,6 @@ struct curlFileTransfer : public FileTransfer
 #pragma GCC diagnostic pop
                 }
 
-                attempt++;
-
                 std::optional<std::string> response;
                 if (errorSink)
                     response = std::move(errorSink->s);
@@ -980,8 +1009,66 @@ struct curlFileTransfer : public FileTransfer
                                      code,
                                      errbuf);
 
+                if (waitedForConnection(code, finishTime)) {
+                    debug(
+                        "%s of '%s' timed out waiting for a free connection, requeueing",
+                        Uncolored(request.noun()),
+                        request.displayUri());
+                    requeue(std::move(exc));
+                    return;
+                }
+
+                attempt++;
+
                 maybeRetry(err, httpStatus, std::move(exc));
             }
+        }
+
+        /**
+         * Whether this attempt failed only because it timed out while
+         * waiting for a connection, in which case it can be requeued
+         * without counting it as an attempt.
+         *
+         * When all `http-connections` are in use, curl keeps new
+         * transfers in a queue, and the time spent there counts
+         * towards the connect timeout
+         * (https://curl.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html).
+         * We can recognize such timeouts because the transfer was
+         * never assigned a connection.
+         *
+         * Waiting is fine as long as the transfers holding the
+         * connections make progress, no matter how long it takes.
+         * However, curl's stall detection doesn't apply to paused
+         * transfers, so they can hold on to a connection indefinitely
+         * (e.g. if their consumer is waiting for a queued transfer).
+         * So we stop requeueing if no transfer has made any progress
+         * for `stalled-download-timeout` while this transfer was
+         * waiting.
+         */
+        bool waitedForConnection(CURLcode code, std::chrono::steady_clock::time_point now)
+        {
+            if (code != CURLE_OPERATION_TIMEDOUT || !neverConnected()) {
+                waitingForConnectionSince.reset();
+                return false;
+            }
+
+            if (!waitingForConnectionSince)
+                waitingForConnectionSince = attemptStartTime;
+
+            auto maxStall = fileTransfer.settings.stalledDownloadTimeout.get();
+            return maxStall == 0
+                   || now - std::max(*waitingForConnectionSince, fileTransfer.lastProgress)
+                          < std::chrono::seconds(maxStall);
+        }
+
+        /**
+         * Whether curl never assigned a connection to the current
+         * attempt.
+         */
+        bool neverConnected()
+        {
+            curl_off_t connId = 0;
+            return curl_easy_getinfo(req, CURLINFO_CONN_ID, &connId) == CURLE_OK && connId < 0;
         }
 
         /* If this is a transient error, then maybe retry the download
@@ -1048,8 +1135,18 @@ struct curlFileTransfer : public FileTransfer
                 warn("%s; retrying in %d ms (attempt %d/%d)", exc.message(), delay.count(), attempt, effAttempts);
             }
 
-            errorSink.reset();
             embargo = std::chrono::steady_clock::now() + delay;
+            requeue(std::move(exc));
+        }
+
+        /**
+         * Put this transfer back into the queue, to be restarted once
+         * its embargo has passed. If that's not possible, fail with
+         * `exc`.
+         */
+        void requeue(FileTransferError && exc)
+        {
+            errorSink.reset();
             try {
                 fileTransfer.enqueueItem(ref{shared_from_this()});
             } catch (const nix::Error & e) {
