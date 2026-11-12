@@ -7,11 +7,25 @@
 #include <cstdlib>
 #include <sstream>
 
+#include <boost/unordered/concurrent_flat_map.hpp>
+
 #include "nix/util/strings-inline.hh"
 
 namespace nix {
 
 Counter Expr::nrExprs;
+
+Exprs::Exprs()
+    : pathAccessors(make_ref<decltype(pathAccessors)::element_type>())
+{
+}
+
+ExprPath * Exprs::addPath(const ref<SourceAccessor> & accessor, std::string_view path)
+{
+    /* Note: this only copies `accessor` if it's not already in the map. */
+    pathAccessors->try_emplace(accessor->number, accessor);
+    return add<ExprPath>(alloc, *accessor, path);
+}
 
 // FIXME: remove, because *symbols* are abstract and do not have a single
 //        textual representation; see printIdentifier()

@@ -18,6 +18,8 @@
 #include "nix/util/error.hh"
 #include "nix/util/bump-memory-resource.hh"
 
+#include <boost/unordered/concurrent_flat_map_fwd.hpp>
+
 namespace nix {
 
 class EvalState;
@@ -198,13 +200,15 @@ struct ExprString : Expr
 
 struct ExprPath : Expr
 {
-    ref<SourceAccessor> accessor;
     Value v;
 
-    ExprPath(std::pmr::polymorphic_allocator<char> & alloc, ref<SourceAccessor> accessor, std::string_view sv)
-        : accessor(accessor)
+    /**
+     * @param accessor Must outlive this `ExprPath`. Use
+     * `Exprs::addPath()`, which ensures that.
+     */
+    ExprPath(std::pmr::polymorphic_allocator<char> & alloc, SourceAccessor & accessor, std::string_view sv)
     {
-        v.mkPath(&*accessor, StringData::make(*alloc.resource(), sv));
+        v.mkPath(&accessor, StringData::make(*alloc.resource(), sv));
     }
 
     Value * maybeThunk(EvalState & state, Env & env) override;
@@ -800,8 +804,21 @@ class Exprs
     std::pmr::synchronized_pool_resource fallbackResource;
     BumpMemoryResource buffer{BumpMemoryResource::defaultReserveSize, &fallbackResource};
 
+    /**
+     * The source accessors referenced by `ExprPath`s, indexed by
+     * their numbers. `Expr`s are allocated in an arena and never
+     * destroyed, so they can't own these themselves: that would keep
+     * the accessors (and anything they refer to, such as the store)
+     * alive forever.
+     */
+    const ref<boost::concurrent_flat_map<size_t, ref<SourceAccessor>>> pathAccessors;
+
 public:
     std::pmr::polymorphic_allocator<char> alloc{&buffer};
+
+    Exprs();
+
+    ExprPath * addPath(const ref<SourceAccessor> & accessor, std::string_view path);
 
     template<class C>
     [[gnu::always_inline]]
