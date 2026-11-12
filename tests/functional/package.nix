@@ -57,7 +57,12 @@ mkMesonDerivation (
 
       jq
       git
-      mercurial
+    ]
+    # Mercurial isn't cached for the static macOS package set, and building
+    # it fails (its dependency pybind11 fails its tests). Without it, the
+    # Mercurial tests are skipped.
+    ++ lib.optional (!(stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isStatic)) mercurial
+    ++ [
       # For the OpenTelemetry collector in `otel.sh`.
       python3
       unixtools.script
