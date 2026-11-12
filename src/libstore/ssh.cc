@@ -6,7 +6,57 @@
 #include "nix/util/exec.hh"
 #include "nix/util/base-n.hh"
 
+#include <map>
+
 namespace nix {
+
+#ifndef _WIN32
+
+namespace {
+
+/**
+ * Resources of an `SSHMaster` that must be cleaned up on exit.
+ */
+struct MasterResources
+{
+    /**
+     * The PID of the `ssh -M` process, or -1 if it's not running.
+     */
+    pid_t pid = -1;
+
+    std::filesystem::path tmpDir;
+};
+
+/**
+ * The resources of the `SSHMaster`s that haven't been destroyed yet.
+ * quickExit() kills their master processes and deletes their
+ * temporary directories, since an `SSHMaster` may never be destroyed
+ * (e.g. if a reference to the store that owns it is leaked), and its
+ * `ssh -M -N` process would otherwise keep running after we exit.
+ */
+Sync<std::map<const SSHMaster *, MasterResources>> & liveMasters()
+{
+    /* Leaked, so that it's never destroyed by static destructors. */
+    static auto & masters = []() -> auto & {
+        auto & masters = *new Sync<std::map<const SSHMaster *, MasterResources>>;
+        atQuickExit([&masters]() {
+            for (auto & [_, res] : *masters.lock()) {
+                if (res.pid != -1)
+                    ::kill(res.pid, SIGKILL);
+                /* Note: not using deletePath(), since that throws
+                   if we're exiting because of an interrupt. */
+                std::error_code ec;
+                std::filesystem::remove_all(res.tmpDir, ec);
+            }
+        });
+        return masters;
+    }();
+    return masters;
+}
+
+} // namespace
+
+#endif
 
 static std::string parsePublicHostKey(std::string_view host, std::string_view sshPublicHostKey)
 {
@@ -100,6 +150,21 @@ SSHMaster::SSHMaster(
     }())
 {
     checkValidAuthority(authority);
+
+#ifndef _WIN32
+    if (tmpDir)
+        liveMasters().lock()->emplace(this, MasterResources{.tmpDir = tmpDir->path()});
+#endif
+}
+
+SSHMaster::~SSHMaster()
+{
+    /* Our members clean up the master process and the temporary
+       directory. */
+#ifndef _WIN32
+    if (tmpDir)
+        liveMasters().lock()->erase(this);
+#endif
 }
 
 void SSHMaster::addCommonSSHOpts(OsStrings & args, std::optional<std::filesystem::path> socketPath)
@@ -268,8 +333,15 @@ std::optional<std::filesystem::path> SSHMaster::startMaster()
     auto state(state_.lock());
 
     // Check if the master is still alive before returning the cached socket.
-    if (state->sshMaster != INVALID_DESCRIPTOR && state->sshMaster.isAlive())
-        return state->socketPath;
+    if (state->sshMaster != INVALID_DESCRIPTOR) {
+        /* Hold the registry lock while checking, since isAlive()
+           reaps the master if it has exited, after which its PID may
+           be reused. */
+        auto masters(liveMasters().lock());
+        if (state->sshMaster.isAlive())
+            return state->socketPath;
+        masters->at(this).pid = -1;
+    }
 
     assert(tmpDir);
     state->socketPath = tmpDir->path() / "ssh.sock";
@@ -304,6 +376,8 @@ std::optional<std::filesystem::path> SSHMaster::startMaster()
             throw SysError("unable to execute '%s'", args.front());
         },
         options);
+
+    liveMasters().lock()->at(this).pid = state->sshMaster;
 
     out.writeSide = INVALID_DESCRIPTOR;
 
