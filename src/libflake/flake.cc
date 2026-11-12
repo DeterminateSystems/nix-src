@@ -69,6 +69,47 @@ using namespace fetchers;
 
 namespace flake {
 
+namespace {
+
+/**
+ * Per-`EvalState` state of libflake.
+ */
+struct LibFlakeState : EvalState::Extension
+{
+    /**
+     * The function defined by `call-flake.nix`.
+     */
+    RootValue vCallFlake;
+
+    const Symbol sInputs, sOutputs, sNixConfig, sUrl, sFlake, sFollows, sBuildTime, sPublicKeys, sSourceInfo, sDir;
+
+    LibFlakeState(EvalState & state)
+        : vCallFlake(state.allocValue())
+        , sInputs(state.symbols.create("inputs"))
+        , sOutputs(state.symbols.create("outputs"))
+        , sNixConfig(state.symbols.create("nixConfig"))
+        , sUrl(state.symbols.create("url"))
+        , sFlake(state.symbols.create("flake"))
+        , sFollows(state.symbols.create("follows"))
+        , sBuildTime(state.symbols.create("buildTime"))
+        , sPublicKeys(state.symbols.create("publicKeys"))
+        , sSourceInfo(state.symbols.create("sourceInfo"))
+        , sDir(state.symbols.create("dir"))
+    {
+        auto internalFS = make_ref<MemorySourceAccessor>();
+        internalFS->setPathDisplay("«flakes-internal»", "");
+        internalFS->addFile(
+            CanonPath("call-flake.nix"),
+#include "call-flake.nix.gen.hh" // IWYU pragma: keep
+        );
+        state.evalFile(SourcePath{internalFS, CanonPath("call-flake.nix")}, **vCallFlake);
+    }
+};
+
+} // namespace
+
+static EvalState::RegisterExtension<LibFlakeState> rLibFlakeState;
+
 static void forceTrivialValue(EvalState & state, Value & value, const PosIdx pos)
 {
     if (value.isTrivial())
@@ -114,7 +155,7 @@ static void parseFlakeInputAttr(EvalState & state, const nix::Attr & attr, fetch
         break;
     }
     default:
-        if (attr.name == state.symbols.create("publicKeys")) {
+        if (attr.name == state.getExtension(rLibFlakeState).sPublicKeys) {
             experimentalFeatureSettings.require(Xp::VerifiedFetches);
             NixStringContext emptyContext = {};
             attrs.emplace(
@@ -141,18 +182,14 @@ static FlakeInput parseFlakeInput(
 
     FlakeInput input;
 
-    auto sInputs = state.symbols.create("inputs");
-    auto sUrl = state.symbols.create("url");
-    auto sFlake = state.symbols.create("flake");
-    auto sFollows = state.symbols.create("follows");
-    auto sBuildTime = state.symbols.create("buildTime");
+    auto & libFlakeState = state.getExtension(rLibFlakeState);
 
     fetchers::Attrs attrs;
     std::optional<std::string> url;
 
     for (auto & attr : *value->attrs()) {
         try {
-            if (attr.name == sUrl) {
+            if (attr.name == libFlakeState.sUrl) {
                 forceTrivialValue(state, *attr.value, pos);
                 if (attr.value->type() == nString)
                     url = attr.value->string_view();
@@ -171,18 +208,18 @@ static FlakeInput parseFlakeInput(
                         showType(attr.value->type()),
                         state.positions[attr.pos]);
                 attrs.emplace("url", *url);
-            } else if (attr.name == sFlake) {
+            } else if (attr.name == libFlakeState.sFlake) {
                 expectType(state, nBool, *attr.value, attr.pos);
                 input.isFlake = attr.value->boolean();
-            } else if (attr.name == sBuildTime) {
+            } else if (attr.name == libFlakeState.sBuildTime) {
                 expectType(state, nBool, *attr.value, attr.pos);
                 input.buildTime = attr.value->boolean();
                 if (input.buildTime)
                     experimentalFeatureSettings.require(Xp::BuildTimeFetchTree);
-            } else if (attr.name == sInputs) {
+            } else if (attr.name == libFlakeState.sInputs) {
                 input.overrides =
                     parseFlakeInputs(state, attr.value, attr.pos, lockRootAttrPath, flakeDir, false).first;
-            } else if (attr.name == sFollows) {
+            } else if (attr.name == libFlakeState.sFollows) {
                 expectType(state, nString, *attr.value, attr.pos);
                 auto follows(parseInputAttrPath(attr.value->string_view()));
                 follows.insert(follows.begin(), lockRootAttrPath.begin(), lockRootAttrPath.end());
@@ -275,18 +312,16 @@ Flake readFlake(
         flake.description = description->value->string_view();
     }
 
-    auto sInputs = state.symbols.create("inputs");
+    auto & libFlakeState = state.getExtension(rLibFlakeState);
 
-    if (auto inputs = vInfo.attrs()->get(sInputs)) {
+    if (auto inputs = vInfo.attrs()->get(libFlakeState.sInputs)) {
         auto [flakeInputs, selfAttrs] =
             parseFlakeInputs(state, inputs->value, inputs->pos, lockRootAttrPath, flakeDir, true);
         flake.inputs = std::move(flakeInputs);
         flake.selfAttrs = std::move(selfAttrs);
     }
 
-    auto sOutputs = state.symbols.create("outputs");
-
-    if (auto outputs = vInfo.attrs()->get(sOutputs)) {
+    if (auto outputs = vInfo.attrs()->get(libFlakeState.sOutputs)) {
         expectType(state, nFunction, *outputs->value, outputs->pos);
 
         if (outputs->value->isLambda()) {
@@ -304,9 +339,7 @@ Flake readFlake(
     } else
         throw Error("flake '%s' lacks attribute 'outputs'", resolvedRef);
 
-    auto sNixConfig = state.symbols.create("nixConfig");
-
-    if (auto nixConfig = vInfo.attrs()->get(sNixConfig)) {
+    if (auto nixConfig = vInfo.attrs()->get(libFlakeState.sNixConfig)) {
         expectType(state, nAttrs, *nixConfig->value, nixConfig->pos);
 
         for (auto & setting : *nixConfig->value->attrs()) {
@@ -346,8 +379,8 @@ Flake readFlake(
     }
 
     for (auto & attr : *vInfo.attrs()) {
-        if (attr.name != state.s.description && attr.name != sInputs && attr.name != sOutputs
-            && attr.name != sNixConfig)
+        if (attr.name != state.s.description && attr.name != libFlakeState.sInputs
+            && attr.name != libFlakeState.sOutputs && attr.name != libFlakeState.sNixConfig)
             throw Error(
                 "flake '%s' has an unsupported attribute '%s', at %s",
                 resolvedRef,
@@ -960,37 +993,18 @@ lockFlake(const Settings & settings, EvalState & state, const SourcePath & flake
     return lockFlake(settings, state, fakeRef, lockFlags, readFlake(state, fakeRef, fakeRef, fakeRef, flakeDir, {}));
 }
 
-static ref<SourceAccessor> makeInternalFS()
-{
-    auto internalFS = make_ref<MemorySourceAccessor>(MemorySourceAccessor{});
-    internalFS->setPathDisplay("«flakes-internal»", "");
-    internalFS->addFile(
-        CanonPath("call-flake.nix"),
-#include "call-flake.nix.gen.hh" // IWYU pragma: keep
-    );
-    return internalFS;
-}
-
-static auto internalFS = makeInternalFS();
-
-static Value * requireInternalFile(EvalState & state, CanonPath path)
-{
-    SourcePath p{internalFS, path};
-    auto v = state.allocValue();
-    state.evalFile(p, *v); // has caching
-    return v;
-}
-
 void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & vRes)
 {
     auto [lockFileStr, keyMap] = lockedFlake.lockFile.to_string();
+
+    auto & libFlakeState = state.getExtension(rLibFlakeState);
 
     auto overrides = state.buildBindings(lockedFlake.nodePaths.size());
 
     for (auto & [node, sourcePath] : lockedFlake.nodePaths) {
         auto override = state.buildBindings(2);
 
-        auto & vSourceInfo = override.alloc(state.symbols.create("sourceInfo"));
+        auto & vSourceInfo = override.alloc(libFlakeState.sSourceInfo);
 
         auto lockedNode = node.dynamic_pointer_cast<const LockedNode>();
 
@@ -1007,20 +1021,18 @@ void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & vRes)
         auto key = keyMap.find(node);
         assert(key != keyMap.end());
 
-        override.alloc(state.symbols.create("dir")).mkString(CanonPath(subdir).rel(), state.mem);
+        override.alloc(libFlakeState.sDir).mkString(CanonPath(subdir).rel(), state.mem);
 
         overrides.alloc(state.symbols.create(key->second)).mkAttrs(override);
     }
 
     auto & vOverrides = state.allocValue()->mkAttrs(overrides);
 
-    Value * vCallFlake = requireInternalFile(state, CanonPath("call-flake.nix"));
-
     auto vLocks = state.allocValue();
     vLocks->mkString(lockFileStr, state.mem);
 
     Value * args[] = {vLocks, &vOverrides};
-    state.callFunction(*vCallFlake, args, vRes, noPos);
+    state.callFunction(**libFlakeState.vCallFlake, args, vRes, noPos);
 }
 
 std::optional<Fingerprint> LockedFlake::getFingerprint(Store & store, const fetchers::Settings & fetchSettings) const
