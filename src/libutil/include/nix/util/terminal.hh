@@ -1,8 +1,11 @@
 #pragma once
 ///@file
 
+#include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "nix/util/file-descriptor.hh"
 
@@ -56,5 +59,38 @@ unsigned int getWindowWidth();
  * @return The slave device name as a string
  */
 std::string getPtsName(int fd);
+
+/**
+ * Program Status Protocol states.
+ * https://www.superlogical.com/rex/docs/build/program-status
+ */
+enum class ProgramState : uint8_t { Idle, Working, Done, Blocked, Error };
+
+/** Action type for the user to do while blocked. */
+enum class ProgramStatusKind { Permission, Question, Auth };
+
+/**
+ * Reports are always attributed to `app=nix`.
+ *
+ * @param id The record to report to, such as the process id. In the format
+ * `segment ("/" segment)*` where `segment := [A-Za-z0-9_.+-]{1,32}`.
+ * @param msg A one line readable description without escape sequences,
+ * control characters, and malformed UTF-8 replaced with U+FFFD.
+ * @param progress Percentage from 0 to 100, only for `Working` and `Blocked` states
+ * @param kind What the user needs to do, only for `Blocked` states
+ * @return An OSC 7501 sequence string that reports program state
+ */
+std::string makeProgramStatusReport(
+    ProgramState state,
+    std::string_view id,
+    std::string_view msg = "",
+    std::optional<uint64_t> progress = {},
+    std::optional<ProgramStatusKind> kind = {});
+
+/**
+ * @param id The record to clear.
+ * @return An OSC 7501 sequence that removes the program's status
+ */
+std::string makeProgramStatusClearReport(std::string_view id);
 
 } // namespace nix

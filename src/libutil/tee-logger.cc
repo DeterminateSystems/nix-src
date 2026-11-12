@@ -20,6 +20,12 @@ public:
             logger->stop();
     };
 
+    void exited(int status) override
+    {
+        for (auto & logger : loggers)
+            logger->exited(status);
+    };
+
     void flush() override
     {
         for (auto & logger : loggers)
