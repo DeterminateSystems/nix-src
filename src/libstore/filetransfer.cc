@@ -256,6 +256,13 @@ struct curlFileTransfer : public FileTransfer
         bool hasContentEncoding:1 = false;
 
         /**
+         * Whether curl was about to send the request of the current
+         * attempt on an established connection (i.e. it called
+         * `CURLOPT_PREREQFUNCTION`). See `neverConnected()`.
+         */
+        bool gotConnection:1 = false;
+
+        /**
          * Server-provided minimum retry delay, parsed from the `Retry-After`
          * response header. Reset on each new HTTP status line, and consumed
          * (cleared) by maybeRetry() so it applies to at most one retry attempt.
@@ -632,6 +639,12 @@ struct curlFileTransfer : public FileTransfer
             return 1;
         }
 
+        static int prereqCallbackWrapper(void * clientp, char *, char *, int, int) noexcept
+        {
+            ((TransferItem *) clientp)->gotConnection = true;
+            return CURL_PREREQFUNC_OK;
+        }
+
         void unpause()
         {
             /* Unpausing an already unpaused transfer is a no-op. */
@@ -649,6 +662,7 @@ struct curlFileTransfer : public FileTransfer
             curl_easy_reset(req);
 
             attemptStartTime = std::chrono::steady_clock::now();
+            gotConnection = false;
             bytesReceived = 0;
 
             /* Start an activity for this HTTP request. Note that
@@ -830,6 +844,9 @@ struct curlFileTransfer : public FileTransfer
             // call act().
             curl_easy_setopt(req, CURLOPT_RESOLVER_START_FUNCTION, resolverCallbackWrapper);
             curl_easy_setopt(req, CURLOPT_RESOLVER_START_DATA, this);
+
+            curl_easy_setopt(req, CURLOPT_PREREQFUNCTION, prereqCallbackWrapper);
+            curl_easy_setopt(req, CURLOPT_PREREQDATA, this);
 
             result.data.clear();
             result.bodySize = 0;
@@ -1064,9 +1081,20 @@ struct curlFileTransfer : public FileTransfer
         /**
          * Whether curl never assigned a connection to the current
          * attempt.
+         *
+         * `CURLINFO_CONN_ID` covers attempts that failed while
+         * establishing a connection, since such a connection isn't
+         * shared with other transfers. However, older versions of
+         * curl (e.g. 8.17) don't record the connection ID of a
+         * transfer that finishes while other transfers still use its
+         * connection (e.g. a stalled HTTP/2 stream), so we also check
+         * whether the request was about to be sent on an established
+         * connection.
          */
         bool neverConnected()
         {
+            if (gotConnection)
+                return false;
             curl_off_t connId = 0;
             return curl_easy_getinfo(req, CURLINFO_CONN_ID, &connId) == CURLE_OK && connId < 0;
         }
