@@ -66,6 +66,15 @@ public:
         bool compress,
         Descriptor logFD = INVALID_DESCRIPTOR);
 
+    /**
+     * Not copyable or movable, since the cleanup registry (see
+     * `ssh.cc`) refers to it by address.
+     */
+    SSHMaster(const SSHMaster &) = delete;
+    SSHMaster(SSHMaster &&) = delete;
+
+    ~SSHMaster();
+
     struct Connection
     {
 #ifndef _WIN32 // TODO re-enable on Windows, once we can start processes.
