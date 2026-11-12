@@ -6,6 +6,9 @@
 
 #include <wasmtime.hh>
 #include <boost/unordered/concurrent_flat_map.hpp>
+#include <nlohmann/json.hpp>
+
+#include <mutex>
 
 using namespace wasmtime;
 
@@ -49,16 +52,13 @@ static void enableCompilationCache(wasmtime::Config & config)
     }
 }
 
-static Engine & getEngine()
+static Engine makeEngine()
 {
-    static Engine engine = []() {
-        wasmtime::Config config;
-        config.pooling_allocation_strategy(PoolAllocationConfig());
-        config.memory_init_cow(true);
-        enableCompilationCache(config);
-        return Engine(std::move(config));
-    }();
-    return engine;
+    wasmtime::Config config;
+    config.pooling_allocation_strategy(PoolAllocationConfig());
+    config.memory_init_cow(true);
+    enableCompilationCache(config);
+    return Engine(std::move(config));
 }
 
 static std::span<uint8_t> string2span(std::string_view s)
@@ -106,7 +106,7 @@ static void regFuns(Linker & linker, bool useWasi);
 
 struct NixWasmInstancePre
 {
-    Engine & engine = getEngine();
+    Engine & engine;
     std::string name;
     bool useWasi = false;
     InstancePre instancePre;
@@ -132,14 +132,16 @@ struct NixWasmInstancePre
         return unwrap(instantiate_pre(linker, module));
     }
 
-    NixWasmInstancePre(SourcePath wasmPath)
-        : name(wasmPath.baseName())
+    NixWasmInstancePre(Engine & engine, SourcePath wasmPath)
+        : engine(engine)
+        , name(wasmPath.baseName())
         , instancePre(compile(string2span(wasmPath.readFile())))
     {
     }
 
-    NixWasmInstancePre(std::string_view wat)
-        : name("<inline wat>")
+    NixWasmInstancePre(Engine & engine, std::string_view wat)
+        : engine(engine)
+        , name("<inline wat>")
         , instancePre([&] {
             auto wasm = unwrap(wat2wasm(wat));
             return compile(std::span<uint8_t>(wasm));
@@ -147,6 +149,96 @@ struct NixWasmInstancePre
     {
     }
 };
+
+template<typename T>
+struct LazyMakeRef
+{
+    ref<T> p;
+
+    template<typename... Args>
+    LazyMakeRef(Args &&... args)
+        : p(make_ref<T>(std::forward<Args>(args)...))
+    {
+    }
+};
+
+namespace {
+
+/**
+ * Per-`EvalState` Wasm state.
+ */
+struct WasmState : EvalState::Extension
+{
+    /**
+     * Buffers allocated in Wasm guests on behalf of host functions
+     * (e.g. `read_file_v2`).
+     */
+    Counter nrGuestAllocs;
+    Counter guestAllocBytes;
+
+    /**
+     * Return the wasmtime engine, creating it on first use. We don't
+     * create it eagerly because that's not free (e.g. the pooling
+     * allocator reserves a lot of address space), and most
+     * evaluations don't use Wasm.
+     */
+    Engine & getEngine()
+    {
+        std::call_once(engineCreated, [&] { engine.emplace(makeEngine()); });
+        return *engine;
+    }
+
+    /**
+     * Return the compiled module for `wasmPath`, compiling it if it's
+     * not in the cache yet.
+     */
+    ref<NixWasmInstancePre> getInstancePre(const SourcePath & wasmPath)
+    {
+        std::shared_ptr<NixWasmInstancePre> instancePre;
+
+        instancesPre.try_emplace_and_cvisit(
+            wasmPath,
+            getEngine(),
+            wasmPath,
+            [&](auto & i) { instancePre = i.second.p; },
+            [&](auto & i) { instancePre = i.second.p; });
+
+        return ref(instancePre);
+    }
+
+    void addStatistics(nlohmann::json & topObj) override
+    {
+        topObj["nrWasmGuestAllocs"] = nrGuestAllocs.load();
+        topObj["wasmGuestAllocBytes"] = guestAllocBytes.load();
+    }
+
+    /**
+     * Forget the compiled modules, so that modified Wasm files are
+     * picked up (e.g. after `:reload` in the REPL).
+     */
+    void resetFileCache() override
+    {
+        instancesPre.clear();
+    }
+
+private:
+
+    std::once_flag engineCreated;
+
+    /**
+     * Note: this must come before `instancesPre` so that it's
+     * destroyed after it.
+     */
+    std::optional<Engine> engine;
+
+    // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
+    // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
+    boost::concurrent_flat_map<SourcePath, LazyMakeRef<NixWasmInstancePre>> instancesPre;
+};
+
+} // namespace
+
+static EvalState::RegisterExtension<WasmState> rWasmState;
 
 struct NixWasmInstance
 {
@@ -609,8 +701,9 @@ struct NixWasmInstance
         auto ptr = (uint32_t) res[0].i32();
         if (ptr % align)
             throw Error("'nix_wasm_alloc' of Wasm module '%s' returned a misaligned pointer", pre->name);
-        state.nrWasmGuestAllocs++;
-        state.wasmGuestAllocBytes += size;
+        auto & wasmState = state.getExtension(rWasmState);
+        wasmState.nrGuestAllocs++;
+        wasmState.guestAllocBytes += size;
         return ptr;
     }
 
@@ -715,31 +808,9 @@ static void regFuns(Linker & linker, bool useWasi)
     }
 }
 
-template<typename T>
-struct LazyMakeRef
-{
-    ref<T> p;
-
-    template<typename... Args>
-    LazyMakeRef(Args &&... args)
-        : p(make_ref<T>(std::move(args...)))
-    {
-    }
-};
-
 static NixWasmInstance instantiateWasm(EvalState & state, const SourcePath & wasmPath)
 {
-    // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
-    // FIXME: move to EvalState?
-    // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
-    static boost::concurrent_flat_map<SourcePath, LazyMakeRef<NixWasmInstancePre>> instancesPre;
-
-    std::shared_ptr<NixWasmInstancePre> instancePre;
-
-    instancesPre.try_emplace_and_cvisit(
-        wasmPath, wasmPath, [&](auto & i) { instancePre = i.second.p; }, [&](auto & i) { instancePre = i.second.p; });
-
-    return NixWasmInstance{state, ref(instancePre)};
+    return NixWasmInstance{state, state.getExtension(rWasmState).getInstancePre(wasmPath)};
 }
 
 /**
@@ -841,11 +912,13 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
     WasmActivationsHook activationsHook;
 
     try {
-        auto instance = pathAttr ? instantiateWasm(state, state.realisePath(pos, *pathAttr->value))
-                                 : NixWasmInstance{
-                                       state,
-                                       make_ref<NixWasmInstancePre>(state.forceStringNoCtx(
-                                           *watAttr->value, pos, "while evaluating the 'wat' attribute"))};
+        auto instance =
+            pathAttr ? instantiateWasm(state, state.realisePath(pos, *pathAttr->value))
+                     : NixWasmInstance{
+                           state,
+                           make_ref<NixWasmInstancePre>(
+                               state.getExtension(rWasmState).getEngine(),
+                               state.forceStringNoCtx(*watAttr->value, pos, "while evaluating the 'wat' attribute"))};
 
         // Extract 'function' attribute (optional for wasi, required for non-wasi)
         std::string functionName;
