@@ -176,16 +176,31 @@ struct curlFileTransfer : public FileTransfer
     std::mt19937 mt19937;
 
     /**
-     * When any transfer last made progress, i.e. sent or received
-     * data, or finished after having been assigned a connection.
-     * Only accessed from the worker thread.
+     * When any transfer last sent or received data. Only accessed
+     * from the worker thread.
      */
     std::chrono::steady_clock::time_point lastProgress;
+
+    /**
+     * The destinations (see `TransferItem::destination`) whose most
+     * recent transfer that had a connection failed with a transient
+     * error (e.g. failing to connect, or stalling), without any data
+     * having been received from them since. Only accessed from the
+     * worker thread.
+     */
+    std::set<std::string> failingDestinations;
 
     struct TransferItem : public std::enable_shared_from_this<TransferItem>, public FileTransfer::Item
     {
         curlFileTransfer & fileTransfer;
         FileTransferRequest request;
+
+        /**
+         * The scheme and authority of `request.uri`, used as the key
+         * in `failingDestinations`.
+         */
+        std::string destination;
+
         FileTransferResult result;
         std::unique_ptr<Activity> _act;
 
@@ -213,7 +228,7 @@ struct curlFileTransfer : public FileTransfer
 
         /**
          * If the preceding attempts timed out while waiting for a
-         * connection (see `waitedForConnection()`), when the first of
+         * connection (see `canRequeueAfterWaiting()`), when the first of
          * those attempts was handed to curl.
          */
         std::optional<std::chrono::steady_clock::time_point> waitingForConnectionSince;
@@ -309,6 +324,14 @@ struct curlFileTransfer : public FileTransfer
             Callback<FileTransferResult> && callback)
             : fileTransfer(fileTransfer)
             , request(request)
+            , destination([&]() -> std::string {
+                try {
+                    auto url = request.uri.parsed();
+                    return url.scheme + "://" + (url.authority ? url.authority->to_string() : "");
+                } catch (BadURL &) {
+                    return request.uri.to_string();
+                }
+            }())
             , callback(std::move(callback))
             , finalSink([this](std::string_view data) {
                 if (errorSink) {
@@ -400,9 +423,19 @@ struct curlFileTransfer : public FileTransfer
 
         std::exception_ptr callbackException;
 
+        /**
+         * Record that we received data from the server.
+         */
+        void receivedData()
+        {
+            fileTransfer.lastProgress = std::chrono::steady_clock::now();
+            if (!fileTransfer.failingDestinations.empty())
+                fileTransfer.failingDestinations.erase(destination);
+        }
+
         size_t writeCallback(void * contents, size_t size, size_t nmemb) noexcept
         try {
-            fileTransfer.lastProgress = std::chrono::steady_clock::now();
+            receivedData();
 
             size_t realSize = size * nmemb;
             result.bodySize += realSize;
@@ -446,7 +479,7 @@ struct curlFileTransfer : public FileTransfer
 
         size_t headerCallback(void * contents, size_t size, size_t nmemb) noexcept
         try {
-            fileTransfer.lastProgress = std::chrono::steady_clock::now();
+            receivedData();
 
             size_t realSize = size * nmemb;
             std::string line((char *) contents, realSize);
@@ -856,11 +889,6 @@ struct curlFileTransfer : public FileTransfer
         {
             auto finishTime = std::chrono::steady_clock::now();
 
-            /* If this transfer had a connection, it's now available to
-               other transfers. */
-            if (!neverConnected())
-                fileTransfer.lastProgress = finishTime;
-
             auto httpStatus = getHTTPStatus();
 
             debug(
@@ -1007,7 +1035,23 @@ struct curlFileTransfer : public FileTransfer
                     return;
                 }
 
-                auto exc = httpStatus != 0
+                bool hadConnection = !neverConnected();
+
+                if (hadConnection && err == Transient)
+                    fileTransfer.failingDestinations.insert(destination);
+
+                /* Curl's error message for this case ("Operation timed
+                   out after N milliseconds with 0 bytes received") is
+                   misleading. */
+                bool waitedForConnection = code == CURLE_OPERATION_TIMEDOUT && !hadConnection;
+
+                auto exc = waitedForConnection ? FileTransferError(
+                                                     err,
+                                                     std::move(response),
+                                                     "unable to %s '%s': timed out waiting for a connection",
+                                                     Uncolored(request.verb()),
+                                                     request.displayUri())
+                           : httpStatus != 0
                                ? FileTransferError(
                                      err,
                                      std::move(response),
@@ -1026,9 +1070,11 @@ struct curlFileTransfer : public FileTransfer
                                      code,
                                      errbuf);
 
-                if (waitedForConnection(code, finishTime)) {
+                if (!waitedForConnection)
+                    waitingForConnectionSince.reset();
+                else if (canRequeueAfterWaiting(finishTime)) {
                     debug(
-                        "%s of '%s' timed out waiting for a free connection, requeueing",
+                        "%s of '%s' timed out waiting for a connection, requeueing",
                         Uncolored(request.noun()),
                         request.displayUri());
                     requeue(std::move(exc));
@@ -1042,35 +1088,38 @@ struct curlFileTransfer : public FileTransfer
         }
 
         /**
-         * Whether this attempt failed only because it timed out while
-         * waiting for a connection, in which case it can be requeued
-         * without counting it as an attempt.
+         * Whether this attempt, which timed out while waiting for a
+         * connection, can be requeued without counting it as an
+         * attempt.
          *
-         * When all `http-connections` are in use, curl keeps new
-         * transfers in a queue, and the time spent there counts
-         * towards the connect timeout
+         * Curl keeps transfers in a queue when all `http-connections`
+         * are in use, or while waiting for a connection to the same
+         * server to be established (`CURLOPT_PIPEWAIT`), and the time
+         * spent there counts towards the connect timeout
          * (https://curl.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html).
          * We can recognize such timeouts because the transfer was
          * never assigned a connection.
          *
-         * Waiting is fine as long as the transfers holding the
-         * connections make progress, no matter how long it takes.
-         * However, curl's stall detection doesn't apply to paused
+         * Waiting is fine as long as the server is healthy and the
+         * transfers holding the connections make progress, no matter
+         * how long it takes. However, if the server is failing (e.g.
+         * it's unreachable or not responding), we want to fail as
+         * quickly as if we hadn't waited, so we count the attempt.
+         *
+         * Also, curl's stall detection doesn't apply to paused
          * transfers, so they can hold on to a connection indefinitely
          * (e.g. if their consumer is waiting for a queued transfer).
-         * So we stop requeueing if no transfer has made any progress
-         * for `stalled-download-timeout` while this transfer was
-         * waiting.
+         * So we count the attempt if no transfer has made any
+         * progress for `stalled-download-timeout` while this transfer
+         * was waiting.
          */
-        bool waitedForConnection(CURLcode code, std::chrono::steady_clock::time_point now)
+        bool canRequeueAfterWaiting(std::chrono::steady_clock::time_point now)
         {
-            if (code != CURLE_OPERATION_TIMEDOUT || !neverConnected()) {
-                waitingForConnectionSince.reset();
-                return false;
-            }
-
             if (!waitingForConnectionSince)
                 waitingForConnectionSince = attemptStartTime;
+
+            if (fileTransfer.failingDestinations.contains(destination))
+                return false;
 
             auto maxStall = fileTransfer.settings.stalledDownloadTimeout.get();
             return maxStall == 0

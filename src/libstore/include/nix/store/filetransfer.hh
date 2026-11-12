@@ -76,6 +76,11 @@ public:
           The timeout (in seconds) for establishing connections in the
           binary cache substituter. It corresponds to `curl`’s
           `--connect-timeout` option. A value of 0 means no limit.
+
+          Time spent waiting for a connection to become available
+          (e.g. because all [`http-connections`](#conf-http-connections)
+          are in use) doesn't count towards this timeout, unless the
+          server is failing.
         )"};
 
     Setting<unsigned long> stalledDownloadTimeout{
@@ -86,6 +91,10 @@ public:
           The timeout (in seconds) for receiving data from servers
           during download. Nix cancels idle downloads after this
           timeout's duration.
+
+          This also limits how long a transfer waits for a connection
+          to become available if no other transfer sends or receives
+          any data in the meantime.
         )"};
 
     Setting<uint32_t> tries{
