@@ -675,6 +675,7 @@ void mainWrapped(int argc, char ** argv)
             Xp::FetchTree,
             Xp::BakedDerivations,
             Xp::Provenance,
+            Xp::Memoise,
         };
         evalSettings.pureEval = false;
         auto statePtr = std::make_shared<EvalState>(

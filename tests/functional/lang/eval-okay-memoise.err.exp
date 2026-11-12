@@ -1,0 +1,13 @@
+trace: called with 1
+trace: called with 1.0
+trace: called with {"a":1,"b":[2,3]}
+trace: called with ["foo"]
+trace: called with ["bar"]
+trace: called with a = 1
+trace: called with a = 2
+trace: called with a = 2
+trace: applying
+trace: applying
+trace: applying
+trace: applying
+trace: failing

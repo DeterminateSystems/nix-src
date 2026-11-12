@@ -10,6 +10,7 @@ sources += files(
   'fetchMercurial.cc',
   'fetchTree.cc',
   'fromTOML.cc',
+  'memoise.cc',
 )
 
 if wasmtime_required.enabled()

@@ -35,6 +35,10 @@ nix-instantiate --eval -E 'let x = { repeating = x; tracing = builtins.trace x t
   2>&1 | grepQuiet -F 'trace: { repeating = «repeated»; tracing = «potential infinite recursion»; }'
 
 nix-instantiate --eval -E 'builtins.warn "Hello" 123' 2>&1 | grepQuiet 'warning: Hello'
+
+# builtins.memoise requires the `memoise` experimental feature.
+[[ $(nix-instantiate --eval -E 'builtins ? memoise') = false ]]
+[[ $(nix-instantiate --extra-experimental-features memoise --eval -E 'builtins ? memoise') = true ]]
 # shellcheck disable=SC2016 # The ${} in this is Nix, not shell
 nix-instantiate --eval -E 'builtins.addErrorContext "while doing ${"something"} interesting" (builtins.warn "Hello" 123)' 2>/dev/null | grepQuiet 123
 

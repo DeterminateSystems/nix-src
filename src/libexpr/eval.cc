@@ -346,6 +346,7 @@ EvalState::EvalState(
     , positionToDocComment(make_ref<decltype(positionToDocComment)::element_type>())
     , lookupPathResolved(make_ref<decltype(lookupPathResolved)::element_type>())
     , regexCache(makeRegexCache())
+    , memoiseCache(makeMemoiseCache())
 #if NIX_USE_BOEHMGC
     , baseEnvP(std::allocate_shared<Env *>(traceable_allocator<Env *>(), &mem.allocEnv(BASE_ENV_SIZE)))
     , baseEnv(**baseEnvP)
@@ -1235,6 +1236,8 @@ void EvalState::resetFileCache()
 {
     importResolutionCache->clear();
     fileEvalCache->clear();
+    /* Memoised results may depend on files that have changed. */
+    clearMemoiseCache(*memoiseCache);
     inputCache->clear();
     lookupPathResolved->clear();
     rootFS->invalidateCache();
@@ -3318,6 +3321,8 @@ void EvalState::printStatistics()
     topObj["nrLookups"] = nrLookups.load();
     topObj["nrPrimOpCalls"] = nrPrimOpCalls.load();
     topObj["nrFunctionCalls"] = nrFunctionCalls.load();
+    topObj["nrMemoiseHits"] = nrMemoiseHits.load();
+    topObj["nrMemoiseMisses"] = nrMemoiseMisses.load();
     topObj["nrWasmGuestAllocs"] = nrWasmGuestAllocs.load();
     topObj["wasmGuestAllocBytes"] = wasmGuestAllocBytes.load();
 #if NIX_USE_BOEHMGC

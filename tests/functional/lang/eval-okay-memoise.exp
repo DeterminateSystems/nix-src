@@ -1,0 +1,1 @@
+[ 23416728348467685 1 1 1 { a = 1; b = [ 2 3 ]; } «repeated» [ "foo" ] [ "foo" ] [ "bar" ] { } { "/nix/store/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-x" = { path = true; }; } 1 1 2 2 { success = false; value = false; } 2 2 2 2 2 "3" 3 15 { success = false; value = false; } { success = false; value = false; } ]
