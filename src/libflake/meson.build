@@ -41,10 +41,13 @@ endforeach
 
 sources = files(
   'config.cc',
+  'diff.cc',
   'flake-primops.cc',
   'flake.cc',
   'flakeref.cc',
-  'lockfile.cc',
+  'input-attr-path.cc',
+  'lockfile-v7.cc',
+  'lockfile-v8.cc',
   'provenance.cc',
   'settings.cc',
   'url-name.cc',

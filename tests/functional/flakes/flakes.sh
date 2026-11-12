@@ -6,6 +6,8 @@ TODO_NixOS
 
 requireGit
 
+lockFileFormat=$(nix config show lock-file-format)
+
 createFlake1
 createFlake2
 
@@ -176,11 +178,19 @@ expect 1 nix build -o "$TEST_ROOT/result" "$flake2Dir#bar" --no-update-lock-file
 nix build -o "$TEST_ROOT/result" "$flake2Dir#bar" --commit-lock-file
 [[ -e "$flake2Dir/flake.lock" ]]
 [[ -z $(git -C "$flake2Dir" diff main || echo failed) ]]
-[[ $(jq --indent 0 --compact-output . < "$flake2Dir/flake.lock") =~ ^'{"nodes":{"flake1":{"locked":{"lastModified":'[0-9]*',"narHash":"sha256-'.*'","ref":"refs/heads/master","rev":"'.*'","revCount":2,"type":"git","url":"file:///'.*'"},"original":{"id":"flake1","type":"indirect"}},"root":{"inputs":{"flake1":"flake1"}}},"root":"root","version":7}'$ ]]
+if [[ $lockFileFormat = 8 ]]; then
+    [[ $(jq --indent 0 --compact-output . < "$flake2Dir/flake.lock") =~ ^'{"locks":{"flake1":{"locked":{"lastModified":'[0-9]*',"narHash":"sha256-'.*'","ref":"refs/heads/master","rev":"'.*'","revCount":2,"type":"git","url":"file:///'.*'"},"locks":{},"original":{"id":"flake1","type":"indirect"}}},"version":8}'$ ]]
+else
+    [[ $(jq --indent 0 --compact-output . < "$flake2Dir/flake.lock") =~ ^'{"nodes":{"flake1":{"locked":{"lastModified":'[0-9]*',"narHash":"sha256-'.*'","ref":"refs/heads/master","rev":"'.*'","revCount":2,"type":"git","url":"file:///'.*'"},"original":{"id":"flake1","type":"indirect"}},"root":{"inputs":{"flake1":"flake1"}}},"root":"root","version":7}'$ ]]
+fi
 if [[ $(nix config show lazy-trees) = true ]]; then
     # Test that `lazy-locks` causes NAR hashes to be omitted from the lock file.
     nix flake update --flake "$flake2Dir" --commit-lock-file --lazy-locks
-    [[ $(jq --indent 0 --compact-output . < "$flake2Dir/flake.lock") =~ ^'{"nodes":{"flake1":{"locked":{"lastModified":'[0-9]*',"ref":"refs/heads/master","rev":"'.*'","revCount":2,"type":"git","url":"file:///'.*'"},"original":{"id":"flake1","type":"indirect"}},"root":{"inputs":{"flake1":"flake1"}}},"root":"root","version":7}'$ ]]
+    if [[ $lockFileFormat = 8 ]]; then
+        [[ $(jq --indent 0 --compact-output . < "$flake2Dir/flake.lock") =~ ^'{"locks":{"flake1":{"locked":{"lastModified":'[0-9]*',"ref":"refs/heads/master","rev":"'.*'","revCount":2,"type":"git","url":"file:///'.*'"},"locks":{},"original":{"id":"flake1","type":"indirect"}}},"version":8}'$ ]]
+    else
+        [[ $(jq --indent 0 --compact-output . < "$flake2Dir/flake.lock") =~ ^'{"nodes":{"flake1":{"locked":{"lastModified":'[0-9]*',"ref":"refs/heads/master","rev":"'.*'","revCount":2,"type":"git","url":"file:///'.*'"},"original":{"id":"flake1","type":"indirect"}},"root":{"inputs":{"flake1":"flake1"}}},"root":"root","version":7}'$ ]]
+    fi
 fi
 
 # Rerunning the build should not change the lockfile.
@@ -234,6 +244,19 @@ nix build -o "$TEST_ROOT"/result "$flake3Dir#sth%20sth"
 git -C "$flake3Dir" add flake.lock
 
 git -C "$flake3Dir" commit -m 'Add lockfile'
+
+# Without '--transitive', 'nix flake metadata' only shows the inputs
+# recorded in the flake's own lock file.
+nix flake metadata "$flake3Dir" | grepQuiet '^├───.*flake1.*: '
+nix flake metadata "$flake3Dir" | grepQuiet '^└───.*flake2.*: '
+if [[ $lockFileFormat = 8 ]]; then
+    # flake2's inputs are locked by flake2's own lock file, which is
+    # not fetched.
+    nix flake metadata "$flake3Dir" | grepQuietInverse '^    └───.*flake1.*: '
+else
+    nix flake metadata "$flake3Dir" | grepQuiet '^    └───.*flake1.*: '
+fi
+nix flake metadata "$flake3Dir" --transitive | grepQuiet '^    └───.*flake1.*: '
 
 # Test whether registry caching works.
 nix registry list --flake-registry "file://$registry" | grepQuiet flake3
@@ -324,7 +347,12 @@ cat > "$flake3Dir/flake.nix" <<EOF
 EOF
 
 nix flake lock "$flake3Dir"
-[[ $(jq -c .nodes.root.inputs.bar "$flake3Dir/flake.lock") = '["foo"]' ]]
+if [[ $lockFileFormat = 8 ]]; then
+    # 'follows' inputs are not stored in version 8 lock files.
+    [[ $(jq '.locks | has("bar")' "$flake3Dir/flake.lock") = false ]]
+else
+    [[ $(jq -c .nodes.root.inputs.bar "$flake3Dir/flake.lock") = '["foo"]' ]]
+fi
 
 cat > "$flake3Dir/flake.nix" <<EOF
 {
@@ -336,7 +364,11 @@ cat > "$flake3Dir/flake.nix" <<EOF
 EOF
 
 nix flake lock "$flake3Dir"
-[[ $(jq -c .nodes.root.inputs.bar "$flake3Dir/flake.lock") = '["flake2","flake1"]' ]]
+if [[ $lockFileFormat = 8 ]]; then
+    [[ $(jq '.locks | has("bar")' "$flake3Dir/flake.lock") = false ]]
+else
+    [[ $(jq -c .nodes.root.inputs.bar "$flake3Dir/flake.lock") = '["flake2","flake1"]' ]]
+fi
 
 cat > "$flake3Dir/flake.nix" <<EOF
 {
@@ -348,7 +380,11 @@ cat > "$flake3Dir/flake.nix" <<EOF
 EOF
 
 nix flake lock "$flake3Dir"
-[[ $(jq -c .nodes.root.inputs.bar "$flake3Dir/flake.lock") = '["flake2"]' ]]
+if [[ $lockFileFormat = 8 ]]; then
+    [[ $(jq '.locks | has("bar")' "$flake3Dir/flake.lock") = false ]]
+else
+    [[ $(jq -c .nodes.root.inputs.bar "$flake3Dir/flake.lock") = '["flake2"]' ]]
+fi
 
 # Test overriding inputs of inputs.
 writeTrivialFlake "$flake7Dir"
@@ -368,7 +404,14 @@ cat > "$flake3Dir/flake.nix" <<EOF
 EOF
 
 nix flake lock "$flake3Dir"
-[[ $(jq .nodes.flake1.locked.url "$flake3Dir/flake.lock") =~ flake7 ]]
+if [[ $lockFileFormat = 8 ]]; then
+    [[ $(jq '.locks."flake2/flake1".locked.url' "$flake3Dir/flake.lock") =~ flake7 ]]
+else
+    [[ $(jq .nodes.flake1.locked.url "$flake3Dir/flake.lock") =~ flake7 ]]
+fi
+
+# The override is shown by 'nix flake metadata' even without '--transitive'.
+nix flake metadata "$flake3Dir" | grepQuiet '^    └───.*flake1.*: .*flake7'
 
 cat > "$flake3Dir/flake.nix" <<EOF
 {
@@ -381,9 +424,18 @@ cat > "$flake3Dir/flake.nix" <<EOF
 EOF
 
 nix flake update --flake "$flake3Dir"
-# shellcheck disable=SC2076
-[[ $(jq -c .nodes.flake2.inputs.flake1 "$flake3Dir/flake.lock") =~ '["foo"]' ]]
-[[ $(jq .nodes.foo.locked.url "$flake3Dir/flake.lock") =~ flake7 ]]
+if [[ $lockFileFormat = 8 ]]; then
+    [[ $(jq '.locks | has("flake2/flake1")' "$flake3Dir/flake.lock") = false ]]
+    [[ $(jq .locks.foo.locked.url "$flake3Dir/flake.lock") =~ flake7 ]]
+else
+    # shellcheck disable=SC2076
+    [[ $(jq -c .nodes.flake2.inputs.flake1 "$flake3Dir/flake.lock") =~ '["foo"]' ]]
+    [[ $(jq .nodes.foo.locked.url "$flake3Dir/flake.lock") =~ flake7 ]]
+fi
+
+# The 'follows' override is shown by 'nix flake metadata' even without
+# '--transitive'.
+nix flake metadata "$flake3Dir" | grepQuiet "^│   └───.*flake1.* follows input 'foo'"
 
 # Test git+file with bare repo.
 rm -rf "$flakeGitBare"
@@ -415,14 +467,25 @@ expectStderr 102 nix build -o "$TEST_ROOT"/result "file://$TEST_ROOT/flake.tar.g
 
 # Test --override-input.
 git -C "$flake3Dir" reset --hard
-nix flake lock "$flake3Dir" --override-input flake2/flake1 file://"$TEST_ROOT"/flake.tar.gz -vvvvv
-[[ $(jq .nodes.flake1_2.locked.url "$flake3Dir/flake.lock") =~ flake.tar.gz ]]
+if [[ $lockFileFormat = 8 ]]; then
+    # An override of a transitive input that has no corresponding entry in
+    # flake.nix cannot be written to a version 8 lock file (the entry
+    # would be removed again by the next lock file update)...
+    expectStderr 1 nix flake lock "$flake3Dir" --override-input flake2/flake1 file://"$TEST_ROOT"/flake.tar.gz | grepQuiet "would create a lock file entry"
 
-nix flake lock "$flake3Dir" --override-input flake2/flake1 flake1
-[[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash2 ]]
+    # ...but it can still be applied without writing the lock file.
+    nix flake metadata --json "$flake3Dir" --no-write-lock-file --override-input flake2/flake1 flake1/master/"$hash1" | jq -r '.locks.locks."flake2/flake1".locked.rev' | grepQuiet "$hash1"
+    nix flake metadata "$flake3Dir" --no-write-lock-file --override-input flake2/flake1 flake1/master/"$hash1" | grepQuiet "^    └───.*flake1.*: .*$hash1"
+else
+    nix flake lock "$flake3Dir" --override-input flake2/flake1 file://"$TEST_ROOT"/flake.tar.gz -vvvvv
+    [[ $(jq .nodes.flake1_2.locked.url "$flake3Dir/flake.lock") =~ flake.tar.gz ]]
 
-nix flake lock "$flake3Dir" --override-input flake2/flake1 flake1/master/"$hash1"
-[[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash1 ]]
+    nix flake lock "$flake3Dir" --override-input flake2/flake1 flake1
+    [[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash2 ]]
+
+    nix flake lock "$flake3Dir" --override-input flake2/flake1 flake1/master/"$hash1"
+    [[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash1 ]]
+fi
 
 # Test that --override-input with empty input path is rejected (issue #14816).
 expectStderr 1 nix flake lock "$flake3Dir" --override-input '' . | grepQuiet -- "--override-input was passed a zero-length input path, which would refer to the flake itself, not an input"
@@ -431,24 +494,41 @@ expectStderr 1 nix flake lock "$flake3Dir" --override-input '' . | grepQuiet -- 
 expectStderr 1 nix flake lock "$flake3Dir" --update-input '' | grepQuiet -- "--update-input was passed a zero-length input path, which would refer to the flake itself, not an input"
 
 # Test --update-input.
-nix flake lock "$flake3Dir"
-[[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") = "$hash1" ]]
+if [[ $lockFileFormat = 8 ]]; then
+    # A transitive input locked by a dependency's own lock file cannot be
+    # updated in our lock file.
+    nix flake lock "$flake3Dir"
+    [[ $(jq '.locks | has("flake2/flake1")' "$flake3Dir/flake.lock") = false ]]
 
-nix flake update flake2/flake1 --flake "$flake3Dir"
-[[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash2 ]]
+    nix flake update flake2/flake1 --flake "$flake3Dir" 2>&1 | grepQuiet "does not match any input"
+else
+    nix flake lock "$flake3Dir"
+    [[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") = "$hash1" ]]
+
+    nix flake update flake2/flake1 --flake "$flake3Dir"
+    [[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash2 ]]
+fi
 
 # Test that 'nix flake update' with empty input path is rejected.
 expectStderr 1 nix flake update '' --flake "$flake3Dir" | grepQuiet -- "input path to be updated cannot be zero-length; it would refer to the flake itself, not an input"
 
 # Test updating multiple inputs.
-nix flake lock "$flake3Dir" --override-input flake1 flake1/master/"$hash1"
-nix flake lock "$flake3Dir" --override-input flake2/flake1 flake1/master/"$hash1"
-[[ $(jq -r .nodes.flake1.locked.rev "$flake3Dir/flake.lock") =~ $hash1 ]]
-[[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash1 ]]
+if [[ $lockFileFormat = 8 ]]; then
+    nix flake lock "$flake3Dir" --override-input flake1 flake1/master/"$hash1"
+    [[ $(jq -r .locks.flake1.locked.rev "$flake3Dir/flake.lock") =~ $hash1 ]]
 
-nix flake update flake1 flake2/flake1 --flake "$flake3Dir"
-[[ $(jq -r .nodes.flake1.locked.rev "$flake3Dir/flake.lock") =~ $hash2 ]]
-[[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash2 ]]
+    nix flake update flake1 --flake "$flake3Dir"
+    [[ $(jq -r .locks.flake1.locked.rev "$flake3Dir/flake.lock") =~ $hash2 ]]
+else
+    nix flake lock "$flake3Dir" --override-input flake1 flake1/master/"$hash1"
+    nix flake lock "$flake3Dir" --override-input flake2/flake1 flake1/master/"$hash1"
+    [[ $(jq -r .nodes.flake1.locked.rev "$flake3Dir/flake.lock") =~ $hash1 ]]
+    [[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash1 ]]
+
+    nix flake update flake1 flake2/flake1 --flake "$flake3Dir"
+    [[ $(jq -r .nodes.flake1.locked.rev "$flake3Dir/flake.lock") =~ $hash2 ]]
+    [[ $(jq -r .nodes.flake1_2.locked.rev "$flake3Dir/flake.lock") =~ $hash2 ]]
+fi
 
 # Test 'nix flake metadata --json'.
 nix flake metadata "$flake3Dir" --json | jq .
@@ -505,7 +585,13 @@ git -C "$flake3Dir" commit flake.nix -m 'bla'
 
 rm "$flake3Dir/flake.lock"
 nix flake lock "$flake3Dir"
-[[ "$(nix flake metadata --json "$flake3Dir" | jq -r .locks.nodes.flake1.locked.rev)" = "$newFlake1Rev" ]]
+if [[ $lockFileFormat = 8 ]]; then
+    # Version 8 lock files only record the immediate input; its transitive
+    # inputs are locked by its own lock file at the locked revision.
+    [[ "$(nix flake metadata --json "$flake3Dir" | jq -r .locks.locks.flake2.locked.rev)" = "$newFlake2Rev" ]]
+else
+    [[ "$(nix flake metadata --json "$flake3Dir" | jq -r .locks.nodes.flake1.locked.rev)" = "$newFlake1Rev" ]]
+fi
 
 cat > "$flake3Dir/flake.nix" <<EOF
 {
@@ -516,7 +602,11 @@ cat > "$flake3Dir/flake.nix" <<EOF
 }
 EOF
 
-[[ "$(nix flake metadata --json "$flake3Dir" | jq -r .locks.nodes.flake1.locked.rev)" = "$prevFlake1Rev" ]]
+if [[ $lockFileFormat = 8 ]]; then
+    [[ "$(nix flake metadata --json "$flake3Dir" | jq -r .locks.locks.flake2.locked.rev)" = "$prevFlake2Rev" ]]
+else
+    [[ "$(nix flake metadata --json "$flake3Dir" | jq -r .locks.nodes.flake1.locked.rev)" = "$prevFlake1Rev" ]]
+fi
 
 baseDir=$TEST_ROOT/$RANDOM
 subdirFlakeDir1=$baseDir/foo1
