@@ -204,6 +204,10 @@ private:
      * listing, and optional debuginfo links), and construct the
      * corresponding `NarInfo`. The returned `NarInfo` is neither signed
      * nor published yet; call `uploadNarInfo()` to do that.
+     *
+     * `mkInfo` gets the hash and size of the NAR read from `narSource`.
+     * Throws, before writing anything, if they differ from the
+     * `narHash` and `narSize` of the `ValidPathInfo` it returns.
      */
     ref<NarInfo> uploadData(Source & narSource, RepairFlag repair, fun<ValidPathInfo(HashResult)> mkInfo);
 
