@@ -77,10 +77,14 @@ public:
           binary cache substituter. It corresponds to `curl`’s
           `--connect-timeout` option. A value of 0 means no limit.
 
-          Time spent waiting for a connection to become available
-          (e.g. because all [`http-connections`](#conf-http-connections)
-          are in use) doesn't count towards this timeout, unless the
-          server is failing.
+          This includes time spent waiting for a connection to become
+          available (e.g. because all [`http-connections`](#conf-http-connections)
+          are in use). However, if the timeout expires while waiting,
+          Nix tries again without counting this as a failed attempt
+          (see [`filetransfer-retry-attempts`](#conf-filetransfer-retry-attempts)),
+          unless the server is failing or no transfer has sent or
+          received any data for
+          [`stalled-download-timeout`](#conf-stalled-download-timeout).
         )"};
 
     Setting<unsigned long> stalledDownloadTimeout{
@@ -94,7 +98,10 @@ public:
 
           This also limits how long a transfer waits for a connection
           to become available if no other transfer sends or receives
-          any data in the meantime.
+          any data in the meantime (see
+          [`connect-timeout`](#conf-connect-timeout)). If this is 0,
+          a transfer that waits for a connection for longer than
+          `connect-timeout` counts as a failed attempt.
         )"};
 
     Setting<uint32_t> tries{
