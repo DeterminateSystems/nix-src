@@ -7,9 +7,11 @@
 #include "nix/store/binary-cache-store.hh"
 #include "nix/store/log-store.hh"
 #include "nix/util/environment-variables.hh"
+#include "nix/util/util.hh"
 
 #include <future>
 #include <regex>
+#include <thread>
 
 #include <arpa/inet.h>
 #include <microhttpd.h>
@@ -146,9 +148,11 @@ struct CmdServe : StoreCommand
             {
                 std::unique_ptr<Source> source;
                 std::optional<char> firstByte;
+                uint64_t narSize;
             };
 
             auto state = std::make_unique<State>();
+            state->narSize = info->narSize;
 
             state->source = sinkToSource([&store, p = *path](Sink & sink) { store.narFromPath(p, sink); });
 
@@ -167,6 +171,18 @@ struct CmdServe : StoreCommand
             // Stream the NAR.
             auto reader = [](void * cls, uint64_t pos, char * buf, size_t max) -> ssize_t {
                 auto & state = *static_cast<State *>(cls);
+
+                /* For testing: send the NAR in chunks of about 10% of
+                   its size, spread out over this many seconds. Note
+                   that this blocks the daemon's only thread, so it
+                   stalls all other requests as well. */
+                static auto narDuration =
+                    string2Float<double>(getEnv("_NIX_TEST_NIX_SERVE_NAR_DURATION").value_or("")).value_or(0);
+                if (narDuration > 0) {
+                    std::this_thread::sleep_for(std::chrono::duration<double>(narDuration / 10));
+                    max = std::min<size_t>(max, std::max<uint64_t>(state.narSize / 10, 1));
+                }
+
                 size_t read = 0;
                 if (pos == 0 && state.firstByte) {
                     *buf++ = *state.firstByte;
