@@ -66,6 +66,17 @@ std::string DerivationTrampolineGoal::key()
     }.to_string(worker.store);
 }
 
+/**
+ * Make `drvPath` a temporary root in both the eval store and the main
+ * store, since the derivation can be in either of them (see below).
+ */
+static void addDrvTempRoot(Worker & worker, const StorePath & drvPath)
+{
+    worker.evalStore.addTempRoot(drvPath);
+    if (&worker.store != &worker.evalStore)
+        worker.store.addTempRoot(drvPath);
+}
+
 Goal::Co DerivationTrampolineGoal::init()
 {
     trace("need to load derivation from file");
@@ -91,7 +102,7 @@ Goal::Co DerivationTrampolineGoal::init()
                the garbage collector is deleting it right now,
                `addTempRoot()` waits for that to finish, so the
                check will see that it's gone. */
-            worker.evalStore.addTempRoot(drvPath);
+            addDrvTempRoot(worker, drvPath);
             auto cond = worker.evalStore.isValidPath(drvPath) || worker.store.isValidPath(drvPath);
             return cond ? std::optional{drvPath} : std::nullopt;
         }()) {
@@ -121,7 +132,7 @@ Goal::Co DerivationTrampolineGoal::init()
     /* `drvPath' should already be a root, but let's be on the safe
        side: if the user forgot to make it a root, we wouldn't want
        things being garbage collected while we're busy. */
-    worker.evalStore.addTempRoot(drvPath);
+    addDrvTempRoot(worker, drvPath);
 
     /* Get the derivation. It is probably in the eval store, but it might be in the main store:
 
