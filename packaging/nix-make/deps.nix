@@ -222,6 +222,11 @@ in
     pkgconfig = [ "libeditline" ];
   }
   {
+    prefix = "zlib.h";
+    pkg = deps.zlib;
+    pkgconfig = [ "zlib" ];
+  }
+  {
     # Matches both <git2.h> and <git2/...>.
     prefix = "git2";
     pkg = deps.libgit2;
