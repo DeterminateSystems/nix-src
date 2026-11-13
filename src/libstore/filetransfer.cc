@@ -44,7 +44,12 @@ enum struct HttpStatus : long {
     Created = 201,
     NoContent = 204,
     PartialContent = 206,
+    MovedPermanently = 301,
+    Found = 302,
+    SeeOther = 303,
     NotModified = 304,
+    TemporaryRedirect = 307,
+    PermanentRedirect = 308,
     Unauthorized = 401,
     Forbidden = 403,
     NotFound = 404,
@@ -61,6 +66,17 @@ enum struct HttpStatus : long {
 constexpr bool operator==(long lhs, HttpStatus rhs) noexcept
 {
     return lhs == static_cast<long>(rhs);
+}
+
+/**
+ * Whether curl follows a response with this status (if it has a
+ * `Location` header).
+ */
+constexpr bool isRedirect(long httpStatus) noexcept
+{
+    return httpStatus == HttpStatus::MovedPermanently || httpStatus == HttpStatus::Found
+           || httpStatus == HttpStatus::SeeOther || httpStatus == HttpStatus::TemporaryRedirect
+           || httpStatus == HttpStatus::PermanentRedirect;
 }
 
 const char * httpMethodName(HttpMethod method)
@@ -268,11 +284,16 @@ struct curlFileTransfer : public FileTransfer
          * The number of redirects that curl had followed in the
          * current attempt (see `redirectCount()`) when it was last
          * about to send a request on an established connection
-         * (i.e. it called `CURLOPT_PREREQFUNCTION`), and the ID of
-         * that connection. See `neverConnected()`.
+         * (i.e. it called `CURLOPT_PREREQFUNCTION`). See
+         * `neverConnected()`.
          */
         long connectedRedirects = -1;
-        curl_off_t connectedConnId = -1;
+
+        /**
+         * The IDs of the connections on which curl sent requests in
+         * the current attempt.
+         */
+        std::vector<curl_off_t> connIds;
 
         /**
          * The number of redirects that curl had followed in the
@@ -454,7 +475,15 @@ struct curlFileTransfer : public FileTransfer
          */
         void receivedData()
         {
-            fileTransfer.lastProgress = std::chrono::steady_clock::now();
+            /* A redirect doesn't count as progress, since the
+               transfer still needs the response to the next request,
+               which may have to wait for a connection. Otherwise a
+               transfer that keeps getting redirected and requeued
+               could keep `canRequeueAfterWaiting()` from ever counting
+               an attempt. (Curl doesn't pass the body of a redirect
+               to `writeCallback()`.) */
+            if (!isRedirect(getHTTPStatus()))
+                fileTransfer.lastProgress = std::chrono::steady_clock::now();
             if (!fileTransfer.failingDestinations.empty())
                 fileTransfer.failingDestinations.erase(currentDestination());
         }
@@ -703,7 +732,10 @@ struct curlFileTransfer : public FileTransfer
         {
             auto & item = *(TransferItem *) clientp;
             item.connectedRedirects = item.redirectCount();
-            curl_easy_getinfo(item.req, CURLINFO_CONN_ID, &item.connectedConnId);
+            curl_off_t connId = -1;
+            if (curl_easy_getinfo(item.req, CURLINFO_CONN_ID, &connId) == CURLE_OK && connId >= 0
+                && !std::ranges::contains(item.connIds, connId))
+                item.connIds.push_back(connId);
             return CURL_PREREQFUNC_OK;
         }
 
@@ -725,7 +757,7 @@ struct curlFileTransfer : public FileTransfer
 
             attemptStartTime = std::chrono::steady_clock::now();
             connectedRedirects = -1;
-            connectedConnId = -1;
+            connIds.clear();
             respondedRedirects = -1;
             bytesReceived = 0;
 
@@ -1178,14 +1210,16 @@ struct curlFileTransfer : public FileTransfer
          * connection. Otherwise, `CURLINFO_CONN_ID` tells us whether
          * curl assigned a connection that it was still establishing,
          * since such a connection isn't shared with other transfers.
-         * If it didn't, `CURLINFO_CONN_ID` is -1, or the ID of the
+         * If it didn't, `CURLINFO_CONN_ID` is -1, or the ID of a
          * connection used for a previous request in the redirect
          * chain.
          *
          * We can't rely on `CURLINFO_CONN_ID` alone, because older
          * versions of curl (e.g. 8.17) don't record the connection ID
          * of a transfer that finishes while other transfers still use
-         * its connection (e.g. a stalled HTTP/2 stream).
+         * its connection (e.g. a stalled HTTP/2 stream). For the same
+         * reason, after a redirect, `CURLINFO_CONN_ID` can be the ID
+         * of a connection used before the previous request.
          */
         bool neverConnected()
         {
@@ -1193,7 +1227,7 @@ struct curlFileTransfer : public FileTransfer
                 return false;
             curl_off_t connId = 0;
             return curl_easy_getinfo(req, CURLINFO_CONN_ID, &connId) == CURLE_OK
-                   && (connId < 0 || connId == connectedConnId);
+                   && (connId < 0 || std::ranges::contains(connIds, connId));
         }
 
         /* If this is a transient error, then maybe retry the download
