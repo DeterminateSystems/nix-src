@@ -167,8 +167,14 @@ void emitTreeAttrs(
 
     if (auto lastModified = input.getLastModified()) {
         attrs.alloc("lastModified").mkInt(*lastModified);
-        attrs.alloc("lastModifiedDate")
-            .mkString(fmt("%s", std::put_time(std::gmtime(&*lastModified), "%Y%m%d%H%M%S")), state.mem);
+        struct tm tm;
+#ifdef _WIN32
+        if (gmtime_s(&tm, &*lastModified))
+#else
+        if (!gmtime_r(&*lastModified, &tm))
+#endif
+            throw Error("cannot convert lastModified timestamp %d to UTC", *lastModified);
+        attrs.alloc("lastModifiedDate").mkString(fmt("%s", std::put_time(&tm, "%Y%m%d%H%M%S")), state.mem);
     }
 
     v.mkAttrs(attrs);
