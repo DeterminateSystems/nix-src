@@ -154,6 +154,37 @@ scope: {
     idnSupport = !stdenv.hostPlatform.isStatic;
   };
 
+  google-cloud-cpp =
+    (pkgs.google-cloud-cpp.override {
+      apis = [
+        "storage"
+        "universe_domain"
+      ];
+      inherit (scope) curl;
+    }).overrideAttrs
+      (attrs: {
+        # Keep headers and CMake/pkg-config dependencies out of the runtime closure.
+        outputs = [
+          "out"
+          "dev"
+        ];
+
+        patches = attrs.patches or [ ] ++ [
+          ./patches/google-cloud-cpp-universe-domain-rest.patch
+        ];
+
+        # The REST client needs Abseil directly, without gRPC's propagated inputs.
+        buildInputs = lib.subtractLists [ pkgs.grpc pkgs.protobuf pkgs.c-ares ] attrs.buildInputs ++ [
+          pkgs.abseil-cpp
+        ];
+
+        # Fail the build if a future SDK update brings these back at runtime.
+        disallowedRequisites = [
+          pkgs.grpc
+          pkgs.protobuf
+        ];
+      });
+
   libblake3 =
     (pkgs.libblake3.override {
       inherit stdenv;

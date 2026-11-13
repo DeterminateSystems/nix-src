@@ -109,6 +109,18 @@ rec {
             # Same for all components; nix-util is an arbitrary pick
             (nix.appendPatches [ pkgs.emptyFile ]).libs.nix-util.src;
         };
+
+    packaging-gcs =
+      let
+        linux = nixFlake.packages.x86_64-linux;
+        hasGCS = package: builtins.elem "-Dgcs=enabled" package.mesonFlags;
+      in
+      assert hasGCS linux.nix-store;
+      assert !(hasGCS linux.nix-store-libcxxStdenv);
+      assert !(hasGCS linux.nix-store-static);
+      assert
+        !(builtins.tryEval (linux.nix-store-libcxxStdenv.override { withGCS = true; }).drvPath).success;
+      pkgs.emptyFile;
   };
 
   disable =
