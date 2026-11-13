@@ -662,7 +662,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
            reuse that corrupt path. */
         deletePath(unpackedMarkerFor(realPath));
 
-        uint64_t bytesFreed;
+        uint64_t bytesFreed = 0;
         deleteStorePath(realPath, bytesFreed, isKnownPath);
 
         results.bytesFreed += bytesFreed;

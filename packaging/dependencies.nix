@@ -18,16 +18,16 @@ scope: {
 
   mimalloc =
     (
-      if lib.versionAtLeast pkgs.mimalloc.version "3.3.2" then
+      if lib.versionAtLeast pkgs.mimalloc.version "3.5.1" then
         pkgs.mimalloc
       else
         pkgs.mimalloc.overrideAttrs rec {
-          version = "3.3.2";
+          version = "3.5.1";
           src = pkgs.fetchFromGitHub {
             owner = "microsoft";
             repo = "mimalloc";
             tag = "v${version}";
-            hash = "sha256-GZ37qQVDe9jgMb4Coe5oKvgaLTspZDlSkS5rdy1MfUU=";
+            hash = "sha256-hljle/jR2hNvy2ikdOna9QZiyqzAuMjNUfC7vxl7g7k=";
           };
         }
     ).overrideAttrs
@@ -190,6 +190,40 @@ scope: {
             ];
           }
       );
+
+  # Force the s2n TLS backend in aws-c-io on macOS; Apple SecureTransport is not
+  # fork-safe and crashes daemon workers (NixOS/nix#15857). Override it across
+  # the whole aws-c-* stack so one aws-c-io is shared. These are attributes of
+  # the scope (rather than local to `aws-crt-cpp`) because nix-make links
+  # against the aws-c-* libraries directly, so it must use the same ones.
+  aws-c-io =
+    if !stdenv.hostPlatform.isDarwin then
+      pkgs.aws-c-io
+    else
+      pkgs.aws-c-io.overrideAttrs (old: {
+        patches = (old.patches or [ ]) ++ [ ./patches/aws-c-io-s2n-darwin.patch ];
+      });
+
+  aws-c-http = pkgs.aws-c-http.override { inherit (scope) aws-c-io; };
+
+  aws-c-auth = pkgs.aws-c-auth.override { inherit (scope) aws-c-io aws-c-http; };
+
+  aws-c-event-stream = pkgs.aws-c-event-stream.override { inherit (scope) aws-c-io; };
+
+  aws-c-mqtt = pkgs.aws-c-mqtt.override { inherit (scope) aws-c-io aws-c-http; };
+
+  aws-c-s3 = pkgs.aws-c-s3.override { inherit (scope) aws-c-io aws-c-http aws-c-auth; };
+
+  aws-crt-cpp = pkgs.aws-crt-cpp.override {
+    inherit (scope)
+      aws-c-io
+      aws-c-http
+      aws-c-auth
+      aws-c-event-stream
+      aws-c-mqtt
+      aws-c-s3
+      ;
+  };
 
   sqlite =
     if !stdenv.hostPlatform.isWindows then

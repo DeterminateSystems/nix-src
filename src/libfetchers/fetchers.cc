@@ -184,7 +184,7 @@ Attrs Input::toAttrs() const
     return attrs;
 }
 
-bool Input::operator==(const Input & other) const noexcept
+bool Input::operator==(const Input & other) const
 {
     return attrs == other.attrs;
 }
