@@ -350,3 +350,70 @@ This release was made possible by the following 43 contributors:
 - Michael Daniels [**(@mdaniels5757)**](https://github.com/mdaniels5757)
 - Matthew Kenigsberg [**(@mkenigs)**](https://github.com/mkenigs)
 - Shea Levy [**(@shlevy)**](https://github.com/shlevy)
+
+# Release 2.34.1 (2026-03-08)
+
+## Changes
+
+- C API: Fix `EvalState` pointer passed to primop callbacks [#15300](https://github.com/NixOS/nix/pull/15300) [#15383](https://github.com/NixOS/nix/pull/15383)
+
+  The `EvalState *` passed to C API primop callbacks was incorrectly pointing to
+  the internal `nix::EvalState` rather than the C API wrapper struct. This caused
+  a segfault when the callback used the pointer with C API functions such as
+  `nix_alloc_value()`. The same issue affected `printValueAsJSON` and
+  `printValueAsXML` callbacks on external values.
+
+- Fix daemon not applying `FileTransferSettings` from `trusted-users` [#15408](https://github.com/NixOS/nix/pull/15408)
+
+  Previously `nix-daemon` failed to apply settings for `libcurl` configuration configured by client connections from [`trusted-users`](@docroot@/command-ref/conf-file.md#conf-trusted-users). This was a pre-existing bug, which has been exacerbated by 2.34.0 moving more settings from the global `settings` into libcurl-specific `fileTransferSettings` (e.g. `netrc-file`, `http-connections` or `ssl-cert-file`). Note that the use of `trusted-users` is heavily discouraged unless you are fine with:
+
+  > Adding a user to `trusted-users` is essentially equivalent to giving that user root access to the system.
+  > For example, the user can access or replace store path contents that are critical for system security.
+
+- Improve formatting of error messages and warnings [#15397](https://github.com/NixOS/nix/pull/15397)
+
+# Release 2.34.2 (2026-03-20)
+
+## Changes
+
+- Fixed `nix upgrade-nix` without an explicitly specified `--profile` argument [#15437](https://github.com/NixOS/nix/issues/15437) [#15438](https://github.com/NixOS/nix/pull/15438)
+
+- Erroneous `error (ignored): write of ... bytes: Bad file descriptor` warnings on interrupted store copy operations are now fixed [#15486](https://github.com/NixOS/nix/pull/15486)
+
+- Reverted changes enabling keep-alive in the HTTP client [#15522](https://github.com/NixOS/nix/pull/15522)
+
+  Connection reuse for S3 stores has caused Hydra upload errors due to stale connections being closed by the remote servers. Nix currently lacks retry mechanisms for 400 `RequestTimeout` errors used by AWS S3.
+
+- Fixed evaluation that accesses the logical store directory using `ssh-ng://` `eval-store`s [#15417](https://github.com/NixOS/nix/pull/15417)
+
+  Accessing the logical store directory (typically `/nix/store`) during evaluation would fail previously:
+
+  ```
+  nix build nixpkgs#hello --store ssh-ng://host
+  error: path '/nix/store/' is not in the Nix store
+  ```
+
+- S3: restore STS WebIdentity and ECS container credential providers [#15507](https://github.com/NixOS/nix/pull/15507)
+
+  Nix 2.33 replaced the S3 backend's `aws-sdk-cpp` credential chain with a
+  custom chain built on `aws-c-auth`. That chain omitted two providers,
+  breaking S3 binary cache access in container workloads:
+
+  - **STS WebIdentity** (`AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ROLE_ARN`,
+    `AWS_ROLE_SESSION_NAME`) — used by EKS IRSA, GitHub Actions OIDC, and
+    any `sts:AssumeRoleWithWebIdentity` federation.
+  - **ECS container metadata** (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`,
+    `AWS_CONTAINER_CREDENTIALS_FULL_URI`) — used by ECS tasks and EKS Pod
+    Identity.
+
+  The typical symptom was a misleading IMDS error
+  (`Valid credentials could not be sourced by the IMDS provider`), because
+  IMDS is the last provider tried after the correct one was skipped.
+
+  Both providers are now part of the chain, ordered to match the
+  pre-2.33 `DefaultAWSCredentialsProviderChain`:
+  `Environment → SSO → Profile → STS WebIdentity → (ECS | IMDS)`.
+  As in both the old and new AWS SDK default chains, ECS and IMDS are
+  mutually exclusive: when container credential environment variables are
+  set, IMDS is skipped.
+

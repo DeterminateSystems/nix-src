@@ -31,10 +31,14 @@ deps_public += nlohmann_json
 libgit2 = dependency('libgit2', version : '>= 1.9')
 deps_private += libgit2
 
+zstd = dependency('libzstd', version : '>= 1.4.0')
+deps_private += zstd
+
 subdir('nix-meson-build-support/common')
 
 sources = files(
   'attrs.cc',
+  'builtin.cc',
   'cache.cc',
   'fetch-settings.cc',
   'fetch-to-store.cc',
@@ -48,11 +52,20 @@ sources = files(
   'input-cache.cc',
   'mercurial.cc',
   'path.cc',
+  'provenance.cc',
   'registry.cc',
+  'tarball-cache.cc',
   'tarball.cc',
 )
 
 subdir('include/nix/fetchers')
+
+# Generate builtin-flake-registry.json.gen.hh
+subdir('nix-meson-build-support/generate-header')
+
+sources += gen_header.process(
+  'builtin-flake-registry.json',
+)
 
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
@@ -60,11 +73,10 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixfetchers',
   sources,
-  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,
-  prelink : true, # For C++ static initializers
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )

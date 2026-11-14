@@ -94,6 +94,14 @@ struct WorkerProto::BasicClientConnection : WorkerProto::BasicConnection
      */
     ClientHandshakeInfo postHandshake(const StoreDirConfig & store);
 
+    /**
+     * Start sending an operation: write the opcode, followed by the
+     * trace context of the current activity if the "open-telemetry"
+     * protocol feature has been negotiated, so that the daemon can
+     * parent its work under it.
+     */
+    void startOp(WorkerProto::Op op);
+
     void addTempRoot(const StoreDirConfig & remoteStore, bool * daemonException, const StorePath & path);
 
     StorePathSet queryValidPaths(

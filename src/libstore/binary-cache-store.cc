@@ -34,13 +34,13 @@ BinaryCacheStore::BinaryCacheStore(Config & config)
     : config{config}
 {
     if (auto & skf = config.secretKeyFile.get())
-        signers.push_back(std::make_unique<LocalSigner>(SecretKey{readFile(*skf)}));
+        signers.push_back(std::make_unique<LocalSigner>(SecretKey::parse(readFile(*skf))));
 
     if (config.secretKeyFiles != "") {
         std::stringstream ss(config.secretKeyFiles);
         std::string keyPath;
         while (std::getline(ss, keyPath, ',')) {
-            signers.push_back(std::make_unique<LocalSigner>(SecretKey{readFile(keyPath)}));
+            signers.push_back(std::make_unique<LocalSigner>(SecretKey::parse(readFile(keyPath))));
         }
     }
 
@@ -49,8 +49,10 @@ BinaryCacheStore::BinaryCacheStore(Config & config)
     narMagic = sink.s;
 }
 
-void BinaryCacheStore::init()
+std::map<std::string, std::string> BinaryCacheStore::parseNixCacheInfo()
 {
+    std::map<std::string, std::string> fields;
+
     auto cacheInfo = getNixCacheInfo();
     if (!cacheInfo) {
         upsertFile(cacheInfoFile, "StoreDir: " + storeDir + "\n", "text/x-nix-cache-info");
@@ -68,13 +70,31 @@ void BinaryCacheStore::init()
                         config.getHumanReadableURI(),
                         value,
                         storeDir);
-            } else if (name == "WantMassQuery") {
-                config.wantMassQuery.setDefault(value == "1");
-            } else if (name == "Priority") {
-                config.priority.setDefault(std::stoi(value));
+            } else {
+                /* Keep every other field verbatim, including ones we
+                   don't (yet) understand. The known ones are applied
+                   by applyCacheInfoFields(). */
+                fields.insert_or_assign(name, value);
             }
         }
     }
+
+    return fields;
+}
+
+void BinaryCacheStore::applyCacheInfoFields(const std::map<std::string, std::string> & fields)
+{
+    if (auto * value = get(fields, "WantMassQuery"))
+        config.wantMassQuery.setDefault(*value == "1");
+    if (auto * value = get(fields, "Priority")) {
+        if (auto priority = string2Int<int>(*value))
+            config.priority.setDefault(*priority);
+    }
+}
+
+void BinaryCacheStore::init()
+{
+    applyCacheInfoFields(parseNixCacheInfo());
 }
 
 std::optional<std::string> BinaryCacheStore::getNixCacheInfo()
@@ -342,7 +362,9 @@ void BinaryCacheStore::addMultipleToStore(
 
     /* The NarInfos produced by uploading the NARs, to be consumed when
        writing the .narinfo files. Populated by the `UploadNar` nodes
-       and read by the corresponding `UploadNarInfo` nodes. */
+       and read by the corresponding `UploadNarInfo` nodes. A path has
+       no entry if its NAR wasn't uploaded because it was already
+       valid. */
     Sync<std::map<StorePath, ref<NarInfo>>> narInfos_;
 
     /* The work graph has two kinds of nodes: uploading the NAR for a
@@ -443,11 +465,13 @@ void BinaryCacheStore::addMultipleToStore(
                         showProgress();
                     },
                     [&](const UploadNarInfo & n) {
-                        auto & info = infosMap.at(n.path)->first;
-                        if (!repair && isValidPath(info.path))
-                            return;
-                        auto narInfo = narInfos_.lock()->at(n.path);
-                        uploadNarInfo(narInfo);
+                        /* Upload the .narinfo only if the `UploadNar`
+                           node uploaded the NAR, i.e. if the path wasn't
+                           valid then. Don't call `isValidPath()` again:
+                           its result may have changed in the meantime. */
+                        auto narInfo = narInfos_.lock()->extract(n.path);
+                        if (narInfo)
+                            uploadNarInfo(narInfo.mapped());
                     },
                 },
                 node);
@@ -461,7 +485,8 @@ StorePath BinaryCacheStore::addToStoreFromDump(
     ContentAddressMethod hashMethod,
     HashAlgorithm hashAlgo,
     const StorePathSet & references,
-    RepairFlag repair)
+    RepairFlag repair,
+    std::shared_ptr<const Provenance> provenance)
 {
     std::optional<Hash> caHash;
     std::string nar;
@@ -524,6 +549,7 @@ StorePath BinaryCacheStore::addToStoreFromDump(
                            }),
                        nar.hash);
                    info.narSize = nar.numBytesDigested;
+                   info.provenance = provenance;
                    return info;
                })
         ->path;
@@ -659,6 +685,7 @@ StorePath BinaryCacheStore::addToStore(
                            }),
                        nar.hash);
                    info.narSize = nar.numBytesDigested;
+                   info.provenance = path.getProvenance();
                    return info;
                })
         ->path;

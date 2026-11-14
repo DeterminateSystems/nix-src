@@ -162,7 +162,6 @@ private:
     std::ostream & output;
     EvalState & state;
     PrintOptions options;
-    NixStringContext * context;
     std::optional<ValuesSeen> seen;
     size_t totalAttrsPrinted = 0;
     size_t totalListItemsPrinted = 0;
@@ -250,14 +249,22 @@ private:
 
     void printString(Value & v)
     {
-        printLiteralString(output, v.string_view(), options.maxStringLength, options.ansiColors);
+        NixStringContext context;
+        copyContext(v, context);
+        std::ostringstream s;
+        printLiteralString(s, v.string_view(), options.maxStringLength, options.ansiColors);
+        output << state.devirtualize(s.str(), context);
     }
 
     void printPath(Value & v)
     {
         if (options.ansiColors)
             output << ANSI_GREEN;
-        output << v.path().to_string(); // !!! escaping?
+        const auto sourcePath = v.path();
+        output <<
+            /* See the comment in libexpr/value-to-xml.cc about separate roots.
+               TODO: Handle escaping. */
+            (sourcePath.accessor == state.rootFS ? sourcePath.path.abs() : sourcePath.to_string());
         if (options.ansiColors)
             output << ANSI_NORMAL;
     }
@@ -499,7 +506,7 @@ private:
             output << "«potential infinite recursion»";
             if (options.ansiColors)
                 output << ANSI_NORMAL;
-        } else if (v.isThunk() || v.isApp()) {
+        } else if (!v.isFinished()) {
             if (options.ansiColors)
                 output << ANSI_MAGENTA;
             output << "«thunk»";
@@ -516,7 +523,7 @@ private:
             output << ANSI_MAGENTA;
         // Historically, a tried and then ignored value (e.g. through tryEval) was
         // reverted to the original thunk.
-        output << "«thunk»";
+        output << "«failed»";
         if (options.ansiColors)
             output << ANSI_NORMAL;
     }
@@ -578,12 +585,9 @@ private:
                 printBool(v);
                 break;
 
-            case nString: {
+            case nString:
                 printString(v);
-                if (context)
-                    copyContext(v, *context);
                 break;
-            }
 
             case nPath:
                 printPath(v);
@@ -636,11 +640,10 @@ private:
     }
 
 public:
-    Printer(std::ostream & output, EvalState & state, PrintOptions options, NixStringContext * context)
+    Printer(std::ostream & output, EvalState & state, PrintOptions options)
         : output(output)
         , state(state)
         , options(options)
-        , context(context)
     {
     }
 
@@ -661,14 +664,14 @@ public:
     }
 };
 
-void printValue(EvalState & state, std::ostream & output, Value & v, PrintOptions options, NixStringContext * context)
+void printValue(EvalState & state, std::ostream & output, Value & v, PrintOptions options)
 {
-    Printer(output, state, options, context).print(v);
+    Printer(output, state, options).print(v);
 }
 
 std::ostream & operator<<(std::ostream & output, const ValuePrinter & printer)
 {
-    printValue(printer.state, output, printer.value, printer.options, printer.context);
+    printValue(printer.state, output, printer.value, printer.options);
     return output;
 }
 

@@ -489,6 +489,20 @@ public:
 };
 
 /**
+ * A setting whose value is represented as JSON. The type `T` must be supported by `nlohmann::json`'s `get<T>()`.
+ */
+template<typename T>
+class JSONSetting : public Setting<T>
+{
+public:
+    using Setting<T>::Setting;
+
+    T parse(const std::string & str) const override;
+
+    std::string to_string() const override;
+};
+
+/**
  * `AbsolutePath` wraps `std::filesystem::path`, so implicit conversion
  * from `Setting<AbsolutePath>` to `const path &` requires two
  * user-defined conversions (`Setting` -> `AbsolutePath` -> `path`),
@@ -564,7 +578,7 @@ public:
           Example:
 
           ```
-          experimental-features = nix-command flakes
+          experimental-features = ca-derivations
           ```
 
           The following experimental features are available:

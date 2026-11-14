@@ -8,12 +8,22 @@ ResolvedAttr forceAttr(const Attr & attr)
 {
     return std::visit(
         overloaded{
-            [](const LazyAttr & lazy) -> ResolvedAttr { return lazy->compute(); },
+            [](const LazyAttr & lazy) -> ResolvedAttr { return lazy.compute(); },
             [](const std::string & v) -> ResolvedAttr { return v; },
             [](uint64_t v) -> ResolvedAttr { return v; },
             [](const Explicit<bool> & v) -> ResolvedAttr { return v; },
         },
         attr);
+}
+
+bool Attr::operator==(const Attr & other) const
+{
+    return forceAttr(*this) == forceAttr(other);
+}
+
+std::strong_ordering Attr::operator<=>(const Attr & other) const
+{
+    return forceAttr(*this) <=> forceAttr(other);
 }
 
 Attrs jsonToAttrs(const nlohmann::json & json)
@@ -38,6 +48,9 @@ nlohmann::json attrsToJSON(const Attrs & attrs)
 {
     nlohmann::json json;
     for (auto & attr : attrs) {
+        /* The __final attribute is purely internal, so never serialize it. */
+        if (attr.first == "__final")
+            continue;
         auto resolved = forceAttr(attr.second);
         if (auto v = std::get_if<uint64_t>(&resolved)) {
             json[attr.first] = *v;

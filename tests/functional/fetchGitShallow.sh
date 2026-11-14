@@ -30,7 +30,7 @@ git -C "$TEST_ROOT/shallow-parent" commit -m "Branch commit"
 git clone --depth 1 "file://$TEST_ROOT/shallow-parent" "$TEST_ROOT/shallow-clone"
 
 # Test 1: Fetching a shallow repo succeeds for outPath because revCount is lazy.
-path1=$(nix eval --impure --raw --expr "(builtins.fetchGit { url = \"$TEST_ROOT/shallow-clone\"; ref = \"dev\"; }).outPath")
+path1=$(nix eval --impure --raw --expr "(builtins.fetchGit { url = \"$TEST_ROOT/shallow-clone\"; ref = \"dev\"; shallow = true; }).outPath")
 [[ -d "$path1" ]]
 # But accessing revCount on a shallow clone fails.
 (! nix eval --impure --expr "(builtins.fetchGit { url = \"$TEST_ROOT/shallow-clone\"; ref = \"dev\"; }).revCount" 2>/dev/null)
@@ -93,4 +93,4 @@ git -C "$TEST_ROOT/shallow-build-parent" add flake.nix
 git -C "$TEST_ROOT/shallow-build-parent" commit -m "add flake"
 git clone --depth 1 "file://$TEST_ROOT/shallow-build-parent" "$TEST_ROOT/shallow-build-clone"
 rm -rf "$TEST_ROOT/shallow-build-parent"
-nix build --dry-run "git+file://$TEST_ROOT/shallow-build-clone"
+nix build --dry-run "git+file://$TEST_ROOT/shallow-build-clone?shallow=1"

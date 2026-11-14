@@ -430,7 +430,7 @@ path_start
         /* add back in the trailing '/' to the first segment */
         if (literal.size() > 1 && literal.back() == '/')
           path += '/';
-        $$ = state->exprs.add<ExprPath>(state->exprs.alloc, state->rootFS, path);
+        $$ = state->exprs.addPath(state->rootFS, path);
     } else {
         /* check for short path literals */
         diagnose(state->settings.lintShortPathLiterals, [&](bool) -> std::optional<ParseError> {
@@ -446,7 +446,7 @@ path_start
         /* add back in the trailing '/' to the first segment */
         if (literal.size() > 1 && literal.back() == '/')
           path += '/';
-        $$ = state->exprs.add<ExprPath>(state->exprs.alloc, state->basePath.accessor, path);
+        $$ = state->exprs.addPath(state->basePath.accessor, path);
     }
   }
   | HPATH {
@@ -463,8 +463,12 @@ path_start
             .pos = state->positions[CUR_POS]
         });
     });
-    auto path(getHome().string() + std::string($1.p + 1, $1.l - 1));
-    $$ = state->exprs.add<ExprPath>(state->exprs.alloc, state->rootFS, path);
+
+    auto path = CanonPath(concatStrings(getHome().string(), std::string_view($1.p + 1, $1.l - 1))).abs();
+    if (literal.size() > 1 && literal.back() == '/')
+        path += '/';
+
+    $$ = state->exprs.addPath(state->rootFS, path);
   }
   ;
 

@@ -179,7 +179,7 @@ std::optional<N> string2Float(const std::string_view s);
  * Convert a little-endian integer to host order.
  */
 template<typename T>
-T readLittleEndian(unsigned char * p)
+T readLittleEndian(const unsigned char * p)
 {
     T x = 0;
     /* Byte types such as char/unsigned char/std::byte are a bit special because
@@ -203,6 +203,17 @@ T readLittleEndian(unsigned char * p)
         }
     }
     return x;
+}
+
+/**
+ * Convert a host order integer to little-endian.
+ */
+template<typename T>
+void writeLittleEndian(unsigned char * p, T x)
+{
+    if constexpr (std::endian::native != std::endian::little)
+        x = std::byteswap(x);
+    std::memcpy(p, &x, sizeof(T));
 }
 
 /**
@@ -250,6 +261,11 @@ void ignoreExceptionInDestructor(Verbosity lvl = lvlError);
  * This may be used in a few places where Interrupt can't happen, but that's ok.
  */
 void ignoreExceptionExceptInterrupt(Verbosity lvl = lvlError);
+
+/**
+ * Like ignoreExceptionExceptInterrupt(), but specifies the error prefix.
+ */
+void logExceptionExceptInterrupt(std::string_view prefix = "error: ", Verbosity lvl = lvlError);
 
 /**
  * Tree formatting.
@@ -322,9 +338,15 @@ typename T::mapped_type * get(T & map, const K & key)
 template<class T, typename K>
 typename T::mapped_type * get(T && map, const K & key) = delete;
 
-/**
- * Look up a value in a `boost::concurrent_flat_map`.
- */
+template<class T>
+std::optional<typename T::mapped_type> getOptional(const T & map, const typename T::key_type & key)
+{
+    auto i = map.find(key);
+    if (i == map.end())
+        return std::nullopt;
+    return {i->second};
+}
+
 template<class T>
 std::optional<typename T::mapped_type> getConcurrent(const T & map, const typename T::key_type & key)
 {

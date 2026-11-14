@@ -10,6 +10,7 @@
 #include "nix/util/file-descriptor.hh"
 #include "nix/store/gc-store.hh"
 #include "nix/store/log-store.hh"
+#include "nix/store/active-builds.hh"
 
 namespace nix {
 
@@ -33,7 +34,7 @@ public:
     }
 
     Setting<int> maxConnections{
-        this, 1, "max-connections", "Maximum number of concurrent connections to the Nix daemon."};
+        this, 64, "max-connections", "Maximum number of concurrent connections to the Nix daemon."};
 
     Setting<unsigned int> maxConnectionAge{
         this,
@@ -46,7 +47,10 @@ public:
  * \todo RemoteStore is a misnomer - should be something like
  * DaemonStore.
  */
-struct RemoteStore : public virtual Store, public virtual GcStore, public virtual LogStore
+struct RemoteStore : public virtual Store,
+                     public virtual GcStore,
+                     public virtual LogStore,
+                     public virtual QueryActiveBuildsStore
 {
 private:
     void anchor() override;
@@ -68,6 +72,10 @@ public:
 
     void queryPathInfoUncached(
         const StorePath & path, Callback<std::shared_ptr<const ValidPathInfo>> callback) noexcept override;
+
+    asio::awaitable<void> queryPathInfos(
+        const std::set<StorePath> & paths,
+        fun<void(std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>>)> callback) override;
 
     void queryReferrers(const StorePath & path, StorePathSet & referrers) override;
 
@@ -92,7 +100,8 @@ public:
         ContentAddressMethod caMethod,
         HashAlgorithm hashAlgo,
         const StorePathSet & references,
-        RepairFlag repair);
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance);
 
     /**
      * Add a content-addressable store path. `dump` will be drained.
@@ -100,11 +109,12 @@ public:
     StorePath addToStoreFromDump(
         Source & dump,
         std::string_view name,
-        FileSerialisationMethod dumpMethod = FileSerialisationMethod::NixArchive,
-        ContentAddressMethod hashMethod = FileIngestionMethod::NixArchive,
-        HashAlgorithm hashAlgo = HashAlgorithm::SHA256,
-        const StorePathSet & references = StorePathSet(),
-        RepairFlag repair = NoRepair) override;
+        FileSerialisationMethod dumpMethod,
+        ContentAddressMethod hashMethod,
+        HashAlgorithm hashAlgo,
+        const StorePathSet & references,
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance) override;
 
     void addToStore(const ValidPathInfo & info, Source & nar, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
@@ -126,7 +136,7 @@ public:
 
     void ensurePath(const StorePath & path) override;
 
-    void addTempRoot(const StorePath & path) override;
+    void addTempRoots(const StorePathSet & paths, bool skipIfSlow) override;
 
     Roots findRoots(bool censor) override;
 
@@ -154,6 +164,8 @@ public:
     MissingPaths queryMissing(const std::vector<DerivedPath> & targets) override;
 
     void addBuildLog(const StorePath & drvPath, std::string_view log) override;
+
+    std::vector<ActiveBuildInfo> queryActiveBuilds() override;
 
     std::optional<std::string> getVersion() override;
 

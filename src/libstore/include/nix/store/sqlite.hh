@@ -74,9 +74,26 @@ struct SQLite
      */
     void isCache();
 
+    /**
+     * Execute a statement. Retry if the database is busy. Do not call this inside a transaction; use execNoRetry()
+     * instead.
+     */
     void exec(const std::string & stmt);
 
+    /**
+     * Execute a statement.
+     */
+    void execNoRetry(const std::string & stmt);
+
     uint64_t getLastInsertedRowId();
+
+    /**
+     * Set the value returned by `getLastInsertedRowId()`. Since only
+     * successful inserts update the last-inserted rowid, this can be
+     * used to detect whether an upsert statement performed an insert
+     * or an update.
+     */
+    void setLastInsertedRowId(uint64_t id);
 };
 
 /**
@@ -140,6 +157,13 @@ struct SQLiteStmt
         bool next();
 
         std::string getStr(int col);
+
+        /**
+         * Return the contents of a blob (or text) column. The result is
+         * only valid until the next call to `next()` or until this
+         * `Use` is destroyed.
+         */
+        std::string_view getBlob(int col);
         int64_t getInt(int col);
         bool isNull(int col);
     };

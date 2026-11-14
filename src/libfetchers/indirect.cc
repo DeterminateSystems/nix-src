@@ -3,9 +3,11 @@
 #include "nix/util/url-parts.hh"
 #include "nix/store/path.hh"
 
+#include <boost/regex.hpp>
+
 namespace nix::fetchers {
 
-std::regex flakeRegex("[a-zA-Z][a-zA-Z0-9_-]*", std::regex::ECMAScript);
+boost::regex flakeRegex("[a-zA-Z][a-zA-Z0-9_-]*", boost::regex::ECMAScript);
 
 struct IndirectInputScheme : InputScheme
 {
@@ -39,7 +41,7 @@ struct IndirectInputScheme : InputScheme
             throw BadURL("GitHub URL '%s' is invalid", url);
 
         std::string id = path[0];
-        if (!std::regex_match(id, flakeRegex))
+        if (!boost::regex_match(id, flakeRegex))
             throw BadURL("'%s' is not a valid flake ID", id);
 
         // FIXME: forbid query params?
@@ -92,7 +94,7 @@ struct IndirectInputScheme : InputScheme
     std::optional<Input> inputFromAttrs(const Settings & settings, const Attrs & attrs) const override
     {
         auto id = getStrAttr(attrs, "id");
-        if (!std::regex_match(id, flakeRegex))
+        if (!boost::regex_match(id, flakeRegex))
             throw BadURL("'%s' is not a valid flake ID", id);
 
         Input input{};
@@ -100,7 +102,7 @@ struct IndirectInputScheme : InputScheme
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         ParsedURL url{
             .scheme = "flake",
@@ -129,11 +131,6 @@ struct IndirectInputScheme : InputScheme
     getAccessor(const Settings & settings, Store & store, const Input & input) const override
     {
         throw Error("indirect input '%s' cannot be fetched directly", input.to_string());
-    }
-
-    std::optional<ExperimentalFeature> experimentalFeature() const override
-    {
-        return Xp::Flakes;
     }
 
     bool isDirect(const Input & input) const override

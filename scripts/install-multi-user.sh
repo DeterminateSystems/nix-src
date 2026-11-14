@@ -653,54 +653,26 @@ create_directories() {
     # FIXME: remove all of this because it duplicates LocalStore::LocalStore().
     task "Setting up the basic directory structure"
     if [ -d "$NIX_ROOT" ]; then
-        # if /nix already exists, take ownership
-        #
-        # Caution: notes below are macOS-y
-        # This is a bit of a goldilocks zone for taking ownership
-        # if there are already files on the volume; the volume is
-        # now mounted, but we haven't added a bunch of new files
-
-        # this is probably a bit slow; I've been seeing 3.3-4s even
-        # when promptly installed over a fresh single-user install.
-        # In case anyone's aware of a shortcut.
-        # `|| true`: .Trashes errors w/o full disk perm
-
-        # rumor per #4488 that macOS 11.2 may not have
-        # sbin on path, and that's where chown is, but
-        # since this bit is cross-platform:
-        # - first try with `command -vp` to try and find
-        #   chown in the usual places
-        #   * to work around some sort of deficiency in
-        #     `command -p` in macOS bash 3.2, we also add
-        #     PATH="$(getconf PATH 2>/dev/null)". As long as
-        #     getconf is found, this should set a sane PATH
-        #     which `command -p` in bash 3.2 appears to use.
-        #     A bash with a properly-working `command -p`
-        #     should ignore this hard-set PATH in favor of
-        #     whatever it obtains internally. See
-        #     github.com/NixOS/nix/issues/5768
-        # - fall back on `command -v` which would find
-        #   any chown on path
-        # if we don't find one, the command is already
-        # hiding behind || true, and the general state
-        # should be one the user can repair once they
-        # figure out where chown is...
-        local get_chr_own
-        get_chr_own="$(PATH="$(getconf PATH 2>/dev/null)" command -vp chown)"
-        if [[ -z "$get_chr_own" ]]; then
-            get_chr_own="$(command -v chown)"
+        if is_os_darwin; then
+            # Certain files cannot be listed / chowned even by root on macOS.
+            set +e
         fi
 
-        if [[ -z "$get_chr_own" ]]; then
-            reminder <<EOF
-I wanted to take root ownership of existing Nix store files,
-but I couldn't locate 'chown'. (You may need to fix your PATH.)
-To manually change file ownership, you can run:
-    sudo chown -R 'root:$NIX_BUILD_GROUP_NAME' '$NIX_ROOT'
-EOF
-        else
-            _sudo "to take root ownership of existing Nix store files" \
-                  "$get_chr_own" -R "root:$NIX_BUILD_GROUP_NAME" "$NIX_ROOT" || true
+        # Everything inside /nix is root-owned.
+        # (modulo https://github.com/NixOS/nix/issues/13719, but that's a bug).
+        _sudo "to take root ownership of existing Nix files" \
+            find "$NIX_ROOT" \( \
+                \( \( -path "/nix" -or -path "/nix/var" -or -path "/nix/var/*" ! -path "/nix/var/nix/builds/*" \) ! \( -uid 0 -gid 0 \) \) \
+                -or \( -path "/nix/store/*" ! \( -uid 0 \( -gid 0 -or -group "$NIX_BUILD_GROUP_NAME" \) \) \) \
+                \) \
+                -exec chown -h 0:0 {} +
+
+        set -e
+
+        # But not the store directory itself.
+        if [ -d "$NIX_ROOT/store" ]; then
+            _sudo "to take root ownership of existing Nix store directory" \
+                chown "root:$NIX_BUILD_GROUP_NAME" "$NIX_ROOT/store"
         fi
     fi
     _sudo "to make the basic directory structure of Nix (part 1)" \
@@ -856,16 +828,56 @@ install_from_extracted_nix() {
     (
         cd "$EXTRACTED_NIX_PATH"
 
+        # cp -n is not very portable and on macOS it exists with failure status
+        # when everything is skipped. So we first remove the bootstrap closure to
+        # avoid collisions.
+        local colliding_files=()
+
+        for src in ./store/*; do
+            dst="$NIX_ROOT/store/${src##*/}"
+            if [ -L "$dst" ] || [ -e "$dst" ]; then
+                colliding_files+=("$dst")
+            fi
+        done
+
+        if [ "${#colliding_files[@]}" -gt 0 ]; then
+            _sudo "to remove colliding closure files in $NIX_ROOT/store before copying" \
+                  rm -rf "${colliding_files[@]}"
+        fi
+
         if is_os_darwin || is_os_freebsd; then
             _sudo "to copy the basic Nix files to the new store at $NIX_ROOT/store" \
                   cp -RPp ./store/* "$NIX_ROOT/store/"
+
+            # Certain files cannot be listed / chowned even by root on macOS.
+            if is_os_darwin; then
+                set +e
+            fi
+
+            # Everything inside the store directory is root-owned.
+            _sudo "to chown the $NIX_ROOT/store contents" \
+                  chown -R 0:0 "$NIX_ROOT"/store
+
+            set -e
+
+            # But not the store directory itself.
+            _sudo "to chown the $NIX_ROOT/store directory" \
+                  chown "root:$NIX_BUILD_GROUP_NAME" "$NIX_ROOT"/store
         else
+            # The files will be owned to root by the copy.
             _sudo "to copy the basic Nix files to the new store at $NIX_ROOT/store" \
-                  cp -RP --preserve=ownership,timestamps ./store/* "$NIX_ROOT/store/"
+                  cp -RP --preserve=mode,timestamps ./store/* "$NIX_ROOT/store/"
+        fi
+
+        # Certain files cannot be chmod-ed even by root on macOS.
+        if is_os_darwin; then
+            set +e
         fi
 
         _sudo "to make the new store non-writable at $NIX_ROOT/store" \
               chmod -R ugo-w "$NIX_ROOT/store/"
+
+        set -e
 
         if [ -d "$NIX_INSTALLED_NIX" ]; then
             echo "      Alright! We have our first nix at $NIX_INSTALLED_NIX"
@@ -1058,6 +1070,10 @@ main() {
 
     create_build_group
     create_build_users
+    if is_os_darwin; then
+        # Inexplicably, certain macOS setups seem to be missing chown from PATH.
+        export PATH="${PATH:+$PATH:}/usr/sbin"
+    fi
     create_directories
     place_channel_configuration
     install_from_extracted_nix

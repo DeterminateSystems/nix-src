@@ -90,6 +90,36 @@ TEST(LRUCache, overwriteOldestWhenCapacityIsReached)
     ASSERT_EQ(c.get("another").value(), "whatever");
 }
 
+TEST(LRUCache, updateMakesMostRecentAndEvictionsRepeat)
+{
+    LRUCache<std::string, std::string> c(2);
+    c.upsert("one", "eins");
+    c.upsert("two", "zwei");
+
+    // Updating "one" makes "two" the oldest.
+    c.upsert("one", "uno");
+    c.upsert("three", "drei");
+    ASSERT_EQ(c.size(), 2u);
+    ASSERT_FALSE(c.get("two").has_value());
+    ASSERT_EQ(c.get("one").value(), "uno");
+    ASSERT_EQ(c.get("three").value(), "drei");
+
+    // "one" is now the oldest.
+    c.upsert("four", "vier");
+    c.upsert("five", "fünf");
+    ASSERT_EQ(c.size(), 2u);
+    ASSERT_FALSE(c.get("one").has_value());
+    ASSERT_FALSE(c.get("three").has_value());
+    ASSERT_EQ(c.get("four").value(), "vier");
+    ASSERT_EQ(c.get("five").value(), "fünf");
+
+    ASSERT_TRUE(c.erase("four"));
+    c.upsert("six", "sechs");
+    ASSERT_EQ(c.size(), 2u);
+    ASSERT_EQ(c.get("five").value(), "fünf");
+    ASSERT_EQ(c.get("six").value(), "sechs");
+}
+
 /* ----------------------------------------------------------------------------
  * clear
  * --------------------------------------------------------------------------*/

@@ -16,6 +16,16 @@
 
       # https://flake.parts/options/git-hooks-nix#options
       pre-commit.settings = {
+        # `self.outPath` from git-hooks-nix's flake-module is not path-normalized,
+        # so when this flake is evaluated via `packaging/secure-packages` (whose
+        # `inputs.nix.url = "../.."`), it expands to `.../source/packaging/secure-packages/../..`,
+        # which breaks the stdenv unpackPhase. Use a clean relative path instead.
+        rootSrc = lib.mkForce (
+          builtins.path {
+            name = "source";
+            path = ../.;
+          }
+        );
         hooks = {
           # Conflicts are usually found by other checks, but not those in docs,
           # and potentially other places.
@@ -82,6 +92,9 @@
               ''^tests/functional/lang/eval-fail-bad-string-interpolation-3\.nix$''
               ''^tests/functional/lang/eval-fail-bad-string-interpolation-4\.nix$''
               ''^tests/functional/lang/eval-okay-regex-match2\.nix$''
+              ''^tests/functional/lang/eval-okay-scope-1\.nix$''
+              ''^tests/functional/lang/eval-okay-scope-2\.nix$''
+              ''^tests/functional/lang/eval-okay-scope-3\.nix$''
 
               # URL literal tests - nixfmt converts unquoted URLs to strings
               ''^tests/functional/lang/eval-fail-url-literal\.nix$''
@@ -101,6 +114,7 @@
               # Don't format vendored code
               ''^doc/manual/redirects\.js$''
               ''^doc/manual/theme/highlight\.js$''
+              ''^src/libfetchers/builtin-flake-registry\.json$''
             ];
           };
           shellcheck = {

@@ -8,7 +8,6 @@
 #include <memory_resource>
 #include <algorithm>
 
-#include "nix/expr/gc-small-vector.hh"
 #include "nix/expr/value.hh"
 #include "nix/expr/symbol-table.hh"
 #include "nix/expr/eval-error.hh"
@@ -18,6 +17,8 @@
 #include "nix/util/pos-table.hh"
 #include "nix/util/error.hh"
 #include "nix/util/bump-memory-resource.hh"
+
+#include <boost/unordered/concurrent_flat_map_fwd.hpp>
 
 namespace nix {
 
@@ -92,8 +93,6 @@ typedef std::vector<AttrName> AttrSelectionPath;
 
 std::string showAttrSelectionPath(const SymbolTable & symbols, std::span<const AttrName> attrPath);
 
-using UpdateQueue = SmallTemporaryValueVector<conservativeStackReservation>;
-
 /* Abstract syntax of Nix expressions. */
 
 struct Expr
@@ -124,14 +123,6 @@ struct Expr
      * of thunks allocated.
      */
     virtual Value * maybeThunk(EvalState & state, Env & env);
-
-    /**
-     * Only called when performing an attrset update: `//` or similar.
-     * Instead of writing to a Value &, this function writes to an UpdateQueue.
-     * This allows the expression to perform multiple updates in a delayed manner, gathering up all the updates before
-     * applying them.
-     */
-    virtual void evalForUpdate(EvalState & state, Env & env, UpdateQueue & q, std::string_view errorCtx);
     virtual void setName(Symbol name);
     virtual void setDocComment(DocComment docComment) {};
 
@@ -209,13 +200,15 @@ struct ExprString : Expr
 
 struct ExprPath : Expr
 {
-    ref<SourceAccessor> accessor;
     Value v;
 
-    ExprPath(std::pmr::polymorphic_allocator<char> & alloc, ref<SourceAccessor> accessor, std::string_view sv)
-        : accessor(accessor)
+    /**
+     * @param accessor Must outlive this `ExprPath`. Use
+     * `Exprs::addPath()`, which ensures that.
+     */
+    ExprPath(std::pmr::polymorphic_allocator<char> & alloc, SourceAccessor & accessor, std::string_view sv)
     {
-        v.mkPath(&*accessor, StringData::make(*alloc.resource(), sv));
+        v.mkPath(&accessor, StringData::make(*alloc.resource(), sv));
     }
 
     Value * maybeThunk(EvalState & state, Env & env) override;
@@ -739,7 +732,7 @@ struct ExprOpNot : Expr
     struct name : Expr            \
     {                             \
         MakeBinOpMembers(name, s) \
-    }
+    };
 
 MakeBinOp(ExprOpEq, "==");
 MakeBinOp(ExprOpNEq, "!=");
@@ -750,14 +743,7 @@ MakeBinOp(ExprOpConcatLists, "++");
 
 struct ExprOpUpdate : Expr
 {
-private:
-    /** Special case for merging of two attrsets. */
-    void eval(EvalState & state, Value & v, Value & v1, Value & v2);
-    void evalForUpdate(EvalState & state, Env & env, UpdateQueue & q);
-
-public:
-    MakeBinOpMembers(ExprOpUpdate, "//");
-    virtual void evalForUpdate(EvalState & state, Env & env, UpdateQueue & q, std::string_view errorCtx) override;
+    MakeBinOpMembers(ExprOpUpdate, "//")
 };
 
 struct ExprConcatStrings : Expr
@@ -812,28 +798,27 @@ struct ExprPos : Expr
     COMMON_METHODS
 };
 
-/* only used to mark thunks as black holes. */
-struct ExprBlackHole : Expr
-{
-    void show(const SymbolTable & symbols, std::ostream & str) const override {}
-
-    void eval(EvalState & state, Env & env, Value & v) override;
-
-    void bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env) override {}
-
-    [[noreturn]] static void throwInfiniteRecursionError(EvalState & state, Value & v);
-};
-
-extern ExprBlackHole eBlackHole;
-
 class Exprs
 {
     /* Thread-safe fallback resource, which might be a bit slower. */
     std::pmr::synchronized_pool_resource fallbackResource;
     BumpMemoryResource buffer{BumpMemoryResource::defaultReserveSize, &fallbackResource};
 
+    /**
+     * The source accessors referenced by `ExprPath`s, indexed by
+     * their numbers. `Expr`s are allocated in an arena and never
+     * destroyed, so they can't own these themselves: that would keep
+     * the accessors (and anything they refer to, such as the store)
+     * alive forever.
+     */
+    const ref<boost::concurrent_flat_map<size_t, ref<SourceAccessor>>> pathAccessors;
+
 public:
     std::pmr::polymorphic_allocator<char> alloc{&buffer};
+
+    Exprs();
+
+    ExprPath * addPath(const ref<SourceAccessor> & accessor, std::string_view path);
 
     template<class C>
     [[gnu::always_inline]]

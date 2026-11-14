@@ -8,7 +8,11 @@
 namespace nix {
 
 void checkCAFixedOutput(
-    StoreDirConfig & store, const StorePath & drvPath, const DerivationOutput & outputSpec, const ValidPathInfo & info)
+    StoreDirConfig & store,
+    const StorePath & drvPath,
+    const DerivationOutput & outputSpec,
+    const ValidPathInfo & info,
+    Activity & act)
 {
     if (const auto * dof = std::get_if<DerivationOutput::CAFixed>(&outputSpec.raw)) {
         auto & wanted = dof->ca.hash;
@@ -17,6 +21,15 @@ void checkCAFixedOutput(
         assert(info.ca);
         auto & got = info.ca->hash;
         if (wanted != got) {
+            /* Throw an error after registering the path as
+               valid. */
+            act.result(
+                resHashMismatch,
+                {
+                    {"storePath", store.printStorePath(drvPath)},
+                    {"wanted", wanted},
+                    {"got", got},
+                });
             throw BuildError(
                 BuildResult::Failure::HashMismatch,
                 "hash mismatch in fixed-output derivation '%s':\n  specified: %s\n     got:    %s",
@@ -41,7 +54,8 @@ void checkOutputs(
     const StorePath & drvPath,
     const decltype(Derivation::outputs) & drvOutputs,
     const decltype(DerivationOptions<StorePath>::outputChecks) & outputChecks,
-    const std::map<std::string, ValidPathInfo> & outputs)
+    const std::map<std::string, ValidPathInfo> & outputs,
+    Activity & act)
 {
     std::map<StorePath, const ValidPathInfo &> outputsByPath;
     for (auto & output : outputs)
@@ -56,7 +70,7 @@ void checkOutputs(
         auto * outputSpec = get(drvOutputs, outputName);
         assert(outputSpec);
 
-        checkCAFixedOutput(store, drvPath, *outputSpec, info);
+        checkCAFixedOutput(store, drvPath, *outputSpec, info, act);
 
         /* Compute the closure and closure size of some output. This
            is slightly tricky because some of its references (namely

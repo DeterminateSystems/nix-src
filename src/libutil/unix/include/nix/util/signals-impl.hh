@@ -37,7 +37,7 @@ namespace unix {
 
 extern std::atomic<bool> _isInterrupted;
 
-extern thread_local std::function<bool()> interruptCheck;
+[[gnu::tls_model("initial-exec")]] extern thread_local std::function<bool()> interruptCheck;
 
 void _interrupted();
 
@@ -45,7 +45,8 @@ void _interrupted();
  * Start a thread that handles various signals. Also block those signals
  * on the current thread (and thus any threads created by it).
  * Saves the signal mask before changing the mask to block those signals.
- * See saveSignalMask().
+ * See saveSignalMask(). Also ignores SIGXFSZ, which restoreSignals()
+ * undoes.
  */
 void startSignalHandlerThread();
 

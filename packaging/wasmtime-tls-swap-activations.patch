@@ -1,0 +1,112 @@
+--- a/crates/c-api/include/wasmtime/engine.h
++++ b/crates/c-api/include/wasmtime/engine.h
+@@ -43,6 +43,28 @@
+  */
+ WASM_API_EXTERN bool wasmtime_engine_is_pulley(const wasm_engine_t *engine);
+ 
++/**
++ * \brief Replaces the current thread's list of active WebAssembly calls with
++ * `state`, returning the previous list.
++ *
++ * This is for embedders that switch between stacks themselves (e.g. with their
++ * own fibers or coroutines) while WebAssembly calls are active on those stacks.
++ * Before switching away from a stack, call this with `NULL` and save the
++ * result; after switching back to that stack, call it with the saved value.
++ * Each stack then has its own list, so calls on different stacks may be
++ * interleaved on the same thread.
++ *
++ * Every WebAssembly call that is started while a list is current must return
++ * while that same list is current, on the same thread. The returned value is
++ * only meaningful on the current thread.
++ *
++ * Unlike Wasmtime's own async support, this does not save or restore any
++ * per-store state, so a store that has calls in a list that has been swapped
++ * out must not be used in any way (including calling into it, garbage
++ * collecting it or deleting it) until that list has been swapped back in.
++ */
++WASM_API_EXTERN void *wasmtime_tls_swap_activations(void *state);
++
+ #ifdef __cplusplus
+ } // extern "C"
+ #endif
+--- a/crates/c-api/src/engine.rs
++++ b/crates/c-api/src/engine.rs
+@@ -52,3 +52,10 @@
+ pub extern "C" fn wasmtime_engine_is_pulley(engine: &wasm_engine_t) -> bool {
+     engine.engine.is_pulley()
+ }
++
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn wasmtime_tls_swap_activations(
++    state: *mut std::ffi::c_void,
++) -> *mut std::ffi::c_void {
++    unsafe { Engine::tls_swap_activations(state.cast()).cast_mut().cast() }
++}
+--- a/crates/wasmtime/src/engine.rs
++++ b/crates/wasmtime/src/engine.rs
+@@ -782,6 +782,23 @@
+         crate::runtime::vm::tls_eager_initialize();
+     }
+ 
++    /// Replaces the current thread's list of active Wasm calls with
++    /// `state`, returning the previous list. This allows embedders that
++    /// switch stacks themselves to keep a separate list per stack.
++    ///
++    /// # Unsafety
++    ///
++    /// Every Wasm call that is started while a list is current must return
++    /// while that same list is current, on the same thread. A [`Store`]
++    /// that has calls in a swapped-out list must not be used in any way
++    /// until that list has been swapped back in.
++    ///
++    /// [`Store`]: crate::Store
++    #[doc(hidden)]
++    pub unsafe fn tls_swap_activations(state: *const u8) -> *const u8 {
++        unsafe { crate::runtime::vm::swap_activations(state) }
++    }
++
+     /// Returns a [`PoolingAllocatorMetrics`](crate::PoolingAllocatorMetrics) if
+     /// this engine was configured with
+     /// [`InstanceAllocationStrategy::Pooling`](crate::InstanceAllocationStrategy::Pooling).
+--- a/crates/wasmtime/src/runtime/vm/traphandlers.rs
++++ b/crates/wasmtime/src/runtime/vm/traphandlers.rs
+@@ -40,7 +40,7 @@
+ pub use wasmtime_unwinder::Frame;
+ 
+ pub use self::coredump::CoreDumpStack;
+-pub use self::tls::tls_eager_initialize;
++pub use self::tls::{swap_activations, tls_eager_initialize};
+ #[cfg(feature = "async")]
+ pub use self::tls::{AsyncWasmCallState, PreviousAsyncWasmCallState};
+ 
+@@ -1200,6 +1200,30 @@
+     }
+ 
+     pub use raw::initialize as tls_eager_initialize;
++
++    /// Replaces the current thread's list of active Wasm calls with
++    /// `state`, returning the previous list.
++    ///
++    /// This is for embedders that switch between stacks themselves (e.g.
++    /// with their own fibers) while Wasm calls are active on those stacks:
++    /// before switching away from a stack, they swap in an empty (null)
++    /// list, saving the stack's list, and they swap the saved list back in
++    /// when they switch to that stack again.
++    ///
++    /// # Unsafety
++    ///
++    /// Every Wasm call that is started while a list is current must return
++    /// while that same list is current, on the same thread. The state
++    /// returned by this function is only valid on the current thread.
++    ///
++    /// Unlike `AsyncWasmCallState`, this doesn't save or restore any
++    /// per-store state (see `CallThreadState::swap`), so a store that has
++    /// activations in a swapped-out list must not be used in any way until
++    /// that list has been swapped back in.
++    pub unsafe fn swap_activations(state: *const u8) -> *const u8 {
++        raw::replace(state.cast()).cast()
++    }
++
+     #[cfg(all(feature = "component-model-async", feature = "gc"))]
+     use wasmtime_unwinder::Unwind;
+ 

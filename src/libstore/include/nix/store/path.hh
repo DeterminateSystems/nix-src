@@ -1,6 +1,8 @@
 #pragma once
 ///@file
 
+#include <cstdint>
+#include <expected>
 #include <string_view>
 
 #include "nix/util/types.hh"
@@ -10,6 +12,38 @@
 namespace nix {
 
 struct Hash;
+
+/**
+ * Why a string is not a valid store path, store path base name or
+ * store path name.
+ */
+enum class BadStorePathReason : uint8_t {
+    /** The name is empty. */
+    NameEmpty,
+    /** The name is longer than `StorePath::MaxPathLen`. */
+    NameTooLong,
+    /** The name is `.` or `..`. */
+    NameReserved,
+    /** The first dash-separated component of the name is `.` or `..`. */
+    NameReservedComponent,
+    /** The name contains a character that is not allowed. */
+    NameIllegalCharacter,
+    /** The base name is too short to contain a hash part and a name. */
+    TooShort,
+    /** The hash part is not followed by a `-`. */
+    NoDashAfterHash,
+    /** The hash part contains a character that is not valid base-32. */
+    IllegalHashCharacter,
+    /** The path is empty. */
+    EmptyPath,
+    /** The path is not a direct child of the store directory. */
+    NotInStore,
+};
+
+/**
+ * Check whether a name is a valid store path name, without throwing.
+ */
+std::expected<void, BadStorePathReason> validateStorePathName(std::string_view name);
 
 /**
  * Check whether a name is a valid store path name.
@@ -30,6 +64,14 @@ class StorePath
 {
     std::string baseName;
 
+    struct Unchecked
+    {};
+
+    StorePath(std::string_view baseName, Unchecked)
+        : baseName(baseName)
+    {
+    }
+
 public:
 
     /**
@@ -43,6 +85,12 @@ public:
 
     /** @throws BadStorePath */
     StorePath(std::string_view baseName);
+
+    /**
+     * Parse a store path base name (`<hash>-<name>`), without throwing
+     * if it's invalid.
+     */
+    static std::expected<StorePath, BadStorePathReason> parse(std::string_view baseName);
 
     /** @throws BadStorePath */
     StorePath(const Hash & hash, std::string_view name);

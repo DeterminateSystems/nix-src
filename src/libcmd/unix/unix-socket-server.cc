@@ -49,8 +49,10 @@ PeerInfo getPeerInfo(Descriptor remote)
 
     xucred cred;
     socklen_t credLen = sizeof(cred);
-    if (getsockopt(remote, SOL_LOCAL, LOCAL_PEERCRED, &cred, &credLen) == 0)
+    if (getsockopt(remote, SOL_LOCAL, LOCAL_PEERCRED, &cred, &credLen) == 0) {
         peer.uid = cred.cr_uid;
+        peer.gid = cred.cr_gid;
+    }
 
 #endif
 
@@ -122,7 +124,6 @@ PeerInfo getPeerInfo(Descriptor remote)
                 socklen_t remoteAddrLen = sizeof(remoteAddr);
 
                 AutoCloseFD remote = accept(fd.fd, (struct sockaddr *) &remoteAddr, &remoteAddrLen);
-                checkInterrupt();
                 if (!remote) {
                     if (errno == EINTR)
                         continue;

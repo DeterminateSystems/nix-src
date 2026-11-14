@@ -73,6 +73,7 @@ startDaemon() {
     fi
     # Start the daemon, wait for the socket to appear.
     rm -f "$NIX_DAEMON_SOCKET_PATH"
+    # TODO: remove the nix-command feature when we're no longer testing against old daemons.
     PATH=$DAEMON_PATH nix --extra-experimental-features 'nix-command' daemon &
     _NIX_TEST_DAEMON_PID=$!
     export _NIX_TEST_DAEMON_PID
@@ -132,11 +133,11 @@ restartDaemon() {
 }
 
 isDaemonNewer () {
-  [[ -n "${NIX_DAEMON_PACKAGE:-}" ]] || return 0
-  local requiredVersion="$1"
-  local daemonVersion
-  daemonVersion=$("$NIX_DAEMON_PACKAGE/bin/nix" daemon --version | cut -d' ' -f3)
-  [[ $(nix eval --expr "builtins.compareVersions ''$daemonVersion'' ''$requiredVersion''") -ge 0 ]]
+    [[ -n "${NIX_DAEMON_PACKAGE:-}" ]] || return 0
+    local requiredVersion="$1"
+    local daemonVersion
+    daemonVersion=$("$NIX_DAEMON_PACKAGE/bin/nix" daemon --version | sed 's/.*) //')
+    [[ $(nix eval --expr "builtins.compareVersions ''$daemonVersion'' ''$requiredVersion''") -ge 0 ]]
 }
 
 skipTest () {
@@ -352,8 +353,14 @@ count() {
 
 trap onError ERR
 
+# Note: with newer AppArmor stacks, this restriction doesn't prevent *creating*
+# a user namespace, but denies mounting inside it, which Nix's sandbox needs.
+unprivilegedUserNamespacesSupported() {
+  ! { [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] && [[ $(< /proc/sys/kernel/apparmor_restrict_unprivileged_userns) -eq 1 ]]; }
+}
+
 requiresUnprivilegedUserNamespaces() {
-  if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] && [[ $(< /proc/sys/kernel/apparmor_restrict_unprivileged_userns) -eq 1 ]]; then
+  if ! unprivilegedUserNamespacesSupported; then
     skipTest "Unprivileged user namespaces are disabled. Run 'sudo sysctl -w /proc/sys/kernel/apparmor_restrict_unprivileged_userns=0' to allow, and run these tests."
   fi
 }
@@ -368,7 +375,7 @@ initGitRepo() {
     local extraArgs="${2-}"
 
     # shellcheck disable=SC2086 # word splitting of extraArgs is intended
-    git -C "$repo" init $extraArgs
+    git -C "$repo" init --initial-branch=master $extraArgs
     git -C "$repo" config user.email "foobar@example.com"
     git -C "$repo" config user.name "Foobar"
 }

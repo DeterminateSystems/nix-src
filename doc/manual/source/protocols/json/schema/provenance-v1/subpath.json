@@ -1,0 +1,15 @@
+{
+    "next": {
+        "attrs": {
+            "lastModified": 1760000000,
+            "ref": "refs/heads/main",
+            "rev": "8f2b1c0d9e4a7b6c5d3e2f1a0b9c8d7e6f5a4b3c",
+            "revCount": 42,
+            "type": "git",
+            "url": "https://example.org/repo.git"
+        },
+        "type": "tree"
+    },
+    "subpath": "/builder.sh",
+    "type": "subpath"
+}

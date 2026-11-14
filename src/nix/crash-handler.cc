@@ -2,6 +2,7 @@
 
 #include "nix/util/fmt.hh"
 #include "nix/util/logging.hh"
+#include "nix/util/terminal.hh"
 
 #include <boost/core/demangle.hpp>
 #include <exception>
@@ -31,10 +32,17 @@ void logFatal(std::string const & s)
 #endif
 }
 
+} // namespace
+
 void onTerminate()
 {
+    /* The progress bar may have hidden the cursor, and it won't get a
+       chance to unhide it, so do that here. */
+    if (isTTY())
+        writeToStderr("\e[?25h");
+
     logFatal(
-        "Nix crashed. This is a bug. Please report this at https://github.com/NixOS/nix/issues with the following information included:\n");
+        "\nDeterminate Nix crashed. This is a bug. Please report this at https://github.com/DeterminateSystems/nix-src/issues with the following information included:\n");
     try {
         std::exception_ptr eptr = std::current_exception();
         if (eptr) {
@@ -55,7 +63,6 @@ void onTerminate()
 
     std::abort();
 }
-} // namespace
 
 void registerCrashHandler()
 {

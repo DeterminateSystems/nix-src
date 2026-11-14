@@ -35,6 +35,7 @@
 namespace nix {
 
 DirectoryIterator::DirectoryIterator(const std::filesystem::path & p)
+    : dir_(p)
 {
     try {
         // **Attempt to create the underlying directory_iterator**
@@ -51,16 +52,10 @@ DirectoryIterator & DirectoryIterator::operator++()
     // **Attempt to increment the underlying iterator**
     std::error_code ec;
     it_.increment(ec);
-    if (ec) {
-        // Try to get path info if possible, might fail if iterator is bad
-        try {
-            if (it_ != std::filesystem::directory_iterator{}) {
-                throw SysError("cannot read directory past %s: %s", PathFmt(it_->path()), ec.message());
-            }
-        } catch (...) {
-            throw SysError("cannot read directory");
-        }
-    }
+    // On error, it_ has already become the end iterator, so this is the
+    // only way to tell an error from the end of the directory.
+    if (ec)
+        throw SystemError(ec, "cannot read directory %s", PathFmt(dir_));
     return *this;
 }
 
@@ -623,28 +618,6 @@ void copyFile(const std::filesystem::path & from, const std::filesystem::path & 
                 std::filesystem::perms::owner_write,
                 std::filesystem::perm_options::add | std::filesystem::perm_options::nofollow);
         std::filesystem::remove(from);
-    }
-}
-
-void moveFile(const std::filesystem::path & oldName, const std::filesystem::path & newName)
-{
-    try {
-        std::filesystem::rename(oldName, newName);
-    } catch (std::filesystem::filesystem_error & e) {
-        auto oldPath = oldName;
-        auto newPath = newName;
-        // For the move to be as atomic as possible, copy to a temporary
-        // directory
-        std::filesystem::path temp = createTempDir(os_string_to_string(PathView{newPath.parent_path()}), "rename-tmp");
-        Finally removeTemp = [&]() { std::filesystem::remove(temp); };
-        auto tempCopyTarget = temp / "copy-target";
-        if (e.code().value() == EXDEV) {
-            std::filesystem::remove(newPath);
-            warn("can’t rename %s as %s, copying instead", PathFmt(oldName), PathFmt(newName));
-            copyFile(oldPath, tempCopyTarget, true);
-            std::filesystem::rename(
-                os_string_to_string(PathView{tempCopyTarget}), os_string_to_string(PathView{newPath}));
-        }
     }
 }
 

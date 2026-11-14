@@ -66,6 +66,17 @@ std::string DerivationTrampolineGoal::key()
     }.to_string(worker.store);
 }
 
+/**
+ * Make `drvPath` a temporary root in both the eval store and the main
+ * store, since the derivation can be in either of them (see below).
+ */
+static void addDrvTempRoot(Worker & worker, const StorePath & drvPath)
+{
+    worker.evalStore.addTempRoot(drvPath);
+    if (&worker.store != &worker.evalStore)
+        worker.store.addTempRoot(drvPath);
+}
+
 Goal::Co DerivationTrampolineGoal::init()
 {
     trace("need to load derivation from file");
@@ -84,6 +95,14 @@ Goal::Co DerivationTrampolineGoal::init()
             } catch (MissingRealisation &) {
                 return std::nullopt;
             }
+            /* Make `drvPath` a temporary root *before* checking
+               whether it's valid. Otherwise the garbage collector
+               could delete it right after the check, and we would
+               skip obtaining it but then fail to read it below. If
+               the garbage collector is deleting it right now,
+               `addTempRoot()` waits for that to finish, so the
+               check will see that it's gone. */
+            addDrvTempRoot(worker, drvPath);
             auto cond = worker.evalStore.isValidPath(drvPath) || worker.store.isValidPath(drvPath);
             return cond ? std::optional{drvPath} : std::nullopt;
         }()) {
@@ -113,7 +132,7 @@ Goal::Co DerivationTrampolineGoal::init()
     /* `drvPath' should already be a root, but let's be on the safe
        side: if the user forgot to make it a root, we wouldn't want
        things being garbage collected while we're busy. */
-    worker.evalStore.addTempRoot(drvPath);
+    addDrvTempRoot(worker, drvPath);
 
     /* Get the derivation. It is probably in the eval store, but it might be in the main store:
 
@@ -125,7 +144,9 @@ Goal::Co DerivationTrampolineGoal::init()
         for (auto * drvStore : {&worker.evalStore, &worker.store})
             if (drvStore->isValidPath(drvPath))
                 return drvStore->readDerivation(drvPath);
-        assert(false);
+        /* This can only happen if something deleted the derivation
+           despite the temporary root. */
+        throw Error("derivation '%s' disappeared while trying to build it", worker.store.printStorePath(drvPath));
     }();
 
     co_return haveDerivation(std::move(drvPath), std::move(drv));
@@ -149,6 +170,65 @@ Goal::Co DerivationTrampolineGoal::haveDerivation(StorePath drvPath, Derivation 
 
     /* Must have at least one wanted output. This is assumed below. */
     assert(!resolvedWantedOutputs.empty());
+
+    /* Short-circuit `builtin:substitute`. Since these are never actually built, just create substitution goals for the
+     * outputs. */
+    if (drv.type() == DerivationType::Substituted{}) {
+        struct OutputGoal
+        {
+            OutputName outputName;
+            StorePath outPath;
+            GoalPtr goal;
+        };
+
+        std::vector<OutputGoal> outputGoals;
+        Goals waitees;
+        for (auto & outputName : resolvedWantedOutputs) {
+            auto i = drv.outputs.find(outputName);
+            if (i == drv.outputs.end())
+                throw Error(
+                    "derivation '%s' does not have wanted output '%s'",
+                    worker.store.printStorePath(drvPath),
+                    outputName);
+            auto outPath = i->second.path(worker.store, drv.name, outputName);
+            if (!outPath)
+                throw Error(
+                    "output '%s' of derivation '%s' has no store path",
+                    outputName,
+                    worker.store.printStorePath(drvPath));
+            auto g = upcast_goal(worker.makePathSubstitutionGoal(*outPath));
+            outputGoals.push_back({outputName, *outPath, g});
+            waitees.insert(g);
+        }
+
+        co_await await(std::move(waitees));
+
+        if (nrFailed != 0) {
+            StringSet failedPaths;
+            for (auto & og : outputGoals)
+                if (og.goal->exitCode != ecSuccess)
+                    failedPaths.insert(worker.store.printStorePath(og.outPath));
+            co_return doneFailure(
+                ecFailed,
+                BuildResult::Failure{{
+                    .status = BuildResult::Failure::DependencyFailed,
+                    .msg = HintFmt(
+                        "failed to substitute outputs of '%s': %s",
+                        worker.store.printStorePath(drvPath),
+                        concatStringsSep(", ", quoteStrings(failedPaths))),
+                }});
+        }
+
+        SingleDrvOutputs builtOutputs;
+        for (auto & og : outputGoals)
+            builtOutputs.emplace(og.outputName, UnkeyedRealisation{.outPath = og.outPath});
+
+        co_return doneSuccess(
+            BuildResult::Success{
+                .status = BuildResult::Success::Substituted,
+                .builtOutputs = std::move(builtOutputs),
+            });
+    }
 
     Goals concreteDrvGoals;
 
