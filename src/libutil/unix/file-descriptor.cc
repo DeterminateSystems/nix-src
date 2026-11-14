@@ -7,6 +7,7 @@
 #  include <libproc.h> /* For closeExtraFDs. */
 #endif
 #include <fcntl.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <span>

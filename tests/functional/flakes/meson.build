@@ -35,6 +35,7 @@ suites += {
     'old-lockfiles.sh',
     'trace-ifd.sh',
     'get-flake.sh',
+    'path-values.sh',
     'type-error-fallback.sh',
     'build-time-flake-inputs.sh',
     'substitution.sh',
