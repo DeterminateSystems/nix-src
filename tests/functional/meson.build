@@ -188,6 +188,7 @@ suites = [
       'toString-path.sh',
       'user-envs-migration.sh',
       'user-envs.sh',
+      'verify-concurrent-add.sh',
       'wasm.sh',
       'why-depends.sh',
     ],

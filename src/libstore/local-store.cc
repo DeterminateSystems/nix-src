@@ -11,6 +11,7 @@
 #include "nix/util/topo-sort.hh"
 #include "nix/util/thread-pool.hh"
 #include "nix/util/util.hh"
+#include "nix/util/environment-variables.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/compression.hh"
 #include "nix/util/signals.hh"
@@ -1794,12 +1795,27 @@ LocalStore::VerificationResult LocalStore::verifyAllValidPaths(RepairFlag repair
             storePathsInStoreDir.insert(std::move(*storePath));
     }
 
+    /* Synchronisation points for testing, see
+       tests/functional/verify-concurrent-add.sh. */
+    if (auto p = getEnv("_NIX_TEST_VERIFY_SYNC_1"))
+        writeFile(*p, "");
+    if (auto p = getEnv("_NIX_TEST_VERIFY_SYNC_2"))
+        readFile(*p);
+
     /* Check whether all valid paths actually exist. */
     printInfo("checking path existence...");
 
     StorePathSet done;
 
-    auto existsInStoreDir = [&](const StorePath & storePath) { return storePathsInStoreDir.count(storePath); };
+    /* The scan above is not a snapshot. A path that was added while it
+       ran (its file created, then registered) can be missing from it and
+       still be in the query below, so check such a path on disk before
+       treating it as gone. The GC lock keeps the garbage collector from
+       deleting paths meanwhile. */
+    auto existsInStoreDir = [&](const StorePath & storePath) {
+        return storePathsInStoreDir.count(storePath)
+               || pathExists(config->realStoreDir.get() / storePath.to_string());
+    };
 
     bool errors = false;
     StorePathSet validPaths;
