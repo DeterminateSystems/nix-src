@@ -284,8 +284,11 @@ public:
      * Asynchronously flush to disk without blocking, if available on
      * the platform. This is just a performance optimization, and
      * fsync must be run later even if this is called.
+     *
+     * @param offset Start of the byte range to flush.
+     * @param nbytes Length of the range; 0 means up to the end of the file.
      */
-    void startFsync() const;
+    void startFsync(off_t offset = 0, off_t nbytes = 0) const;
 };
 
 /**

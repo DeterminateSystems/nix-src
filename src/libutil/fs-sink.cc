@@ -205,6 +205,18 @@ struct RestoreRegularFile : CreateRegularFileSink, FdSink
     AutoCloseFD fd;
     bool startFsync = false;
 
+    /**
+     * With `startFsync`, writeback is started every `writebackChunkSize`
+     * bytes while the file is written, rather than only when it's closed,
+     * so the fsync before registration doesn't wait for the whole file.
+     */
+    static constexpr size_t writebackChunkSize = 32 * 1024 * 1024;
+
+    /**
+     * Bytes at the start of the file whose writeback has been started.
+     */
+    size_t writebackStarted = 0;
+
     RestoreRegularFile(bool startFSync_, AutoCloseFD fd_)
         : FdSink(fd_.get())
         , fd(std::move(fd_))
@@ -232,7 +244,16 @@ struct RestoreRegularFile : CreateRegularFileSink, FdSink
            store path, but this is a performance optimization to allow
            the disk write to start early. */
         if (fd && startFsync)
-            fd.startFsync();
+            fd.startFsync(writebackStarted);
+    }
+
+    void writeUnbuffered(std::string_view data) override
+    {
+        FdSink::writeUnbuffered(data);
+        if (startFsync && written - writebackStarted >= writebackChunkSize) {
+            fd.startFsync(writebackStarted, written - writebackStarted);
+            writebackStarted = written;
+        }
     }
 
     void isExecutable() override;

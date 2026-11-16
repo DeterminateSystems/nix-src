@@ -164,6 +164,7 @@ suites = [
       'remote-store.sh',
       'repair.sh',
       'repl.sh',
+      'restore-large-file.sh',
       'restricted.sh',
       'search.sh',
       'secure-drv-outputs.sh',
