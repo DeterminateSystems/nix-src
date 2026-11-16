@@ -86,6 +86,10 @@ public:
           The timeout (in seconds) for receiving data from servers
           during download. Nix cancels idle downloads after this
           timeout's duration.
+
+          This also limits how long a transfer waits for a connection
+          to become available if no other transfer sends or receives
+          any data in the meantime.
         )"};
 
     Setting<uint32_t> tries{

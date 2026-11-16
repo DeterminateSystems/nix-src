@@ -138,6 +138,37 @@ nix-store -r "$bigFile" --substituters "$httpBinaryCacheUrl" 2>&1 | tee "$TEST_R
 unset _NIX_TEST_NIX_SERVE_TRUNCATE_NAR
 
 
+# Test that transfers waiting for a connection (because all
+# `http-connections` are in use) don't fail. Curl counts the time
+# spent waiting towards `connect-timeout`, so Nix has to requeue such
+# transfers. Waiting also shouldn't run into `stalled-download-timeout`
+# as long as the transfers holding the connections make progress.
+slowPaths=()
+for i in 1 2; do
+    echo "slow $i" > "$TEST_ROOT/slow-file"
+    slowPaths+=("$(nix store add-file --store "file://$cacheDir" "$TEST_ROOT/slow-file")")
+done
+export _NIX_TEST_NIX_SERVE_NAR_DURATION=3
+restartNixServe
+clearStore
+# With a single connection, the download of the second NAR has to wait
+# 3 seconds for the first one, exceeding both `connect-timeout` and
+# `stalled-download-timeout`. This should neither fail nor count as a
+# failed attempt. (Substitutions run concurrently, so the downloads do
+# overlap.)
+nix-store -r "${slowPaths[@]}" --substituters "$httpBinaryCacheUrl" --no-require-sigs \
+    --option http-connections 1 \
+    --option connect-timeout 1 \
+    --option stalled-download-timeout 2 \
+    --option filetransfer-retry-attempts 1 \
+    --debug 2> "$TEST_ROOT/log" || { cat "$TEST_ROOT/log"; fail "substitution failed"; }
+# Check that the second download actually had to wait.
+grepQuiet "timed out waiting for a connection, requeueing" "$TEST_ROOT/log"
+grepQuietInverse "unable to download" "$TEST_ROOT/log"
+nix path-info "${slowPaths[@]}"
+unset _NIX_TEST_NIX_SERVE_NAR_DURATION
+
+
 # Regression test: queryMissing() should cache narinfos.
 restartNixServe
 nix path-info -vvvv --store "$httpBinaryCacheUrl" "$bigFile" 2> "$TEST_ROOT/log"
