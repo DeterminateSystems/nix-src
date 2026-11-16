@@ -44,12 +44,7 @@ enum struct HttpStatus : long {
     Created = 201,
     NoContent = 204,
     PartialContent = 206,
-    MovedPermanently = 301,
-    Found = 302,
-    SeeOther = 303,
     NotModified = 304,
-    TemporaryRedirect = 307,
-    PermanentRedirect = 308,
     Unauthorized = 401,
     Forbidden = 403,
     NotFound = 404,
@@ -66,17 +61,6 @@ enum struct HttpStatus : long {
 constexpr bool operator==(long lhs, HttpStatus rhs) noexcept
 {
     return lhs == static_cast<long>(rhs);
-}
-
-/**
- * Whether curl follows a response with this status (if it has a
- * `Location` header).
- */
-constexpr bool isRedirect(long httpStatus) noexcept
-{
-    return httpStatus == HttpStatus::MovedPermanently || httpStatus == HttpStatus::Found
-           || httpStatus == HttpStatus::SeeOther || httpStatus == HttpStatus::TemporaryRedirect
-           || httpStatus == HttpStatus::PermanentRedirect;
 }
 
 const char * httpMethodName(HttpMethod method)
@@ -198,12 +182,14 @@ struct curlFileTransfer : public FileTransfer
     std::chrono::steady_clock::time_point lastProgress;
 
     /**
-     * The destinations (see `TransferItem::currentDestination()`) to
-     * which a request that had a connection failed with a transient
+     * Destinations (see `TransferItem::destination`) that appear to
+     * be failing, because a request to them failed with a transient
      * error without receiving a response (e.g. because the server
-     * isn't accepting connections or isn't responding), and from
-     * which no data has been received since. Only accessed from the
-     * worker thread.
+     * isn't accepting connections or isn't responding).
+     * Requests that only timed out waiting for a connection don't
+     * count. A destination is removed as soon as we receive any data
+     * from it. See `TransferItem::canRequeueAfterWaiting()`. Only
+     * accessed from the worker thread.
      */
     std::set<std::string> failingDestinations;
 
@@ -211,6 +197,13 @@ struct curlFileTransfer : public FileTransfer
     {
         curlFileTransfer & fileTransfer;
         FileTransferRequest request;
+
+        /**
+         * The scheme and authority of `request.uri`, used as the key
+         * in `failingDestinations`.
+         */
+        std::string destination;
+
         FileTransferResult result;
         std::unique_ptr<Activity> _act;
 
@@ -237,9 +230,8 @@ struct curlFileTransfer : public FileTransfer
         std::chrono::steady_clock::time_point attemptStartTime;
 
         /**
-         * If the preceding attempts timed out while waiting for a
-         * connection (see `canRequeueAfterWaiting()`), when the first of
-         * those attempts was handed to curl.
+         * When this transfer started waiting for a connection. Unset if the
+         * most recent attempt ended any other way. See `canRequeueAfterWaiting()`.
          */
         std::optional<std::chrono::steady_clock::time_point> waitingForConnectionSince;
 
@@ -287,26 +279,11 @@ struct curlFileTransfer : public FileTransfer
         bool needsProgressUpdate:1 = false;
 
         /**
-         * The number of redirects that curl had followed in the
-         * current attempt (see `redirectCount()`) when it was last
-         * about to send a request on an established connection
-         * (i.e. it called `CURLOPT_PREREQFUNCTION`). See
-         * `neverConnected()`.
+         * Whether curl was about to send a request of the current
+         * attempt on an established connection (i.e. it called
+         * `CURLOPT_PREREQFUNCTION`). See `neverConnected()`.
          */
-        long connectedRedirects = -1;
-
-        /**
-         * The IDs of the connections on which curl sent requests in
-         * the current attempt.
-         */
-        std::vector<curl_off_t> connIds;
-
-        /**
-         * The number of redirects that curl had followed in the
-         * current attempt when we last received a status line, or
-         * -1 if we didn't receive any.
-         */
-        long respondedRedirects = -1;
+        bool gotConnection:1 = false;
 
         /**
          * Server-provided minimum retry delay, parsed from the `Retry-After`
@@ -376,6 +353,14 @@ struct curlFileTransfer : public FileTransfer
             Callback<FileTransferResult> && callback)
             : fileTransfer(fileTransfer)
             , request(request)
+            , destination([&]() -> std::string {
+                try {
+                    auto url = request.uri.parsed();
+                    return url.scheme + "://" + (url.authority ? url.authority->to_string() : "");
+                } catch (BadURL &) {
+                    return request.uri.to_string();
+                }
+            }())
             , callback(std::move(callback))
             , finalSink([this](std::string_view data) {
                 if (errorSink) {
@@ -468,51 +453,13 @@ struct curlFileTransfer : public FileTransfer
         std::exception_ptr callbackException;
 
         /**
-         * The number of redirects that curl has followed in the
-         * current attempt. This identifies the current request in
-         * the redirect chain.
-         */
-        long redirectCount()
-        {
-            long redirects = 0;
-            curl_easy_getinfo(req, CURLINFO_REDIRECT_COUNT, &redirects);
-            return redirects;
-        }
-
-        /**
-         * The scheme and authority of the URL of the current request
-         * (which differs from `request.uri` after a redirect), used
-         * as the key in `failingDestinations`.
-         */
-        std::string currentDestination()
-        {
-            char * effectiveUrl = nullptr;
-            curl_easy_getinfo(req, CURLINFO_EFFECTIVE_URL, &effectiveUrl);
-            auto url = effectiveUrl && *effectiveUrl ? std::string(effectiveUrl) : request.uri.to_string();
-            try {
-                auto parsed = parseURL(url);
-                return parsed.scheme + "://" + (parsed.authority ? parsed.authority->to_string() : "");
-            } catch (BadURL &) {
-                return url;
-            }
-        }
-
-        /**
          * Record that we received data from the server.
          */
         void receivedData()
         {
-            /* A redirect doesn't count as progress, since the
-               transfer still needs the response to the next request,
-               which may have to wait for a connection. Otherwise a
-               transfer that keeps getting redirected and requeued
-               could keep `canRequeueAfterWaiting()` from ever counting
-               an attempt. (Curl doesn't pass the body of a redirect
-               to `writeCallback()`.) */
-            if (!isRedirect(getHTTPStatus()))
-                fileTransfer.lastProgress = std::chrono::steady_clock::now();
+            fileTransfer.lastProgress = std::chrono::steady_clock::now();
             if (!fileTransfer.failingDestinations.empty())
-                fileTransfer.failingDestinations.erase(currentDestination());
+                fileTransfer.failingDestinations.erase(destination);
         }
 
         size_t writeCallback(void * contents, size_t size, size_t nmemb) noexcept
@@ -577,7 +524,6 @@ struct curlFileTransfer : public FileTransfer
                 hasContentEncoding = false;
                 retryAfterMs = std::nullopt;
                 bytesReceived = 0;
-                respondedRedirects = redirectCount();
                 appendCurrentUrl();
             } else {
 
@@ -760,12 +706,7 @@ struct curlFileTransfer : public FileTransfer
 
         static int prereqCallbackWrapper(void * clientp, char *, char *, int, int) noexcept
         {
-            auto & item = *(TransferItem *) clientp;
-            item.connectedRedirects = item.redirectCount();
-            curl_off_t connId = -1;
-            if (curl_easy_getinfo(item.req, CURLINFO_CONN_ID, &connId) == CURLE_OK && connId >= 0
-                && !std::ranges::contains(item.connIds, connId))
-                item.connIds.push_back(connId);
+            ((TransferItem *) clientp)->gotConnection = true;
             return CURL_PREREQFUNC_OK;
         }
 
@@ -786,9 +727,7 @@ struct curlFileTransfer : public FileTransfer
             curl_easy_reset(req);
 
             attemptStartTime = std::chrono::steady_clock::now();
-            connectedRedirects = -1;
-            connIds.clear();
-            respondedRedirects = -1;
+            gotConnection = false;
             bytesReceived = 0;
 
             /* Start an activity for this HTTP request. Note that
@@ -1128,15 +1067,11 @@ struct curlFileTransfer : public FileTransfer
                     return;
                 }
 
-                auto destination = currentDestination();
-
                 bool hadConnection = !neverConnected();
 
-                /* Note that `httpStatus` may come from the response
-                   to a previous request in the redirect chain. */
-                bool gotResponse = respondedRedirects == redirectCount();
-
-                if (hadConnection && !gotResponse && err == Transient)
+                /* A server that sent a response (e.g. HTTP 503) is
+                   reachable, so it isn't failing in this sense. */
+                if (hadConnection && httpStatus == 0 && err == Transient)
                     fileTransfer.failingDestinations.insert(destination);
 
                 /* Curl's error message for this case ("Operation timed
@@ -1174,7 +1109,7 @@ struct curlFileTransfer : public FileTransfer
                 else {
                     if (!waitingForConnectionSince)
                         waitingForConnectionSince = attemptStartTime;
-                    if (canRequeueAfterWaiting(destination, finishTime)) {
+                    if (canRequeueAfterWaiting(finishTime)) {
                         debug(
                             "%s of '%s' timed out waiting for a connection, requeueing",
                             Uncolored(request.noun()),
@@ -1203,12 +1138,11 @@ struct curlFileTransfer : public FileTransfer
          * We can recognize such timeouts because the transfer was
          * never assigned a connection.
          *
-         * Waiting is fine as long as the server `destination` is
-         * healthy and the transfers holding the connections make
-         * progress, no matter how long it takes. However, if the
-         * server is failing (e.g. it's unreachable or not
-         * responding), we want to fail as quickly as if we hadn't
-         * waited, so we count the attempt.
+         * Waiting is fine as long as the server is healthy and the
+         * transfers holding the connections make progress, no matter
+         * how long it takes. However, if the server is failing (e.g.
+         * it's unreachable or not responding), we want to fail as
+         * quickly as if we hadn't waited, so we count the attempt.
          *
          * Also, curl's stall detection doesn't apply to paused
          * transfers, so they can hold on to a connection indefinitely
@@ -1219,7 +1153,7 @@ struct curlFileTransfer : public FileTransfer
          * count it, since otherwise such a deadlock would never be
          * resolved.
          */
-        bool canRequeueAfterWaiting(const std::string & destination, std::chrono::steady_clock::time_point now)
+        bool canRequeueAfterWaiting(std::chrono::steady_clock::time_point now)
         {
             assert(waitingForConnectionSince);
 
@@ -1234,30 +1168,31 @@ struct curlFileTransfer : public FileTransfer
 
         /**
          * Whether curl never assigned a connection to the current
-         * request in the redirect chain of this attempt.
+         * attempt.
          *
-         * If curl was about to send the current request, it had a
-         * connection. Otherwise, `CURLINFO_CONN_ID` tells us whether
-         * curl assigned a connection that it was still establishing,
-         * since such a connection isn't shared with other transfers.
-         * If it didn't, `CURLINFO_CONN_ID` is -1, or the ID of a
-         * connection used for a previous request in the redirect
-         * chain.
+         * `CURLINFO_CONN_ID` covers attempts that failed while
+         * establishing a connection, since such a connection isn't
+         * shared with other transfers. However, older versions of
+         * curl (e.g. 8.17) don't record the connection ID of a
+         * transfer that finishes while other transfers still use its
+         * connection (e.g. a stalled HTTP/2 stream), so we also check
+         * whether a request was about to be sent on an established
+         * connection.
          *
-         * We can't rely on `CURLINFO_CONN_ID` alone, because older
-         * versions of curl (e.g. 8.17) don't record the connection ID
-         * of a transfer that finishes while other transfers still use
-         * its connection (e.g. a stalled HTTP/2 stream). For the same
-         * reason, after a redirect, `CURLINFO_CONN_ID` can be the ID
-         * of a connection used before the previous request.
+         * We don't handle redirects: after a redirect, this returns
+         * false even if the request to the redirect target is waiting
+         * for a connection, so we count timing out as a failed
+         * attempt. (Binary caches generally don't use redirects,
+         * since they add latency.) Since curl then still reports the
+         * HTTP status of the redirect, `finish()` doesn't mark either
+         * server as failing.
          */
         bool neverConnected()
         {
-            if (connectedRedirects == redirectCount())
+            if (gotConnection)
                 return false;
             curl_off_t connId = 0;
-            return curl_easy_getinfo(req, CURLINFO_CONN_ID, &connId) == CURLE_OK
-                   && (connId < 0 || std::ranges::contains(connIds, connId));
+            return curl_easy_getinfo(req, CURLINFO_CONN_ID, &connId) == CURLE_OK && connId < 0;
         }
 
         /* If this is a transient error, then maybe retry the download
