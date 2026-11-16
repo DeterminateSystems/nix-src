@@ -4,8 +4,6 @@
 #include "nix/store/uds-remote-store.hh"
 #include "nix/store/globals.hh"
 #include "nix/util/environment-variables.hh"
-#include "nix/util/current-process.hh"
-#include "nix/util/sync.hh"
 
 #include <filesystem>
 
@@ -115,12 +113,12 @@ ref<StoreConfig> resolveStoreConfig(StoreReference && storeURI)
 
 std::list<ref<Store>> getDefaultSubstituters()
 {
-    static Sync<std::optional<std::list<ref<Store>>>> stores_;
-
-    auto stores(stores_.lock());
-
-    if (!*stores) {
-        std::list<ref<Store>> res;
+    /* Note: quickExit() doesn't destroy these stores, since other
+       threads (e.g. the curl worker thread) may still be using
+       them. Resources that must not outlive the process (like SSH
+       master processes) are cleaned up by atQuickExit() handlers. */
+    static auto stores([]() {
+        std::list<ref<Store>> stores;
 
         std::set<StoreReference> done;
 
@@ -128,7 +126,7 @@ std::list<ref<Store>> getDefaultSubstituters()
             if (!done.insert(ref).second)
                 return;
             try {
-                res.push_back(openStore(StoreReference{ref}));
+                stores.push_back(openStore(StoreReference{ref}));
             } catch (Error & e) {
                 logWarning(e.info());
             }
@@ -137,18 +135,12 @@ std::list<ref<Store>> getDefaultSubstituters()
         for (const auto & ref : settings.getWorkerSettings().substituters.get())
             addStore(ref);
 
-        res.sort([](ref<Store> & a, ref<Store> & b) { return a->config.priority < b->config.priority; });
+        stores.sort([](ref<Store> & a, ref<Store> & b) { return a->config.priority < b->config.priority; });
 
-        *stores = std::move(res);
+        return stores;
+    }());
 
-        /* Close the substituters on exit, since they may own
-           resources that need cleaning up (e.g. SSH master
-           processes). The stores are destroyed outside of the
-           lock. */
-        atQuickExit([]() { auto stores = std::exchange(*stores_.lock(), std::nullopt); });
-    }
-
-    return **stores;
+    return stores;
 }
 
 Implementations::Map & Implementations::registered()

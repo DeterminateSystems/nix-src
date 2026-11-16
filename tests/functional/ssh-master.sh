@@ -70,3 +70,13 @@ builtins.seq (builtins.toFile "foo" "bar") (throw "this is an error")
 EOF
 expectStderr 1 nix eval --store "$store" --impure -f "$TEST_ROOT/throw.nix" | grepQuiet "this is an error"
 checkMasters
+
+# A substituter. quickExit() doesn't destroy the default substituters.
+# Substitute into a local store, so that the substituter is opened by
+# this process rather than by the daemon (which would ignore it if
+# we're not a trusted user).
+echo bar > "$TEST_ROOT/bar"
+path=$(nix store add --store "$TEST_ROOT/other-store" "$TEST_ROOT/bar")
+nix-store --store "$TEST_ROOT/substituted-store" --realise "$path" --option substituters "$store" --option require-sigs false
+[[ $(nix store cat --store "$TEST_ROOT/substituted-store" "$path") = bar ]]
+checkMasters
