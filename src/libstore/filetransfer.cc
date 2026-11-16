@@ -202,7 +202,7 @@ struct curlFileTransfer : public FileTransfer
          * The scheme and authority of `request.uri`, used as the key
          * in `failingDestinations`.
          */
-        std::string destination;
+        const std::string destination;
 
         FileTransferResult result;
         std::unique_ptr<Activity> _act;
@@ -277,13 +277,6 @@ struct curlFileTransfer : public FileTransfer
          * be updated.
          */
         bool needsProgressUpdate:1 = false;
-
-        /**
-         * Whether curl was about to send a request of the current
-         * attempt on an established connection (i.e. it called
-         * `CURLOPT_PREREQFUNCTION`). See `neverConnected()`.
-         */
-        bool gotConnection:1 = false;
 
         /**
          * Server-provided minimum retry delay, parsed from the `Retry-After`
@@ -704,12 +697,6 @@ struct curlFileTransfer : public FileTransfer
             return 1;
         }
 
-        static int prereqCallbackWrapper(void * clientp, char *, char *, int, int) noexcept
-        {
-            ((TransferItem *) clientp)->gotConnection = true;
-            return CURL_PREREQFUNC_OK;
-        }
-
         void unpause()
         {
             /* Unpausing an already unpaused transfer is a no-op. */
@@ -727,7 +714,6 @@ struct curlFileTransfer : public FileTransfer
             curl_easy_reset(req);
 
             attemptStartTime = std::chrono::steady_clock::now();
-            gotConnection = false;
             bytesReceived = 0;
 
             /* Start an activity for this HTTP request. Note that
@@ -909,9 +895,6 @@ struct curlFileTransfer : public FileTransfer
             // call act().
             curl_easy_setopt(req, CURLOPT_RESOLVER_START_FUNCTION, resolverCallbackWrapper);
             curl_easy_setopt(req, CURLOPT_RESOLVER_START_DATA, this);
-
-            curl_easy_setopt(req, CURLOPT_PREREQFUNCTION, prereqCallbackWrapper);
-            curl_easy_setopt(req, CURLOPT_PREREQDATA, this);
 
             result.data.clear();
             result.bodySize = 0;
@@ -1168,29 +1151,10 @@ struct curlFileTransfer : public FileTransfer
 
         /**
          * Whether curl never assigned a connection to the current
-         * attempt.
-         *
-         * `CURLINFO_CONN_ID` covers attempts that failed while
-         * establishing a connection, since such a connection isn't
-         * shared with other transfers. However, older versions of
-         * curl (e.g. 8.17) don't record the connection ID of a
-         * transfer that finishes while other transfers still use its
-         * connection (e.g. a stalled HTTP/2 stream), so we also check
-         * whether a request was about to be sent on an established
-         * connection.
-         *
-         * We don't handle redirects: after a redirect, this returns
-         * false even if the request to the redirect target is waiting
-         * for a connection, so we count timing out as a failed
-         * attempt. (Binary caches generally don't use redirects,
-         * since they add latency.) Since curl then still reports the
-         * HTTP status of the redirect, `finish()` doesn't mark either
-         * server as failing.
+         * attempt. Note: this requires Curl >= 8.22.
          */
         bool neverConnected()
         {
-            if (gotConnection)
-                return false;
             curl_off_t connId = 0;
             return curl_easy_getinfo(req, CURLINFO_CONN_ID, &connId) == CURLE_OK && connId < 0;
         }

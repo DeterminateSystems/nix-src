@@ -133,8 +133,9 @@ deps_other += boost
 
 # This is quite new, but curl has a bunch of known issues with write pausing and decompression.
 # Please use libcurl >= 8.17. See https://github.com/curl/curl/issues/19334, https://github.com/curl/curl/issues/16280, https://github.com/curl/curl/issues/16955 if in doubt.
+# Also, filetransfer.cc relies on libcurl >= 8.22 setting CURLINFO_CONN_ID as soon as a transfer is assigned a connection.
 # Patch out this check at your own risk.
-curl = dependency('libcurl', 'curl', version : '>= 8.17.0')
+curl = dependency('libcurl', 'curl', version : '>= 8.22.0')
 
 deps_private += curl
 
