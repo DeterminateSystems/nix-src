@@ -210,6 +210,9 @@ SingleDrvOutputs DerivationBuilderImpl::unprepareBuild()
 
     /* Close the read side of the logger pipe. */
     builderOut.close();
+#ifdef __APPLE__
+    ptyRelay.reset();
+#endif
 
     /* Close the log file. */
     miscMethods->closeLogFile();
@@ -527,6 +530,14 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
         activeBuildHandle.emplace(tracker->buildStarted(getActiveBuild()));
 
     processSandboxSetupMessages();
+
+#ifdef __APPLE__
+    /* On macOS, the output of a builder is lost if it isn't read from
+       the pseudoterminal shortly after the builder exits, so don't
+       leave that to the worker. */
+    ptyRelay = std::make_unique<PtyRelay>(std::move(builderOut), std::move(slaveName));
+    builderOut = std::move(ptyRelay->out);
+#endif
 
     return builderOut.get();
 }

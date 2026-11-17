@@ -60,6 +60,8 @@ suites = [
       'build-cores.sh',
       'build-delete.sh',
       'build-dry.sh',
+      'build-log-busy-worker.sh',
+      'build-log-many.sh',
       'build-remote-content-addressed-fixed.sh',
       'build-remote-content-addressed-floating.sh',
       'build-remote-input-addressed.sh',
