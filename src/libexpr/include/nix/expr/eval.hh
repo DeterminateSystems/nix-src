@@ -676,7 +676,12 @@ public:
         v.force(*this, pos);
     }
 
-    void tryFixupBlackHolePos(Value & v, PosIdx pos);
+    /**
+     * Give an infinite recursion error that doesn't have a position
+     * yet the position `pos` of the thunk that it's propagating
+     * through.
+     */
+    void fixupBlackHolePos(InfiniteRecursionError & e, PosIdx pos);
 
 public:
 

@@ -2408,18 +2408,10 @@ void ExprPos::eval(EvalState & state, Env & env, Value & v)
     state.mkPos(v, pos);
 }
 
-void EvalState::tryFixupBlackHolePos(Value & v, PosIdx pos)
+void EvalState::fixupBlackHolePos(InfiniteRecursionError & e, PosIdx pos)
 {
-    if (!v.isBlackhole())
-        return;
-    auto e = std::current_exception();
-    try {
-        std::rethrow_exception(e);
-    } catch (InfiniteRecursionError & e) {
-        if (!e.hasPos())
-            e.atPos(positions[pos]);
-    } catch (...) {
-    }
+    if (!e.hasPos())
+        e.atPos(positions[pos]);
 }
 
 void EvalState::forceValueDeep(Value & v)

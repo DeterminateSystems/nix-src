@@ -156,8 +156,16 @@ void ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptr
                 auto expr = untagPointer<Expr *>(p1_);
                 expr->eval(state, *env, (Value &) *this);
             }
+        } catch (InfiniteRecursionError & e) {
+            /* Note: this is a separate handler (rather than a check
+               in the `catch (...)` below) because figuring out the
+               type of the current exception there would require
+               rethrowing it, which is expensive to do for every
+               thunk that an error propagates through. */
+            state.fixupBlackHolePos(e, pos);
+            setStorage(new Value::Failed{.ex = std::current_exception()});
+            throw;
         } catch (...) {
-            state.tryFixupBlackHolePos((Value &) *this, pos);
             setStorage(new Value::Failed{.ex = std::current_exception()});
             throw;
         }
