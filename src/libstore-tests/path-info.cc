@@ -204,4 +204,38 @@ TEST_F(PathInfoTestV2, PathInfo_full_shortRefs)
     ASSERT_EQ(*++refs.begin(), "n5wkd9frr45pa74if5gpz9j7mifg27fh-foo");
 }
 
+class PathInfoTest : public LibStoreTest
+{};
+
+static ValidPathInfo makeText(const Store & store)
+{
+    return ValidPathInfo::makeFromCA(
+        store,
+        "foo.drv",
+        TextInfo{
+            .hash = hashString(HashAlgorithm::SHA256, "Derive(...)"),
+            .references = {StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-bar"}},
+        },
+        Hash::parseSRI("sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="));
+}
+
+TEST_F(PathInfoTest, text_isContentAddressed)
+{
+    auto info = makeText(*store);
+    ASSERT_TRUE(info.isContentAddressed(*store));
+}
+
+/**
+ * A text-hashed path cannot refer to itself, but a corrupt Nix
+ * database or a bad binary cache can claim that it does. That used to
+ * trigger an assertion failure.
+ */
+TEST_F(PathInfoTest, text_selfReference_throws)
+{
+    auto info = makeText(*store);
+    info.references.insert(info.path);
+    ASSERT_THROW(info.contentAddressWithReferences(), Error);
+    ASSERT_THROW(info.isContentAddressed(*store), Error);
+}
+
 } // namespace nix
