@@ -210,9 +210,6 @@ SingleDrvOutputs DerivationBuilderImpl::unprepareBuild()
 
     /* Close the read side of the logger pipe. */
     builderOut.close();
-#ifdef __APPLE__
-    ptyRelay.reset();
-#endif
 
     /* Close the log file. */
     miscMethods->closeLogFile();
@@ -228,6 +225,23 @@ SingleDrvOutputs DerivationBuilderImpl::unprepareBuild()
 
     /* Terminate the recursive Nix daemon. */
     stopDaemon();
+
+#ifdef __APPLE__
+    /* If the thread that read the output of the builder has failed,
+       we got EOF while the builder may still have been running. */
+    if (auto relay = std::move(ptyRelay)) {
+        try {
+            relay->finish();
+        } catch (std::exception & e) {
+            cleanupBuild(false);
+            throw BuildError(
+                BuildResult::Failure::TransientFailure,
+                "cannot read the output of the builder for '%s': %s",
+                store.printStorePath(drvPath),
+                e.what());
+        }
+    }
+#endif
 
     if (buildResult.cpuUser && buildResult.cpuSystem) {
         debug(

@@ -3,6 +3,7 @@
 
 #include "nix/util/file-descriptor.hh"
 
+#include <exception>
 #include <string>
 #include <thread>
 
@@ -41,6 +42,15 @@ struct PtyRelay
      */
     ~PtyRelay();
 
+    PtyRelay(const PtyRelay &) = delete;
+    PtyRelay & operator=(const PtyRelay &) = delete;
+
+    /**
+     * Stop the thread, and rethrow the exception that made it fail,
+     * if any. In that case `out` got EOF before the master side did.
+     */
+    void finish();
+
     /**
      * The read side of the pipe.
      */
@@ -49,11 +59,18 @@ struct PtyRelay
 private:
 
     /**
-     * The thread stops when this is closed.
+     * The thread stops when something is written to this pipe.
      */
     AutoCloseFD cancel;
 
     std::thread thread;
+
+    /**
+     * The exception that made the thread fail, if any.
+     */
+    std::exception_ptr error;
+
+    void stop();
 };
 
 } // namespace nix

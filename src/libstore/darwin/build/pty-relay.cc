@@ -1,9 +1,11 @@
 #include "pty-relay.hh"
 #include "nix/util/error.hh"
+#include "nix/util/finally.hh"
 #include "nix/util/util.hh"
 
 #include <atomic>
 #include <chrono>
+#include <utility>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -32,7 +34,9 @@ struct Relay
     std::string pending;
 
     /**
-     * How much output to keep in `pending` at most.
+     * A soft limit on the size of `pending`: we stop reading the
+     * master side when it's reached, so `pending` can hold up to
+     * 64 KiB plus what one read returns.
      */
     static constexpr size_t maxPending = 64 * 1024;
 
@@ -66,8 +70,8 @@ struct Relay
             {.fd = cancel.get(), .events = POLLIN, .revents = 0},
         };
         while (poll(fds, 2, timeout) == -1)
-            if (errno != EINTR)
-                return Wait::Cancelled;
+            if (errno != EINTR && errno != EAGAIN)
+                throw SysError("waiting for the output of a builder");
         if (fds[1].revents)
             return Wait::Cancelled;
         return fds[0].revents ? Wait::Ready : Wait::Timeout;
@@ -110,6 +114,7 @@ struct Relay
             fn();
             done = true;
         });
+        Finally joinHelper([&]() { helper.join(); });
 
         bool cancelled = false;
         while (!done) {
@@ -122,8 +127,6 @@ struct Relay
             } else
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-
-        helper.join();
 
         return !cancelled;
     }
@@ -144,9 +147,16 @@ struct Relay
                        exits instead, its last output must not be
                        discarded, so keep the slave side open
                        ourselves. */
-                    if (slave == -1
-                        && !whileReading([&]() { slave = open(slaveName.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC); }))
-                        return;
+                    if (slave == -1) {
+                        int error = 0;
+                        if (!whileReading([&]() {
+                                slave = open(slaveName.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC);
+                                error = errno;
+                            }))
+                            return;
+                        if (slave == -1)
+                            throw SysError(error, "opening pseudoterminal slave");
+                    }
                     if (wait(out.get(), POLLOUT, -1) == Wait::Cancelled)
                         return;
                 } else if (errno != EINTR)
@@ -205,21 +215,44 @@ PtyRelay::PtyRelay(AutoCloseFD master, std::string slaveName)
     relay->cancel = std::move(cancelPipe.readSide);
     relay->slaveName = std::move(slaveName);
 
-    thread = std::thread([relay{std::move(relay)}]() {
+    thread = std::thread([this, relay{std::move(relay)}]() mutable {
         try {
             relay->run();
         } catch (...) {
-            ignoreExceptionInDestructor();
+            error = std::current_exception();
         }
+        /* This closes the pipe, so the worker gets EOF. */
+        relay.reset();
     });
+}
+
+void PtyRelay::stop()
+{
+    if (cancel) {
+        /* Closing the pipe is not enough, since a child process that
+           we forked may still have a copy of this file
+           descriptor. */
+        char c = 0;
+        [[maybe_unused]] auto n = ::write(cancel.get(), &c, 1);
+        cancel.close();
+    }
+
+    if (thread.joinable())
+        thread.join();
+}
+
+void PtyRelay::finish()
+{
+    stop();
+
+    if (auto e = std::exchange(error, nullptr))
+        std::rethrow_exception(e);
 }
 
 PtyRelay::~PtyRelay()
 {
     try {
-        cancel.close();
-        if (thread.joinable())
-            thread.join();
+        stop();
     } catch (...) {
         ignoreExceptionInDestructor();
     }
