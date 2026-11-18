@@ -8,7 +8,18 @@ echo -n "file://$TEST_ROOT/sentry-endpoint" > "$test_nix_conf_dir/sentry-endpoin
 
 ulimit -c 0
 
-sentryDir="$TEST_HOME/.cache/nix/sentry"
+# Every `nix` invocation spawns a crashpad handler that isn't waited
+# for, so it may still be creating files in the Sentry database (e.g.
+# the `new` directory) after `nix` has exited. Deleting the database
+# between runs is therefore racy, so use a fresh one instead.
+sentryRuns=0
+freshSentryDir() {
+    sentryRuns=$((sentryRuns + 1))
+    export NIX_CACHE_HOME="$TEST_ROOT/cache-$sentryRuns"
+    sentryDir="$NIX_CACHE_HOME/sentry"
+}
+
+freshSentryDir
 
 nix --version
 if ! [[ -d $sentryDir ]]; then
@@ -57,7 +68,7 @@ for type in segfault assert logic-error panic terminate abort stack-overflow; do
     # a signal handler, so the signal stack doesn't matter there.
     if [[ $type = stack-overflow && $(uname) != Linux ]]; then continue; fi
 
-    rm -rf "$sentryDir"
+    freshSentryDir
 
     (! nix __crash "$type")
 
@@ -72,7 +83,7 @@ done
 # alternate signal stack. The crash dump includes the entire 60 MiB
 # stack of the fiber.
 if [[ $(uname) = Linux ]]; then
-    rm -rf "$sentryDir"
+    freshSentryDir
 
     (! nix eval --eval-cores 4 --max-call-depth 10000000 --json --file ./fiber-stack-overflow.nix)
 
@@ -85,7 +96,7 @@ fi
 # Exceeding the file size limit is an I/O error, not a crash, even
 # though crashpad installs a crash handler for SIGXFSZ. The crashpad
 # handler process inherits the limit, so leave room for a crash dump.
-rm -rf "$sentryDir"
+freshSentryDir
 
 head -c 20000000 /dev/zero > "$TEST_ROOT/big"
 # shellcheck disable=SC2016
@@ -96,7 +107,7 @@ if waitForCrashDump; then
     fail "Unexpected crash dump after exceeding the file size limit"
 fi
 
-rm -rf "$sentryDir"
+freshSentryDir
 
 if nix shell --file ./simple.nix --command bash -c 'kill -SEGV $$'; then
     fail "Command did not segfault"
