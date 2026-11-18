@@ -62,8 +62,10 @@ checkCrashDumpSize() {
     fi
 }
 
-for type in segfault assert logic-error panic terminate abort stack-overflow; do
-    if [[ $type = logic-error && $(uname) = Darwin ]]; then continue; fi
+for type in segfault assert logic-error panic terminate abort stack-overflow bad-optional-access; do
+    # Aborting on these exceptions requires the __cxa_throw wrapper,
+    # which is Linux-only.
+    if [[ ($type = logic-error || $type = bad-optional-access) && $(uname) = Darwin ]]; then continue; fi
     # On macOS, crashpad catches crashes out of process rather than with
     # a signal handler, so the signal stack doesn't matter there.
     if [[ $type = stack-overflow && $(uname) != Linux ]]; then continue; fi

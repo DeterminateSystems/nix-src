@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <cxxabi.h>
 #include <stdexcept>
+#include <optional>
 #include <typeinfo>
 #include <cstring>
 #include <cstdio>
@@ -34,7 +35,9 @@ public:
 
 static bool is_logic_error(const std::type_info * tinfo)
 {
-    if (*tinfo == typeid(std::logic_error))
+    /* std::bad_optional_access derives directly from std::exception,
+       but like std::logic_error it signals a bug, so abort on it too. */
+    if (*tinfo == typeid(std::logic_error) || *tinfo == typeid(std::bad_optional_access))
         return true;
 
     auto * si = dynamic_cast<const __cxxabiv1::__si_class_type_info *>(tinfo);
