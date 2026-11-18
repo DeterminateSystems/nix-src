@@ -59,6 +59,13 @@ typedef enum {
      * in the future.
      */
     resHttpStatus = 10111,
+    /**
+     * Progress of a garbage collection (the `CollectGarbage`
+     * activity), as absolute counts: the number of paths found to be
+     * alive so far, the number of paths deleted (or, in a dry run,
+     * found to be dead) so far, and the number of bytes freed so far.
+     */
+    resGCProgress = 10112,
 } ResultType;
 
 typedef uint64_t ActivityId;
