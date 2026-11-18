@@ -19,6 +19,7 @@
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/unordered/unordered_flat_set.hpp>
 #include <boost/regex.hpp>
+#include <array>
 #include <queue>
 #include <random>
 #include <thread>
@@ -451,6 +452,17 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
             options.pathsToDelete))
         return;
 
+    /* The progress of the garbage collector is reported as
+       `resGCProgress` results on this activity. */
+    Activity act(
+        *logger,
+        lvlDebug,
+        "CollectGarbage",
+        std::to_array<std::pair<std::string_view, Logger::Field>>({
+            {"nix.gc.dry_run", (uint64_t) !shouldDelete},
+        }));
+    PushActivity pact(act.id);
+
     struct Shared
     {
         // The temp roots only store the hash part to make it easier to
@@ -607,15 +619,16 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
 #endif
 
-    /* Find the roots.  Since we've grabbed the GC lock, the set of
-       permanent roots cannot increase now. */
-    printInfo("finding garbage collector roots...");
-    if (!options.ignoreLiveness)
-        findRootsNoTemp(roots, options.censor);
-
-    /* Read the temporary roots created before we acquired the global
-       GC root. Any new roots will be sent to our socket. */
     {
+        Activity stageAct(*logger, lvlInfo, "FindGCRoots", {}, "finding garbage collector roots");
+
+        /* Find the roots.  Since we've grabbed the GC lock, the set of
+           permanent roots cannot increase now. */
+        if (!options.ignoreLiveness)
+            findRootsNoTemp(roots, options.censor);
+
+        /* Read the temporary roots created before we acquired the
+           global GC root. Any new roots will be sent to our socket. */
         Roots tempRoots;
         findTempRoots(tempRoots, options.censor, true);
         for (auto & root : tempRoots)
@@ -676,6 +689,23 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         if (results.bytesFreed > options.maxFreed) {
             printInfo("deleted more than %d bytes; stopping", options.maxFreed);
             throw GCLimitReached();
+        }
+    };
+
+    /* Helper function that reports the number of paths found to be
+       alive, the number of paths deleted (or found to be dead in a
+       dry run), and the number of bytes freed so far, if any of them
+       have changed since the last report. */
+    std::array<uint64_t, 3> lastProgress{0, 0, 0};
+    auto reportProgress = [&]() {
+        std::array<uint64_t, 3> progress{
+            (uint64_t) alive.size(),
+            (uint64_t) (shouldDelete ? results.paths.size() : dead.size()),
+            results.bytesFreed,
+        };
+        if (progress != lastProgress) {
+            act.result(resGCProgress, progress[0], progress[1], progress[2]);
+            lastProgress = progress;
         }
     };
 
@@ -888,6 +918,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                     markAlive(path);
                 }
             }
+            reportProgress();
         }
     };
 
@@ -896,20 +927,24 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         std::visit(
             overloaded{
                 [&](const GCOptions::SpecificPaths & pathsToDelete) {
+                    std::string_view stage;
                     switch (options.action) {
                     case GCOptions::gcDeleteDead:
-                        printInfo("deleting garbage within specified paths...");
+                        stage = "deleting garbage within specified paths";
                         break;
                     case GCOptions::gcDeleteSpecific:
-                        printInfo("deleting specified paths...");
+                        stage = "deleting specified paths";
                         break;
                     case GCOptions::gcReturnDead:
                     case GCOptions::gcReturnLive:
-                        printInfo("determining live/dead paths...");
+                        stage = "determining live/dead paths";
                     }
+
+                    Activity stageAct(*logger, lvlInfo, shouldDelete ? "DeleteGarbage" : "FindGarbage", {}, stage);
 
                     for (auto & i : pathsToDelete.paths) {
                         maybeDeleteReferrersClosure(i);
+                        reportProgress();
                         /* The path may not have been deleted if it
                            became alive during deletion, e.g. because it
                            became a temporary root. */
@@ -924,16 +959,19 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                     if (options.maxFreed == 0)
                         return;
 
+                    std::string_view stage;
                     switch (options.action) {
                     case GCOptions::gcDeleteDead:
-                        printInfo("deleting garbage...");
+                        stage = "deleting garbage";
                         break;
                     case GCOptions::gcDeleteSpecific:
                         throw Error("Cannot delete the entire store");
                     case GCOptions::gcReturnDead:
                     case GCOptions::gcReturnLive:
-                        printInfo("determining live/dead paths...");
+                        stage = "determining live/dead paths";
                     }
+
+                    Activity stageAct(*logger, lvlInfo, shouldDelete ? "DeleteGarbage" : "FindGarbage", {}, stage);
 
                     AutoCloseDir dir(opendir(config->realStoreDir.get().string().c_str()));
                     if (!dir)
@@ -954,6 +992,8 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                             maybeDeleteReferrersClosure(*storePath);
                         else
                             deleteFromStore(name, false);
+
+                        reportProgress();
                     }
                 },
             },
@@ -979,7 +1019,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
        might see a link count of 1 just before optimisePath() increases
        the link count. */
     if (options.action == GCOptions::gcDeleteDead || options.action == GCOptions::gcDeleteSpecific) {
-        printInfo("deleting unused links...");
+        Activity stageAct(*logger, lvlInfo, "DeleteUnusedLinks", {}, "deleting unused links");
 
         AutoCloseDir dir(opendir(linksDir.string().c_str()));
         if (!dir)
@@ -1097,7 +1137,8 @@ void LocalStore::autoGC(bool sync)
                 GCOptions options;
                 options.maxFreed = gcSettings.maxFree - avail;
 
-                printInfo("running auto-GC to free %d bytes", options.maxFreed);
+                Activity act(*logger, lvlInfo, "AutoGC", {}, fmt("running auto-GC to free %d bytes", options.maxFreed));
+                PushActivity pact(act.id);
 
                 GCResults results;
 

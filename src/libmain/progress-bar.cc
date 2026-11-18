@@ -50,6 +50,16 @@ static std::string_view storePathToNameWithoutDrvSuffix(std::string_view path)
     return res;
 }
 
+/**
+ * Progress of a garbage collection, cf. `resGCProgress`.
+ */
+struct GCStatus
+{
+    bool dryRun = false;
+    bool haveProgress = false;
+    uint64_t alive = 0, deleted = 0, bytesFreed = 0;
+};
+
 class ProgressBar final : public Logger
 {
 private:
@@ -67,6 +77,11 @@ private:
         std::optional<std::string> name;
         std::chrono::time_point<std::chrono::steady_clock> startTime;
         bool logged = false;
+
+        /**
+         * Set for `CollectGarbage` activities.
+         */
+        std::optional<GCStatus> gc;
     };
 
     struct ActivitiesByType
@@ -282,6 +297,20 @@ public:
         }
     }
 
+    std::list<ActInfo>::iterator addActivity(
+        State & state, ActivityId act, Verbosity lvl, ActivityType type, std::string s, ActivityId parent) noexcept
+    {
+        state.activities.emplace_back(
+            ActInfo{.s = std::move(s), .type = type, .parent = parent, .startTime = std::chrono::steady_clock::now()});
+        auto i = std::prev(state.activities.end());
+        state.its.emplace(act, i);
+        state.activitiesByType[type].its.emplace(act, i);
+
+        logActivity(state, lvl, *i);
+
+        return i;
+    }
+
     void startActivity(
         ActivityId act,
         Verbosity lvl,
@@ -292,13 +321,7 @@ public:
     {
         auto state(state_.lock());
 
-        state->activities.emplace_back(
-            ActInfo{.s = s, .type = type, .parent = parent, .startTime = std::chrono::steady_clock::now()});
-        auto i = std::prev(state->activities.end());
-        state->its.emplace(act, i);
-        state->activitiesByType[type].its.emplace(act, i);
-
-        logActivity(*state, lvl, *i);
+        auto i = addActivity(*state, act, lvl, type, s, parent);
 
         if (type == actBuild) {
             auto name = storePathToNameWithoutDrvSuffix(getS(fields, 0));
@@ -334,6 +357,29 @@ public:
             || (type == actFileTransfer && hasAncestor(*state, actQueryPathInfo, parent))
             || (type == actCopyPath && hasAncestor(*state, actSubstitute, parent)))
             i->visible = false;
+
+        update(*state);
+    }
+
+    void startActivity(
+        ActivityId act,
+        Verbosity lvl,
+        std::string_view name,
+        ActivityMetadata metadata,
+        std::string_view s,
+        ActivityId parent) noexcept override
+    {
+        auto state(state_.lock());
+
+        auto i = addActivity(*state, act, lvl, actStringly, std::string(s), parent);
+
+        if (name == "CollectGarbage") {
+            i->gc.emplace();
+            for (auto & [key, value] : metadata)
+                if (key == "nix.gc.dry_run")
+                    if (auto p = std::get_if<uint64_t>(&value.raw))
+                        i->gc->dryRun = *p != 0;
+        }
 
         update(*state);
     }
@@ -451,6 +497,18 @@ public:
             ActInfo & actInfo = *i->second;
             actInfo.lastLine = getS(fields, 0);
             update(*state);
+        }
+
+        else if (type == resGCProgress) {
+            auto i = state->its.find(act);
+            if (i != state->its.end() && i->second->gc) {
+                auto & gc = *i->second->gc;
+                gc.alive = getI(fields, 0);
+                gc.deleted = getI(fields, 1);
+                gc.bytesFreed = getI(fields, 2);
+                gc.haveProgress = true;
+                update(*state);
+            }
         }
     }
 
@@ -698,6 +756,17 @@ public:
                     res += ", ";
                 res += s;
             }
+        }
+
+        for (auto & [_, i] : state.activitiesByType[actStringly].its) {
+            if (!i->gc || !i->gc->haveProgress)
+                continue;
+            auto & gc = *i->gc;
+            if (gc.dryRun)
+                maybeAppendToResult(fmt("%d paths alive, %d paths dead", gc.alive, gc.deleted));
+            else
+                maybeAppendToResult(
+                    fmt("%d paths alive, %d paths deleted, %s freed", gc.alive, gc.deleted, renderSize(gc.bytesFreed)));
         }
 
         // FIXME: don't show "done" paths in green.
