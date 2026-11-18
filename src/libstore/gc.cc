@@ -475,6 +475,18 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
     auto fdGCLock = openGCLock();
     FdLock gcLock(fdGCLock.get(), ltWrite, true, "waiting for the big garbage collector lock");
 
+    /* Forget what we know about the validity of paths. In a
+       long-running process (e.g. one that does an auto-GC), the path
+       info cache may say that a path is invalid while another
+       process has registered it since. We would then ignore the roots
+       of that path and its referrers, and delete it. Paths that
+       become valid from here on are not a problem, since they're
+       registered as temporary roots first. (Entries for valid paths
+       cannot be stale in a harmful way: at worst they keep some
+       garbage alive. But there is no reason to trust them
+       either.) */
+    clearPathInfoCache();
+
     /* Synchronisation point to test ENOENT handling in
        addTempRoot(), see tests/gc-non-blocking.sh. */
     if (auto p = getEnv("_NIX_TEST_GC_SYNC_1"))
