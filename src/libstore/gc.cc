@@ -854,6 +854,14 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                     options.pathsToDelete);
             }
         }
+
+        /* Synchronisation points between the BFS and the deletion of
+           the paths it found, see tests/functional/gc-new-root-during-deletion.sh. */
+        if (auto p = getEnv("_NIX_TEST_GC_SYNC_4"))
+            readFile(*p);
+        if (auto p = getEnv("_NIX_TEST_GC_SYNC_5"))
+            readFile(*p);
+
         for (auto & path : topoSortPaths(visited)) {
             /* Skip paths that became alive after the BFS because
                they're in the closure of a path that became a
@@ -880,6 +888,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                     if (!isTempRoot)
                         shared->pending = hashPart;
                 }
+                /* Don't hold the lock while marking. A dependency of
+                   this path that becomes a temporary root in the
+                   meantime is fine, since we check it again when we
+                   get to it. */
                 if (isTempRoot) {
                     debug(
                         "not deleting '%s' because it became a temporary root after initial scan",
