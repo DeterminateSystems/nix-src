@@ -1041,6 +1041,23 @@ public:
         bool includeDerivers = false);
 
     /**
+     * Like `computeFSClosure()`, but don't follow edges to paths for
+     * which `stop` returns true, so those paths and anything only
+     * reachable through them are not added to `out`. `paths` are
+     * always visited. An empty `stop` follows all edges.
+     *
+     * This is non-virtual because the traversal has to happen on the
+     * client: a store can't push the predicate to a remote side.
+     */
+    void computePartialFSClosure(
+        const StorePathSet & paths,
+        StorePathSet & out,
+        const std::function<bool(const StorePath &)> & stop,
+        bool flipDirection = false,
+        bool includeOutputs = false,
+        bool includeDerivers = false);
+
+    /**
      * Given a set of paths that are to be built, return the set of
      * derivations that will be built, and the set of output paths that
      * will be substituted.

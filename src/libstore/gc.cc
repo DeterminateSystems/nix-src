@@ -732,19 +732,27 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         StorePathSet visited;
         std::queue<StorePath> todo;
 
-        /* Wake up any GC client waiting for deletion of the paths in
-           'visited' to finish. */
-        Finally releasePending([&]() {
-            auto shared(_shared.lock());
-            shared->pending.reset();
-            wakeup.notify_all();
-        });
-
         auto enqueue = [&](const StorePath & path) {
             if (visited.insert(path).second)
                 todo.push(path);
         };
 
+        /* Mark `p` and its closure as alive. To avoid traversing
+           shared dependencies once for every root, this doesn't
+           descend into paths that are already alive. So don't add a
+           path to `alive` before its closure has been marked.
+
+           `alive` can still contain paths whose closure isn't
+           marked: a root that isn't valid has no edges to follow, and
+           if it becomes valid while we're running, we may not notice
+           because lookups of invalid paths are cached. For the same
+           reason, the traversal below can throw `InvalidPath` if the
+           closure refers to a path that became valid in the
+           meantime. This doesn't cause paths that are still
+           referenced to be deleted: a path is only deleted if the
+           referrers walk doesn't reach a live path, and
+           `invalidatePathChecked()` refuses to invalidate a path that
+           has valid referrers. */
         auto markAlive = [&](const StorePath & p) {
             alive.insert(p);
             if (auto sync = std::exchange(markAliveSync, std::nullopt))
@@ -762,9 +770,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                         [](const GCOptions::SpecificPaths &) {},
                     },
                     options.pathsToDelete);
-                computeFSClosure(
-                    p,
+                computePartialFSClosure(
+                    {p},
                     closure,
+                    [&](const StorePath & q) { return alive.contains(q); },
                     /* flipDirection */ false,
                     includeOutputs,
                     includeDerivers);
@@ -814,30 +823,29 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                         printStorePath(start),
                         *i->second.begin());
                 debug("cannot delete '%s' because it's a root", printStorePath(*path));
+                markAlive(*path);
                 alive.insert(start);
-                return markAlive(*path);
+                return;
             }
 
             static bool inTest = getEnv("_NIX_IN_TEST").has_value();
             if (!(inTest && options.ignoreLiveness)) {
-                auto hashPart = path->hashPart();
                 bool isTempRoot;
                 {
                     auto shared(_shared.lock());
-                    auto i = shared->tempRoots.find(std::string(hashPart));
+                    auto i = shared->tempRoots.find(std::string(path->hashPart()));
                     isTempRoot = i != shared->tempRoots.end();
                     if (isTempRoot && options.action == GCOptions::gcDeleteSpecific)
                         throw Error(
                             "Cannot delete path '%s' because it's in use by '%s'.", printStorePath(start), i->second);
-                    if (!isTempRoot)
-                        shared->pending = hashPart;
                 }
                 /* Don't hold the lock while computing the closure:
                    that would block every client registering a
                    temporary root. */
                 if (isTempRoot) {
+                    markAlive(*path);
                     alive.insert(start);
-                    return markAlive(*path);
+                    return;
                 }
             }
 
@@ -878,6 +886,14 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                     options.pathsToDelete);
             }
         }
+
+        /* Synchronisation points between the BFS and the deletion of
+           the paths it found, see tests/functional/gc-new-root-during-deletion.sh. */
+        if (auto p = getEnv("_NIX_TEST_GC_SYNC_4"))
+            readFile(*p);
+        if (auto p = getEnv("_NIX_TEST_GC_SYNC_5"))
+            readFile(*p);
+
         for (auto & path : topoSortPaths(visited)) {
             /* Skip paths that became alive after the BFS because
                they're in the closure of a path that became a
@@ -891,11 +907,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                    to synchronise with addTempRoot. Between the BFS
                    and this deletion loop, new temproots may have been
                    added via the GC socket by a concurrent process
-                   (e.g. an evaluator calling addTempRoot). The BFS
-                   only checks tempRoots when it first visits a path,
-                   but the "pending" mechanism only blocks the socket
-                   handler for the single path currently being visited,
-                   not for paths already queued for deletion. */
+                   (e.g. an evaluator calling addTempRoot), since the
+                   BFS only checks tempRoots when it first visits a
+                   path. Setting `pending` makes the socket handler
+                   wait until we've deleted this path. */
                 bool isTempRoot;
                 {
                     auto hashPart = std::string(path.hashPart());
@@ -904,6 +919,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                     if (!isTempRoot)
                         shared->pending = hashPart;
                 }
+                /* Don't hold the lock while marking. A dependency of
+                   this path that becomes a temporary root in the
+                   meantime is fine, since we check it again when we
+                   get to it. */
                 if (isTempRoot) {
                     debug(
                         "not deleting '%s' because it became a temporary root after initial scan",

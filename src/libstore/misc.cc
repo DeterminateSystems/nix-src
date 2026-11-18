@@ -20,9 +20,20 @@ namespace nix {
 void Store::computeFSClosure(
     const StorePathSet & startPaths, StorePathSet & out, bool flipDirection, bool includeOutputs, bool includeDerivers)
 {
+    computePartialFSClosure(startPaths, out, {}, flipDirection, includeOutputs, includeDerivers);
+}
+
+void Store::computePartialFSClosure(
+    const StorePathSet & startPaths,
+    StorePathSet & out,
+    const std::function<bool(const StorePath &)> & stop,
+    bool flipDirection,
+    bool includeOutputs,
+    bool includeDerivers)
+{
     if (flipDirection) {
         std::function<asio::awaitable<StorePathSet>(const StorePath & path)> queryDeps =
-            [this, includeOutputs, includeDerivers](const StorePath & path) -> asio::awaitable<StorePathSet> {
+            [this, &stop, includeOutputs, includeDerivers](const StorePath & path) -> asio::awaitable<StorePathSet> {
             StorePathSet res;
             StorePathSet referrers;
             queryReferrers(path, referrers);
@@ -38,6 +49,8 @@ void Store::computeFSClosure(
                 for (auto & [_, maybeOutPath] : queryPartialDerivationOutputMap(path))
                     if (maybeOutPath && isValidPath(*maybeOutPath))
                         res.insert(*maybeOutPath);
+            if (stop)
+                std::erase_if(res, stop);
             co_return res;
         };
         computeClosure<StorePath>(startPaths, out, GetEdgesAsync<StorePath>(queryDeps));
@@ -88,6 +101,9 @@ void Store::computeFSClosure(
                         // FIXME: process partialClosure when we merge
                         // https://github.com/DeterminateSystems/nix-src/pull/523.
                     }
+
+                    if (stop)
+                        std::erase_if(todo, stop);
 
                     if (!todo.empty())
                         asio::co_spawn(executor, std::bind(doPaths, todo), [&](std::exception_ptr e) {
