@@ -66,6 +66,7 @@ sources = files(
   'dummy-store.cc',
   'filetransfer-request.cc',
   'filetransfer-retry.cc',
+  'gcs-binary-cache-store.cc',
   'http-binary-cache-store.cc',
   'legacy-ssh-store.cc',
   'local-binary-cache-store.cc',

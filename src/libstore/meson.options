@@ -41,6 +41,12 @@ option(
 )
 
 option(
+  'gcs',
+  type : 'feature',
+  description : 'build support for Google Cloud Storage binary caches with Application Default Credentials',
+)
+
+option(
   'wasm',
   type : 'feature',
   description : 'enable wasmtime integration into the Nix derivation builder',
