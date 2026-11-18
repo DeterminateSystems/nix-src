@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <utility>
 #include <variant>
 #if HAVE_STATVFS
 #  include <sys/statvfs.h>
@@ -625,6 +626,11 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
     if (auto p = getEnv("_NIX_TEST_GC_SYNC_2"))
         readFile(*p);
 
+    /* Synchronisation point for testing, see
+       tests/functional/gc-mark-alive-unlocked.sh. Only the first
+       `markAlive()` call waits. */
+    auto markAliveSync = getEnv("_NIX_TEST_GC_SYNC_3");
+
     /* Helper function that deletes a path from the store and throws
        GCLimitReached if we've deleted enough garbage. */
     auto deleteFromStore = [&](std::string_view baseName, bool isKnownPath) {
@@ -698,6 +704,8 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
         auto markAlive = [&](const StorePath & p) {
             alive.insert(p);
+            if (auto sync = std::exchange(markAliveSync, std::nullopt))
+                readFile(*sync);
             try {
                 StorePathSet closure;
                 bool includeOutputs = false;
@@ -770,15 +778,24 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
             static bool inTest = getEnv("_NIX_IN_TEST").has_value();
             if (!(inTest && options.ignoreLiveness)) {
                 auto hashPart = path->hashPart();
-                auto shared(_shared.lock());
-                if (auto i = shared->tempRoots.find(std::string(hashPart)); i != shared->tempRoots.end()) {
-                    if (options.action == GCOptions::gcDeleteSpecific)
+                bool isTempRoot;
+                {
+                    auto shared(_shared.lock());
+                    auto i = shared->tempRoots.find(std::string(hashPart));
+                    isTempRoot = i != shared->tempRoots.end();
+                    if (isTempRoot && options.action == GCOptions::gcDeleteSpecific)
                         throw Error(
                             "Cannot delete path '%s' because it's in use by '%s'.", printStorePath(start), i->second);
+                    if (!isTempRoot)
+                        shared->pending = hashPart;
+                }
+                /* Don't hold the lock while computing the closure:
+                   that would block every client registering a
+                   temporary root. */
+                if (isTempRoot) {
                     alive.insert(start);
                     return markAlive(*path);
                 }
-                shared->pending = hashPart;
             }
 
             if (isValidPath(*path)) {
@@ -836,18 +853,21 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                    but the "pending" mechanism only blocks the socket
                    handler for the single path currently being visited,
                    not for paths already queued for deletion. */
+                bool isTempRoot;
                 {
                     auto hashPart = std::string(path.hashPart());
                     auto shared(_shared.lock());
-                    if (shared->tempRoots.contains(hashPart)) {
-                        debug(
-                            "not deleting '%s' because it became a temporary root after initial scan",
-                            printStorePath(path));
-                        dead.erase(path);
-                        markAlive(path);
-                        continue;
-                    }
-                    shared->pending = hashPart;
+                    isTempRoot = shared->tempRoots.contains(hashPart);
+                    if (!isTempRoot)
+                        shared->pending = hashPart;
+                }
+                if (isTempRoot) {
+                    debug(
+                        "not deleting '%s' because it became a temporary root after initial scan",
+                        printStorePath(path));
+                    dead.erase(path);
+                    markAlive(path);
+                    continue;
                 }
                 Finally resetPending([&]() {
                     auto shared(_shared.lock());
