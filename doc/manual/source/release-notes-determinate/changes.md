@@ -1,6 +1,6 @@
 # Changes between Nix and Determinate Nix
 
-This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.24.2.<!-- differences -->
+This section lists the differences between upstream Nix 2.35 and Determinate Nix 3.24.3.<!-- differences -->
 
 * In Determinate Nix, flakes are stable. You no longer need to enable the `flakes` experimental feature.
 
@@ -266,3 +266,9 @@ This section lists the differences between upstream Nix 2.35 and Determinate Nix
 * The cache of unpacked tarballs is a SQLite database (`~/.cache/nix/tarball-cache-detsys-v1.sqlite`) rather than a bare Git repository, which makes imports faster and more reliable under concurrency. [DeterminateSystems/nix-src#646](https://github.com/DeterminateSystems/nix-src/pull/646)
 
 * The evaluator uses much less stack space, so deeply recursive Nix expressions can go roughly twice as deep before overflowing the stack. [DeterminateSystems/nix-src#752](https://github.com/DeterminateSystems/nix-src/pull/752)
+
+<!-- Determinate Nix version 3.24.3 -->
+
+* `nix store gc` shows its progress (the number of live, dead and deleted paths and the amount of space freed) in the progress bar. [DeterminateSystems/nix-src#808](https://github.com/DeterminateSystems/nix-src/pull/808)
+
+* Attribute selections count towards `max-call-depth`, so long chains of attribute selections fail with an error instead of crashing Nix with a stack overflow. [DeterminateSystems/nix-src#775](https://github.com/DeterminateSystems/nix-src/pull/775)
