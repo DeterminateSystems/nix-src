@@ -1001,6 +1001,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
     } catch (GCLimitReached & e) {
     }
 
+    /* Report the final counts, since the deletion that reached the
+       limit didn't get reported. */
+    reportProgress();
+
     if (options.action == GCOptions::gcReturnLive) {
         for (auto & i : alive)
             results.paths.insert(printStorePath(i));
