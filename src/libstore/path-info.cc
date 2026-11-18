@@ -76,7 +76,9 @@ std::optional<ContentAddressWithReferences> ValidPathInfo::contentAddressWithRef
 
     switch (ca->method.raw) {
     case ContentAddressMethod::Raw::Text: {
-        assert(references.count(path) == 0);
+        if (references.count(path))
+            throw Error(
+                "text-hashed path '%s/%s' cannot refer to itself; its metadata is corrupt", storeDir, path.to_string());
         return TextInfo{
             .hash = ca->hash,
             .references = references,
