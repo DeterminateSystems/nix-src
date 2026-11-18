@@ -56,6 +56,7 @@ suites = [
       'bash-profile.sh',
       'binary-cache-build-remote.sh',
       'binary-cache-compression.sh',
+      'binary-cache-upload-verify.sh',
       'binary-cache.sh',
       'build-cores.sh',
       'build-delete.sh',

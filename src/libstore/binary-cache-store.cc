@@ -190,7 +190,30 @@ ref<NarInfo> BinaryCacheStore::uploadData(Source & narSource, RepairFlag repair,
 
     auto now2 = std::chrono::steady_clock::now();
 
-    auto info = mkInfo(narHashSink.finish());
+    auto nar = narHashSink.finish();
+    auto info = mkInfo(nar);
+
+    /* Refuse to publish a .narinfo that doesn't describe the NAR we
+       received, e.g. because the source path was modified after it
+       was registered. Every client would reject such a .narinfo when
+       substituting from it, so fail here instead, before writing
+       anything to the cache. */
+    if (nar.numBytesDigested != info.narSize)
+        throw Error(
+            "size mismatch uploading path '%s' to '%s';\n  specified: %s\n  got:       %s",
+            printStorePath(info.path),
+            config.getHumanReadableURI(),
+            info.narSize,
+            nar.numBytesDigested);
+
+    if (nar.hash != info.narHash)
+        throw Error(
+            "hash mismatch uploading path '%s' to '%s';\n  specified: %s\n  got:       %s",
+            printStorePath(info.path),
+            config.getHumanReadableURI(),
+            info.narHash.to_string(HashFormat::SRI, true),
+            nar.hash.to_string(HashFormat::SRI, true));
+
     auto narInfo = make_ref<NarInfo>(info);
     narInfo->compression = config.compression;
     auto [fileHash, fileSize] = fileHashSink.finish();
@@ -334,13 +357,7 @@ void BinaryCacheStore::addToStore(
     if (!repair && isValidPath(info.path))
         return;
 
-    addToStoreCommon(narSource, repair, checkSigs, {[&](HashResult nar) {
-                         /* FIXME reinstate these, once we can correctly do hash modulo sink as
-                            needed. We need to throw here in case we uploaded a corrupted store path. */
-                         // assert(info.narHash == nar.first);
-                         // assert(info.narSize == nar.second);
-                         return info;
-                     }});
+    addToStoreCommon(narSource, repair, checkSigs, {[&](HashResult) { return info; }});
 }
 
 void BinaryCacheStore::addMultipleToStore(
