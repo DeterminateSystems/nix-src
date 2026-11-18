@@ -689,14 +689,6 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         StorePathSet visited;
         std::queue<StorePath> todo;
 
-        /* Wake up any GC client waiting for deletion of the paths in
-           'visited' to finish. */
-        Finally releasePending([&]() {
-            auto shared(_shared.lock());
-            shared->pending.reset();
-            wakeup.notify_all();
-        });
-
         auto enqueue = [&](const StorePath & path) {
             if (visited.insert(path).second)
                 todo.push(path);
@@ -795,17 +787,14 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
             static bool inTest = getEnv("_NIX_IN_TEST").has_value();
             if (!(inTest && options.ignoreLiveness)) {
-                auto hashPart = path->hashPart();
                 bool isTempRoot;
                 {
                     auto shared(_shared.lock());
-                    auto i = shared->tempRoots.find(std::string(hashPart));
+                    auto i = shared->tempRoots.find(std::string(path->hashPart()));
                     isTempRoot = i != shared->tempRoots.end();
                     if (isTempRoot && options.action == GCOptions::gcDeleteSpecific)
                         throw Error(
                             "Cannot delete path '%s' because it's in use by '%s'.", printStorePath(start), i->second);
-                    if (!isTempRoot)
-                        shared->pending = hashPart;
                 }
                 /* Don't hold the lock while computing the closure:
                    that would block every client registering a
@@ -875,11 +864,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                    to synchronise with addTempRoot. Between the BFS
                    and this deletion loop, new temproots may have been
                    added via the GC socket by a concurrent process
-                   (e.g. an evaluator calling addTempRoot). The BFS
-                   only checks tempRoots when it first visits a path,
-                   but the "pending" mechanism only blocks the socket
-                   handler for the single path currently being visited,
-                   not for paths already queued for deletion. */
+                   (e.g. an evaluator calling addTempRoot), since the
+                   BFS only checks tempRoots when it first visits a
+                   path. Setting `pending` makes the socket handler
+                   wait until we've deleted this path. */
                 bool isTempRoot;
                 {
                     auto hashPart = std::string(path.hashPart());
