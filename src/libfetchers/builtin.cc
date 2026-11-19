@@ -32,7 +32,7 @@ static void builtinFetchTree(const BuiltinBuilderContext & ctx)
 
     // FIXME: disable use of the git/tarball cache
 
-    auto input = Input::fromAttrs(myFetchSettings, jsonToAttrs(ctx.drv.structuredAttrs->structuredAttrs.at("input")));
+    auto input = Input::fromAttrs(jsonToAttrs(ctx.drv.structuredAttrs->structuredAttrs.at("input")));
 
     std::cerr << fmt("fetching '%s'...\n", input.to_string());
 

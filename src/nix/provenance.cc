@@ -97,7 +97,7 @@ struct CmdProvenanceShow : StorePathsCommand
                 }
                 if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(next)) {
                     FlakeRef flakeRef(
-                        fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs)),
+                        fetchers::Input::fromAttrs(fetchers::jsonToAttrs(*tree->attrs)),
                         std::string(flakePath.parent().value_or(CanonPath::root).rel()));
                     logger->cout(
                         "← %sinstantiated from %sflake output " ANSI_BOLD "%s#%s" ANSI_NORMAL,
@@ -113,7 +113,7 @@ struct CmdProvenanceShow : StorePathsCommand
             }
 
             else if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(provenance)) {
-                auto input = fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs));
+                auto input = fetchers::Input::fromAttrs(fetchers::jsonToAttrs(*tree->attrs));
                 logger->cout(
                     "← from %stree " ANSI_BOLD "%s" ANSI_NORMAL,
                     input.isLocked(fetchSettings) ? "" : ANSI_RED "unlocked" ANSI_NORMAL " ",
@@ -480,7 +480,7 @@ struct CmdProvenanceVerify : StorePathsCommand
         }
 
         else if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(provenance)) {
-            auto input = fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs));
+            auto input = fetchers::Input::fromAttrs(fetchers::jsonToAttrs(*tree->attrs));
             try {
                 auto [accessor, final] = input.getAccessor(fetchSettings, store);
                 if (!input.isLocked(fetchSettings))

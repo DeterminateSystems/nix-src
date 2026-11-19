@@ -44,8 +44,8 @@ Registry::read(const Settings & settings, std::string_view whence, std::string_v
                 auto exact = i.find("exact");
                 registry->entries.push_back(
                     Entry{
-                        .from = Input::fromAttrs(settings, jsonToAttrs(i["from"])),
-                        .to = Input::fromAttrs(settings, std::move(toAttrs)),
+                        .from = Input::fromAttrs(jsonToAttrs(i["from"])),
+                        .to = Input::fromAttrs(std::move(toAttrs)),
                         .extraAttrs = extraAttrs,
                         .exact = exact != i.end() && exact.value()});
             }

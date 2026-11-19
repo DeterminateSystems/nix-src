@@ -272,7 +272,7 @@ static void fetchTree(
                     .atPos(noPos)
                     .debugThrow();
 
-        input = fetchers::Input::fromAttrs(state.fetchSettings, std::move(attrs));
+        input = fetchers::Input::fromAttrs(std::move(attrs));
     } else {
         auto url = state
                        .coerceToString(
@@ -292,9 +292,9 @@ static void fetchTree(
                 && (!attrs.contains("submodules") || !*fetchers::maybeGetBoolAttr(attrs, "submodules"))) {
                 attrs.emplace("exportIgnore", Explicit<bool>{true});
             }
-            input = fetchers::Input::fromAttrs(state.fetchSettings, std::move(attrs));
+            input = fetchers::Input::fromAttrs(std::move(attrs));
         } else {
-            input = fetchers::Input::fromURL(state.fetchSettings, url);
+            input = fetchers::Input::fromURL(url);
         }
     }
 
@@ -565,7 +565,7 @@ fetch(EvalState & state, Value * const * args, Value & v, const std::string & wh
         };
         if (expectedHash)
             attrs.emplace("narHash", expectedHash->to_string(HashFormat::SRI, true));
-        auto input = fetchers::Input::fromAttrs(state.fetchSettings, std::move(attrs));
+        auto input = fetchers::Input::fromAttrs(std::move(attrs));
         auto cachedInput =
             state.inputCache->getAccessor(state.fetchSettings, *state.store, input, fetchers::UseRegistries::No);
         auto storePath = state.mountInput(cachedInput.lockedInput, input, cachedInput.accessor, false);

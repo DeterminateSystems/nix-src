@@ -171,7 +171,7 @@ static LazyAttr makeLazyAttr(fun<ResolvedAttr()> compute)
 
 struct GitInputScheme : InputScheme
 {
-    std::optional<Input> inputFromURL(const Settings & settings, const ParsedURL & url, bool requireTree) const override
+    std::optional<Input> inputFromURL(const ParsedURL & url, bool requireTree) const override
     {
         if (url.scheme != "git" && parseUrlScheme(url.scheme).application != "git")
             return {};
@@ -195,7 +195,7 @@ struct GitInputScheme : InputScheme
 
         attrs.emplace("url", url2.to_string());
 
-        return inputFromAttrs(settings, attrs);
+        return inputFromAttrs(attrs);
     }
 
     std::string_view schemeName() const override
@@ -379,7 +379,7 @@ struct GitInputScheme : InputScheme
         return attrs;
     }
 
-    std::optional<Input> inputFromAttrs(const Settings & settings, const Attrs & attrs) const override
+    std::optional<Input> inputFromAttrs(const Attrs & attrs) const override
     {
         for (auto & [name, _] : attrs)
             if (name == "verifyCommit" || name == "keytype" || name == "publicKey" || name == "publicKeys")
@@ -1145,7 +1145,7 @@ struct GitInputScheme : InputScheme
                     /* Export the submodule using the same semantics as the top-level repo,
                        regardless of the `nix-219-compat` setting. */
                     attrs.insert_or_assign("__legacyExport", Explicit<bool>{options2.legacy});
-                    auto submoduleInput = fetchers::Input::fromAttrs(settings, std::move(attrs));
+                    auto submoduleInput = fetchers::Input::fromAttrs(std::move(attrs));
                     auto [submoduleAccessor, submoduleInput2] = submoduleInput.getAccessor(settings, store);
                     submoduleAccessor->setPathDisplay("«" + submoduleInput.to_string(true) + "»");
                     mounts.insert_or_assign(submodule.path, submoduleAccessor);
@@ -1244,7 +1244,7 @@ struct GitInputScheme : InputScheme
                 // TODO: fall back to getAccessorFromCommit-like fetch when submodules aren't checked out
                 // attrs.insert_or_assign("allRefs", Explicit<bool>{ true });
 
-                auto submoduleInput = fetchers::Input::fromAttrs(settings, std::move(attrs));
+                auto submoduleInput = fetchers::Input::fromAttrs(std::move(attrs));
                 auto [submoduleAccessor, submoduleInput2] = submoduleInput.getAccessor(settings, store);
                 submoduleAccessor->setPathDisplay("«" + submoduleInput.to_string(true) + "»");
 

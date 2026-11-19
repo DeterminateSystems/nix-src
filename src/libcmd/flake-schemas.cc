@@ -34,7 +34,6 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
 
     // Construct a dummy flakeref.
     auto flakeRef = parseFlakeRef(
-        fetchSettings,
         fmt("tarball+https://builtin-flake-schemas?narHash=%s", narHash.to_string(HashFormat::SRI, true)));
 
     auto flake = readFlake(state, flakeRef, flakeRef, flakeRef, state.storePath(storePath), {});
@@ -628,7 +627,7 @@ std::optional<FlakeRef> MixFlakeSchemas::getDefaultFlakeSchemas()
     if (!defaultFlakeSchemas)
         return std::nullopt;
     else
-        return parseFlakeRef(fetchSettings, *defaultFlakeSchemas, absPath(getCommandBaseDir()));
+        return parseFlakeRef(*defaultFlakeSchemas, absPath(getCommandBaseDir()));
 }
 
 } // namespace nix
