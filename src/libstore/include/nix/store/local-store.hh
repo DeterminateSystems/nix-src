@@ -400,6 +400,8 @@ public:
 
     void collectGarbage(const GCOptions & options, GCResults & results) override;
 
+    void deleteBuildTraces(const std::set<DrvOutput> & keys) override;
+
     /**
      * Called by `collectGarbage` to trace in reverse.
      *
