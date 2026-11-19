@@ -16,10 +16,6 @@
 
 namespace nix {
 
-BasicDerivation::~BasicDerivation() {}
-
-Derivation::~Derivation() {}
-
 std::optional<StorePath>
 DerivationOutput::path(const StoreDirConfig & store, std::string_view drvName, OutputNameView outputName) const
 {
@@ -107,15 +103,26 @@ bool DerivationType::isImpure() const
         raw);
 }
 
-bool BasicDerivation::isBuiltin() const
+bool isBuiltin(const BasicDerivation & drv)
+{
+    return drv.builder.substr(0, 8) == "builtin:";
+}
+
+template<typename InputsType>
+bool DerivationT<InputsType>::isBuiltin() const
 {
     return builder.substr(0, 8) == "builtin:";
 }
 
+// Forward declaration of specialization
+template<>
+std::string DerivationT<FullInputs>::unparse(
+    const StoreDirConfig & store, bool maskOutputs, DerivedPathMap<StringSet>::ChildNode::Map * actualInputs) const;
+
 static auto infoForDerivation(const StoreDirConfig & store, const Derivation & drv)
 {
-    auto references = drv.inputSrcs;
-    for (auto & i : drv.inputDrvs.map)
+    auto references = drv.inputs.srcs;
+    for (auto & i : drv.inputs.drvs.map)
         references.insert(i.first);
     /* Note that the outputs of a derivation are *not* references
        (that can be missing (of course) and should not necessarily be
@@ -173,8 +180,8 @@ StorePath Store::writeDerivation(
     RepairFlag repair,
     std::shared_ptr<const Provenance> provenance)
 {
-    auto references = drv.inputSrcs;
-    for (auto & i : drv.inputDrvs.map)
+    auto references = drv.inputs.srcs;
+    for (auto & i : drv.inputs.drvs.map)
         references.insert(i.first);
     return asyncPathWriter.addPath(
         drv.unparse(*this, false), std::string(drv.name) + drvExtension, references, repair, provenance);
@@ -465,8 +472,9 @@ Derivation parseDerivation(
 {
     using namespace std::literals::string_view_literals;
 
-    Derivation drv;
-    drv.name = name;
+    Derivation drv{
+        .name = std::string{name},
+    };
 
     StringViewStream str{s};
     expect(str, 'D');
@@ -510,13 +518,13 @@ Derivation parseDerivation(
         expect(str, '(');
         auto drvPath = parsePath(str);
         expect(str, ',');
-        drv.inputDrvs.map.insert_or_assign(
+        drv.inputs.drvs.map.insert_or_assign(
             store.parseStorePath(*drvPath), parseDerivedPathMapNode(store, str, version));
         expect(str, ')');
     }
 
     expect(str, ',');
-    drv.inputSrcs = store.parseStorePathSet(parseStrings(str, true));
+    drv.inputs.srcs = store.parseStorePathSet(parseStrings(str, true));
     expect(str, ',');
     drv.platform = parseString(str).toOwned();
     expect(str, ',');
@@ -661,13 +669,14 @@ static void unparseDerivedPathMapNode(
 static bool hasDynamicDrvDep(const Derivation & drv)
 {
     return std::find_if(
-               drv.inputDrvs.map.begin(),
-               drv.inputDrvs.map.end(),
+               drv.inputs.drvs.map.begin(),
+               drv.inputs.drvs.map.end(),
                [](auto & kv) { return !kv.second.childMap.empty(); })
-           != drv.inputDrvs.map.end();
+           != drv.inputs.drvs.map.end();
 }
 
-std::string Derivation::unparse(
+template<>
+std::string DerivationT<FullInputs>::unparse(
     const StoreDirConfig & store, bool maskOutputs, DerivedPathMap<StringSet>::ChildNode::Map * actualInputs) const
 {
     using namespace std::literals::string_view_literals;
@@ -757,7 +766,7 @@ std::string Derivation::unparse(
             s += ')';
         }
     } else {
-        for (auto & [drvPath, childMap] : inputDrvs.map) {
+        for (auto & [drvPath, childMap] : inputs.drvs.map) {
             if (first)
                 first = false;
             else
@@ -770,7 +779,7 @@ std::string Derivation::unparse(
     }
 
     s += "],"sv;
-    auto paths = store.printStorePathSet(inputSrcs); // FIXME: slow
+    auto paths = store.printStorePathSet(inputs.srcs); // FIXME: slow
     printUnquotedStrings(s, paths.begin(), paths.end());
 
     s += ',';
@@ -829,7 +838,8 @@ std::string outputPathName(std::string_view drvName, OutputNameView outputName)
     return res;
 }
 
-DerivationType BasicDerivation::type() const
+template<typename InputsType>
+DerivationType DerivationT<InputsType>::type() const
 {
     using namespace std::literals::string_view_literals;
 
@@ -975,7 +985,7 @@ DrvHashModulo hashDerivationModulo(Store & store, const Derivation & drv, bool m
     /* For other derivations, replace the inputs paths with recursive
        calls to this function. */
     DerivedPathMap<StringSet>::ChildNode::Map inputs2;
-    for (auto & [drvPath, node] : drv.inputDrvs.map) {
+    for (auto & [drvPath, node] : drv.inputs.drvs.map) {
         /* Need to build and resolve dynamic derivations first */
         if (!node.childMap.empty()) {
             return DrvHashModulo::DeferredDrv{};
@@ -1020,7 +1030,8 @@ static DerivationOutput readDerivationOutput(Source & in, const StoreDirConfig &
     return parseDerivationOutput(store, pathS, hashAlgo, hash, experimentalFeatureSettings);
 }
 
-StringSet BasicDerivation::outputNames() const
+template<typename InputsType>
+StringSet DerivationT<InputsType>::outputNames() const
 {
     StringSet names;
     for (auto & i : outputs)
@@ -1028,7 +1039,8 @@ StringSet BasicDerivation::outputNames() const
     return names;
 }
 
-DerivationOutputsAndOptPaths BasicDerivation::outputsAndOptPaths(const StoreDirConfig & store) const
+template<typename InputsType>
+DerivationOutputsAndOptPaths DerivationT<InputsType>::outputsAndOptPaths(const StoreDirConfig & store) const
 {
     DerivationOutputsAndOptPaths outsAndOptPaths;
     for (auto & [outputName, output] : outputs)
@@ -1037,7 +1049,8 @@ DerivationOutputsAndOptPaths BasicDerivation::outputsAndOptPaths(const StoreDirC
     return outsAndOptPaths;
 }
 
-std::string_view BasicDerivation::nameFromPath(const StorePath & drvPath)
+template<typename InputsType>
+std::string_view DerivationT<InputsType>::nameFromPath(const StorePath & drvPath)
 {
     drvPath.requireDerivation();
     auto nameWithSuffix = drvPath.name();
@@ -1057,7 +1070,7 @@ Source & readDerivation(Source & in, const StoreDirConfig & store, BasicDerivati
         drv.outputs.emplace(std::move(name), std::move(output));
     }
 
-    drv.inputSrcs = CommonProto::Serialise<StorePathSet>::read(store, CommonProto::ReadConn{.from = in});
+    drv.inputs = CommonProto::Serialise<StorePathSet>::read(store, CommonProto::ReadConn{.from = in});
     in >> drv.platform >> drv.builder;
     drv.args = readStrings<Strings>(in);
 
@@ -1101,7 +1114,7 @@ void writeDerivation(Sink & out, const StoreDirConfig & store, const BasicDeriva
             },
             i.second.raw);
     }
-    CommonProto::write(store, CommonProto::WriteConn{.to = out}, drv.inputSrcs);
+    CommonProto::write(store, CommonProto::WriteConn{.to = out}, drv.inputs);
     out << drv.platform << drv.builder << drv.args;
 
     auto writeEnv = [&](const StringPairs atermEnv) {
@@ -1128,7 +1141,8 @@ std::string hashPlaceholder(const OutputNameView outputName)
                  .to_string(HashFormat::Nix32, false);
 }
 
-void BasicDerivation::applyRewrites(const StringMap & rewrites)
+template<typename InputsType>
+void DerivationT<InputsType>::applyRewrites(const StringMap & rewrites)
 {
     if (rewrites.empty())
         return;
@@ -1158,10 +1172,17 @@ void BasicDerivation::applyRewrites(const StringMap & rewrites)
     }
 }
 
+template<>
+Derivation DerivationT<StorePathSet>::unresolve() const
+{
+    return mapInputs([](const StorePathSet & inputs) -> FullInputs { return {.srcs = inputs, .drvs = {}}; });
+}
+
+template<>
 bool Derivation::shouldResolve() const
 {
     /* No input drvs means nothing to resolve. */
-    if (inputDrvs.map.empty())
+    if (inputs.drvs.map.empty())
         return false;
 
     auto drvType = type();
@@ -1187,22 +1208,13 @@ bool Derivation::shouldResolve() const
 
     /* Also need to resolve if any inputs are outputs of dynamic derivations. */
     bool hasDynamicInputs = std::ranges::any_of(
-        inputDrvs.map.begin(), inputDrvs.map.end(), [](auto & pair) { return !pair.second.childMap.empty(); });
+        inputs.drvs.map.begin(), inputs.drvs.map.end(), [](auto & pair) { return !pair.second.childMap.empty(); });
 
     return typeNeedsResolve || hasDynamicInputs;
 }
 
-std::optional<BasicDerivation> Derivation::tryResolve(Store & store, Store * evalStore) const
-{
-    return tryResolve(
-        store, [&](ref<const SingleDerivedPath> drvPath, const std::string & outputName) -> std::optional<StorePath> {
-            try {
-                return resolveDerivedPath(store, SingleDerivedPath::Built{drvPath, outputName}, evalStore);
-            } catch (Error &) {
-                return std::nullopt;
-            }
-        });
-}
+template<bool fillIn>
+static void processDerivationOutputPaths(Store & store, auto && drv, std::string_view drvName);
 
 static bool tryResolveInput(
     const StoreDirConfig & store,
@@ -1249,20 +1261,49 @@ static bool tryResolveInput(
     return true;
 }
 
-std::optional<BasicDerivation> Derivation::tryResolve(
+// Forward declaration of specialization
+template<>
+std::optional<BasicDerivation> DerivationT<FullInputs>::tryResolve(
+    Store & store,
+    fun<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
+        queryResolutionChain) const;
+
+template<>
+std::optional<BasicDerivation> DerivationT<FullInputs>::tryResolve(Store & store, Store * evalStore) const
+{
+    return tryResolve(
+        store, [&](ref<const SingleDerivedPath> drvPath, const std::string & outputName) -> std::optional<StorePath> {
+            try {
+                return resolveDerivedPath(store, SingleDerivedPath::Built{drvPath, outputName}, evalStore);
+            } catch (Error &) {
+                return std::nullopt;
+            }
+        });
+}
+
+template<>
+std::optional<BasicDerivation> DerivationT<FullInputs>::tryResolve(
     Store & store,
     fun<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
         queryResolutionChain) const
 {
-    BasicDerivation resolved{*this};
+    BasicDerivation resolved{
+        .outputs = outputs,
+        .inputs = inputs.srcs,
+        .platform = platform,
+        .builder = builder,
+        .args = args,
+        .env = env,
+        .structuredAttrs = structuredAttrs,
+        .name = name,
+    };
 
-    // Input paths that we'll want to rewrite in the derivation
     StringMap inputRewrites;
 
-    for (auto & [inputDrv, inputNode] : inputDrvs.map)
+    for (auto & [inputDrv, inputNode] : inputs.drvs.map)
         if (!tryResolveInput(
                 store,
-                resolved.inputSrcs,
+                resolved.inputs,
                 inputRewrites,
                 nullptr,
                 make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{inputDrv}),
@@ -1272,11 +1313,9 @@ std::optional<BasicDerivation> Derivation::tryResolve(
 
     resolved.applyRewrites(inputRewrites);
 
-    Derivation resolved2{std::move(resolved)};
+    processDerivationOutputPaths<true>(store, resolved, resolved.name);
 
-    resolved2.fillInOutputPaths(store);
-
-    return resolved2;
+    return resolved;
 }
 
 /**
@@ -1310,7 +1349,14 @@ static void processDerivationOutputPaths(Store & store, auto && drv, std::string
             throw Error("'builtin:substitute' derivation must have no arguments");
         if (!drv.env.empty())
             throw Error("'builtin:substitute' derivation must have no environment variables");
-        if (!drv.inputSrcs.empty())
+        /* `drv` is either a `Derivation` or a `BasicDerivation`. */
+        auto hasInputSrcs = [](const auto & inputs) {
+            if constexpr (requires { inputs.srcs; })
+                return !inputs.srcs.empty();
+            else
+                return !inputs.empty();
+        };
+        if (hasInputSrcs(drv.inputs))
             throw Error("'builtin:substitute' derivation must have no inputs");
         /* Check the output types (and the experimental feature). */
         drv.type();
@@ -1322,7 +1368,11 @@ static void processDerivationOutputPaths(Store & store, auto && drv, std::string
     auto hashModulo = [&]() -> const auto & {
         if (!hashModulo_) {
             // somewhat expensive so we do lazily
-            hashModulo_ = hashDerivationModulo(store, drv, true);
+            if constexpr (std::is_same_v<std::decay_t<decltype(drv)>, Derivation>) {
+                hashModulo_ = hashDerivationModulo(store, drv, true);
+            } else {
+                hashModulo_ = hashDerivationModulo(store, drv.unresolve(), true);
+            }
         }
         return *hashModulo_;
     };
@@ -1439,7 +1489,8 @@ static void processDerivationOutputPaths(Store & store, auto && drv, std::string
     drv.type();
 }
 
-void Derivation::checkInvariants(Store & store, const StorePath & drvPath) const
+template<typename InputsType>
+void DerivationT<InputsType>::checkInvariants(Store & store, const StorePath & drvPath) const
 {
     assert(drvPath.isDerivation());
     std::string drvName(drvPath.name());
@@ -1457,16 +1508,25 @@ void Derivation::checkInvariants(Store & store, const StorePath & drvPath) const
     }
 }
 
+template<>
+void BasicDerivation::checkInvariants(Store & store) const
+{
+    processDerivationOutputPaths<false>(store, *this, name);
+}
+
+template<>
 void Derivation::checkInvariants(Store & store) const
 {
     processDerivationOutputPaths<false>(store, *this, name);
 }
 
+template<>
 void Derivation::fillInOutputPaths(Store & store)
 {
     processDerivationOutputPaths<true>(store, *this, name);
 }
 
+template<>
 Derivation Derivation::parseJsonAndValidate(Store & store, const nlohmann::json & json)
 {
     auto drv = static_cast<Derivation>(json);
@@ -1484,6 +1544,10 @@ Derivation Derivation::parseJsonAndValidate(Store & store, const nlohmann::json 
 }
 
 const Hash impureOutputHash = hashString(HashAlgorithm::SHA256, "impure");
+
+// Explicit template instantiations
+template struct DerivationT<StorePathSet>;
+template struct DerivationT<FullInputs>;
 
 } // namespace nix
 
@@ -1586,14 +1650,40 @@ nix::DerivationOutput adl_serializer<nix::DerivationOutput>::from_json(
     }
 }
 
-static void inputSrcsToJson(json & res, const nix::StorePathSet & inputSrcs)
+static void inputsToJson(json & res, const nix::StorePathSet & inputs)
 {
     res = nlohmann::json::array();
-    for (auto & input : inputSrcs)
+    for (auto & input : inputs)
         res.emplace_back(input);
 }
 
-static void basicDerivationToJson(json & res, const nix::BasicDerivation & d)
+static void inputsToJson(json & res, const nix::FullInputs & inputs)
+{
+    using namespace nix;
+    res = nlohmann::json::object();
+
+    inputsToJson(res["srcs"], inputs.srcs);
+
+    auto doInput = [&](this const auto & doInput, const auto & inputNode) -> nlohmann::json {
+        auto value = nlohmann::json::object();
+        value["outputs"] = inputNode.value;
+        {
+            auto next = nlohmann::json::object();
+            for (auto & [outputId, childNode] : inputNode.childMap)
+                next[outputId] = doInput(childNode);
+            value["dynamicOutputs"] = std::move(next);
+        }
+        return value;
+    };
+
+    auto & inputDrvsObj = res["drvs"];
+    inputDrvsObj = nlohmann::json::object();
+    for (auto & [inputDrv, inputNode] : inputs.drvs.map)
+        inputDrvsObj[inputDrv.to_string()] = doInput(inputNode);
+}
+
+template<typename Inputs>
+void adl_serializer<nix::DerivationT<Inputs>>::to_json(json & res, const nix::DerivationT<Inputs> & d)
 {
     using namespace nix;
     res = nlohmann::json::object();
@@ -1608,6 +1698,8 @@ static void basicDerivationToJson(json & res, const nix::BasicDerivation & d)
             outputsObj[outputName] = output;
     }
 
+    inputsToJson(res["inputs"], d.inputs);
+
     res["system"] = d.platform;
     res["builder"] = d.builder;
     res["args"] = d.args;
@@ -1617,157 +1709,119 @@ static void basicDerivationToJson(json & res, const nix::BasicDerivation & d)
         res["structuredAttrs"] = d.structuredAttrs->structuredAttrs;
 }
 
-void adl_serializer<nix::BasicDerivation>::to_json(json & res, const nix::BasicDerivation & d)
-{
-    basicDerivationToJson(res, d);
+template<typename Inputs>
+static Inputs inputsFromJson(const json & inputsJson, const nix::ExperimentalFeatureSettings & xpSettings);
 
-    inputSrcsToJson(res["inputs"], d.inputSrcs);
-}
-
-void adl_serializer<nix::Derivation>::to_json(json & res, const nix::Derivation & d)
+template<>
+nix::StorePathSet inputsFromJson<nix::StorePathSet>(const json & inputsJson, const nix::ExperimentalFeatureSettings &)
 {
     using namespace nix;
-
-    basicDerivationToJson(res, d);
-
-    {
-        auto & inputsObj = res["inputs"];
-        inputsObj = nlohmann::json::object();
-
-        inputSrcsToJson(inputsObj["srcs"], d.inputSrcs);
-
-        auto doInput = [&](this const auto & doInput, const auto & inputNode) -> nlohmann::json {
-            auto value = nlohmann::json::object();
-            value["outputs"] = inputNode.value;
-            {
-                auto next = nlohmann::json::object();
-                for (auto & [outputId, childNode] : inputNode.childMap)
-                    next[outputId] = doInput(childNode);
-                value["dynamicOutputs"] = std::move(next);
-            }
-            return value;
-        };
-
-        auto & inputDrvsObj = inputsObj["drvs"];
-        inputDrvsObj = nlohmann::json::object();
-        for (auto & [inputDrv, inputNode] : d.inputDrvs.map)
-            inputDrvsObj[inputDrv.to_string()] = doInput(inputNode);
-    }
-}
-
-static void inputSrcsFromJson(const json & inputSrcsJson, nix::StorePathSet & inputSrcs)
-{
-    auto arr = nix::getArray(inputSrcsJson);
-    for (auto & input : arr)
+    StorePathSet inputSrcs;
+    for (auto & input : getArray(inputsJson))
         inputSrcs.insert(input);
+    return inputSrcs;
 }
 
-static void basicDerivationFromJson(
-    const json::object_t & json, nix::BasicDerivation & res, const nix::ExperimentalFeatureSettings & xpSettings)
+template<>
+nix::FullInputs
+inputsFromJson<nix::FullInputs>(const json & inputsJson, const nix::ExperimentalFeatureSettings & xpSettings)
 {
     using namespace nix;
 
-    res.name = getString(valueAt(json, "name"));
+    auto inputsObj = getObject(inputsJson);
+    FullInputs inputs;
 
+    try {
+        for (auto & input : getArray(valueAt(inputsObj, "srcs")))
+            inputs.srcs.insert(input);
+    } catch (Error & e) {
+        e.addTrace({}, "while reading key 'srcs'");
+        throw;
+    }
+
+    try {
+        auto doInput = [&](this const auto & doInput, const auto & _json) -> DerivedPathMap<StringSet>::ChildNode {
+            auto & json = getObject(_json);
+            DerivedPathMap<StringSet>::ChildNode node;
+            node.value = getStringSet(valueAt(json, "outputs"));
+            for (auto & [outputId, childNode] : getObject(valueAt(json, "dynamicOutputs"))) {
+                xpSettings.require(
+                    Xp::DynamicDerivations, [&] { return fmt("dynamic output '%s' in JSON", outputId); });
+                node.childMap[outputId] = doInput(childNode);
+            }
+            return node;
+        };
+        for (auto & [inputDrvPath, inputOutputs] : getObject(valueAt(inputsObj, "drvs")))
+            inputs.drvs.map[StorePath{inputDrvPath}] = doInput(inputOutputs);
+    } catch (Error & e) {
+        e.addTrace({}, "while reading key 'drvs'");
+        throw;
+    }
+
+    return inputs;
+}
+
+template<typename Inputs>
+nix::DerivationT<Inputs> adl_serializer<nix::DerivationT<Inputs>>::from_json(
+    const json & _json, const nix::ExperimentalFeatureSettings & xpSettings)
+{
+    using namespace nix;
+
+    auto & json = getObject(_json);
     {
         auto version = getUnsigned(valueAt(json, "version"));
-        if (valueAt(json, "version") != expectedJsonVersionDerivation)
+        if (version != expectedJsonVersionDerivation)
             throw Error(
                 "Unsupported derivation JSON format version %d, only format version %d is currently supported.",
                 version,
                 expectedJsonVersionDerivation);
     }
 
-    try {
-        auto outputs = getObject(valueAt(json, "outputs"));
-        for (auto & [outputName, output] : outputs) {
-            res.outputs.insert_or_assign(outputName, adl_serializer<DerivationOutput>::from_json(output, xpSettings));
-        }
-    } catch (Error & e) {
-        e.addTrace({}, "while reading key 'outputs'");
-        throw;
-    }
-
-    res.platform = getString(valueAt(json, "system"));
-    res.builder = getString(valueAt(json, "builder"));
-    res.args = getStringList(valueAt(json, "args"));
-
-    auto envJson = valueAt(json, "env");
-    try {
-        res.env = getStringMap(envJson);
-    } catch (Error & e) {
-        e.addTrace({}, "while reading key 'env'");
-        throw;
-    }
-
-    if (auto structuredAttrs = get(json, "structuredAttrs"))
-        res.structuredAttrs = StructuredAttrs::fromJSON(*structuredAttrs);
-}
-
-nix::BasicDerivation
-adl_serializer<nix::BasicDerivation>::from_json(const json & _json, const nix::ExperimentalFeatureSettings & xpSettings)
-{
-    using namespace nix;
-
-    BasicDerivation res;
-    auto & json = getObject(_json);
-    basicDerivationFromJson(json, res, xpSettings);
-
-    try {
-        inputSrcsFromJson(valueAt(json, "inputs"), res.inputSrcs);
-    } catch (Error & e) {
-        e.addTrace({}, "while reading key 'inputs'");
-        throw;
-    }
-
-    return res;
-}
-
-nix::Derivation
-adl_serializer<nix::Derivation>::from_json(const json & _json, const nix::ExperimentalFeatureSettings & xpSettings)
-{
-    using namespace nix;
-
-    Derivation res;
-    auto & json = getObject(_json);
-    basicDerivationFromJson(json, res, xpSettings);
-
-    try {
-        auto inputsObj = getObject(valueAt(json, "inputs"));
-
-        try {
-            inputSrcsFromJson(valueAt(inputsObj, "srcs"), res.inputSrcs);
-        } catch (Error & e) {
-            e.addTrace({}, "while reading key 'srcs'");
-            throw;
-        }
-
-        try {
-            auto doInput = [&](this const auto & doInput, const auto & _json) -> DerivedPathMap<StringSet>::ChildNode {
-                auto & json = getObject(_json);
-                DerivedPathMap<StringSet>::ChildNode node;
-                node.value = getStringSet(valueAt(json, "outputs"));
-                auto drvs = getObject(valueAt(json, "dynamicOutputs"));
-                for (auto & [outputId, childNode] : drvs) {
-                    xpSettings.require(
-                        Xp::DynamicDerivations, [&] { return fmt("dynamic output '%s' in JSON", outputId); });
-                    node.childMap[outputId] = doInput(childNode);
+    return DerivationT<Inputs>{
+        .outputs =
+            [&] {
+                DerivationOutputs outputs;
+                try {
+                    for (auto & [outputName, output] : getObject(valueAt(json, "outputs")))
+                        outputs.insert_or_assign(
+                            outputName, adl_serializer<DerivationOutput>::from_json(output, xpSettings));
+                } catch (Error & e) {
+                    e.addTrace({}, "while reading key 'outputs'");
+                    throw;
                 }
-                return node;
-            };
-            auto drvs = getObject(valueAt(inputsObj, "drvs"));
-            for (auto & [inputDrvPath, inputOutputs] : drvs)
-                res.inputDrvs.map[StorePath{inputDrvPath}] = doInput(inputOutputs);
-        } catch (Error & e) {
-            e.addTrace({}, "while reading key 'drvs'");
-            throw;
-        }
-    } catch (Error & e) {
-        e.addTrace({}, "while reading key 'inputs'");
-        throw;
-    }
-
-    return res;
+                return outputs;
+            }(),
+        .inputs =
+            [&] {
+                try {
+                    return inputsFromJson<Inputs>(valueAt(json, "inputs"), xpSettings);
+                } catch (Error & e) {
+                    e.addTrace({}, "while reading key 'inputs'");
+                    throw;
+                }
+            }(),
+        .platform = getString(valueAt(json, "system")),
+        .builder = getString(valueAt(json, "builder")),
+        .args = getStringList(valueAt(json, "args")),
+        .env =
+            [&] {
+                try {
+                    return getStringMap(valueAt(json, "env"));
+                } catch (Error & e) {
+                    e.addTrace({}, "while reading key 'env'");
+                    throw;
+                }
+            }(),
+        .structuredAttrs = [&]() -> std::optional<StructuredAttrs> {
+            if (auto structuredAttrs = get(json, "structuredAttrs"))
+                return StructuredAttrs::fromJSON(*structuredAttrs);
+            return std::nullopt;
+        }(),
+        .name = getString(valueAt(json, "name")),
+    };
 }
+
+template struct adl_serializer<nix::BasicDerivation>;
+template struct adl_serializer<nix::Derivation>;
 
 } // namespace nlohmann

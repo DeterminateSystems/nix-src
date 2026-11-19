@@ -1558,8 +1558,9 @@ static void derivationStrictInternal(
             "passed to builtins.derivationStrict");
 
     /* Build the derivation expression by processing the attributes. */
-    Derivation drv;
-    drv.name = drvName;
+    Derivation drv{
+        .name = std::string{drvName},
+    };
 
     NixStringContext context;
 
@@ -1810,17 +1811,17 @@ static void derivationStrictInternal(
                     state.waitForPath(d.drvPath);
                     state.store->computeFSClosure(d.drvPath, refs);
                     for (auto & j : refs) {
-                        drv.inputSrcs.insert(j);
+                        drv.inputs.srcs.insert(j);
                         if (j.isDerivation()) {
-                            drv.inputDrvs.map[j].value = state.store->readDerivation(j).outputNames();
+                            drv.inputs.drvs.map[j].value = state.store->readDerivation(j).outputNames();
                         }
                     }
                 },
                 [&](const NixStringContextElem::Built & b) {
-                    drv.inputDrvs.ensureSlot(*b.drvPath).value.insert(b.output);
+                    drv.inputs.drvs.ensureSlot(*b.drvPath).value.insert(b.output);
                 },
                 [&](const NixStringContextElem::Opaque & o) {
-                    drv.inputSrcs.insert(state.devirtualize(o.path, &rewrites));
+                    drv.inputs.srcs.insert(state.devirtualize(o.path, &rewrites));
                 },
                 [&](const NixStringContextElem::Path & p) {
                     if (!drvS)
