@@ -93,12 +93,13 @@ void RemoteStore::initConnection(Connection & conn)
         StringSink saved;
         TeeSource tee(conn.from, saved);
         try {
-            // The DisableSetOptions and `AddToStoreScanning` features aren't in the `latest` constant because it is
-            // shared with the daemon, which only adds the feature under certain conditions.
+            // The following features aren't in the `latest` constant because it is
+            // shared with the daemon, which only adds the features under certain conditions.
             // Adding is easier than removing.
             auto localVersion = WorkerProto::latest;
             localVersion.features.insert(std::string{WorkerProto::featureDisableSetOptions});
             localVersion.features.insert(std::string{WorkerProto::featureAddToStoreScanning});
+            localVersion.features.insert(std::string{WorkerProto::featureSubmitOutput});
             if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
                 localVersion.features.erase(std::string(WorkerProto::featureProvenance));
 
@@ -605,6 +606,20 @@ void RemoteStore::registerDrvOutput(const Realisation & info)
     conn->startOp(WorkerProto::Op::RegisterDrvOutput);
     WorkerProto::write(*this, *conn, info);
     conn.processStderr();
+}
+
+void RemoteStore::submitOutput(const SingleDerivedPath & path, const OutputName & output)
+{
+    auto conn(getConnection());
+    if (!conn->protoVersion.features.contains(WorkerProto::featureSubmitOutput))
+        throw Error(
+            "the daemon does not support SubmitOutput, perhaps this is not in a derivation with the `builder-rpc-v0` feature?");
+
+    conn->startOp(WorkerProto::Op::SubmitOutput);
+    WorkerProto::Serialise<SingleDerivedPath>::write(*this, *conn, path);
+    conn->to << output;
+    conn.processStderr();
+    readInt(conn->from);
 }
 
 ref<const ValidPathInfo> RemoteStore::addToStoreScanning(

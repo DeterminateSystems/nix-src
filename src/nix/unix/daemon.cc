@@ -513,7 +513,7 @@ static void processStdioConnection(ref<Store> store, TrustedFlag trustClient)
         FdSource(STDIN_FILENO),
         FdSink(STDOUT_FILENO),
         trustClient,
-        daemon::NotRecursive,
+        daemon::RecursiveFlag::NotRecursive,
         nullptr,
         setupConnectionTelemetry);
 }

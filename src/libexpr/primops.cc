@@ -11,7 +11,9 @@
 #include "nix/store/names.hh"
 #include "nix/store/path-references.hh"
 #include "nix/store/store-api.hh"
+#include "nix/util/configuration.hh"
 #include "nix/store/build.hh"
+#include "nix/util/strings.hh"
 #include "nix/util/util.hh"
 #include "nix/util/os-string.hh"
 #include "nix/util/processes.hh"
@@ -1566,6 +1568,7 @@ static void derivationStrictInternal(
 
     bool contentAddressed = false;
     bool isImpure = false;
+    bool isSubmittingOutputs = false;
     std::optional<std::string> outputHash;
     std::optional<HashAlgorithm> outputHashAlgo;
     std::optional<ContentAddressMethod> ingestionMethod;
@@ -1711,6 +1714,22 @@ static void derivationStrictInternal(
                         handleOutputs(ss);
                         break;
                     }
+                    case EvalState::s.requiredSystemFeatures.getId(): {
+                        /* Only parsed to detect `builder-rpc-v0`; skip
+                           entirely unless the experimental feature is
+                           enabled. */
+                        if (!experimentalFeatureSettings.isEnabled(Xp::DynamicDerivations))
+                            break;
+                        state.forceList(*i->value, pos, context_below);
+                        for (auto elem : i->value->listView()) {
+                            auto name = state.forceString(*elem, context, pos, context_below);
+                            if (name == drvFeatureBuilderRpcV0) {
+                                isSubmittingOutputs = true;
+                                break;
+                            }
+                        }
+                        break;
+                    }
                     default:
                         break;
                     }
@@ -1732,6 +1751,15 @@ static void derivationStrictInternal(
 
                 } else {
                     auto s = state.coerceToString(pos, *i->value, context, context_below, true).toOwned();
+
+                    /* Re-interpret the attribute's value as a list of
+                       strings.
+
+                       We may wish to warn here better future-compat
+                       later, e.g. requiring that it be a list of
+                       strings without spaces to begin with. */
+                    auto forceStringList = [&] { return tokenizeString<Strings>(s); };
+
                     if (i->name == state.s.json) {
                         warnAttr(HintFmt(
                             "setting structured attributes via '__json' is deprecated, and may be disallowed in future versions of Nix. Set '__structuredAttrs = true' instead."));
@@ -1755,8 +1783,22 @@ static void derivationStrictInternal(
                             handleHashMode(s);
                             break;
                         case EvalState::s.outputs.getId():
-                            handleOutputs(tokenizeString<Strings>(s));
+                            handleOutputs(forceStringList());
                             break;
+                        case EvalState::s.requiredSystemFeatures.getId(): {
+                            /* Only parsed to detect `builder-rpc-v0`; skip
+                               entirely unless the experimental feature is
+                               enabled. */
+                            if (!experimentalFeatureSettings.isEnabled(Xp::DynamicDerivations))
+                                break;
+                            for (auto & name : forceStringList()) {
+                                if (name == drvFeatureBuilderRpcV0) {
+                                    isSubmittingOutputs = true;
+                                    break;
+                                }
+                            }
+                            break;
+                        }
                         default:
                             break;
                         }
@@ -1872,7 +1914,8 @@ static void derivationStrictInternal(
                 },
         };
 
-        drv.env["out"] = state.store->printStorePath(dof.path(*state.store, drvName, "out"));
+        if (!isSubmittingOutputs)
+            drv.env["out"] = state.store->printStorePath(dof.path(*state.store, drvName, "out"));
         drv.outputs.insert_or_assign("out", std::move(dof));
     }
 
@@ -1884,7 +1927,8 @@ static void derivationStrictInternal(
         auto method = ingestionMethod.value_or(ContentAddressMethod::Raw::NixArchive);
 
         for (auto & i : outputs) {
-            drv.env[i] = hashPlaceholder(i);
+            if (!isSubmittingOutputs)
+                drv.env[i] = hashPlaceholder(i);
             if (isImpure)
                 drv.outputs.insert_or_assign(
                     i,
