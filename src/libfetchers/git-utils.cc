@@ -476,7 +476,7 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
 #endif
         if (git_indexer_new(
                 Setter(indexer),
-                packFilesPath.c_str(),
+                packFilesPath.string().c_str(),
 #if LIBGIT2_VERSION_CHECK(2, 0, 0)
                 &indexerOpts
 #else

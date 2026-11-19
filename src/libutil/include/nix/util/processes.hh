@@ -161,6 +161,7 @@ struct RunOptions
     bool lookupPath = true;
     OsStrings args;
 #ifndef _WIN32
+    std::optional<std::string> argv0;
     std::optional<uid_t> uid;
     std::optional<uid_t> gid;
 #endif
