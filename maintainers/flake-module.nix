@@ -120,6 +120,9 @@
           shellcheck = {
             enable = true;
           };
+          zizmor = {
+            enable = true;
+          };
         };
       };
     };
