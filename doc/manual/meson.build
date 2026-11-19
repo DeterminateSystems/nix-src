@@ -9,6 +9,10 @@ fs = import('fs')
 
 doc_url = 'https://manual.determinate.systems/'
 
+# Whether to hide the release notes of the upcoming release (see
+# `source/meson.build`).
+official_release = get_option('official-release')
+
 nix = find_program('nix', native : true)
 
 bash = find_program('bash', native : true)
