@@ -825,6 +825,18 @@ struct GitInputScheme : InputScheme
     }
 
     /**
+     * Throw an error if `repo` is a shallow repository. This must be checked if `shallow = false`, since then we
+     * promise to provide `revCount`, which a shallow repository can't compute.
+     */
+    void checkNotShallow(GitRepo & repo, const RepoInfo & repoInfo) const
+    {
+        if (repo.isShallow())
+            throw Error(
+                "'%s' is a shallow Git repository, but shallow repositories are only allowed when `shallow = true;` is specified",
+                repoInfo.locationToArg());
+    }
+
+    /**
      * Decide whether we can do a shallow clone, which is faster. This is possible if the user explicitly specified
      * `shallow = true`, or if we already have a `revCount`.
      */
@@ -1073,13 +1085,7 @@ struct GitInputScheme : InputScheme
 
         /* Like lastModified, skip revCount if supplied by the caller. */
         if (!shallow && !input.attrs.contains("revCount")) {
-            auto isShallow = repo->isShallow();
-
-            if (isShallow && !shallow)
-                throw Error(
-                    "'%s' is a shallow Git repository, but shallow repositories are only allowed when `shallow = true;` is specified",
-                    repoInfo.locationToArg());
-
+            checkNotShallow(*repo, repoInfo);
             input.attrs.insert_or_assign("revCount", lazyRevCount(settings, repoInfo, repoDir, rev));
         }
 
@@ -1234,6 +1240,9 @@ struct GitInputScheme : InputScheme
                 attrs.insert_or_assign("url", submodulePath.string());
                 attrs.insert_or_assign("exportIgnore", Explicit<bool>{exportIgnore});
                 attrs.insert_or_assign("submodules", Explicit<bool>{true});
+                /* Nothing needs the `revCount` of a submodule, so don't require one. This allows shallow submodule
+                   checkouts (e.g. as created by `shallow = true` in `.gitmodules`). */
+                attrs.insert_or_assign("shallow", Explicit<bool>{true});
                 // TODO: fall back to getAccessorFromCommit-like fetch when submodules aren't checked out
                 // attrs.insert_or_assign("allRefs", Explicit<bool>{ true });
 
@@ -1267,6 +1276,7 @@ struct GitInputScheme : InputScheme
                 if (rev == nullRev) {
                     input.attrs.insert_or_assign("revCount", uint64_t(0));
                 } else {
+                    checkNotShallow(*repo, repoInfo);
                     input.attrs.insert_or_assign("revCount", lazyRevCount(settings, repoInfo, repoPath, rev));
                 }
             }
