@@ -94,3 +94,38 @@ git -C "$TEST_ROOT/shallow-build-parent" commit -m "add flake"
 git clone --depth 1 "file://$TEST_ROOT/shallow-build-parent" "$TEST_ROOT/shallow-build-clone"
 rm -rf "$TEST_ROOT/shallow-build-parent"
 nix build --dry-run "git+file://$TEST_ROOT/shallow-build-clone?shallow=1"
+
+# Test 6: Fetching a clean, shallow working tree without `shallow = true`
+# fails right away, rather than when `revCount` is forced.
+expectStderr 1 nix build --dry-run "git+file://$TEST_ROOT/shallow-build-clone" \
+    | grepQuiet "shallow repositories are only allowed when"
+
+# Test 7: A flake with `inputs.self.submodules = true` and a shallow
+# submodule checkout works, whether the tree is clean or dirty.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=protocol.file.allow
+export GIT_CONFIG_VALUE_0=always
+
+createGitRepo "$TEST_ROOT/shallow-sub"
+for i in 1 2 3; do
+    echo "$i" > "$TEST_ROOT/shallow-sub/file"
+    git -C "$TEST_ROOT/shallow-sub" add file
+    git -C "$TEST_ROOT/shallow-sub" commit -m "$i"
+done
+
+createGitRepo "$TEST_ROOT/shallow-sub-parent"
+cat > "$TEST_ROOT/shallow-sub-parent/flake.nix" <<EOF
+{
+  inputs.self.submodules = true;
+  outputs = { self }: { x = builtins.readFile (self + "/sub/file"); };
+}
+EOF
+git -C "$TEST_ROOT/shallow-sub-parent" submodule add --depth 1 "file://$TEST_ROOT/shallow-sub" sub
+git -C "$TEST_ROOT/shallow-sub-parent" add flake.nix
+git -C "$TEST_ROOT/shallow-sub-parent" commit -m "first"
+[[ $(git -C "$TEST_ROOT/shallow-sub-parent/sub" rev-parse --is-shallow-repository) = true ]]
+
+[[ $(nix eval --no-write-lock-file --raw "$TEST_ROOT/shallow-sub-parent#x") = 3 ]]
+
+echo "# dirty" >> "$TEST_ROOT/shallow-sub-parent/flake.nix"
+[[ $(nix eval --no-write-lock-file --raw "$TEST_ROOT/shallow-sub-parent#x") = 3 ]]
