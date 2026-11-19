@@ -22,8 +22,9 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
 
     accessor->addFile(
         CanonPath("flake.nix"),
-#include "builtin-flake-schemas/flake.nix.gen.hh"
-    );
+        {
+#embed "builtin-flake-schemas/flake.nix"
+        });
 
     auto [storePath, narHash] = state.store->computeStorePath("source", {accessor});
 
@@ -49,9 +50,9 @@ ref<EvalCache> call(
 {
     auto fingerprint = lockedFlake->getFingerprint(*state.store, state.fetchSettings);
 
-    std::string callFlakeSchemasNix =
-#include "call-flake-schemas.nix.gen.hh"
-        ;
+    std::string callFlakeSchemasNix = {
+#embed "call-flake-schemas.nix"
+    };
 
     auto lockedDefaultSchemasFlake = defaultSchemasFlake
                                          ? flake::lockFlake(flakeSettings, state, *defaultSchemasFlake, {})

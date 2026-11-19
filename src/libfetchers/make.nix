@@ -21,9 +21,7 @@ nixMake.mkComponent {
     "include"
   ];
 
-  files = nixMake.commonSupportFiles // {
-    "builtin-flake-registry.json.gen.hh" = nixMake.mkStringHeader ./builtin-flake-registry.json;
-  };
+  files = nixMake.commonSupportFiles;
 
   linkFlags = nixMake.wrapAssertFailFlags;
 }

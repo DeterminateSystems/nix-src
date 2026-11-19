@@ -36,20 +36,19 @@ nixMake.mkComponent {
 
   # Every .cc file under the root (including the legacy commands in
   # subdirectories and unix/) is a compilation unit. The `doc`, `misc`
-  # and `scripts` symlinks are ignored by the scanner.
+  # and `scripts` symlinks are ignored by the scanner, so the files that
+  # are `#embed`ded through them are listed in `files`.
   includeDirs = [ "" ];
 
   files = nixMake.commonSupportFiles // {
-    "generate-manpage.nix.gen.hh" = nixMake.mkStringHeader ../../doc/manual/generate-manpage.nix;
-    "generate-settings.nix.gen.hh" = nixMake.mkStringHeader ../../doc/manual/generate-settings.nix;
-    "generate-store-info.nix.gen.hh" = nixMake.mkStringHeader ../../doc/manual/generate-store-info.nix;
-    "utils.nix.gen.hh" = nixMake.mkStringHeader ../../doc/manual/utils.nix;
-    "get-env.sh.gen.hh" = nixMake.mkStringHeader ./get-env.sh;
-    "help-stores.md.gen.hh" = nixMake.mkStringHeader ../../doc/manual/source/store/types/index.md.in;
+    "doc/manual/generate-manpage.nix" = ../../doc/manual/generate-manpage.nix;
+    "doc/manual/generate-settings.nix" = ../../doc/manual/generate-settings.nix;
+    "doc/manual/generate-store-info.nix" = ../../doc/manual/generate-store-info.nix;
+    "doc/manual/utils.nix" = ../../doc/manual/utils.nix;
+    "help-stores.md" = ../../doc/manual/source/store/types/index.md.in;
     "profiles.md.gen.hh" = nixMake.mkStringHeader ../../doc/manual/source/command-ref/files/profiles.md;
     "unpack-channel.nix.gen.hh" = nixMake.mkStringHeader ./nix-channel/unpack-channel.nix;
     "buildenv.nix.gen.hh" = nixMake.mkStringHeader ./nix-env/buildenv.nix;
-    "baked-flake.nix.gen.hh" = nixMake.mkStringHeader ./baked-flake.nix;
   };
 
   configHeaders = {

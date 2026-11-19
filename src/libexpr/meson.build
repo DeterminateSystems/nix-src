@@ -164,16 +164,6 @@ lexer_tab = custom_target(
   install_dir : get_option('includedir') / 'nix',
 )
 
-subdir('nix-meson-build-support/generate-header')
-
-generated_headers = []
-foreach header : [
-  'imported-drv-to-derivation.nix',
-  'fetchurl.nix',
-]
-  generated_headers += gen_header.process(header)
-endforeach
-
 sources = files(
   'attr-path.cc',
   'attr-set.cc',
@@ -264,7 +254,6 @@ this_library = library(
   config_priv_h,
   parser_tab[1],
   lexer_tab[1],
-  generated_headers,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags + link_args,

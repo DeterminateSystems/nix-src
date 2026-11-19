@@ -648,10 +648,9 @@ void LocalStore::openDB(State & state, bool create)
 
     /* Initialise the database schema, if necessary. */
     if (create) {
-        static const char schema[] =
-#include "schema.sql.gen.hh"
-            ;
-        db.exec(schema);
+        db.exec({
+#embed "schema.sql"
+        });
     }
 }
 
@@ -694,11 +693,13 @@ void LocalStore::upgradeDBSchema(State & state, bool isNew)
         schemaMigrations.insert(migrationName);
     };
 
-    if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations))
+    if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
         doUpgrade(
             "20251017-ca-derivations",
-#include "ca-specific-schema.sql.gen.hh"
-        );
+            {
+#embed "ca-specific-schema.sql"
+            });
+    }
 
     doUpgrade("20260309-drop-redundant-indexreferrer", "drop index if exists IndexReferrer");
 
@@ -1496,7 +1497,8 @@ StorePath LocalStore::addToStoreFromDump(
     RepairFlag repair,
     std::shared_ptr<const Provenance> provenance)
 {
-    return addToStoreFromDump(source0, name, dumpMethod, hashMethod, hashAlgo, references, repair, false, std::move(provenance));
+    return addToStoreFromDump(
+        source0, name, dumpMethod, hashMethod, hashAlgo, references, repair, false, std::move(provenance));
 }
 
 StorePath LocalStore::addToStoreFromDump(

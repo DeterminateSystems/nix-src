@@ -173,8 +173,9 @@ static std::shared_ptr<Registry> getGlobalRegistry(const Settings & settings, St
             return Registry::read(
                 settings,
                 "builtin flake registry",
-#include "builtin-flake-registry.json.gen.hh"
-                ,
+                std::string{
+#embed "builtin-flake-registry.json"
+                },
                 Registry::Global);
         }
     }();

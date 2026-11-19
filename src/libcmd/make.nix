@@ -30,10 +30,7 @@ nixMake.mkComponent {
     "include"
   ];
 
-  files = nixMake.commonSupportFiles // {
-    "call-flake-schemas.nix.gen.hh" = nixMake.mkStringHeader ./call-flake-schemas.nix;
-    "builtin-flake-schemas/flake.nix.gen.hh" = nixMake.mkStringHeader ./builtin-flake-schemas/flake.nix;
-  };
+  files = nixMake.commonSupportFiles;
 
   configHeaders = {
     "cmd-config-private.hh" = {

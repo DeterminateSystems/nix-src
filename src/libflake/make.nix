@@ -25,9 +25,7 @@ nixMake.mkComponent {
     "include"
   ];
 
-  files = nixMake.commonSupportFiles // {
-    "call-flake.nix.gen.hh" = nixMake.mkStringHeader ./call-flake.nix;
-  };
+  files = nixMake.commonSupportFiles;
 
   linkFlags = nixMake.wrapAssertFailFlags;
 }

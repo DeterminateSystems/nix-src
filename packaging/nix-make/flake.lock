@@ -106,12 +106,12 @@
     },
     "nix-wasm-module-make": {
       "locked": {
-        "lastModified": 1793118280,
-        "narHash": "sha256-ZPlQLUanCYuO6IYPVlOaKoGxrnLbfiShkr94tT1w8y8=",
-        "rev": "fe16bb96b6af7b5ba8d33a203b14cefeb5e21ba7",
-        "revCount": 125,
+        "lastModified": 1795106167,
+        "narHash": "sha256-FiNnBlSLaS9W8GSjbQ7XZ3UBdEQQ62GzTn8i7p76MZw=",
+        "rev": "7fd8f02a9d551a62cdd0698b71f3dc8781ca89f4",
+        "revCount": 127,
         "type": "tarball",
-        "url": "https://api.flakehub.com/f/pinned/DeterminateSystems/nix-wasm-module-make/0.1.125%2Brev-fe16bb96b6af7b5ba8d33a203b14cefeb5e21ba7/01a17e2e-8654-7132-b3c3-40251e6539bf/source.tar.gz"
+        "url": "https://api.flakehub.com/f/pinned/DeterminateSystems/nix-wasm-module-make/0.1.127%2Brev-7fd8f02a9d551a62cdd0698b71f3dc8781ca89f4/01a1f4ab-4234-7c82-a3b4-30e86f6bdfdf/source.tar.gz"
       },
       "original": {
         "type": "tarball",

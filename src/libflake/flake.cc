@@ -100,8 +100,9 @@ struct LibFlakeState : EvalState::Extension
         internalFS->setPathDisplay("«flakes-internal»", "");
         internalFS->addFile(
             CanonPath("call-flake.nix"),
-#include "call-flake.nix.gen.hh" // IWYU pragma: keep
-        );
+            {
+#embed "call-flake.nix"
+            });
         state.evalFile(SourcePath{internalFS, CanonPath("call-flake.nix")}, **vCallFlake);
     }
 };
