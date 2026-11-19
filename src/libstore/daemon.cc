@@ -1108,7 +1108,7 @@ static void performOp(
     case WorkerProto::Op::RegisterDrvOutput: {
         logger->startWork();
         auto realisation = WorkerProto::Serialise<Realisation>::read(*store, rconn);
-        store->registerDrvOutput(realisation);
+        store->registerDrvOutput(realisation, CheckSigs);
         logger->stopWork();
         break;
     }

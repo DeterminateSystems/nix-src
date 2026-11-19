@@ -1755,7 +1755,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
         };
         if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations) && !drv.type().isImpure()) {
             store.signRealisation(thisRealisation);
-            store.registerDrvOutput(thisRealisation);
+            store.registerDrvOutput(thisRealisation, NoCheckSigs);
         }
         builtOutputs.emplace(outputName, thisRealisation);
     }
@@ -1810,7 +1810,7 @@ SingleDrvOutputs DerivationBuilderImpl::checkSubmittedOutputs()
         };
 
         store.signRealisation(realisation);
-        store.registerDrvOutput(realisation);
+        store.registerDrvOutput(realisation, NoCheckSigs);
         builtOutputs.emplace(outputName, realisation);
 
         // TODO: handle --check

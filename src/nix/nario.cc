@@ -324,7 +324,7 @@ struct CmdNarioList : Command, MixJSON, MixLongListing
                 unsupported("getFSAccessor");
             }
 
-            void registerDrvOutput(const Realisation & output) override
+            void registerDrvOutputUnchecked(const Realisation & output) override
             {
                 unsupported("registerDrvOutput");
             }

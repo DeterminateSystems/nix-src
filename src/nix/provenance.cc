@@ -258,9 +258,14 @@ struct TrackingStore : public Store
         return next->queryPathFromHashPart(hashPart);
     }
 
-    void registerDrvOutput(const Realisation & output) override
+    void registerDrvOutputUnchecked(const Realisation & output) override
     {
-        next->registerDrvOutput(output);
+        next->registerDrvOutput(output, NoCheckSigs);
+    }
+
+    void registerDrvOutput(const Realisation & output, CheckSigsFlag checkSigs) override
+    {
+        next->registerDrvOutput(output, checkSigs);
     }
 
     ref<SourceAccessor> getFSAccessor(bool requireValidPath) override
