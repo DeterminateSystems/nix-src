@@ -1,5 +1,6 @@
 #include "nix/cmd/command.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/build.hh"
 #include "nix/store/store-open.hh"
 #include "nix/expr/provenance.hh"
 #include "nix/store/provenance.hh"
@@ -386,7 +387,7 @@ struct CmdProvenanceVerify : StorePathsCommand
                     "⏭️ skipped rebuild of derivation '%s^%s'", store.printStorePath(build->drvPath), build->output);
             } else {
                 try {
-                    store.buildPaths(
+                    store.getBuilder()->buildPaths(
                         {DerivedPath::Built{
                             .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{build->drvPath}),
                             .outputs = OutputsSpec::Names{build->output},

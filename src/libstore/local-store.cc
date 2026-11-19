@@ -1,4 +1,5 @@
 #include "nix/store/local-store.hh"
+#include "nix/store/build.hh"
 #include "nix/store/globals.hh"
 #include "nix/store/path-references.hh"
 #include "nix/util/git.hh"
@@ -1790,7 +1791,7 @@ bool LocalStore::verifyStore(bool checkContents, RepairFlag repair)
                         info->narHash.to_string(HashFormat::Nix32, true),
                         current.hash.to_string(HashFormat::Nix32, true));
                     if (repair)
-                        repairPath(i);
+                        getBuilder()->repairPath(i);
                     else
                         errors = true;
                 } else {
@@ -1902,7 +1903,7 @@ void LocalStore::verifyPath(
             printError("path '%s' disappeared, but it still has valid referrers!", pathS);
             if (repair)
                 try {
-                    repairPath(path);
+                    getBuilder()->repairPath(path);
                 } catch (Error & e) {
                     logWarning(e.info());
                     errors = true;

@@ -21,6 +21,7 @@
 #include "nix/util/users.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/store/local-fs-store.hh"
+#include "nix/store/build.hh"
 #include "nix/store/globals.hh"
 #include "nix/expr/parallel-eval.hh"
 #include "nix/util/exit.hh"
@@ -548,7 +549,7 @@ struct CmdFlakeCheck : FlakeCommand, MixPrintOutPaths, MixOutLinkBase, MixFlakeS
             // FIXME: should start building while evaluating.
             Activity act(*logger, lvlInfo, actUnknown, fmt("running %d flake checks", toBuild.size()));
 
-            auto buildResults = store->buildPathsWithResults(toBuild);
+            auto buildResults = store->getBuilder()->buildPathsWithResults(toBuild);
 
             /* Daemons running upstream Nix >= 2.34 omit the results of
                goals that were cancelled or never started (which happens

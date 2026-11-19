@@ -426,6 +426,7 @@ static void daemonLoop(
                                 FdSink(remote.get()),
                                 trusted,
                                 RecursiveFlag::NotRecursive,
+                                nullptr,
                                 setupConnectionTelemetry);
                         } catch (...) {
                             error = std::current_exception();
@@ -513,6 +514,7 @@ static void processStdioConnection(ref<Store> store, TrustedFlag trustClient)
         FdSink(STDOUT_FILENO),
         trustClient,
         daemon::NotRecursive,
+        nullptr,
         setupConnectionTelemetry);
 }
 

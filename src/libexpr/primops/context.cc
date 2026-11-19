@@ -2,6 +2,7 @@
 #include "nix/expr/eval-inline.hh"
 #include "nix/store/derivations.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/build.hh"
 #include "nix/store/globals.hh"
 
 namespace nix {
@@ -295,7 +296,7 @@ static void prim_appendContext(EvalState & state, const PosIdx pos, Value ** arg
         if (!settings.readOnlyMode) {
             /* The path may be a derivation that is still being written asynchronously. */
             state.waitForPath(namePath);
-            state.store->ensurePath(namePath);
+            state.store->getBuilder()->ensurePath(namePath);
         }
         state.forceAttrs(*i.value, i.pos, "while evaluating the value of a string context");
 
