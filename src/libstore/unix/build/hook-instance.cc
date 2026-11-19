@@ -3,10 +3,11 @@
 #include "nix/store/build/child.hh"
 #include "nix/util/strings.hh"
 #include "nix/util/executable-path.hh"
+#include <chrono>
 
 namespace nix {
 
-HookInstance::HookInstance(const Strings & _buildHook)
+HookInstance::HookInstance(const Strings & _buildHook, std::chrono::milliseconds timeout)
 {
     debug("starting build hook '%s'", concatStringsSep(" ", _buildHook));
 
@@ -87,7 +88,7 @@ HookInstance::HookInstance(const Strings & _buildHook)
        teardown, give it a chance to do so (e.g. to export its
        telemetry) instead of signalling it right away. */
     pid.setKillSignal(0);
-    pid.setKillTimeout(10s);
+    pid.setKillTimeout(timeout);
 
     pid.setSeparatePG(true);
     fromHook.writeSide = -1;
