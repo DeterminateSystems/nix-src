@@ -194,6 +194,10 @@ if get_option('embedded-sandbox-shell')
 elif busybox.found()
   configdata_priv.set_quoted('SANDBOX_SHELL', busybox.full_path())
   configdata_priv.set('HAVE_EMBEDDED_SANDBOX_SHELL', 0)
+else
+  # Always define this, since it's also used by code that is not
+  # Linux-specific (e.g. `DerivationBuilderImpl::getPathsInSandbox()`).
+  configdata_priv.set('HAVE_EMBEDDED_SANDBOX_SHELL', 0)
 endif
 
 prefix = get_option('prefix')
