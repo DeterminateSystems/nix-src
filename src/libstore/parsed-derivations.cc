@@ -105,7 +105,7 @@ nlohmann::json::object_t StructuredAttrs::prepareStructuredAttrs(
     Store & store,
     const DerivationOptions<StorePath> & drvOptions,
     const StorePathSet & inputPaths,
-    const DerivationOutputs & outputs) const
+    const derivation::Outputs & outputs) const
 {
     /* Copy to then modify */
     auto json = object();

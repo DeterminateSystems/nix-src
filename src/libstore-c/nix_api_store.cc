@@ -285,7 +285,7 @@ nix_derivation * nix_derivation_from_json(nix_c_context * context, Store * store
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        return new nix_derivation{nix::Derivation::parseJsonAndValidate(*store->ptr, nlohmann::json::parse(json))};
+        return new nix_derivation{nix::derivation::parseJsonAndValidate(*store->ptr, nlohmann::json::parse(json))};
     }
     NIXC_CATCH_ERRS_NULL
 }
@@ -300,7 +300,7 @@ nix_err nix_derivation_make_outputs(
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        auto drv = nix::Derivation::parseJsonAndValidate(*store->ptr, nlohmann::json::parse(json));
+        auto drv = nix::derivation::parseJsonAndValidate(*store->ptr, nlohmann::json::parse(json));
 
         for (auto & output : drv.outputs) {
             auto outPath = output.second.path(*store->ptr, drv.name, output.first);

@@ -1,5 +1,6 @@
 #include "nix/store/async-path-writer.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/derivation/aterm.hh"
 #include "nix/store/downstream-placeholder.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/expr/eval.hh"
@@ -1857,7 +1858,7 @@ static void derivationStrictInternal(
                 },
                 [&](const NixStringContextElem::Path & p) {
                     if (!drvS)
-                        drvS = drv.unparse(*state.store);
+                        drvS = unparse(drv, *state.store);
                     if (drvS->find(p.storePath.to_string()) != drvS->npos) {
                         auto devirtualized = state.devirtualize(p.storePath, &rewrites);
                         warn(
@@ -1958,7 +1959,7 @@ static void derivationStrictInternal(
             drv.outputs.insert_or_assign(i, DerivationOutput::Deferred{});
         }
 
-        drv.fillInOutputPaths(*state.store);
+        fillInOutputPaths(drv, *state.store);
     }
 
     /* Write the resulting term into the Nix store directory. The
