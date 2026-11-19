@@ -1,0 +1,9 @@
+# vim: filetype=meson
+
+option(
+  'fuzzers',
+  type : 'boolean',
+  value : false,
+  description : 'Build libFuzzer targets',
+  yield : true,
+)

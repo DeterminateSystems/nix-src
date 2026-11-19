@@ -7,3 +7,11 @@ option(
   description : 'Build benchmarks (requires gbenchmark)',
   yield : true,
 )
+
+option(
+  'fuzzers',
+  type : 'boolean',
+  value : false,
+  description : 'Build libFuzzer targets',
+  yield : true,
+)
