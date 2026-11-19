@@ -1568,7 +1568,6 @@ static void throwAttrMissing(EvalState & state, Env & env, ExprSelect & expr, Va
         allAttrNames.insert(std::string(state.symbols[attr.name]));
     auto suggestions = Suggestions::bestMatches(allAttrNames, state.symbols[name]);
     state.error<EvalError>("attribute '%1%' missing", state.symbols[name])
-        .atPos(expr.pos)
         .withSuggestions(suggestions)
         .withFrame(env, expr)
         .debugThrow();
@@ -1583,17 +1582,30 @@ static bool isDerivationInternalPos(EvalState & state, PosIdx pos)
 }
 
 [[noreturn, gnu::noinline, gnu::cold]]
-static void rethrowWithAttrTrace(EvalState & state, Env & env, ExprSelect & expr, std::exception_ptr error, PosIdx pos)
+static void rethrowWithAttrTrace(
+    EvalState & state,
+    Env & env,
+    ExprSelect & expr,
+    std::exception_ptr error,
+    PosIdx attrPos,
+    std::span<const AttrName> resolvedAttrPath)
 {
-    /* Show the attribute path outside of the catch handler: it
+    /* Show the attribute paths outside of the catch handler: it
        evaluates dynamic attribute names, which may force thunks and
        thereby suspend the current fiber, which is not allowed while an
        exception is being handled. */
+    std::optional<std::string> successPath;
+    if (attrPos && !isDerivationInternalPos(state, attrPos))
+        successPath = showAttrSelectionPath(state, env, resolvedAttrPath);
     auto attrPath = showAttrSelectionPath(state, env, expr.getAttrPath());
     try {
         std::rethrow_exception(error);
     } catch (Error & e) {
-        state.addErrorTrace(e, pos, "while evaluating the attribute '%1%'", attrPath);
+        // Traces are printed in reverse, so we add context before the main item.
+        if (successPath)
+            state.addErrorTrace(e, attrPos, "from the definition of '%1%'", *successPath);
+        // Add main item: the selection site itself (`a.b`), ie the actual access
+        state.addErrorTrace(e, expr.getPos(), "while evaluating the attribute '%1%'", attrPath);
         throw;
     }
 }
@@ -1607,7 +1619,10 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
     auto _level = state.addCallDepth(pos);
 
     Value vTmp;
-    PosIdx pos2;
+    // current or last *definition site* (the attr, not the select)
+    PosIdx attrPos;
+    const AttrName * unresolvedOrEnd = attrPathStart;
+    // cursor, result if successful
     Value * vAttrs = &vTmp;
 
     e->eval(state, env, vTmp);
@@ -1633,23 +1648,21 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
                     throwAttrMissing(state, env, *this, *vAttrs, name);
             }
             vAttrs = j->value;
-            pos2 = j->pos;
+            attrPos = j->pos;
+            unresolvedOrEnd = &i + 1;
             if (state.countCalls)
-                state.incrAttrSelect(pos2);
+                state.incrAttrSelect(attrPos);
         }
 
-        state.forceValue(*vAttrs, pos2 ? pos2 : this->pos);
+        state.forceValue(*vAttrs, attrPos ? attrPos : this->pos);
 
     } catch (Error &) {
-        if (!pos2)
-            throw;
-        if (isDerivationInternalPos(state, pos2))
-            throw;
         error = std::current_exception();
     }
 
     if (error)
-        rethrowWithAttrTrace(state, env, *this, error, pos2);
+        rethrowWithAttrTrace(
+            state, env, *this, error, attrPos, std::span<const AttrName>(attrPathStart, unresolvedOrEnd));
 
     v = *vAttrs;
 }
