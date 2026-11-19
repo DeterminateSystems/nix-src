@@ -838,8 +838,9 @@ uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)
         }
     }
 
-    pathInfoCache->lock()->upsert(
-        info.path, PathInfoCacheValue{.value = std::make_shared<const LocalStorePathInfo>(info, id)});
+    if (pathInfoCache)
+        pathInfoCache->lock()->upsert(
+            info.path, PathInfoCacheValue{.value = std::make_shared<const LocalStorePathInfo>(info, id)});
 
     return id;
 }
@@ -926,7 +927,7 @@ void LocalStore::updatePathInfo(State & state, const ValidPathInfo & info)
 uint64_t LocalStore::queryValidPathId(State & state, const StorePath & path)
 {
     /* Avoid a database query if the id is in `pathInfoCache`. */
-    {
+    if (pathInfoCache) {
         auto cache(pathInfoCache->lock());
         if (auto res = cache->getOrNullptr(path))
             if (auto info = dynamic_cast<const LocalStorePathInfo *>(res->value.get()))
