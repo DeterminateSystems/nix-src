@@ -152,6 +152,7 @@ if host_machine.system() == 'linux'
       args : [
         '--syscall', 'openat2',
         '--syscall', 'fchmodat2',
+        '--syscall', 'close_range',
         '--',
         this_exe,
       ],
