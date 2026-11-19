@@ -854,9 +854,18 @@ void RemoteStore::addTempRoots(const StorePathSet & paths, bool skipIfSlow)
 
     auto conn(getConnection());
 
+    /* Temp roots persist for the duration of the connection, so skip
+       the paths that have already been pinned on it. */
+    StorePathSet todo;
+    for (auto & path : paths)
+        if (!conn->tempRootsPinned.get(path))
+            todo.insert(path);
+    if (todo.empty())
+        return;
+
     if (conn->protoVersion.features.contains(WorkerProto::featureAddTempRoots)) {
         conn->startOp(WorkerProto::Op::AddTempRoots);
-        WorkerProto::write(*this, *conn, paths);
+        WorkerProto::write(*this, *conn, todo);
         conn.processStderr();
         readInt(conn->from);
     } else {
@@ -866,9 +875,12 @@ void RemoteStore::addTempRoots(const StorePathSet & paths, bool skipIfSlow)
            operation. Note that this is very slow for large sets of
            paths on high-latency links, due to a network round-trip per
            path. */
-        for (auto & path : paths)
+        for (auto & path : todo)
             conn->addTempRoot(*this, &conn.daemonException, path);
     }
+
+    for (auto & path : todo)
+        conn->tempRootsPinned.upsert(path, true);
 }
 
 Roots RemoteStore::findRoots(bool censor)
