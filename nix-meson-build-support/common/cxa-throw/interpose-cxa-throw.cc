@@ -6,6 +6,12 @@
 
 typedef void (*cxa_throw_type)(void *, std::type_info *, void (*)(void *));
 
+/* Define this in the same namespace as the declaration in <cxxabi.h>.
+   GCC >= 15 implicitly declares ::__cxa_throw(void *, void *, ...)
+   when it sees a throw expression (e.g. in <optional>), which
+   conflicts with a definition in the global namespace. */
+namespace __cxxabiv1 {
+
 extern "C" void __cxa_throw(void * exc, std::type_info * tinfo, void (*dest)(void *))
 {
     if (is_logic_error(tinfo))
@@ -19,3 +25,5 @@ extern "C" void __cxa_throw(void * exc, std::type_info * tinfo, void (*dest)(voi
 
     __builtin_unreachable();
 }
+
+} // namespace __cxxabiv1

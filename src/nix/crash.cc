@@ -63,6 +63,12 @@ struct CmdCrash : Command
             std::bitset<4>{"012"};
         }
 
+        else if (type == "bad-optional-access") {
+            printError("Dereferencing an empty optional...");
+            std::optional<int> opt;
+            opt.value();
+        }
+
         else if (type == "panic") {
             printError("Triggering a panic...");
             panic("test panic");
