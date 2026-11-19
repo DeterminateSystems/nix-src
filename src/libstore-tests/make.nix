@@ -27,6 +27,8 @@ let
 
     # The benchmarks (Meson option `benchmarks`, off by default).
     excludeSources = [
+      # The fuzzing harnesses are separate executables.
+      "fuzz"
       "bench-main.cc"
       "derivation-parser-bench.cc"
       "ref-scan-bench.cc"

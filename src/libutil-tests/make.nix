@@ -28,7 +28,8 @@ let
 
     # libnixutil only interposes __cxa_throw on Linux (see
     # src/libutil/make.nix).
-    excludeSources = lib.optional (!isLinux) "cxa-throw.cc";
+    # The fuzzing harnesses are separate executables.
+    excludeSources = [ "fuzz" ] ++ lib.optional (!isLinux) "cxa-throw.cc";
 
     includeDirs = [ "" ];
 
