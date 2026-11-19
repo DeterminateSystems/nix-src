@@ -107,7 +107,7 @@ public:
      */
     const std::string & absOrEmpty() const
     {
-        const static std::string epsilon;
+        static const std::string epsilon;
         return isRoot() ? epsilon : path;
     }
 

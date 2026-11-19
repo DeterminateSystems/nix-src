@@ -143,7 +143,7 @@ protected:
      */
     Sync<OutputPathMap> submittedOutputs;
 
-    const static std::filesystem::path homeDir;
+    static const std::filesystem::path homeDir;
 
     /**
      * The recursive Nix daemon socket.

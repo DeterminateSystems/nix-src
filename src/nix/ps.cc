@@ -151,7 +151,7 @@ static void visitProcessTree(
             rootProcesses.insert(&process);
     }
 
-    [&](this auto const & recurse, const Processes & processes, std::string_view prefix) -> void {
+    [&](this const auto & recurse, const Processes & processes, std::string_view prefix) -> void {
         for (const auto & [n, process] : enumerate(processes)) {
             bool last = n + 1 == processes.size();
             visit(*process, fmt("%s%s", prefix, last ? treeLast : treeConn));
