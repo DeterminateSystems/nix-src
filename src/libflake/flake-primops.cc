@@ -30,8 +30,8 @@ namespace nix::flake::primops {
 
 PrimOp getFlake(const Settings & settings)
 {
-    auto prim_getFlake = [&settings](EvalState & state, const PosIdx pos, Value ** args, Value & v) {
-        state.forceValue(*args[0], pos);
+    auto prim_getFlake = [&settings](EvalState & state, CallSite callSite, Value * const * args, Value & v) {
+        state.forceValue(*args[0], noPos);
 
         LockFlags lockFlags{
             .updateLockFile = false,
@@ -41,12 +41,12 @@ PrimOp getFlake(const Settings & settings)
         };
 
         if (args[0]->type() == nPath) {
-            auto path = state.realisePath(pos, *args[0]);
+            auto path = state.realisePath(noPos, *args[0]);
             callFlake(state, lockFlake(settings, state, path, lockFlags), v);
         } else {
             NixStringContext context;
-            std::string flakeRefS(
-                state.forceString(*args[0], context, pos, "while evaluating the argument passed to builtins.getFlake"));
+            std::string flakeRefS(state.forceString(
+                *args[0], context, noPos, "while evaluating the argument passed to builtins.getFlake"));
             auto rewrites = state.realiseContext(context);
             flakeRefS = state.devirtualize(rewriteStrings(flakeRefS, rewrites), context);
             if (hasContext(context))
@@ -60,7 +60,7 @@ PrimOp getFlake(const Settings & settings)
                 throw Error(
                     "cannot call 'getFlake' on unlocked flake reference '%s', at %s (use --impure to override)",
                     flakeRefS,
-                    state.positions[pos]);
+                    state.positions[noPos]);
 
             /* Backward compatibility hack: If this is a `path` flake and it's a virtual path that had
              * `unsafeDiscardStringContext` applied to it, then treat it like the `nPath` case, i.e. call lockFlake() on
@@ -102,10 +102,10 @@ PrimOp getFlake(const Settings & settings)
     };
 }
 
-static void prim_parseFlakeRef(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_parseFlakeRef(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
     std::string flakeRefS(
-        state.forceStringNoCtx(*args[0], pos, "while evaluating the argument passed to builtins.parseFlakeRef"));
+        state.forceStringNoCtx(*args[0], noPos, "while evaluating the argument passed to builtins.parseFlakeRef"));
     auto attrs = nix::parseFlakeRef(state.fetchSettings, flakeRefS, {}, true).toAttrs();
     auto binds = state.buildBindings(attrs.size());
     for (const auto & [key, value] : attrs) {
@@ -143,7 +143,7 @@ nix::PrimOp parseFlakeRef({
     .impl = prim_parseFlakeRef,
 });
 
-static void prim_flakeRefToString(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_flakeRefToString(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
     state.forceAttrs(*args[0], noPos, "while evaluating the argument passed to builtins.flakeRefToString");
     fetchers::Attrs attrs;
@@ -158,7 +158,7 @@ static void prim_flakeRefToString(EvalState & state, const PosIdx pos, Value ** 
                 state
                     .error<EvalError>(
                         "negative value given for flake ref attr %1%: %2%", state.symbols[attr.name], intValue)
-                    .atPos(pos)
+                    .atPos(noPos)
                     .debugThrow();
             }
 

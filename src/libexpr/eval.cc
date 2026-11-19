@@ -1825,9 +1825,8 @@ static void callPrimOpApp(
         // 2. Create a fake env (arg1, arg2, etc.) and a fake expr (arg1: arg2: etc: builtins.name arg1 arg2
         // etc)
         //    so the debugger allows to inspect the wrong parameters passed to the builtin.
-        auto pos2 = vCur.determinePos(noPos);
         vCur.reset();
-        fn.impl(state, pos2, vArgs, vCur);
+        fn.impl(state, CallSite{pos}, vArgs, vCur);
     } catch (Error & e) {
         if (fn.addTrace)
             state.addErrorTrace(e, pos, "while calling the '%1%' builtin", fn.name);
@@ -1955,9 +1954,8 @@ void EvalState::callFunction(Value & fun, std::span<Value * const> args, Value &
                     incrPrimOpCall(fn->name);
 
                 try {
-                    auto pos = vCur.determinePos(noPos);
                     vCur.reset();
-                    fn->impl(*this, pos, const_cast<Value **>(args.data()), vCur);
+                    fn->impl(*this, CallSite{pos}, args.data(), vCur);
                 } catch (Error & e) {
                     if (fn->addTrace)
                         addErrorTrace(e, pos, "while calling the '%1%' builtin", fn->name);

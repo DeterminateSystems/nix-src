@@ -10,9 +10,9 @@
 
 namespace nix {
 
-static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_bakedDerivation(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
-    state.forceAttrs(*args[0], pos, "while evaluating the argument passed to builtins.bakedDerivation");
+    state.forceAttrs(*args[0], noPos, "while evaluating the argument passed to builtins.bakedDerivation");
 
     std::optional<std::string> name;
 
@@ -79,12 +79,12 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
 
     if (!name)
         state.error<EvalError>("attribute 'name' is missing in call to 'builtins.bakedDerivation'")
-            .atPos(pos)
+            .atPos(noPos)
             .debugThrow();
 
     if (outputs.empty())
         state.error<EvalError>("attribute 'outputs' is missing or empty in call to 'builtins.bakedDerivation'")
-            .atPos(pos)
+            .atPos(noPos)
             .debugThrow();
 
     Derivation drv;

@@ -1023,6 +1023,7 @@ void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & vRes)
 
         emitTreeAttrs(
             state,
+            noPos,
             storePath,
             lockedNode ? lockedNode->lockedRef.input : lockedFlake.flake.lockedRef.input,
             vSourceInfo,
