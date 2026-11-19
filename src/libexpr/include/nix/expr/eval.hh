@@ -89,6 +89,7 @@ public:
 
 /**
  * Function that implements a primop.
+ * FIXME: `args` should be `Value * const *` instead of `Value **`, but that would be a big tedious diff.
  */
 using PrimOpFun = void(EvalState & state, const PosIdx pos, Value ** args, Value & v);
 
@@ -955,12 +956,11 @@ public:
 
     bool isFunctor(const Value & fun) const;
 
-    void callFunction(Value & fun, std::span<Value *> args, Value & vRes, const PosIdx pos);
+    void callFunction(Value & fun, std::span<Value * const> args, Value & vRes, const PosIdx pos);
 
     void callFunction(Value & fun, Value & arg, Value & vRes, const PosIdx pos)
     {
-        Value * args[] = {&arg};
-        callFunction(fun, args, vRes, pos);
+        callFunction(fun, std::to_array({&arg}), vRes, pos);
     }
 
     /**

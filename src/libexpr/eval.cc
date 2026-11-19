@@ -713,14 +713,13 @@ std::optional<EvalState::Doc> EvalState::getDoc(Value & v)
     if (isFunctor(v)) {
         try {
             Value & functor = *v.attrs()->get(s.functor)->value;
-            Value * vp[] = {&v};
             Value partiallyApplied;
             // The first parameter is not user-provided, and may be
             // handled by code that is opaque to the user, like lib.const = x: y: y;
             // So preferably we show docs that are relevant to the
             // "partially applied" function returned by e.g. `const`.
             // We apply the first argument:
-            callFunction(functor, vp, partiallyApplied, noPos);
+            callFunction(functor, std::to_array({&v}), partiallyApplied, noPos);
             auto _level = addCallDepth(noPos);
             return getDoc(partiallyApplied);
         } catch (Error & e) {
@@ -1787,7 +1786,7 @@ static void addLambdaCallTrace(EvalState & state, Error & e, ExprLambda & lambda
  * Store in `vRes` the tPrimOpApp chain that applies `vCur` to `args`.
  */
 [[gnu::noinline]]
-static void makeAppChain(EvalState & state, Value & vCur, std::span<Value *> args, Value & vRes)
+static void makeAppChain(EvalState & state, Value & vCur, std::span<Value * const> args, Value & vRes)
 {
     for (auto arg : args) {
         auto fun2 = state.allocValue();
@@ -1809,7 +1808,7 @@ static void callPrimOpApp(
     const PrimOp & fn,
     size_t argsDone,
     size_t argsLeft,
-    std::span<Value *> args,
+    std::span<Value * const> args,
     PosIdx pos)
 {
     Value * vArgs[maxPrimOpArity];
@@ -1853,7 +1852,7 @@ static void callFunctor(EvalState & state, Value & vCur, const Attr & functor, V
     }
 }
 
-void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes, const PosIdx pos)
+void EvalState::callFunction(Value & fun, std::span<Value * const> args, Value & vRes, const PosIdx pos)
 {
     auto _level = addCallDepth(pos);
 
@@ -1958,7 +1957,7 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                 try {
                     auto pos = vCur.determinePos(noPos);
                     vCur.reset();
-                    fn->impl(*this, pos, args.data(), vCur);
+                    fn->impl(*this, pos, const_cast<Value **>(args.data()), vCur);
                 } catch (Error & e) {
                     if (fn->addTrace)
                         addErrorTrace(e, pos, "while calling the '%1%' builtin", fn->name);
