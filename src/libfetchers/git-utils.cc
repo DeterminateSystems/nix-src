@@ -913,7 +913,7 @@ std::string GitAccessorOptions::makeFingerprint(const Hash & rev) const
 /**
  * Raw git tree input accessor.
  */
-struct GitSourceAccessor : SourceAccessor
+struct GitSourceAccessor final : SourceAccessor
 {
 private:
     void anchor() override {};
@@ -1191,7 +1191,7 @@ public:
     }
 };
 
-struct GitExportIgnoreSourceAccessor : CachingFilteringSourceAccessor
+struct GitExportIgnoreSourceAccessor final : CachingFilteringSourceAccessor
 {
 private:
     void anchor() override {};
@@ -1258,7 +1258,7 @@ void GitFileSystemObjectSink::anchor() {}
 
 namespace {
 
-struct GitFileSystemObjectSinkImpl : GitFileSystemObjectSink
+struct GitFileSystemObjectSinkImpl final : GitFileSystemObjectSink
 {
     ref<GitRepoImpl> repo;
 
@@ -1338,15 +1338,19 @@ struct GitFileSystemObjectSinkImpl : GitFileSystemObjectSink
 
     void addNode(State & state, const CanonPath & path, Child && child)
     {
-        assert(!path.isRoot());
+        if (path.isRoot())
+            throw Error("cannot create a file at the root of the git repository");
+
         auto parent = path.parent();
+        assert(parent);
 
         Directory * cur = &state.root;
 
         for (auto & i : *parent) {
             auto child = std::get_if<Directory>(
                 &cur->children.emplace(std::string(i), Child{GIT_FILEMODE_TREE, {Directory()}}).first->second.file);
-            assert(child);
+            if (!child)
+                throw Error("parent of '%1%' is not a directory", path.rel());
             cur = child;
         }
 
