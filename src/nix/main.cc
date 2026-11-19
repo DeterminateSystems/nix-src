@@ -1,3 +1,4 @@
+#include "nix/util/json-utils.hh" // IWYU pragma: keep (partial specialization of adl_serialiser)
 #include "nix/cmd/common-eval-args.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/util/args/root.hh"
@@ -119,8 +120,6 @@ static void disableNet()
     if (!fileTransferSettings.connectTimeout.overridden)
         fileTransferSettings.connectTimeout = 1;
 }
-
-std::string programPath;
 
 struct NixArgs : virtual MultiCommand, virtual MixCommonArgs, virtual RootArgs
 {
@@ -624,8 +623,7 @@ void mainWrapped(int argc, char ** argv)
         tryEnterPrivateMountNamespace();
 #endif
 
-    programPath = argv[0];
-    auto programName = std::string(baseNameOf(programPath));
+    auto programName = std::string(baseNameOf(argv[0]));
     auto extensionPos = programName.find_last_of(".");
     if (extensionPos != std::string::npos)
         programName.erase(extensionPos);
@@ -699,7 +697,7 @@ void mainWrapped(int argc, char ** argv)
             b["args"] = primOp->args;
             b["doc"] = trim(stripIndentation(*primOp->doc));
             if (primOp->experimentalFeature)
-                b["experimental-feature"] = primOp->experimentalFeature;
+                b["experimental-feature"] = *primOp->experimentalFeature;
             builtinsJson.emplace(state.symbols[builtin.name], std::move(b));
         }
         for (auto & [name, info] : state.constantInfos) {
