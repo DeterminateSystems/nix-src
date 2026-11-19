@@ -53,6 +53,8 @@ nixMake.mkComponent {
       HAVE_POSIX_FALLOCATE = if isLinux then 1 else 0;
     };
     "unix/util-unix-config-private.hh" = {
+      # glibc >= 2.34 has it; macOS does not.
+      HAVE_CLOSEFROM = if isLinux then 1 else 0;
       HAVE_CLOSE_RANGE = if isLinux then 1 else 0;
       HAVE_COPY_FILE_RANGE = if isLinux then 1 else 0;
       HAVE_DECL_AT_SYMLINK_NOFOLLOW = 1;
