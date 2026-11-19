@@ -155,6 +155,7 @@ nix_sources = [ config_priv_h ] + files(
   'store.cc',
   'upgrade-nix.cc',
   'verify.cc',
+  'version.cc',
   'why-depends.cc',
 )
 

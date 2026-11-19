@@ -185,6 +185,7 @@ sources = files(
   'print-ambiguous.cc',
   'print.cc',
   'provenance.cc',
+  'register-library-versions.cc',
   'root-value.cc',
   'search-path.cc',
   'symbol-table.cc',

@@ -67,7 +67,8 @@ in
     pkgconfig = [ "libcrypto" ];
   }
   {
-    prefix = "sodium.h";
+    # `sodium.h` and `sodium/*.h`.
+    prefix = "sodium";
     pkg = deps.libsodium;
     pkgconfig = [ "libsodium" ];
   }

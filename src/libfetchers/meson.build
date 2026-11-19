@@ -53,6 +53,7 @@ sources = files(
   'mercurial.cc',
   'path.cc',
   'provenance.cc',
+  'register-library-versions.cc',
   'registry.cc',
   'tarball-cache.cc',
   'tarball.cc',
