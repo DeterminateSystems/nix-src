@@ -191,19 +191,24 @@ public:
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
-        const Fields & fields,
+        std::span<const Field> fields,
         ActivityId parent) noexcept override
     {
         if (lvl <= verbosity && !s.empty())
             log(lvl, s + "...");
     }
 
-    void result(ActivityId act, ResultType type, const Fields & fields) noexcept override
+    void result(ActivityId act, ResultType type, std::span<const Field> fields) noexcept override
     {
-        if (type == resBuildLogLine && printBuildLogs)
-            printError(std::get<std::string>(fields[0].raw));
-        else if (type == resPostBuildLogLine && printBuildLogs)
-            printError("post-build-hook: " + std::get<std::string>(fields[0].raw));
+        if (type == resBuildLogLine && printBuildLogs) {
+            const auto * lastLine = std::get_if<std::string>(&fields[0]);
+            if (lastLine)
+                printError(*lastLine);
+        } else if (type == resPostBuildLogLine && printBuildLogs) {
+            const auto * lastLine = std::get_if<std::string>(&fields[0]);
+            if (lastLine)
+                printError("post-build-hook: " + *lastLine);
+        }
     }
 };
 
@@ -249,7 +254,7 @@ Activity::Activity(
     Verbosity lvl,
     ActivityType type,
     const std::string & s,
-    const Logger::Fields & fields,
+    std::span<const Logger::Field> fields,
     ActivityId parent)
     : logger(logger)
     , id(nextId++ + (((uint64_t) getPid()) << 32))
@@ -313,18 +318,13 @@ struct JSONLogger : Logger
         return true;
     }
 
-    void addFields(nlohmann::json & json, const Fields & fields)
+    void addFields(nlohmann::json & json, std::span<const Field> fields)
     {
         if (fields.empty())
             return;
         auto & arr = json["fields"] = nlohmann::json::array();
         for (auto & f : fields)
-            if (auto p = std::get_if<uint64_t>(&f.raw))
-                arr.push_back(*p);
-            else if (auto p = std::get_if<std::string>(&f.raw))
-                arr.push_back(*p);
-            else
-                unreachable();
+            std::visit([&arr](const auto & v) { arr.push_back(v); }, f);
     }
 
     struct State
@@ -398,7 +398,7 @@ struct JSONLogger : Logger
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
-        const Fields & fields,
+        std::span<const Field> fields,
         ActivityId parent) noexcept override
     {
         nlohmann::json json;
@@ -430,7 +430,7 @@ struct JSONLogger : Logger
         json["name"] = name;
         auto payload = nlohmann::json::object();
         for (auto & [key, value] : metadata)
-            std::visit([&](auto & v) { payload[std::string(key)] = v; }, value.raw);
+            std::visit([&](auto & v) { payload[std::string(key)] = v; }, value);
         json["payload"] = std::move(payload);
         write(std::move(json));
     }
@@ -443,7 +443,7 @@ struct JSONLogger : Logger
         write(std::move(json));
     }
 
-    void result(ActivityId act, ResultType type, const Fields & fields) noexcept override
+    void result(ActivityId act, ResultType type, std::span<const Field> fields) noexcept override
     {
         nlohmann::json json;
         json["action"] = "result";
@@ -518,9 +518,9 @@ void applyJSONLogger()
     }
 }
 
-static Logger::Fields getFields(nlohmann::json & json)
+static auto getFields(nlohmann::json & json)
 {
-    Logger::Fields fields;
+    std::vector<Logger::Field> fields;
     for (auto & f : json) {
         if (f.type() == nlohmann::json::value_t::number_unsigned)
             fields.emplace_back(Logger::Field(f.get<uint64_t>()));

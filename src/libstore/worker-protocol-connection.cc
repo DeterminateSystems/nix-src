@@ -27,9 +27,9 @@ static Logger::Field readField(Source & from)
         throw Error("got unsupported field type %x from Nix daemon", (int) type);
 }
 
-static Logger::Fields readFields(Source & from)
+static std::vector<Logger::Field> readFields(Source & from)
 {
-    Logger::Fields fields;
+    std::vector<Logger::Field> fields;
     size_t size = readInt(from);
     for (size_t n = 0; n < size; n++)
         fields.push_back(readField(from));

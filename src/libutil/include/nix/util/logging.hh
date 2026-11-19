@@ -10,6 +10,7 @@
 
 #include <filesystem>
 #include <span>
+#include <type_traits>
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -113,28 +114,31 @@ class Logger
     friend struct Activity;
 
 public:
-
-    struct Field
+    /* Note that there are no members and invariants in the class itself
+       inheriting is fine, because slicing won't post any issues. There are
+       public constructors for implicit conversions and convenience. */
+    struct Field : public std::variant<uint64_t, std::string>
     {
-        std::variant<std::string, uint64_t> raw;
-
         Field(const std::string & s)
-            : raw(s)
+            : variant(s)
+        {
+        }
+
+        Field(std::string && s)
+            : variant(std::move(s))
         {
         }
 
         Field(const char * s)
-            : raw(std::string(s))
+            : variant(s)
         {
         }
 
-        Field(const uint64_t & i)
-            : raw(i)
+        Field(uint64_t i)
+            : variant(i)
         {
         }
     };
-
-    typedef std::vector<Field> Fields;
 
     /**
      * Key/value meta-information about a string-named activity, cf.
@@ -209,8 +213,10 @@ public:
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
-        const Fields & fields,
-        ActivityId parent) noexcept {};
+        std::span<const Field> fields,
+        ActivityId parent) noexcept
+    {
+    }
 
     /**
      * Start a string-named activity carrying key/value
@@ -234,9 +240,9 @@ public:
 
     virtual void stopActivity(ActivityId act) noexcept {};
 
-    virtual void result(ActivityId act, ResultType type, const Fields & fields) noexcept {};
+    virtual void result(ActivityId act, ResultType type, std::span<const Field> fields) noexcept {}
 
-    virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept {};
+    virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept {}
 
     /**
      * Return distributed tracing context for the given activity as
@@ -267,19 +273,6 @@ public:
     virtual void setPrintBuildLogs(bool printBuildLogs) {}
 };
 
-/**
- * A variadic template that does nothing.
- *
- * Useful to call a function with each argument in a parameter pack.
- */
-struct nop
-{
-    template<typename... T>
-    nop(T...)
-    {
-    }
-};
-
 ActivityId getCurActivity();
 void setCurActivity(const ActivityId activityId);
 
@@ -294,12 +287,17 @@ struct Activity
         Verbosity lvl,
         ActivityType type,
         const std::string & s = "",
-        const Logger::Fields & fields = {},
+        std::span<const Logger::Field> fields = {},
         ActivityId parent = getCurActivity());
 
     Activity(
-        Logger & logger, ActivityType type, const Logger::Fields & fields = {}, ActivityId parent = getCurActivity())
-        : Activity(logger, lvlError, type, "", fields, parent) {};
+        Logger & logger,
+        ActivityType type,
+        std::span<const Logger::Field> fields = {},
+        ActivityId parent = getCurActivity())
+        : Activity(logger, lvlError, type, "", fields, parent)
+    {
+    }
 
     /**
      * Start a string-named activity carrying key/value
@@ -333,14 +331,14 @@ struct Activity
     }
 
     template<typename... Args>
-    void result(ResultType type, const Args &... args) const
+        requires(!(std::is_constructible_v<std::span<const Logger::Field>, std::remove_cvref_t<Args>> || ...))
+    void result(ResultType type, Args &&... args) const
     {
-        Logger::Fields fields;
-        nop{(fields.emplace_back(Logger::Field(args)), 1)...};
+        std::array<Logger::Field, sizeof...(args)> fields = {std::forward<Args>(args)...};
         result(type, fields);
     }
 
-    void result(ResultType type, const Logger::Fields & fields) const
+    void result(ResultType type, std::span<const Logger::Field> fields) const
     {
         logger.result(id, type, fields);
     }

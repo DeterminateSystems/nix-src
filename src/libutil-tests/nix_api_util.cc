@@ -170,7 +170,7 @@ TEST_F(nix_api_util_context, nix_set_logger_routes_activities_and_results)
     {
         nix::Activity act(*nix::logger, nix::lvlInfo, nix::actBuild, "building foo");
         actId = act.id;
-        nix::logger->result(act.id, nix::resBuildLogLine, nix::Logger::Fields{"line of build output"});
+        nix::logger->result(act.id, nix::resBuildLogLine, std::to_array<nix::Logger::Field>({"line of build output"}));
         // Integer-valued result; should be filtered out by result_string.
         act.progress(10, 100);
     }

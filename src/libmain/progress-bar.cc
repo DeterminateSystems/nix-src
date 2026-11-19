@@ -17,22 +17,18 @@ namespace nix {
 
 namespace {
 
-static std::optional<std::string_view> getS(const std::vector<Logger::Field> & fields, size_t n)
+static std::optional<std::string_view> getS(std::span<const Logger::Field> fields, size_t n)
 {
-    if (n < fields.size()) {
-        if (auto p = std::get_if<std::string>(&fields[n].raw))
-            return std::string_view(*p);
-    }
-    return std::nullopt;
+    if (n >= fields.size() || !std::holds_alternative<std::string>(fields[n]))
+        return std::nullopt;
+    return std::get<std::string>(fields[n]);
 }
 
-static std::optional<uint64_t> getI(const std::vector<Logger::Field> & fields, size_t n)
+static std::optional<uint64_t> getI(std::span<const Logger::Field> fields, size_t n)
 {
-    if (n < fields.size()) {
-        if (auto p = std::get_if<uint64_t>(&fields[n].raw))
-            return *p;
-    }
-    return std::nullopt;
+    if (n >= fields.size() || !std::holds_alternative<uint64_t>(fields[n]))
+        return std::nullopt;
+    return std::get<uint64_t>(fields[n]);
 }
 
 static std::string_view storePathToName(std::string_view path)
@@ -316,7 +312,7 @@ public:
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
-        const Fields & fields,
+        std::span<const Field> fields,
         ActivityId parent) noexcept override
     {
         auto state(state_.lock());
@@ -386,7 +382,7 @@ public:
             i->gc.emplace();
             for (auto & [key, value] : metadata)
                 if (key == "nix.gc.dry_run")
-                    if (auto p = std::get_if<uint64_t>(&value.raw))
+                    if (auto p = std::get_if<uint64_t>(&value))
                         i->gc->dryRun = *p != 0;
         }
 
@@ -430,7 +426,7 @@ public:
         update(*state);
     }
 
-    void result(ActivityId act, ResultType type, const std::vector<Field> & fields) noexcept override
+    void result(ActivityId act, ResultType type, std::span<const Field> fields) noexcept override
     {
         auto state(state_.lock());
 

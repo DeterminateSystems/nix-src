@@ -8,6 +8,7 @@
 #include "nix/util/callback.hh"
 
 #include <nlohmann/json.hpp>
+#include <array>
 
 namespace nix {
 
@@ -272,7 +273,8 @@ Goal::Co PathSubstitutionGoal::tryToRun(
             Activity act(
                 *logger,
                 actSubstitute,
-                Logger::Fields{workerStore->printStorePath(storePath), sub->config.getHumanReadableURI()},
+                std::to_array<Logger::Field>(
+                    {workerStore->printStorePath(storePath), sub->config.getHumanReadableURI()}),
                 parentAct);
             PushActivity pact(act.id);
 

@@ -37,17 +37,20 @@ namespace nix::daemon {
 
 static void writeField(Sink & sink, const Logger::Field & field)
 {
-    if (auto p = std::get_if<uint64_t>(&field.raw)) {
-        sink << 0;
-        sink << *p;
-    } else if (auto p = std::get_if<std::string>(&field.raw)) {
-        sink << 1;
-        sink << *p;
-    } else
-        unreachable();
+    std::visit(
+        overloaded{
+            [&sink](uint64_t i) {
+                sink << 0;
+                sink << i;
+            },
+            [&sink](const std::string & s) {
+                sink << 1;
+                sink << s;
+            }},
+        field);
 }
 
-Sink & operator<<(Sink & sink, const Logger::Fields & fields)
+Sink & operator<<(Sink & sink, std::span<const Logger::Field> fields)
 {
     sink << fields.size();
     for (auto & f : fields)
@@ -164,7 +167,7 @@ struct TunnelLogger : public Logger
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
-        const Fields & fields,
+        std::span<const Field> fields,
         ActivityId parent) noexcept override
     {
         if (clientVersion.number < WorkerProto::Version::Number{1, 20}) {
@@ -209,7 +212,7 @@ struct TunnelLogger : public Logger
         enqueueMsg(buf.s);
     }
 
-    void result(ActivityId act, ResultType type, const Fields & fields) noexcept override
+    void result(ActivityId act, ResultType type, std::span<const Field> fields) noexcept override
     {
         if (clientVersion.number < WorkerProto::Version::Number{1, 20})
             return;

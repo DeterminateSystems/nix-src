@@ -22,6 +22,8 @@
 
 #include <chrono>
 #include <algorithm>
+#include <array>
+
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -127,7 +129,7 @@ struct PostBuildHookState
               lvlTalkative,
               actPostBuildHook,
               fmt("running post-build-hook '%s'", hook),
-              Logger::Fields{drvPath})
+              std::to_array<Logger::Field>({drvPath}))
         , out(std::make_unique<Pipe>())
     {
         out->create();
@@ -655,7 +657,7 @@ Goal::Co DerivationBuildingGoal::buildWithHook(
             lvlInfo,
             actBuild,
             msg,
-            Logger::Fields{worker.store.printStorePath(drvPath), machineName, 1, 1},
+            std::to_array<Logger::Field>({worker.store.printStorePath(drvPath), machineName, 1, 1}),
             worker.actDerivations.id));
     mcRunningBuilds = std::make_unique<MaintainCount<uint64_t>>(worker.runningBuilds);
     worker.updateProgress();
@@ -842,7 +844,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
                 lvlInfo,
                 actBuild,
                 msg,
-                Logger::Fields{worker.store.printStorePath(drvPath), "", 1, 1},
+                std::to_array<Logger::Field>({worker.store.printStorePath(drvPath), "", 1, 1}),
                 worker.actDerivations.id));
         mcRunningBuilds = std::make_unique<MaintainCount<uint64_t>>(worker.runningBuilds);
         worker.updateProgress();
