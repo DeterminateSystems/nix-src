@@ -428,7 +428,7 @@ struct curlFileTransfer : public FileTransfer
             failEx(std::make_exception_ptr(std::forward<T>(e)));
         }
 
-        void failInterruptedOrCancelled()
+        void failInterruptedOrCancelled() noexcept
         {
             HintFmt fmt("%s of '%s' was interrupted", Uncolored(request.noun()), request.displayUri());
 

@@ -17,22 +17,22 @@ namespace nix {
 
 namespace {
 
-static std::string_view getS(const std::vector<Logger::Field> & fields, size_t n)
+static std::optional<std::string_view> getS(const std::vector<Logger::Field> & fields, size_t n)
 {
     if (n < fields.size()) {
         if (auto p = std::get_if<std::string>(&fields[n].raw))
-            return *p;
+            return std::string_view(*p);
     }
-    throw Error("could not get expected log field of type 'string' at index %d", n);
+    return std::nullopt;
 }
 
-static uint64_t getI(const std::vector<Logger::Field> & fields, size_t n)
+static std::optional<uint64_t> getI(const std::vector<Logger::Field> & fields, size_t n)
 {
     if (n < fields.size()) {
         if (auto p = std::get_if<uint64_t>(&fields[n].raw))
             return *p;
     }
-    throw Error("could not get expected log field of type 'int' at index %d", n);
+    return std::nullopt;
 }
 
 static std::string_view storePathToName(std::string_view path)
@@ -324,33 +324,42 @@ public:
         auto i = addActivity(*state, act, lvl, type, s, parent);
 
         if (type == actBuild) {
-            auto name = storePathToNameWithoutDrvSuffix(getS(fields, 0));
-            i->s = fmt("building " ANSI_BOLD "%s" ANSI_NORMAL, name);
-            auto machineName = getS(fields, 1);
-            if (machineName != "")
-                i->s += fmt(" on " ANSI_BOLD "%s" ANSI_NORMAL, machineName);
-            i->name = DrvName(name).name;
+            if (auto path = getS(fields, 0)) {
+                auto name = storePathToNameWithoutDrvSuffix(*path);
+                i->s = fmt("building " ANSI_BOLD "%s" ANSI_NORMAL, name);
+                auto machineName = getS(fields, 1);
+                if (machineName && *machineName != "")
+                    i->s += fmt(" on " ANSI_BOLD "%s" ANSI_NORMAL, *machineName);
+                i->name = DrvName(name).name;
+            }
         }
 
         if (type == actSubstitute) {
-            auto name = storePathToName(getS(fields, 0));
+            auto path = getS(fields, 0);
             auto sub = getS(fields, 1);
-            i->s =
-                fmt(hasPrefix(sub, "local") ? "copying " ANSI_BOLD "%s" ANSI_NORMAL " from %s"
-                                            : "fetching " ANSI_BOLD "%s" ANSI_NORMAL " from %s",
-                    name,
-                    sub);
+            if (path && sub) {
+                auto name = storePathToName(*path);
+                i->s =
+                    fmt(hasPrefix(*sub, "local") ? "copying " ANSI_BOLD "%s" ANSI_NORMAL " from %s"
+                                                 : "fetching " ANSI_BOLD "%s" ANSI_NORMAL " from %s",
+                        name,
+                        *sub);
+            }
         }
 
         if (type == actPostBuildHook) {
-            auto name = storePathToNameWithoutDrvSuffix(getS(fields, 0));
-            i->s = fmt("post-build " ANSI_BOLD "%s" ANSI_NORMAL, name);
-            i->name = DrvName(name).name;
+            if (auto path = getS(fields, 0)) {
+                auto name = storePathToNameWithoutDrvSuffix(*path);
+                i->s = fmt("post-build " ANSI_BOLD "%s" ANSI_NORMAL, name);
+                i->name = DrvName(name).name;
+            }
         }
 
         if (type == actQueryPathInfo) {
-            auto name = storePathToName(getS(fields, 0));
-            i->s = fmt("querying " ANSI_BOLD "%s" ANSI_NORMAL " on %s", name, getS(fields, 1));
+            auto path = getS(fields, 0);
+            auto sub = getS(fields, 1);
+            if (path && sub)
+                i->s = fmt("querying " ANSI_BOLD "%s" ANSI_NORMAL " on %s", storePathToName(*path), *sub);
         }
 
         if ((type == actFileTransfer && hasAncestor(*state, actCopyPath, parent))
@@ -427,12 +436,15 @@ public:
 
         if (type == resFileLinked) {
             state->filesLinked++;
-            state->bytesLinked += getI(fields, 0);
+            state->bytesLinked += getI(fields, 0).value_or(0);
             update(*state);
         }
 
         else if (type == resBuildLogLine || type == resPostBuildLogLine) {
-            auto lastLine = chomp(getS(fields, 0));
+            auto line = getS(fields, 0);
+            if (!line)
+                return;
+            auto lastLine = chomp(*line);
             auto i = state->its.find(act);
             assert(i != state->its.end());
             ActInfo info = *i->second;
@@ -462,52 +474,73 @@ public:
         }
 
         else if (type == resSetPhase) {
+            auto phase = getS(fields, 0);
+            if (!phase)
+                return;
             auto i = state->its.find(act);
             assert(i != state->its.end());
-            i->second->phase = getS(fields, 0);
+            i->second->phase = *phase;
             update(*state);
         }
 
         else if (type == resProgress) {
+            auto done = getI(fields, 0);
+            auto expected = getI(fields, 1);
+            auto running = getI(fields, 2);
+            auto failed = getI(fields, 3);
+            if (!done || !expected || !running || !failed)
+                return;
             auto i = state->its.find(act);
             assert(i != state->its.end());
             ActInfo & actInfo = *i->second;
-            actInfo.done = getI(fields, 0);
-            actInfo.expected = getI(fields, 1);
-            actInfo.running = getI(fields, 2);
-            actInfo.failed = getI(fields, 3);
+            actInfo.done = *done;
+            actInfo.expected = *expected;
+            actInfo.running = *running;
+            actInfo.failed = *failed;
             update(*state);
         }
 
         else if (type == resSetExpected) {
+            auto expectedType = getI(fields, 0);
+            auto expected = getI(fields, 1);
+            if (!expectedType || !expected)
+                return;
             auto i = state->its.find(act);
             assert(i != state->its.end());
             ActInfo & actInfo = *i->second;
-            auto type = (ActivityType) getI(fields, 0);
+            auto type = (ActivityType) *expectedType;
             auto & j = actInfo.expectedByType[type];
             state->activitiesByType[type].expected -= j;
-            j = getI(fields, 1);
+            j = *expected;
             state->activitiesByType[type].expected += j;
             update(*state);
         }
 
         else if (type == resFetchStatus) {
+            auto lastLine = getS(fields, 0);
+            if (!lastLine)
+                return;
             auto i = state->its.find(act);
             assert(i != state->its.end());
             ActInfo & actInfo = *i->second;
-            actInfo.lastLine = getS(fields, 0);
+            actInfo.lastLine = *lastLine;
             update(*state);
         }
 
         else if (type == resGCProgress) {
             auto i = state->its.find(act);
             if (i != state->its.end() && i->second->gc) {
-                auto & gc = *i->second->gc;
-                gc.alive = getI(fields, 0);
-                gc.deleted = getI(fields, 1);
-                gc.bytesFreed = getI(fields, 2);
-                gc.haveProgress = true;
-                update(*state);
+                auto alive = getI(fields, 0);
+                auto deleted = getI(fields, 1);
+                auto bytesFreed = getI(fields, 2);
+                if (alive && deleted && bytesFreed) {
+                    auto & gc = *i->second->gc;
+                    gc.alive = *alive;
+                    gc.deleted = *deleted;
+                    gc.bytesFreed = *bytesFreed;
+                    gc.haveProgress = true;
+                    update(*state);
+                }
             }
         }
     }
