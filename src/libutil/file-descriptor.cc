@@ -279,7 +279,7 @@ AutoCloseFD::~AutoCloseFD()
     }
 }
 
-Descriptor AutoCloseFD::get() const
+Descriptor AutoCloseFD::get() const noexcept
 {
     return fd;
 }
@@ -310,12 +310,12 @@ void AutoCloseFD::startFsync(off_t offset, off_t nbytes) const
 #endif
 }
 
-AutoCloseFD::operator bool() const
+AutoCloseFD::operator bool() const noexcept
 {
     return fd != INVALID_DESCRIPTOR;
 }
 
-Descriptor AutoCloseFD::release()
+Descriptor AutoCloseFD::release() noexcept
 {
     Descriptor oldFD = fd;
     fd = INVALID_DESCRIPTOR;

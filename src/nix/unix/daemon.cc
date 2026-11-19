@@ -395,7 +395,6 @@ static void daemonLoop(
                 ProcessOptions options;
                 options.errorPrefix = "unexpected Nix daemon error: ";
                 options.dieWithParent = false;
-                options.allowVfork = false;
                 startProcess(
                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
                         setInterrupted(false);

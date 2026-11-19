@@ -17,6 +17,7 @@
 #  include <signal.h>
 #  include <sys/mman.h>
 #  include <unistd.h>
+#  include "unix/current-process-private.hh"
 #endif
 
 #ifdef __APPLE__
@@ -68,42 +69,6 @@ unsigned int getMaxCPU()
 //////////////////////////////////////////////////////////////////////
 
 #ifndef _WIN32
-size_t savedStackSize = 0;
-
-void ensureStackSizeAtLeast(size_t stackSize)
-{
-    struct rlimit limit;
-    if (getrlimit(RLIMIT_STACK, &limit) == 0 && static_cast<size_t>(limit.rlim_cur) < stackSize) {
-        savedStackSize = limit.rlim_cur;
-        if (limit.rlim_max < static_cast<rlim_t>(stackSize)) {
-            if (getEnv("_NIX_TEST_NO_ENVIRONMENT_WARNINGS") != "1") {
-                logger->log(
-                    lvlWarn,
-                    HintFmt(
-                        "Stack size hard limit is %1%, which is less than the desired %2%. If possible, increase the hard limit, e.g. with 'ulimit -Hs %3%'.",
-                        limit.rlim_max,
-                        stackSize,
-                        stackSize / 1024)
-                        .str());
-            }
-        }
-        auto requestedSize = std::min(static_cast<rlim_t>(stackSize), limit.rlim_max);
-        limit.rlim_cur = requestedSize;
-        if (setrlimit(RLIMIT_STACK, &limit) != 0) {
-            logger->log(
-                lvlError,
-                HintFmt(
-                    "Failed to increase stack size from %1% to %2% (desired: %3%, maximum allowed: %4%): %5%",
-                    savedStackSize,
-                    requestedSize,
-                    stackSize,
-                    limit.rlim_max,
-                    std::strerror(errno))
-                    .str());
-        }
-    }
-}
-
 namespace {
 
 /**
@@ -201,10 +166,10 @@ void restoreProcessContext(bool restoreMounts)
     }
 
 #ifndef _WIN32
-    if (savedStackSize) {
+    if (unix::savedStackSize) {
         struct rlimit limit;
         if (getrlimit(RLIMIT_STACK, &limit) == 0) {
-            limit.rlim_cur = savedStackSize;
+            limit.rlim_cur = unix::savedStackSize;
             setrlimit(RLIMIT_STACK, &limit);
         }
     }
