@@ -559,16 +559,13 @@ StorePathSet Store::querySubstitutablePaths(const StorePathSet & paths)
 bool Store::isValidPath(const StorePath & storePath)
 {
     auto res = pathInfoCache->lock()->get(storePath);
-    if (res && res->isKnownNow(settings.getNarInfoDiskCacheSettings())) {
-        stats.narInfoReadAverted++;
+    if (res && res->isKnownNow(settings.getNarInfoDiskCacheSettings()))
         return res->didExist();
-    }
 
     if (diskCache) {
         auto res = diskCache->lookupNarInfo(
             config.getReference().render(/*FIXME withParams=*/false), std::string(storePath.hashPart()));
         if (res.first != NarInfoDiskCache::oUnknown) {
-            stats.narInfoReadAverted++;
             pathInfoCache->lock()->upsert(
                 storePath,
                 res.first == NarInfoDiskCache::oInvalid ? PathInfoCacheValue{}
@@ -643,7 +640,6 @@ std::optional<std::shared_ptr<const ValidPathInfo>> Store::queryPathInfoFromClie
 
     auto res = pathInfoCache->lock()->get(storePath);
     if (res && res->isKnownNow(settings.getNarInfoDiskCacheSettings())) {
-        stats.narInfoReadAverted++;
         if (res->didExist())
             return std::make_optional(res->value);
         else
@@ -653,7 +649,6 @@ std::optional<std::shared_ptr<const ValidPathInfo>> Store::queryPathInfoFromClie
     if (diskCache) {
         auto res = diskCache->lookupNarInfo(config.getReference().render(/*FIXME withParams=*/false), hashPart);
         if (res.first != NarInfoDiskCache::oUnknown) {
-            stats.narInfoReadAverted++;
             pathInfoCache->lock()->upsert(
                 storePath,
                 res.first == NarInfoDiskCache::oInvalid ? PathInfoCacheValue{}
@@ -697,10 +692,8 @@ void Store::queryPathInfo(const StorePath & storePath, Callback<ref<const ValidP
 
                 pathInfoCache->lock()->upsert(storePath, PathInfoCacheValue{.value = info});
 
-                if (!info || !goodStorePath(storePath, info->path)) {
-                    stats.narInfoMissing++;
+                if (!info || !goodStorePath(storePath, info->path))
                     throw InvalidPath("path '%s' is not valid", printStorePath(storePath));
-                }
 
                 (*callbackPtr)(ref<const ValidPathInfo>(info));
             } catch (...) {
@@ -940,12 +933,6 @@ StorePathSet Store::exportReferences(const StorePathSet & storePaths, const Stor
     }
 
     return paths;
-}
-
-const Store::Stats & Store::getStats()
-{
-    stats.pathInfoCacheSize = pathInfoCache->readLock()->size();
-    return stats;
 }
 
 static std::string
