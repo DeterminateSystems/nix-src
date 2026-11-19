@@ -158,6 +158,11 @@ struct WorkerProto
     static constexpr std::string_view featureNamedActivities = "named-activities";
 
     /**
+     * Feature for enabling the `AddToStoreScanning` operation
+     */
+    static constexpr std::string_view featureAddToStoreScanning = "add-to-store-scanning";
+
+    /**
      * A unidirectional read connection, to be used by the read half of the
      * canonical serializers below.
      */
@@ -283,6 +288,7 @@ enum struct WorkerProto::Op : uint64_t {
     QueryActiveBuilds = 48,
     AddTempRoots = 49,
     QueryPathInfos = 50,
+    AddToStoreScanning = 1001,
 };
 
 struct WorkerProto::ClientHandshakeInfo

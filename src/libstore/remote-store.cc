@@ -1,5 +1,6 @@
 #include "nix/store/path.hh"
 #include "nix/store/store-api.hh"
+#include "nix/util/file-content-address.hh"
 #include "nix/util/serialise.hh"
 #include "nix/util/util.hh"
 #include "nix/store/path-with-outputs.hh"
@@ -91,10 +92,12 @@ void RemoteStore::initConnection(Connection & conn)
         StringSink saved;
         TeeSource tee(conn.from, saved);
         try {
-            // The DisableSetOptions feature isn't in the `latest` constant because it is shared with the daemon,
-            // which only adds the feature under certain conditions. Adding is easier than removing.
+            // The DisableSetOptions and `AddToStoreScanning` features aren't in the `latest` constant because it is
+            // shared with the daemon, which only adds the feature under certain conditions.
+            // Adding is easier than removing.
             auto localVersion = WorkerProto::latest;
             localVersion.features.insert(std::string{WorkerProto::featureDisableSetOptions});
+            localVersion.features.insert(std::string{WorkerProto::featureAddToStoreScanning});
             if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
                 localVersion.features.erase(std::string(WorkerProto::featureProvenance));
 
@@ -516,22 +519,7 @@ StorePath RemoteStore::addToStoreFromDump(
     RepairFlag repair,
     std::shared_ptr<const Provenance> provenance)
 {
-    FileSerialisationMethod fsm;
-    switch (hashMethod.getFileIngestionMethod()) {
-    case FileIngestionMethod::Flat:
-        fsm = FileSerialisationMethod::Flat;
-        break;
-    case FileIngestionMethod::NixArchive:
-        fsm = FileSerialisationMethod::NixArchive;
-        break;
-    case FileIngestionMethod::Git:
-        // Use NAR; Git is not a serialization method
-        fsm = FileSerialisationMethod::NixArchive;
-        break;
-    default:
-        assert(false);
-    }
-    if (fsm != dumpMethod)
+    if (hashMethod.getFileSerialisationMethod() != dumpMethod)
         unsupported("RemoteStore::addToStoreFromDump doesn't support this `dumpMethod` `hashMethod` combination");
     auto storePath = addCAToStore(dump, name, hashMethod, hashAlgo, references, repair, provenance)->path;
     invalidatePathInfoCacheFor(storePath);
@@ -616,6 +604,33 @@ void RemoteStore::registerDrvOutput(const Realisation & info)
     conn->startOp(WorkerProto::Op::RegisterDrvOutput);
     WorkerProto::write(*this, *conn, info);
     conn.processStderr();
+}
+
+ref<const ValidPathInfo> RemoteStore::addToStoreScanning(
+    Source & dump,
+    std::string_view name,
+    FileSerialisationMethod dumpMethod,
+    ContentAddressMethod hashMethod,
+    HashAlgorithm hashAlgo)
+{
+    if (hashMethod.getFileSerialisationMethod() != dumpMethod)
+        unsupported("RemoteStore::addToStoreScanning doesn't support this `dumpMethod` `hashMethod` combination");
+
+    auto conn(getConnection());
+    if (!conn->protoVersion.features.contains(WorkerProto::featureAddToStoreScanning))
+        throw Error("the daemon does not support AddToStoreScanning, perhaps this is not in a recursive-nix builder?");
+
+    conn->startOp(WorkerProto::Op::AddToStoreScanning);
+    conn->to << name << hashMethod.renderWithAlgo(hashAlgo);
+
+    // The dump source may invoke the store, so we need to make some room.
+    connections->incCapacity();
+    {
+        Finally cleanup([&]() { connections->decCapacity(); });
+        conn.withFramedSink([&](Sink & sink) { dump.drainInto(sink); });
+    }
+
+    return make_ref<ValidPathInfo>(WorkerProto::Serialise<ValidPathInfo>::read(*this, *conn));
 }
 
 void RemoteStore::queryRealisationUncached(

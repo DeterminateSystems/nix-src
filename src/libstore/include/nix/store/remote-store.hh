@@ -6,6 +6,7 @@
 #include <string>
 
 #include "nix/store/store-api.hh"
+#include "nix/store/submit-store.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/store/gc-store.hh"
@@ -50,7 +51,8 @@ public:
 struct RemoteStore : public virtual Store,
                      public virtual GcStore,
                      public virtual LogStore,
-                     public virtual QueryActiveBuildsStore
+                     public virtual QueryActiveBuildsStore,
+                     public virtual SubmitStore
 {
 private:
     void anchor() override;
@@ -122,6 +124,13 @@ public:
     addMultipleToStore(PathsSource && pathsToCopy, Activity & act, RepairFlag repair, CheckSigsFlag checkSigs) override;
 
     void registerDrvOutput(const Realisation & info) override;
+
+    ref<const ValidPathInfo> addToStoreScanning(
+        Source & dump,
+        std::string_view name,
+        FileSerialisationMethod dumpMethod,
+        ContentAddressMethod hashMethod,
+        HashAlgorithm hashAlgo) override;
 
     void queryRealisationUncached(
         const DrvOutput &, Callback<std::shared_ptr<const UnkeyedRealisation>> callback) noexcept override;
