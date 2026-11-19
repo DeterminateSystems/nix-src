@@ -24,8 +24,6 @@
 #  include <sys/wait.h>
 #endif
 
-using namespace std::string_literals;
-
 namespace nix::fetchers {
 
 namespace {

@@ -12,9 +12,6 @@
 
 namespace nix::git {
 
-using namespace nix;
-using namespace std::string_literals;
-
 std::optional<Mode> decodeMode(RawMode m)
 {
     switch (m) {
@@ -217,12 +214,14 @@ void restore(FileSystemObjectSink & sink, Source & source, HashAlgorithm hashAlg
 
 void dumpBlobPrefix(uint64_t size, Sink & sink)
 {
+    using namespace std::string_literals;
     auto s = fmt("blob %d\0"s, std::to_string(size));
     sink(s);
 }
 
 void dumpTree(const Tree & entries, Sink & sink)
 {
+    using namespace std::string_literals;
     std::string v1;
 
     for (auto & [name, entry] : entries) {

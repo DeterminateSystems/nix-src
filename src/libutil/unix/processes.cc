@@ -15,7 +15,6 @@
 #include <iostream>
 #include <atomic>
 #include <thread>
-using namespace std::chrono_literals;
 
 #include <grp.h>
 #include <sys/types.h>
@@ -98,6 +97,8 @@ int Pid::kill(bool allowInterrupts)
     /* Note: the thread must not use `pid`, since `wait()` sets it to
        -1 when the child has exited. */
     pid_t target = separatePG ? -pid : pid;
+
+    using namespace std::chrono_literals;
 
     if (killTimeout > 0ms && killSignal != SIGKILL)
         killThread = std::thread([&, target]() {
