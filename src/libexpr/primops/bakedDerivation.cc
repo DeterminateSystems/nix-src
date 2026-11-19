@@ -100,7 +100,7 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
 
     /* As in `derivationStrict`, cache the derivation hash so that derivations depending on this one don't need to
        read it back from the store. */
-    drvHashes.insert_or_assign(drvPath, hashDerivationModulo(*state.store, drv, false));
+    drvHashes.insert_or_assign(drvPath, hashDerivationModulo(*state.store, drv));
 
     /* Return an attribute set of the same shape as `derivationStrict`: the derivation path and one string per
        output. The output strings carry string context, so that they can be used as inputs of other derivations. */

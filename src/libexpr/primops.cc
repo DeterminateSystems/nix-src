@@ -1857,7 +1857,7 @@ static void derivationStrictInternal(
                 },
                 [&](const NixStringContextElem::Path & p) {
                     if (!drvS)
-                        drvS = drv.unparse(*state.store, true);
+                        drvS = drv.unparse(*state.store);
                     if (drvS->find(p.storePath.to_string()) != drvS->npos) {
                         auto devirtualized = state.devirtualize(p.storePath, &rewrites);
                         warn(
@@ -1974,7 +1974,7 @@ static void derivationStrictInternal(
        case we don't actually write store derivations, so we can't
        read them later. */
     {
-        auto h = hashDerivationModulo(*state.store, drv, false);
+        auto h = hashDerivationModulo(*state.store, drv);
         drvHashes.insert_or_assign(drvPath, std::move(h));
     }
 
