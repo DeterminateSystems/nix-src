@@ -441,7 +441,7 @@ nix_err nix_derivation_get_outputs_and_optpaths(
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        auto value = drv->drv.outputsAndOptPaths(store->ptr->config);
+        auto value = outputsAndOptPaths(drv->drv, store->ptr->config);
         if (callback) {
             for (const auto & [name, result] : value) {
                 if (auto store_path = result.second) {

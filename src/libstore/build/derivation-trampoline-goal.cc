@@ -173,7 +173,7 @@ Goal::Co DerivationTrampolineGoal::haveDerivation(StorePath drvPath, Derivation 
 
     /* Short-circuit `builtin:substitute`. Since these are never actually built, just create substitution goals for the
      * outputs. */
-    if (drv.type() == derivation::Type::Substituted{}) {
+    if (type(drv) == derivation::Type::Substituted{}) {
         struct OutputGoal
         {
             OutputName outputName;

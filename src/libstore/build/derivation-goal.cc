@@ -59,11 +59,11 @@ Goal::Co DerivationGoal::haveDerivation(bool storeDerivation)
         }
     }();
 
-    if (!drv->type().hasKnownOutputPaths())
+    if (!type(*drv).hasKnownOutputPaths())
         experimentalFeatureSettings.require(Xp::CaDerivations);
 
     StorePathSet outputPaths;
-    for (auto & i : drv->outputsAndOptPaths(worker.store))
+    for (auto & i : outputsAndOptPaths(*drv, worker.store))
         if (i.second.second)
             outputPaths.insert(*i.second.second);
 
@@ -71,7 +71,7 @@ Goal::Co DerivationGoal::haveDerivation(bool storeDerivation)
 
     /* We don't yet have any safe way to cache an impure derivation at
        this step. */
-    if (drv->type().isImpure()) {
+    if (type(*drv).isImpure()) {
         experimentalFeatureSettings.require(Xp::ImpureDerivations);
     } else {
         /* Check what outputs paths are not already valid. */
@@ -123,7 +123,7 @@ Goal::Co DerivationGoal::haveDerivation(bool storeDerivation)
 
         trace("all outputs substituted (maybe)");
 
-        assert(!drv->type().isImpure());
+        assert(!type(*drv).isImpure());
 
         if (nrFailed > 0 && nrFailed > nrNoSubstituters && !worker.settings.tryFallback) {
             co_return doneFailure(BuildError(
@@ -327,7 +327,7 @@ Goal::Co DerivationGoal::haveDerivation(bool storeDerivation)
 
 Goal::Co DerivationGoal::repairClosure()
 {
-    assert(!drv->type().isImpure());
+    assert(!type(*drv).isImpure());
 
     /* If we're repairing, we now know that our own outputs are valid.
        Now check whether the other paths in the outputs closure are
@@ -341,7 +341,7 @@ Goal::Co DerivationGoal::repairClosure()
                 return deepQueryDerivationOutputMap(worker.store, drvPath, drvStore);
 
         OutputPathMap res;
-        for (auto & [name, output] : drv->outputsAndOptPaths(worker.store))
+        for (auto & [name, output] : outputsAndOptPaths(*drv, worker.store))
             res.insert_or_assign(name, *output.second);
         return res;
     }();
@@ -411,7 +411,7 @@ Goal::Co DerivationGoal::repairClosure()
 
 std::optional<std::pair<UnkeyedRealisation, PathStatus>> DerivationGoal::checkPathValidity()
 {
-    if (drv->type().isImpure())
+    if (type(*drv).isImpure())
         return std::nullopt;
 
     auto drvOutput = DrvOutput{drvPath, wantedOutput};

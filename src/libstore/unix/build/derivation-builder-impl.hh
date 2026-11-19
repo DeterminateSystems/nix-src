@@ -50,7 +50,7 @@ public:
         : DerivationBuilderParams{std::move(params)}
         , store{store}
         , miscMethods{miscMethods}
-        , derivationType{drv.type()}
+        , derivationType{derivation::type(drv)}
     {
     }
 

@@ -499,7 +499,7 @@ nlohmann::json getFlakeInventory(
                         auto outputs = nlohmann::json::object();
                         auto drvPath = drv->forceDerivation();
                         auto drv = evalStore.derivationFromPath(drvPath);
-                        for (auto & i : drv.outputsAndOptPaths(*state.store)) {
+                        for (auto & i : outputsAndOptPaths(drv, *state.store)) {
                             if (auto outPath = i.second.second)
                                 outputs.emplace(i.first, state.store->printStorePath(*outPath));
                             else
