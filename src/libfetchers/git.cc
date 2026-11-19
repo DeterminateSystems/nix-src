@@ -245,8 +245,6 @@ struct GitInputScheme : InputScheme
                     .type = "String",
                     .required = false,
                     .doc = R"(
-                      By default, this has no effect. This becomes relevant only once `shallow` cloning is disabled.
-
                       A [Git reference](https://git-scm.com/book/en/v2/Git-Internals-Git-References), such as a branch or tag name.
 
                       Default: `"HEAD"`
@@ -272,9 +270,10 @@ struct GitInputScheme : InputScheme
                     .required = false,
                     .doc = R"(
                       Make a shallow clone when fetching the Git tree.
-                      When this is enabled, the options `ref` and `allRefs` have no effect anymore.
+                      This is faster, but `revCount` isn't computed.
+                      Even if this is disabled, Nix makes a shallow clone if `revCount` is already known (e.g. when fetching a locked input).
 
-                      Default: `true`
+                      Default: `false`
                     )",
                 },
             },
@@ -342,8 +341,6 @@ struct GitInputScheme : InputScheme
                     .type = "Bool",
                     .required = false,
                     .doc = R"(
-                      By default, this has no effect. This becomes relevant only once `shallow` cloning is disabled.
-
                       Whether to fetch all references (eg. branches and tags) of the repository.
                       With this argument being true, it's possible to load a `rev` from *any* `ref`.
                       (Without setting this option, only `rev`s from the specified `ref` are supported).
