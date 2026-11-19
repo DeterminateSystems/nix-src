@@ -707,8 +707,6 @@ static RegisterPrimOp primop_fetchGit({
 
         [Git reference]: https://git-scm.com/book/en/v2/Git-Internals-Git-References
 
-        This option has no effect once `shallow` cloning is enabled.
-
         By default, the `ref` value is prefixed with `refs/heads/`.
         As of 2.3.0, Nix doesn't prefix `refs/heads/` if `ref` starts with `refs/`.
 
@@ -726,7 +724,7 @@ static RegisterPrimOp primop_fetchGit({
       - `shallow` (default: `false`)
 
         Make a shallow clone when fetching the Git tree.
-        When this is enabled, the options `ref` and `allRefs` have no effect anymore.
+        This is faster, but `revCount` isn't computed, so it's reported as `0`.
 
       - `lfs` (default: `false`)
 
@@ -739,8 +737,6 @@ static RegisterPrimOp primop_fetchGit({
         Whether to fetch all references (eg. branches and tags) of the repository.
         With this argument being true, it's possible to load a `rev` from *any* `ref`.
         (by default only `rev`s from the specified `ref` are supported).
-
-        This option has no effect once `shallow` cloning is enabled.
 
       - `verifyCommit` (default: `true` if `publicKey` or `publicKeys` are provided, otherwise `false`)
 
