@@ -1,0 +1,33 @@
+error:
+       … while evaluating the attribute 'outPath'
+         at «nix-internal»/derivation-internal.nix:50:7:
+           49|     value = commonAttrs // {
+           50|       outPath = strict.${outputName};
+             |       ^
+           51|       drvPath = strict.drvPath;
+
+       … while calling the 'derivationStrict' builtin
+         at «nix-internal»/derivation-internal.nix:37:12:
+           36|
+           37|   strict = drvFunc drvAttrs;
+             |            ^
+           38|
+
+       … while evaluating derivation 'test-5'
+         whose name attribute is located at /pwd/lang/eval-fail-derivation-stack-trace.nix:12:9
+
+       … while evaluating derivation 'test-4'
+         whose name attribute is located at /pwd/lang/eval-fail-derivation-stack-trace.nix:12:9
+
+       … while evaluating derivation 'test-3'
+         whose name attribute is located at /pwd/lang/eval-fail-derivation-stack-trace.nix:12:9
+
+       … while evaluating derivation 'test-2'
+         whose name attribute is located at /pwd/lang/eval-fail-derivation-stack-trace.nix:12:9
+
+       … while evaluating derivation 'test-1'
+         whose name attribute is located at /pwd/lang/eval-fail-derivation-stack-trace.nix:12:9
+
+       (stack trace truncated; use '--show-trace' to show the full, detailed trace)
+
+       error: kaboom
