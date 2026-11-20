@@ -395,8 +395,8 @@
                   ).${pkgName};
               }
             )
-        // lib.optionalAttrs (self.hydraJobs.rustInstaller ? ${system}) {
-          rustInstaller = self.hydraJobs.rustInstaller.${system};
+        // lib.optionalAttrs (self.hydraJobs.nixInstaller ? ${system}) {
+          nixInstaller = self.hydraJobs.nixInstaller.${system};
         }
         // lib.optionalAttrs (self.hydraJobs.dockerImage ? ${system}) {
           dockerImage = self.hydraJobs.dockerImage.${system};
