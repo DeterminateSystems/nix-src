@@ -98,6 +98,7 @@ suites = [
       'extra-sandbox-profile.sh',
       'fetchClosure.sh',
       'fetchGit.sh',
+      'fetchGitRev.sh',
       'fetchGitRefs.sh',
       'fetchGitShallow.sh',
       'fetchGitSubmodules.sh',
