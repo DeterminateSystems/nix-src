@@ -6,6 +6,13 @@ error:
              |       ^
            51|       drvPath = strict.drvPath;
 
+       … while selecting an attribute
+         at «nix-internal»/derivation-internal.nix:50:17:
+           49|     value = commonAttrs // {
+           50|       outPath = strict.${outputName};
+             |                 ^
+           51|       drvPath = strict.drvPath;
+
        … while calling the 'derivationStrict' builtin
          at «nix-internal»/derivation-internal.nix:37:12:
            36|
