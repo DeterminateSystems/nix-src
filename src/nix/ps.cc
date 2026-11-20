@@ -1,4 +1,5 @@
 #include "nix/cmd/command.hh"
+#include "nix/util/system-error.hh"
 #include "nix/main/common-args.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"

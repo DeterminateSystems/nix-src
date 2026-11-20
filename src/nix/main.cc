@@ -1,5 +1,6 @@
 #include "nix/util/json-utils.hh" // IWYU pragma: keep (partial specialization of adl_serialiser)
 #include "nix/cmd/common-eval-args.hh"
+#include "nix/util/system-error.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/util/args/root.hh"
 #include "nix/util/current-process.hh"

@@ -2,6 +2,7 @@
 #include "nix/util/environment-variables.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/logging.hh"
+#include "nix/util/system-error.hh"
 
 #include <grp.h>
 #include <pwd.h>

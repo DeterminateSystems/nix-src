@@ -13,6 +13,7 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/file-system-at.hh"
 #include "nix/store/posix-fs-canonicalise.hh"
+#include "nix/util/system-error.hh"
 
 #include "store-config-private.hh"
 

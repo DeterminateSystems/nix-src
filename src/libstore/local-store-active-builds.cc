@@ -1,4 +1,5 @@
 #include "nix/store/local-store.hh"
+#include "nix/util/system-error.hh"
 #include "nix/util/json-utils.hh"
 #ifdef __linux__
 #  include "nix/util/cgroup.hh"

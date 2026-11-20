@@ -23,6 +23,7 @@
 #include "nix/util/users.hh"
 #include "nix/store/store-registration.hh"
 #include "nix/util/provenance.hh"
+#include "nix/util/system-error.hh"
 
 #include <algorithm>
 #include <cstring>

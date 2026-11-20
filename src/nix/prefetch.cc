@@ -15,6 +15,7 @@
 #include "nix/store/path.hh"
 #include "nix/util/override-provenance-source-accessor.hh"
 #include "nix/fetchers/provenance.hh"
+#include "nix/util/system-error.hh"
 
 #include "man-pages.hh"
 

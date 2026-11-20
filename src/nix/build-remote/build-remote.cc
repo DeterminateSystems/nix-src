@@ -31,6 +31,7 @@
 #include "nix/cmd/legacy.hh"
 #include "nix/util/experimental-features.hh"
 #include "nix/store/globals.hh"
+#include "nix/util/system-error.hh"
 
 namespace nix {
 

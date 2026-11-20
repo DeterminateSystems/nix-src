@@ -1,4 +1,5 @@
 #include "nix/expr/eval.hh"
+#include "nix/util/system-error.hh"
 #include "nix/expr/parallel-eval.hh"
 #include "nix/store/globals.hh"
 #include "nix/expr/primops.hh"

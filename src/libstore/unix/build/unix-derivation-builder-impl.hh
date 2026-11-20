@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nix/store/aws-creds.hh"
+#include "nix/util/system-error.hh"
 #include "nix/store/build/derivation-builder.hh"
 #include "build/derivation-builder-impl.hh"
 #include "nix/store/globals.hh"

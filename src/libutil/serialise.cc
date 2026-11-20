@@ -4,6 +4,7 @@
 #include "nix/util/signals.hh"
 #include "nix/util/socket.hh"
 #include "nix/util/util.hh"
+#include "nix/util/system-error.hh"
 
 #include <cstring>
 #include <cerrno>

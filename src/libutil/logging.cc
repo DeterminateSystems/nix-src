@@ -10,6 +10,7 @@
 #include "nix/util/unix-domain-socket.hh"
 #include "nix/util/exit.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/util/system-error.hh"
 
 #include <atomic>
 #include <sstream>

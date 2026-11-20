@@ -8,6 +8,7 @@
 #include "nix/expr/value-to-json.hh"
 #include "nix/util/archive.hh"
 #include "nix/util/fs-sink.hh"
+#include "nix/util/system-error.hh"
 
 #include <nlohmann/json.hpp>
 

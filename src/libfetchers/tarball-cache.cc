@@ -1,4 +1,5 @@
 #include "nix/fetchers/tarball-cache.hh"
+#include "nix/util/system-error.hh"
 #include "nix/fetchers/cache.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/store/sqlite.hh"

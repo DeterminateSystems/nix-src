@@ -1,5 +1,6 @@
 #include "nix/util/error.hh"
 #include "nix/util/current-process.hh"
+#include "nix/util/system-error.hh"
 #include "nix/main/shared.hh"
 
 #include <cstring>

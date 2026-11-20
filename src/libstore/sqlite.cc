@@ -4,6 +4,7 @@
 #include "nix/util/url.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/sync.hh"
+#include "nix/util/system-error.hh"
 
 #ifdef __linux__
 #  include "nix/util/file-descriptor.hh"

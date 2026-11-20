@@ -6,6 +6,7 @@
 #include <ranges>
 
 #include "nix/util/current-process.hh"
+#include "nix/util/system-error.hh"
 #include "nix/util/util.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/signals.hh"
