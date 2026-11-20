@@ -70,18 +70,23 @@ private:
     /**
      * The states.
      */
-    Co gaveUpOnSubstitution();
-    Co tryToBuild(StorePathSet inputPaths);
-    Co buildWithHook(
-        StorePathSet inputPaths,
-        std::map<std::string, InitialOutput> initialOutputs,
-        DerivationOptions<StorePath> drvOptions,
-        PathLocks outputLocks);
-    Co buildLocally(
+    using Result = decltype(BuildResult::inner);
+
+    struct NeedsSlot
+    {};
+
+    using LocalBuildOutcome = std::variant<Result, NeedsSlot>;
+
+    Co<ExitCode> init();
+    Co<void> realiseInputs();
+    Co<Result> tryToBuild();
+    Co<Result> buildWithHook(
+        const StorePathSet & inputPaths, std::map<std::string, InitialOutput> & initialOutputs, PathLocks outputLocks);
+    Co<LocalBuildOutcome> buildLocally(
         LocalBuildCapability localBuildCap,
-        StorePathSet inputPaths,
-        std::map<std::string, InitialOutput> initialOutputs,
-        DerivationOptions<StorePath> drvOptions,
+        const StorePathSet & inputPaths,
+        std::map<std::string, InitialOutput> & initialOutputs,
+        const DerivationOptions<StorePath> & drvOptions,
         PathLocks outputLocks);
 
     /**
@@ -89,7 +94,7 @@ private:
      */
     HookReply tryBuildHook(const DerivationOptions<StorePath> & drvOptions);
 
-    Done doneFailureLogTooLong(BuildLog & buildLog);
+    BuildError logLimitExceeded();
 
     /**
      * Wrappers around the corresponding Store methods that first consult the
@@ -106,13 +111,17 @@ private:
      */
     std::pair<bool, SingleDrvOutputs> checkPathValidity(std::map<std::string, InitialOutput> & initialOutputs);
 
-    Done doneSuccess(
-        BuildResult::Success::Status status,
-        SingleDrvOutputs builtOutputs,
-        ActivityId act = 0,
-        std::shared_ptr<const Provenance> provenance = nullptr);
+    /**
+     * Whether the result of this goal has been reported using `reportResult()`.
+     */
+    bool resultReported = false;
 
-    Done doneFailure(BuildError ex, ActivityId act = 0);
+    /**
+     * Report `result` as the outcome of this goal on the activity `act` (as a `resBuildResult` result), and
+     * return it. This has to be done by the build stages, rather than by `init()`, since the activity of a
+     * build ends when its stage returns.
+     */
+    Result reportResult(Result result, ActivityId act);
 
     BuildError fixupBuilderFailureErrorMessage(BuilderFailureError msg, BuildLog & buildLog);
 
