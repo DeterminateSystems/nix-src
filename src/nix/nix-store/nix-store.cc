@@ -1241,7 +1241,7 @@ static int main_nix_store(int argc, char ** argv)
            temporary GC roots are removed. */
         Finally releaseStore([]() { store = nullptr; });
 
-        if (op != opDump && op != opRestore) /* !!! hack */
+        if (op != opDump && op != opRestore && op != opVersion) /* !!! hack */
             store = openStore();
 
         op(std::move(opFlags), std::move(opArgs));
