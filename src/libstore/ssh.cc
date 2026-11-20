@@ -108,6 +108,12 @@ static void checkValidAuthority(const ParsedURL::Authority & authority)
     }
 }
 
+const std::filesystem::path & sshProgram()
+{
+    static const std::filesystem::path program = SSH_PROGRAM;
+    return program;
+}
+
 OsStrings getNixSshOpts()
 {
     std::string sshOpts = getEnv("NIX_SSHOPTS").value_or("");
@@ -204,7 +210,7 @@ bool SSHMaster::isMasterRunning(std::filesystem::path socketPath)
 
     auto res = runProgram(
         RunOptions{
-            .spawnOptions = {.program = SSH_PROGRAM, .args = std::move(args)},
+            .spawnOptions = {.program = sshProgram(), .args = std::move(args)},
             .mergeStderrToStdout = true,
         });
     return res.first == 0;
@@ -212,16 +218,16 @@ bool SSHMaster::isMasterRunning(std::filesystem::path socketPath)
 
 static OsStringMap createSSHEnv()
 {
-    // Copy the environment and set SHELL=/bin/sh
+    // Copy the environment and set SHELL to the configured sh
     OsStringMap env = getEnvOs();
 
     // SSH will invoke the "user" shell for -oLocalCommand, but that means
     // $SHELL. To keep things simple and avoid potential issues with other
-    // shells, we set it to /bin/sh.
+    // shells, we set it to the configured POSIX shell.
     // Technically, we don't need that, and we could reinvoke ourselves to print
     // "started". Self-reinvocation is tricky with library consumers, but mostly
     // solved; refer to the development history of nixExePath in libstore/globals.cc.
-    env.insert_or_assign(OS_STR("SHELL"), OS_STR("/bin/sh"));
+    env.insert_or_assign(OS_STR("SHELL"), shProgram().native());
 
     return env;
 }
@@ -245,7 +251,7 @@ std::unique_ptr<SSHMaster::Connection> SSHMaster::startCommand(OsStrings && comm
     std::filesystem::path program;
 
     if (!fakeSSH) {
-        program = SSH_PROGRAM;
+        program = sshProgram();
         args = {string_to_os_string(hostnameAndUser), OS_STR("-x")};
         addCommonSSHOpts(args, socketPath);
         if (verbosity >= lvlChatty)
@@ -370,7 +376,7 @@ std::optional<std::filesystem::path> SSHMaster::startMaster()
 
     state->sshMaster = spawnProgram(
         {
-            .program = SSH_PROGRAM,
+            .program = sshProgram(),
             .lookupPath = true,
             .args = std::move(args),
             .environment = createSSHEnv(),

@@ -51,6 +51,8 @@ nixMake.mkComponent {
       # package.nix only enables libcpuid on x86_64.
       HAVE_LIBCPUID = if isx86_64 then 1 else 0;
       HAVE_POSIX_FALLOCATE = if isLinux then 1 else 0;
+      # The default of the Meson option `sh-program`.
+      SH_PROGRAM = "/bin/sh";
     };
     "unix/util-unix-config-private.hh" = {
       # FreeBSD-only.
