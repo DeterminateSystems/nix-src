@@ -35,7 +35,13 @@ getStoreBaseName(std::string_view storeDir, std::string_view path, std::string &
     // support remote stores whose store dir is a non-native path (e.g.
     // Windows <-> Unix ssh-ing).
 #ifdef _WIN32
-    auto p = std::filesystem::path(path);
+    /* `canonPath` requires an absolute path, which `/nix/store` is not
+       on Windows, so just normalise lexically. */
+    auto p = std::filesystem::path(path).lexically_normal();
+    /* `lexically_normal` keeps a trailing separator (as an empty final
+       component), but `canonPath` drops it. */
+    if (!p.has_filename())
+        p = p.parent_path();
 #else
     /* `canonPath()` throws on relative paths. */
     if (path[0] != '/')
