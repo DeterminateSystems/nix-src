@@ -49,6 +49,8 @@ struct ExecChildParams
     bool setUid;
     uid_t uid;
     bool dieWithParent;
+    bool setSid;
+    bool restoreMounts;
 };
 
 /*
@@ -105,7 +107,7 @@ struct ExecChildParams
     /* Restore saved process context. Much like nix::restoreProcessContext, but inlined
        and without any possibility of throwing exceptions. */
 
-    if (havePrivateMountNs) {
+    if (havePrivateMountNs && params.restoreMounts) {
         char savedCwd[PATH_MAX];
 
         /* On Linux, it seems like cwd can't ever be larger than PATH_MAX (as
@@ -267,6 +269,9 @@ struct ExecChildParams
         && ::sigaction(SIGXFSZ, &*unix::savedSigxfszAction, nullptr) == -1)
         dieWithErrno("restoring SIGXFSZ");
 
+    if (params.setSid && ::setsid() == -1)
+        dieWithErrno("setsid");
+
     if (params.lookupPath)
         /* Nonstandard, but both musl and glibc have it and it doesn't
            seem to do anything weird or allocate memory, so it should
@@ -347,6 +352,8 @@ Pid spawnProgram(const SpawnOptions & options, std::span<const FdRedirection> fd
         /* The default is not used, but a bit sketchy to leave zero initialised so "nobody". */
         .uid = options.uid.value_or(65534),
         .dieWithParent = options.dieWithParent,
+        .setSid = options.setSid,
+        .restoreMounts = options.restoreMounts,
     };
 
     const auto savedErrno = errno;
