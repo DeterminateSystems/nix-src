@@ -391,6 +391,7 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
         if (git_repository_open(Setter(repo), path.string().c_str()))
             throw GitError("opening Git repository %s", PathFmt(path));
 
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
         GitConfig config;
         if (git_repository_config(Setter(config), *this))
             throw GitError("getting Git repository config");
@@ -412,6 +413,7 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
             throw GitError("adding the in-memory Git configuration backend");
 
         memBackend.release();
+#endif
 
         ObjectDb odb;
         if (options.packfilesOnly) {
