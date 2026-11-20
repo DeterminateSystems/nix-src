@@ -25,7 +25,7 @@ std::expected<void, BadStorePathReason> validateStorePathName(std::string_view n
     using enum BadStorePathReason;
     if (name.empty())
         return std::unexpected(NameEmpty);
-    if (name.size() > StorePath::MaxPathLen)
+    if (name.size() > StorePath::MaxNameLen)
         return std::unexpected(NameTooLong);
     // See nameRegexStr for the definition
     if (name[0] == '.') {
@@ -58,7 +58,7 @@ std::expected<void, BadStorePathReason> validateStorePathName(std::string_view n
     case NameEmpty:
         throw BadStorePathName("name must not be empty");
     case NameTooLong:
-        throw BadStorePathName("name '%s' must be no longer than %d characters", name, StorePath::MaxPathLen);
+        throw BadStorePathName("name '%s' must be no longer than %d characters", name, StorePath::MaxNameLen);
     case NameReserved:
         throw BadStorePathName("name '%s' is not valid", name);
     case NameReservedComponent:
@@ -171,7 +171,7 @@ void StorePath::requireDerivation() const
         throw FormatError("store path '%s' is not a valid derivation path", to_string());
 }
 
-StorePath StorePath::dummy("ffffffffffffffffffffffffffffffff-x");
+const StorePath StorePath::dummy("ffffffffffffffffffffffffffffffff-x");
 
 StorePath StorePath::random(std::string_view name)
 {

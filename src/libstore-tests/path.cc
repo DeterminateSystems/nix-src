@@ -253,7 +253,7 @@ TEST_F(StorePathTest, badStorePathReasons)
         {STORE_DIR HASH_PART "_foo", NoDashAfterHash},
         {STORE_DIR "e1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo", IllegalHashCharacter},
         {STORE_DIR HASH_PART "-", NameEmpty},
-        {STORE_DIR HASH_PART "-" + std::string(StorePath::MaxPathLen + 1, 'a'), NameTooLong},
+        {STORE_DIR HASH_PART "-" + std::string(StorePath::MaxNameLen + 1, 'a'), NameTooLong},
         {STORE_DIR HASH_PART "-..", NameReserved},
         {STORE_DIR HASH_PART "-.-a", NameReservedComponent},
         {STORE_DIR HASH_PART "-foo!", NameIllegalCharacter},
@@ -324,6 +324,15 @@ TEST_F(StorePathTest, errorMessages)
     } catch (BadStorePathName & e) {
         EXPECT_NE(std::string(e.what()).find("contains illegal character"), std::string::npos);
     }
+}
+
+TEST_F(StorePathTest, maximumLength)
+{
+    EXPECT_NO_THROW({
+        auto path = StorePath(StorePath::dummy.hashPart() + "-" + std::string(211, 'x'));
+        ASSERT_EQ(path.to_string().size(), StorePath::MaxBasenameLen);
+    });
+    EXPECT_THROW(StorePath(StorePath::dummy.hashPart() + "-" + std::string(212, 'x')), BadStorePath);
 }
 
 /* ----------------------------------------------------------------------------

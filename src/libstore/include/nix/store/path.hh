@@ -23,7 +23,7 @@ MakeError(BadStorePathName, BadStorePath);
 enum class BadStorePathReason : uint8_t {
     /** The name is empty. */
     NameEmpty,
-    /** The name is longer than `StorePath::MaxPathLen`. */
+    /** The name is longer than `StorePath::MaxNameLen`. */
     NameTooLong,
     /** The name is `.` or `..`. */
     NameReserved,
@@ -82,7 +82,17 @@ public:
      */
     constexpr static size_t HashLen = 32; // i.e. 160 bits
 
-    constexpr static size_t MaxPathLen = 211;
+    /**
+     * @brief Maximum length of the name, i.e. everything after <hash part>-.
+     *
+     * It's chosen such that HashLen + MaxNameLen + 1 (dash) + len("/nix/store/") = 255
+     */
+    constexpr static size_t MaxNameLen = 211;
+
+    /**
+     * @brief Maximum length of the basename admitted by the constructor from a string.
+     */
+    constexpr static size_t MaxBasenameLen = HashLen + 1 + MaxNameLen;
 
     StorePath() = delete;
 
@@ -126,7 +136,7 @@ public:
         return std::string_view(baseName).substr(0, HashLen);
     }
 
-    static StorePath dummy;
+    static const StorePath dummy;
 
     static StorePath random(std::string_view name);
 };
