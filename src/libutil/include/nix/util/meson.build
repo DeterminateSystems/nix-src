@@ -65,6 +65,7 @@ headers = [ config_pub_h ] + files(
   'lru-cache.hh',
   'memo.hh',
   'memory-source-accessor.hh',
+  'merkle-files.hh',
   'mounted-source-accessor.hh',
   'move-only-function.hh',
   'muxable-pipe.hh',

@@ -2,6 +2,7 @@
 ///@file
 
 #include "nix/fetchers/git-utils.hh"
+#include "nix/fetchers/merkle-tar-adapter.hh"
 #include "nix/util/hash.hh"
 #include "nix/util/ref.hh"
 #include "nix/util/source-accessor.hh"
@@ -36,11 +37,15 @@ struct TarballCache
     virtual ref<SourceAccessor> getAccessor(const Hash & treeHash, std::string displayPrefix) = 0;
 
     /**
-     * Return a sink that imports a file system tree into the cache.
-     * Calling `flush()` on the sink returns the hash of the root
-     * tree.
+     * Return a sink that imports a tarball into the cache. Calling
+     * `flush()` on the sink returns the root tree.
+     *
+     * Note that this implements the path-based `TarSink` interface
+     * directly, rather than going through `merkle::makeTarSink()` on
+     * top of a `merkle::FileSinkBuilder`. In particular, hard links
+     * are resolved at the end rather than as they are encountered.
      */
-    virtual ref<GitFileSystemObjectSink> getFileSystemObjectSink() = 0;
+    virtual ref<merkle::TarAdapter> getFileSystemObjectSink() = 0;
 
     /**
      * Given a Git tree hash, compute the hash of its NAR

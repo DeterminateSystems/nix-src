@@ -14,6 +14,7 @@
 namespace nix {
 
 struct SrcToStore;
+struct GitRepoPool;
 
 } // namespace nix
 
@@ -164,7 +165,6 @@ struct Settings : public Config
     static ref<SrcToStore> createSrcToStore();
 
     const ref<SrcToStore> srcToStore = createSrcToStore();
-
 
 private:
     void anchor() override;

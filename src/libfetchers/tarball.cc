@@ -8,6 +8,7 @@
 #include "nix/util/types.hh"
 #include "nix/store/store-api.hh"
 #include "nix/fetchers/git-utils.hh"
+#include "nix/fetchers/merkle-tar-adapter.hh"
 #include "nix/fetchers/tarball-cache.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/fetchers/provenance.hh"
@@ -221,7 +222,7 @@ static std::optional<DownloadTarballResult> downloadTarball_(
         infoAttrs = cached->value;
     } else {
         infoAttrs.insert_or_assign("etag", res->etag);
-        infoAttrs.insert_or_assign("treeHash", tarballCache->dereferenceSingletonDirectory(tree).gitRev());
+        infoAttrs.insert_or_assign("treeHash", tarballCache->dereferenceSingletonDirectory(tree.hash).gitRev());
         infoAttrs.insert_or_assign("lastModified", uint64_t(lastModified));
         if (res->immutableUrl)
             infoAttrs.insert_or_assign("immutableUrl", *res->immutableUrl);
