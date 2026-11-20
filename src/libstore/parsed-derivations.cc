@@ -21,20 +21,9 @@ StructuredAttrs StructuredAttrs::fromJSON(nlohmann::json json)
 StructuredAttrs StructuredAttrs::parse(std::string_view encoded)
 {
     try {
-        auto parsed = nlohmann::json::parse(encoded);
-        /* nlohmann does not have a built-in way to check for canonical
-           form, we must reserialise ourselves. We cannot reject a
-           non-canonical encoding --- derivations in the wild have one,
-           and it is part of their identity --- so keep it verbatim in
-           order to round-trip, and merely warn. */
-        std::optional<std::string> verbatim;
-        if (parsed.dump() != encoded) {
-            warn("%s attribute is not in canonical JSON form", envVarName);
-            verbatim = std::string{encoded};
-        }
-
-        auto res = fromJSON(std::move(parsed));
-        res.verbatim = std::move(verbatim);
+        auto res = fromJSON(nlohmann::json::parse(encoded));
+        /* Defensively assume it is not canonical */
+        res.verbatim = std::string{encoded};
         return res;
     } catch (std::exception & e) {
         throw Error("cannot process %s attribute: %s", envVarName, e.what());
