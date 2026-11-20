@@ -36,6 +36,9 @@
 #include <errno.h>
 #include <fcntl.h>
 
+#if defined(__APPLE__)
+#  include <membership.h>
+#endif
 #ifdef __linux__
 #  include "nix/util/cgroup.hh"
 #endif
@@ -169,12 +172,30 @@ static void setSigChldAction(bool autoReap)
  * @return Is the given user a member of this group?
  *
  * @param user User specified by username.
+ * @param peer Information about the peer.
  *
  * @param group Group the user might be a member of.
  */
-static bool matchUser(std::string_view user, const GroupEntry & gr)
+static bool matchUser(std::string_view user, [[maybe_unused]] const unix::PeerInfo & peer, const GroupEntry & gr)
 {
-    return std::ranges::find(gr.members, user) != gr.members.end();
+    if (std::ranges::find(gr.members, user) != gr.members.end())
+        return true;
+
+#if defined(__APPLE__)
+    if (peer.uid) {
+        /* This is just a typedef to an array, so don't be confused when you see it passed seemingly by-value.
+           The C-style array decays into a pointer. */
+        uuid_t userUUID, groupUUID;
+        if (!::mbr_uid_to_uuid(*peer.uid, userUUID) && !::mbr_gid_to_uuid(gr.gid, groupUUID)) {
+            int ismember = 0;
+            if (!::mbr_check_membership(userUUID, groupUUID, &ismember)) {
+                return !!ismember;
+            }
+        }
+    }
+#endif
+
+    return false;
 }
 
 /**
@@ -191,8 +212,11 @@ static bool matchUser(std::string_view user, const GroupEntry & gr)
  *
  * Otherwise: No.
  */
-static bool
-matchUser(const std::optional<std::string> & user, const std::optional<std::string> & group, const Strings & users)
+static bool matchUser(
+    const std::optional<std::string> & user,
+    const std::optional<std::string> & group,
+    const Strings & users,
+    const unix::PeerInfo & peer)
 {
     if (find(users.begin(), users.end(), "*") != users.end())
         return true;
@@ -207,7 +231,7 @@ matchUser(const std::optional<std::string> & user, const std::optional<std::stri
             auto gr = getGroupByName(i.substr(1));
             if (!gr)
                 continue;
-            if (user && matchUser(*user, *gr))
+            if (user && matchUser(*user, peer, *gr))
                 return true;
         }
 
@@ -242,10 +266,11 @@ static std::pair<TrustedFlag, std::optional<std::string>> authPeer(const unix::P
     const Strings & trustedUsers = authorizationSettings.trustedUsers;
     const Strings & allowedUsers = authorizationSettings.allowedUsers;
 
-    if (matchUser(user, group, trustedUsers))
+    if (matchUser(user, group, trustedUsers, peer))
         trusted = Trusted;
 
-    if ((!trusted && !matchUser(user, group, allowedUsers)) || group == settings.getLocalSettings().buildUsersGroup)
+    if ((!trusted && !matchUser(user, group, allowedUsers, peer))
+        || group == settings.getLocalSettings().buildUsersGroup)
         throw Error("user '%1%' is not allowed to connect to the Nix daemon", user.value_or("<unknown>"));
 
     return {trusted, std::move(user)};
