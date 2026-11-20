@@ -96,9 +96,9 @@ bool Derivation<Inputs, Out>::isBuiltin() const
 
 static auto infoForDerivation(const StoreDirConfig & store, const Derivation & drv)
 {
-    auto references = drv.inputs.srcs;
-    for (auto & i : drv.inputs.drvs.map)
-        references.insert(i.first);
+    StorePathSet references;
+    for (const auto & input : drv.inputs)
+        references.insert(input.getBaseStorePath());
     /* Note that the outputs of a derivation are *not* references
        (that can be missing (of course) and should not necessarily be
        held during a garbage collection). */
@@ -155,9 +155,9 @@ StorePath Store::writeDerivation(
     RepairFlag repair,
     std::shared_ptr<const Provenance> provenance)
 {
-    auto references = drv.inputs.srcs;
-    for (auto & i : drv.inputs.drvs.map)
-        references.insert(i.first);
+    StorePathSet references;
+    for (const auto & input : drv.inputs)
+        references.insert(input.getBaseStorePath());
     return asyncPathWriter.addPath(
         unparse(drv, *this), std::string(drv.name) + drvExtension, references, repair, provenance);
 }
@@ -337,13 +337,21 @@ void Derivation<Inputs, Out>::applyRewrites(const StringMap & rewrites)
 
 Full unresolve(const Basic & drv)
 {
-    return drv.mapInputs([](const StorePathSet & inputs) -> FullInputs { return {.srcs = inputs, .drvs = {}}; });
+    return drv.mapInputs([](const StorePathSet & inputs) -> std::set<SingleDerivedPath> {
+        auto view = inputs | std::views::transform([](const StorePath & p) -> SingleDerivedPath {
+                        return SingleDerivedPath::Opaque{p};
+                    });
+        return std::set<SingleDerivedPath>(view.begin(), view.end());
+    });
 }
 
 bool shouldResolve(const Full & drv)
 {
+    bool hasInputDrvs = std::ranges::any_of(
+        drv.inputs, [](const auto & input) { return std::holds_alternative<SingleDerivedPath::Built>(input.raw()); });
+
     /* No input drvs means nothing to resolve. */
-    if (drv.inputs.drvs.map.empty())
+    if (!hasInputDrvs)
         return false;
 
     auto drvType = type(drv);
@@ -369,56 +377,16 @@ bool shouldResolve(const Full & drv)
 
     return typeNeedsResolve ||
            /* Also need to resolve if any inputs are outputs of dynamic derivations. */
-           hasDynamicDrvDep(drv.inputs.drvs.map);
+           hasDynamicDrvDep(drv.inputs);
+}
+
+bool hasDynamicDrvDep(const std::set<SingleDerivedPath> & inputs)
+{
+    return std::ranges::any_of(inputs, [](const auto & input) { return input.isDynamicDrvOutput(); });
 }
 
 template<bool fillIn>
 static void processDerivationOutputPaths(Store & store, auto && drv, std::string_view drvName);
-
-static bool tryResolveInput(
-    const StoreDirConfig & store,
-    StorePathSet & inputSrcs,
-    StringMap & inputRewrites,
-    const DownstreamPlaceholder * placeholderOpt,
-    ref<const SingleDerivedPath> drvPath,
-    const DerivedPathMap<StringSet>::ChildNode & inputNode,
-    fun<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
-        queryResolutionChain)
-{
-    auto getPlaceholder = [&](const std::string & outputName) {
-        return placeholderOpt ? DownstreamPlaceholder::unknownDerivation(*placeholderOpt, outputName) : [&] {
-            auto * p = std::get_if<SingleDerivedPath::Opaque>(&drvPath->raw());
-            // otherwise we should have had a placeholder to build-upon already
-            assert(p);
-            return DownstreamPlaceholder::unknownCaOutput(p->path, outputName);
-        }();
-    };
-
-    for (auto & outputName : inputNode.value) {
-        auto actualPathOpt = queryResolutionChain(drvPath, outputName);
-        if (!actualPathOpt)
-            return false;
-        auto actualPath = *actualPathOpt;
-        if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
-            inputRewrites.emplace(getPlaceholder(outputName).render(), store.printStorePath(actualPath));
-        }
-        inputSrcs.insert(std::move(actualPath));
-    }
-
-    for (auto & [outputName, childNode] : inputNode.childMap) {
-        auto nextPlaceholder = getPlaceholder(outputName);
-        if (!tryResolveInput(
-                store,
-                inputSrcs,
-                inputRewrites,
-                &nextPlaceholder,
-                make_ref<const SingleDerivedPath>(SingleDerivedPath::Built{drvPath, outputName}),
-                childNode,
-                queryResolutionChain))
-            return false;
-    }
-    return true;
-}
 
 std::optional<Basic> tryResolve(const Full & drv, Store & store, Store * evalStore)
 {
@@ -440,9 +408,40 @@ std::optional<Basic> tryResolve(
     fun<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
         queryResolutionChain)
 {
-    Basic resolved{
+    StorePathSet resolvedInputs;
+    StringMap inputRewrites;
+
+    for (const auto & input : drv.inputs) {
+        auto resolved = std::visit(
+            overloaded{
+                [&](const SingleDerivedPath::Opaque & op) -> std::optional<StorePath> { return op.path; },
+                [&](const SingleDerivedPath::Built & built) -> std::optional<StorePath> {
+                    auto actualPathOpt = queryResolutionChain(built.drvPath, built.output);
+                    if (!actualPathOpt)
+                        return std::nullopt;
+
+                    if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
+                        /* This handles both the static case (opaque
+                           derivation path) and the dynamic case
+                           (derivation path that is itself an output of
+                           a derivation), recursively. */
+                        auto placeholder = DownstreamPlaceholder::fromSingleDerivedPathBuilt(built);
+                        inputRewrites.emplace(placeholder.render(), store.printStorePath(*actualPathOpt));
+                    }
+
+                    return actualPathOpt;
+                },
+            },
+            input.raw());
+
+        if (!resolved)
+            return std::nullopt;
+        resolvedInputs.insert(*resolved);
+    }
+
+    Basic result{
         .outputs = drv.outputs,
-        .inputs = drv.inputs.srcs,
+        .inputs = resolvedInputs,
         .platform = drv.platform,
         .builder = drv.builder,
         .args = drv.args,
@@ -451,24 +450,11 @@ std::optional<Basic> tryResolve(
         .name = drv.name,
     };
 
-    StringMap inputRewrites;
+    result.applyRewrites(inputRewrites);
 
-    for (auto & [inputDrv, inputNode] : drv.inputs.drvs.map)
-        if (!tryResolveInput(
-                store,
-                resolved.inputs,
-                inputRewrites,
-                nullptr,
-                make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{inputDrv}),
-                inputNode,
-                queryResolutionChain))
-            return std::nullopt;
+    processDerivationOutputPaths</*fillIn=*/true>(store, result, result.name);
 
-    resolved.applyRewrites(inputRewrites);
-
-    processDerivationOutputPaths</*fillIn=*/true>(store, resolved, resolved.name);
-
-    return resolved;
+    return result;
 }
 
 /**
@@ -540,8 +526,8 @@ static void processDerivationOutputPaths(Store & store, auto && drv, std::string
        `exportReferencesGraph`) are recognized. */
     bool rpcOutputs = [&] {
         auto * parsed = get(drv.structuredAttrs);
-        if constexpr (requires { drv.inputs.drvs; })
-            return derivationOptionsFromStructuredAttrs(store, drv.inputs.drvs, drv.env, parsed, /*shouldWarn=*/false)
+        if constexpr (std::is_same_v<std::decay_t<decltype(drv.inputs)>, std::set<SingleDerivedPath>>)
+            return derivationOptionsFromStructuredAttrs(store, drv.inputs, drv.env, parsed, /*shouldWarn=*/false)
                        .requiredSystemFeatures.count(std::string{drvFeatureBuilderRpcV0})
                    != 0;
         else
@@ -730,7 +716,7 @@ const Hash impureOutputHash = hashString(HashAlgorithm::SHA256, "impure");
 namespace derivation {
 
 template struct Derivation<StorePathSet>;
-template struct Derivation<FullInputs>;
+template struct Derivation<std::set<SingleDerivedPath>>;
 
 } // namespace derivation
 

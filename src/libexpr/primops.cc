@@ -1856,17 +1856,27 @@ static void derivationStrictInternal(
                     state.waitForPath(d.drvPath);
                     state.store->computeFSClosure(d.drvPath, refs);
                     for (auto & j : refs) {
-                        drv.inputs.srcs.insert(j);
+                        drv.inputs.insert(SingleDerivedPath::Opaque{j});
                         if (j.isDerivation()) {
-                            drv.inputs.drvs.map[j].value = state.store->readDerivation(j).outputNames();
+                            for (auto & outputName : state.store->readDerivation(j).outputNames()) {
+                                drv.inputs.insert(
+                                    SingleDerivedPath::Built{
+                                        .drvPath = makeConstantStorePathRef(j),
+                                        .output = outputName,
+                                    });
+                            }
                         }
                     }
                 },
                 [&](const NixStringContextElem::Built & b) {
-                    drv.inputs.drvs.ensureSlot(*b.drvPath).value.insert(b.output);
+                    drv.inputs.insert(
+                        SingleDerivedPath::Built{
+                            .drvPath = b.drvPath,
+                            .output = b.output,
+                        });
                 },
                 [&](const NixStringContextElem::Opaque & o) {
-                    drv.inputs.srcs.insert(state.devirtualize(o.path, &rewrites));
+                    drv.inputs.insert(SingleDerivedPath::Opaque{state.devirtualize(o.path, &rewrites)});
                 },
                 [&](const NixStringContextElem::Path & p) {
                     if (!drvS)
