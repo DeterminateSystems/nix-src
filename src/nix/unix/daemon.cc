@@ -585,6 +585,13 @@ static void runDaemon(
     std::visit(
         overloaded{
             [&](StdIO) {
+#ifdef __linux__
+                if (auto rootCgroup = getEnv("_NIX_DAEMON_ROOT_CGROUP")) {
+                    linux::setRootCgroup(CanonPath(*rootCgroup));
+                    unsetenv("_NIX_DAEMON_ROOT_CGROUP");
+                }
+#endif
+
                 auto store = storeConfig->openStore();
                 store->init();
 

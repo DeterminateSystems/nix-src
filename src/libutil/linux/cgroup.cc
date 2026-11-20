@@ -190,8 +190,12 @@ CanonPath getCurrentCgroup()
     return CanonPath{ourCgroup};
 }
 
+static std::optional<CanonPath> rootCgroupOverride;
+
 CanonPath getRootCgroup()
 {
+    if (rootCgroupOverride)
+        return *rootCgroupOverride;
     static auto rootCgroup = getCurrentCgroup();
     return rootCgroup;
 }
@@ -213,6 +217,11 @@ std::set<pid_t> getPidsInCgroup(const std::filesystem::path & cgroup)
     }
 
     return result;
+}
+
+void setRootCgroup(CanonPath cgroup)
+{
+    rootCgroupOverride = std::move(cgroup);
 }
 
 } // namespace nix::linux
