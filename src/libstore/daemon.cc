@@ -1289,7 +1289,7 @@ void processConnection(
 
     unsigned int opCount = 0;
 
-    Finally finally([&]() { printMsgUsing(prevLogger, lvlDebug, "%d operations", opCount); });
+    Finally logOpCount([&]() { printMsgUsing(prevLogger, lvlDebug, "%d operations", opCount); });
 
     conn.postHandshake(
         *store,
