@@ -1369,6 +1369,8 @@ static void prim_warn(EvalState & state, CallSite callSite, Value * const * args
             .level = lvlWarn,
             .msg = HintFmt(std::string(msgStr)),
             .isFromExpr = true,
+            // Do not indent relative to the "evaluation warning: " prefix if the message starts with a newline.
+            .noIndent = msgStr.starts_with("\n"),
         };
         logWarning(info);
     }
