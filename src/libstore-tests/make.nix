@@ -30,7 +30,7 @@ let
       # The fuzzing harnesses are separate executables.
       "fuzz"
       "bench-main.cc"
-      "derivation-parser-bench.cc"
+      "derivation/parser-bench.cc"
       "ref-scan-bench.cc"
       "register-valid-paths-bench.cc"
     ];
