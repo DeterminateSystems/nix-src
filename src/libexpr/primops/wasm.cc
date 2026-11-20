@@ -17,7 +17,7 @@ namespace nix {
 using ValueId = uint32_t;
 
 template<typename T, typename E = Error>
-T unwrap(Result<T, E> && res)
+T unwrap(wasmtime::Result<T, E> && res)
 {
     if (res)
         return res.ok();
@@ -758,7 +758,7 @@ struct NixWasmInstance
 template<typename R, typename... Args>
 static void regFun(Linker & linker, std::string_view name, R (NixWasmInstance::*f)(Args...))
 {
-    unwrap(linker.func_wrap("env", name, [f](Caller caller, Args... args) -> Result<R, Trap> {
+    unwrap(linker.func_wrap("env", name, [f](Caller caller, Args... args) -> wasmtime::Result<R, Trap> {
         try {
             auto instance = std::any_cast<NixWasmInstance *>(caller.context().get_data());
             return (*instance.*f)(args...);
@@ -800,7 +800,7 @@ static void regFuns(Linker & linker, bool useWasi)
 
     if (useWasi) {
         unwrap(linker.func_wrap(
-            "env", "return_to_nix", [](Caller caller, ValueId resultId) -> Result<std::monostate, Trap> {
+            "env", "return_to_nix", [](Caller caller, ValueId resultId) -> wasmtime::Result<std::monostate, Trap> {
                 auto instance = std::any_cast<NixWasmInstance *>(caller.context().get_data());
                 instance->resultId = resultId;
                 return Trap("return_to_nix");

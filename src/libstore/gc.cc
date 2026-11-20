@@ -676,11 +676,12 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         AutoCloseFD tmpDirFd;
         if (baseName.find("tmp-", 0) == 0) {
             /* TODO Reconsider whether Follow is the right choice, here */
-            tmpDirFd = openDirectory(realPath, FinalSymlink::Follow);
-            if (!tmpDirFd || !lockFile(tmpDirFd.get(), ltWrite, false)) {
+            auto fd = openDirectory(realPath, FinalSymlink::Follow);
+            if (!fd || !lockFile(fd.value().get(), ltWrite, false)) {
                 debug("skipping locked tempdir %s", PathFmt(realPath));
                 return;
             }
+            tmpDirFd = std::move(fd).value();
         }
 
         printInfo("deleting '%1%'", path);

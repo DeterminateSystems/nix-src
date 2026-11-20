@@ -510,7 +510,7 @@ TEST_P(JSONLogMessageCharacterisationTest, writesExpectedLogs)
         /*parent=*/0);
 
     std::map<ActivityId, Activity> activities;
-    FdSource input(inputFd.get());
+    FdSource input(inputFd.value().get());
 
     while (true) {
         try {
@@ -521,7 +521,7 @@ TEST_P(JSONLogMessageCharacterisationTest, writesExpectedLogs)
         }
     }
 
-    lseek(tempFile.get(), 0, SEEK_SET);
+    ASSERT_TRUE(seek(tempFile.get(), 0, SEEK_SET));
 
     /* Determinate Nix: the JSON logger adds a random session ID (`sid`) to every message. Strip it, so
        that the output is deterministic (and the golden masters are the same as upstream's). */
