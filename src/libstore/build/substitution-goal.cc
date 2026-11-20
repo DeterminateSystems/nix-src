@@ -167,10 +167,28 @@ Goal::Co PathSubstitutionGoal::init()
 
         co_await await(std::move(waitees));
 
-        // FIXME: consider returning boolean instead of passing in reference
-        bool out = false; // is mutated by tryToRun
-        co_await tryToRun(subPath ? *subPath : storePath, sub, info, out, act.id);
-        substituterFailed = substituterFailed || out;
+        if (nrFailed > 0) {
+            co_return doneFailure(
+                nrNoSubstituters > 0 ? ecNoSubstituters : ecFailed,
+                BuildResult::Failure{{
+                    .status = BuildResult::Failure::DependencyFailed,
+                    .msg = HintFmt(
+                        "some references of path '%s' could not be realised", worker.store.printStorePath(storePath)),
+                }},
+                act.id);
+        }
+
+        auto [res, provenance] = co_await tryToRun(subPath ? *subPath : storePath, sub, info, act.id);
+        if (res == SubstitutionResult::Ok) {
+            auto success = BuildResult::Success{.status = BuildResult::Success::Substituted, .provenance = provenance};
+
+            logger->result(
+                act.id, resBuildResult, nlohmann::json(KeyedBuildResult({success}, DerivedPath::Opaque{storePath})));
+
+            co_return doneSuccess(std::move(success));
+        }
+
+        substituterFailed = substituterFailed || (res == SubstitutionResult::SubstituterFailed);
     }
 
     /* None left.  Terminate this goal and let someone else deal
@@ -201,25 +219,11 @@ Goal::Co PathSubstitutionGoal::init()
         act.id);
 }
 
-Goal::Co PathSubstitutionGoal::tryToRun(
-    StorePath subPath,
-    nix::ref<Store> sub,
-    std::shared_ptr<const ValidPathInfo> info,
-    bool & substituterFailed,
-    ActivityId parentAct)
+Goal::BasicCo<std::pair<PathSubstitutionGoal::SubstitutionResult, std::shared_ptr<const Provenance>>>
+PathSubstitutionGoal::tryToRun(
+    StorePath subPath, nix::ref<Store> sub, std::shared_ptr<const ValidPathInfo> info, ActivityId parentAct)
 {
     trace("all references realised");
-
-    if (nrFailed > 0) {
-        co_return doneFailure(
-            nrNoSubstituters > 0 ? ecNoSubstituters : ecFailed,
-            BuildResult::Failure{{
-                .status = BuildResult::Failure::DependencyFailed,
-                .msg = HintFmt(
-                    "some references of path '%s' could not be realised", worker.store.printStorePath(storePath)),
-            }},
-            parentAct);
-    }
 
     for (auto & i : info->references)
         /* ignore self-references */
@@ -319,12 +323,13 @@ Goal::Co PathSubstitutionGoal::tryToRun(
             /* Missing NARs are expected when they've been garbage collected.
                This is not a failure, so log as a warning instead of an error. */
             logWarning({.msg = sg.info().msg});
+            co_return std::pair{SubstitutionResult::SubstituteGone, std::shared_ptr<const Provenance>{}};
         } catch (...) {
             printError(e.what());
-            substituterFailed = true;
+            co_return std::pair{SubstitutionResult::SubstituterFailed, std::shared_ptr<const Provenance>{}};
         }
 
-        co_return Return{};
+        unreachable();
     }
 
     worker.markContentsGood(storePath);
@@ -348,12 +353,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
 
     worker.updateProgress();
 
-    auto success = BuildResult::Success{.status = BuildResult::Success::Substituted, .provenance = provenance};
-
-    logger->result(
-        parentAct, resBuildResult, nlohmann::json(KeyedBuildResult({success}, DerivedPath::Opaque{storePath})));
-
-    co_return doneSuccess(std::move(success));
+    co_return std::pair{SubstitutionResult::Ok, std::move(provenance)};
 }
 
 void PathSubstitutionGoal::cleanup()

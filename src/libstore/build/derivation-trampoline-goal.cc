@@ -9,7 +9,7 @@ namespace nix {
 
 DerivationTrampolineGoal::DerivationTrampolineGoal(
     ref<const SingleDerivedPath> drvReq, const OutputsSpec & wantedOutputs, Worker & worker, BuildMode buildMode)
-    : Goal(worker, init())
+    : Goal(worker, haveToLoadFromStore())
     , drvReq(drvReq)
     , wantedOutputs(wantedOutputs)
     , buildMode(buildMode)
@@ -77,7 +77,14 @@ static void addDrvTempRoot(Worker & worker, const StorePath & drvPath)
         worker.store.addTempRoot(drvPath);
 }
 
-Goal::Co DerivationTrampolineGoal::init()
+Goal::Co DerivationTrampolineGoal::haveToLoadFromStore()
+{
+    auto [drvPath, drv] = co_await loadDerivation();
+    co_await haveDerivation(std::move(drvPath), std::move(drv));
+    unreachable(); /* Keep in mind that we *still* end coroutines early. */
+}
+
+Goal::BasicCo<std::pair<StorePath, Derivation>> DerivationTrampolineGoal::loadDerivation()
 {
     trace("need to load derivation from file");
 
@@ -149,7 +156,7 @@ Goal::Co DerivationTrampolineGoal::init()
         throw Error("derivation '%s' disappeared while trying to build it", worker.store.printStorePath(drvPath));
     }();
 
-    co_return haveDerivation(std::move(drvPath), std::move(drv));
+    co_return std::pair{std::move(drvPath), std::move(drv)};
 }
 
 Goal::Co DerivationTrampolineGoal::haveDerivation(StorePath drvPath, Derivation drv)
