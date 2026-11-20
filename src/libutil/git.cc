@@ -127,6 +127,7 @@ void dumpBlobPrefix(uint64_t size, Sink & sink)
 void dumpTree(const Tree & entries, Sink & sink)
 {
     using namespace std::string_literals;
+
     std::string v1;
 
     for (auto & [name, entry] : entries) {
