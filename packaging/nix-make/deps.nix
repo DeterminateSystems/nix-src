@@ -229,6 +229,12 @@ in
     pkgconfig = [ "libgit2" ];
   }
   {
+    # Used by the libfetchers unit tests to build Git objects.
+    prefix = "zlib.h";
+    pkg = deps.zlib;
+    pkgconfig = [ "zlib" ];
+  }
+  {
     prefix = "wasmtime";
     pkg = [
       deps.wasmtime
