@@ -64,7 +64,7 @@ void DarwinDerivationBuilder::setUser()
 
         /* And we want the store in there regardless of how empty pathsInChroot. We include the innermost
            path component this time, since it's typically /nix/store and we care about that. */
-        std::filesystem::path cur = store.storeDir;
+        std::filesystem::path cur = store->storeDir;
         while (cur != "/") {
             ancestry.insert(cur.native());
             cur = cur.parent_path();
@@ -72,13 +72,13 @@ void DarwinDerivationBuilder::setUser()
 
         /* Add all our input paths to the chroot */
         for (auto & i : inputPaths) {
-            auto p = store.printStorePath(i);
+            auto p = store->printStorePath(i);
             pathsInChroot.insert_or_assign(p, ChrootPath{.source = p});
         }
 
         /* Violations will go to the syslog if you set this. Unfortunately the destination does not appear to be
          * configurable */
-        if (store.config->getLocalSettings().darwinLogSandboxViolations) {
+        if (store->getLocalSettings().darwinLogSandboxViolations) {
             sandboxProfile += "(deny default)\n";
         } else {
             sandboxProfile += "(deny default (with no-log))\n";
@@ -96,7 +96,7 @@ void DarwinDerivationBuilder::setUser()
         /* Add the output paths we'll use at build-time to the chroot */
         sandboxProfile += "(allow file-read* file-write* process-exec\n";
         for (auto & [_, path] : scratchOutputs)
-            sandboxProfile += fmt("\t(subpath \"%s\")\n", store.printStorePath(path));
+            sandboxProfile += fmt("\t(subpath \"%s\")\n", store->printStorePath(path));
 
         sandboxProfile += ")\n";
 
@@ -146,11 +146,11 @@ void DarwinDerivationBuilder::setUser()
                 S_ISDIR(optSt->st_mode) ? fmt("\t\t(subpath \"%s\")\n", path) : fmt("\t\t(literal \"%s\")\n", path);
 
             /* Legitimate derivation input paths are already lexically canonical. */
-            if (store.isInStore(path)) {
+            if (store->isInStore(path)) {
                 /* Anything that's inside the store must also be a valid StorePath (or a path under it).
                    Any other path under the store directory is an implementation detail of Nix.
                    (currently that's only .links/ directory). */
-                auto [sp, subdir] = store.toStorePath(path);
+                auto [sp, subdir] = store->toStorePath(path);
                 /* Bucket by the nix32 first char, which is uniformly distributed in the long run. */
                 bucketedStorePathProfiles[sp.hashPart().front()] += profileRule;
             } else {
@@ -161,7 +161,7 @@ void DarwinDerivationBuilder::setUser()
         if (!otherSandboxPathsProfile.empty()) /* Avoid a repeat of CVE-2026-110451. */
             sandboxProfile += fmt("(allow file-read* file-write* process-exec\n%s)\n", otherSandboxPathsProfile);
 
-        const auto storePrefix = store.storeDir + '/';
+        const auto storePrefix = store->storeDir + '/';
         for (const auto & [bucket, filters] : bucketedStorePathProfiles) {
             assert(!filters.empty()); /* Just to be safe. */
             const auto prefix = storePrefix + bucket;
