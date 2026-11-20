@@ -375,13 +375,34 @@ class OpenTelemetryLogger : public Logger
     }
 
     /**
+     * Activities whose span has been given an error status by a
+     * result, so that `stopActivity()` doesn't replace it with a
+     * generic one.
+     */
+    boost::concurrent_flat_set<ActivityId> failedActs;
+
+    /**
+     * Mark the span of activity `act` as failed with the given
+     * message.
+     */
+    void setError(ActivityId act, opentelemetry::trace::Span & span, std::string_view msg)
+    {
+        span.SetStatus(opentelemetry::trace::StatusCode::kError, filterANSIEscapes(msg, true));
+        failedActs.insert(act);
+    }
+
+    /**
      * Record activity metadata or result fields as span attributes.
      * JSON-valued fields are skipped, since attributes can't hold
-     * objects; they need to be handled specifically.
+     * objects; they need to be handled specifically. `error.message`
+     * is skipped as well, since it becomes the description of the
+     * span's error status.
      */
     static void setAttributes(opentelemetry::trace::Span & span, Metadata fields)
     {
         for (auto & [key, value] : fields) {
+            if (key == "error.message")
+                continue;
             if (auto str = std::get_if<std::string>(&value.raw))
                 span.SetAttribute(key, *str);
             else if (auto n = std::get_if<uint64_t>(&value.raw))
@@ -595,10 +616,11 @@ public:
                    is in flight, i.e. the `Activity` is being destroyed
                    by stack unwinding, assume that the activity
                    failed. */
-                if (std::uncaught_exceptions())
+                if (std::uncaught_exceptions() && !failedActs.contains(act))
                     span->SetStatus(opentelemetry::trace::StatusCode::kError, "activity terminated by an exception");
                 span->End();
             }
+            failedActs.erase(act);
         } catch (...) {
         }
     }
@@ -616,7 +638,16 @@ public:
 
             setAttributes(span, fields);
 
+            std::optional<std::string_view> errorType, errorMessage;
+
             for (auto & [key, value] : fields) {
+                if (auto str = std::get_if<std::string>(&value.raw)) {
+                    if (key == "error.type")
+                        errorType = *str;
+                    else if (key == "error.message")
+                        errorMessage = *str;
+                }
+
                 auto json = std::get_if<const nlohmann::json *>(&value.raw);
                 if (!json)
                     continue;
@@ -628,13 +659,17 @@ public:
                        normal prelude to building it, so don't call
                        that an error. */
                     auto & res = **json;
-                    if (!res.value("success", true) && res.value("status", "") != "NoSubstituters") {
+                    if (!res.value("success", true) && res.value("status", "") != "NoSubstituters")
                         // FIXME: privacy (the message can include the build log tail)
-                        auto msg = res.value("errorMsg", "build failed");
-                        span.SetStatus(opentelemetry::trace::StatusCode::kError, filterANSIEscapes(msg, true));
-                    }
+                        setError(act, span, res.value("errorMsg", "build failed"));
                 }
             }
+
+            /* An `error.type` field (cf. `Activity::fail()`) means
+               that the activity failed. */
+            if (errorType)
+                // FIXME: privacy (the message can include URLs and store paths)
+                setError(act, span, errorMessage && !errorMessage->empty() ? *errorMessage : *errorType);
         } catch (...) {
         }
     }

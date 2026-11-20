@@ -7,6 +7,7 @@
 #include "nix/util/terminal.hh"
 #include "nix/util/position.hh"
 #include "nix/util/sentry.hh"
+#include "nix/util/demangle.hh"
 
 #include <cinttypes>
 #include <iostream>
@@ -16,6 +17,11 @@
 namespace nix {
 
 void BaseError::anchor() {}
+
+std::string BaseError::errorType() const
+{
+    return demangle(typeid(*this).name());
+}
 
 void Error::anchor() {}
 

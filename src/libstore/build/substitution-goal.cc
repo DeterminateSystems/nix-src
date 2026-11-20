@@ -276,8 +276,15 @@ Goal::Co PathSubstitutionGoal::tryToRun(
                 parentAct);
             PushActivity pact(act.id);
 
-            promise.set_value(
-                copyStorePath(*sub, *workerStore, subPath, repair, sub->config.isTrusted ? NoCheckSigs : CheckSigs));
+            try {
+                promise.set_value(copyStorePath(
+                    *sub, *workerStore, subPath, repair, sub->config.isTrusted ? NoCheckSigs : CheckSigs));
+            } catch (...) {
+                /* Record why the substitution failed, since `act`
+                   can't tell once it's destroyed by the rethrow. */
+                act.fail(std::current_exception());
+                throw;
+            }
         } catch (...) {
             promise.set_exception(std::current_exception());
         }

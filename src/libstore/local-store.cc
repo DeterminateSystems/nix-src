@@ -1208,7 +1208,7 @@ void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, Repai
             hashResult.numBytesDigested);
 
     if (hashResult.hash != info.narHash)
-        throw Error(
+        throw HashMismatchError(
             "hash mismatch importing path '%s';\n  specified: %s\n  got:       %s",
             printStorePath(info.path),
             info.narHash.to_string(HashFormat::SRI, true),
@@ -1241,7 +1241,7 @@ void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, Repai
             };
         });
         if (specified.hash != actualHash.hash) {
-            throw Error(
+            throw HashMismatchError(
                 "ca hash mismatch importing path '%s';\n  specified: %s\n  got:       %s",
                 printStorePath(info.path),
                 specified.hash.to_string(HashFormat::Nix32, true),

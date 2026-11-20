@@ -130,6 +130,24 @@ expect 1 nix build --no-link "$drvPath^*"
 [[ $(span Build .status.code) = 2 ]]
 span Build .status.message | grepQuiet "builder failed with exit code 1"
 
+# A failed substitution marks its `Substitute` span as failed, with
+# the kind of error and the error message (rather than a generic
+# message). Here the NAR in the binary cache is corrupted, causing a
+# hash mismatch.
+# shellcheck disable=SC2016 # `$out` is for the Nix builder, not the shell.
+outPath=$(nix-build --no-out-link --expr 'with import ./config.nix; mkDerivation { name = "baz"; buildCommand = "echo foo > $out"; }')
+clearBinaryCache
+nix copy --to "file://$cacheDir" "$outPath"
+nix-store --delete "$outPath"
+nar=$cacheDir/$(nix path-info --json --store "file://$cacheDir" "$outPath" | jq -r .[].url)
+xz -cd < "$nar" | sed 's/foo/Foo/' | xz -c > "$nar.new"
+mv "$nar.new" "$nar"
+clearUploads
+expect 1 nix build --no-link --substitute --substituters "file://$cacheDir" --no-require-sigs "$outPath"
+[[ $(span Substitute .status.code) = 2 ]]
+span Substitute .status.message | grepQuiet "hash mismatch importing path"
+[[ $(attr Substitute error.type) = nix::HashMismatchError ]]
+
 # A daemon reached via `ssh-ng://` (here without real SSH, since the
 # host is `localhost`) exports its own spans, in the client's trace.
 # The client and the daemon upload independently, so wait for both.

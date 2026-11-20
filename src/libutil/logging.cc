@@ -8,6 +8,7 @@
 #include "nix/util/sync.hh"
 #include "nix/util/unix-domain-socket.hh"
 #include "nix/util/exit.hh"
+#include "nix/util/demangle.hh"
 
 #include <atomic>
 #include <sstream>
@@ -630,6 +631,32 @@ bool handleJSONLogMessage(
         return false;
 
     return handleJSONLogMessage(*json, act, activities, source, trusted);
+}
+
+void Activity::fail(const std::exception_ptr & ex) const noexcept
+{
+    try {
+        std::string type, message;
+        try {
+            std::rethrow_exception(ex);
+        } catch (BaseError & e) {
+            type = e.errorType();
+            message = filterANSIEscapes(e.message(), true);
+        } catch (std::exception & e) {
+            type = demangle(typeid(e).name());
+            message = e.what();
+        } catch (...) {
+            /* The OpenTelemetry fallback value for `error.type`. */
+            type = "_OTHER";
+        }
+        result(
+            std::to_array<std::pair<std::string_view, Logger::Field>>({
+                {"error.type", type},
+                {"error.message", message},
+            }));
+    } catch (...) {
+        /* Logging is best-effort. */
+    }
 }
 
 Activity::~Activity()

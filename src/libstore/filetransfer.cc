@@ -920,12 +920,38 @@ struct curlFileTransfer : public FileTransfer
                 httpStatus = std::to_underlying(HttpStatus::NotModified);
             }
 
+            bool succeeded = !callbackException && code == CURLE_OK && successfulStatuses.count(httpStatus);
+
+            /* If this attempt failed, classify the failure following
+               the OpenTelemetry HTTP conventions for `error.type`: the
+               HTTP status code if the server returned an error,
+               otherwise the transport error. */
+            std::optional<std::string> failureKind;
+            if (!succeeded && !callbackException) {
+                if (httpStatus >= 400)
+                    failureKind = std::to_string(httpStatus);
+                else if (code == CURLE_OPERATION_TIMEDOUT)
+                    failureKind = "timeout";
+                else if (code != CURLE_OK)
+                    failureKind = curl_easy_strerror(code);
+                else
+                    failureKind = std::to_string(httpStatus);
+            }
+
             if (attemptAct) {
                 /* There is no status code for non-HTTP protocols. */
                 std::vector<std::pair<std::string_view, Logger::Field>> fields;
                 if (httpStatus)
                     fields.emplace_back("http.response.status_code", (uint64_t) httpStatus);
                 fields.emplace_back("http.response.body.size", result.bodySize);
+                if (failureKind) {
+                    fields.emplace_back("error.type", *failureKind);
+                    fields.emplace_back(
+                        "error.message",
+                        errbuf[0]          ? std::string(errbuf)
+                        : code != CURLE_OK ? std::string(curl_easy_strerror(code))
+                                           : fmt("HTTP error %d", httpStatus));
+                }
                 attemptAct->result(Logger::Metadata(fields));
                 attemptAct.reset();
             }
@@ -933,7 +959,7 @@ struct curlFileTransfer : public FileTransfer
             if (callbackException)
                 failEx(callbackException);
 
-            else if (code == CURLE_OK && successfulStatuses.count(httpStatus)) {
+            else if (succeeded) {
                 result.cached = (httpStatus == HttpStatus::NotModified);
 
                 // In 2021, GitHub responds to If-None-Match with 304,
@@ -1085,6 +1111,8 @@ struct curlFileTransfer : public FileTransfer
                                      curl_easy_strerror(code),
                                      code,
                                      errbuf);
+
+                exc.kind = failureKind;
 
                 if (!waitedForConnection)
                     waitingForConnectionSince.reset();
@@ -1782,6 +1810,11 @@ void FileTransfer::download(
 }
 
 void FileTransferError::anchor() {}
+
+std::string FileTransferError::errorType() const
+{
+    return kind ? *kind : Error::errorType();
+}
 
 template<typename... Args>
 FileTransferError::FileTransferError(

@@ -361,6 +361,16 @@ struct Activity
         logger.result(id, fields);
     }
 
+    /**
+     * Report that this activity failed because of the exception
+     * `ex`, as a field-only result with the fields `error.type` (cf.
+     * `BaseError::errorType()`) and `error.message`. Call this from
+     * the `catch` block that handles `ex` (typically before
+     * rethrowing it), since the exception can't be retrieved while
+     * the `Activity` is being destroyed by stack unwinding.
+     */
+    void fail(const std::exception_ptr & ex) const noexcept;
+
     friend class Logger;
 };
 
