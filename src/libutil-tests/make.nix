@@ -11,7 +11,7 @@
 
 let
   inherit (pkgs) lib;
-  inherit (nixMake.hostPlatform) isLinux;
+  inherit (nixMake.hostPlatform) isLinux isDarwin;
 
   tests = nixMake.mkComponent {
     name = "determinate-nix-util-tests";
@@ -29,7 +29,12 @@ let
     # libnixutil only interposes __cxa_throw on Linux (see
     # src/libutil/make.nix).
     # The fuzzing harnesses are separate executables.
-    excludeSources = [ "fuzz" ] ++ lib.optional (!isLinux) "cxa-throw.cc";
+    # Meson only builds darwin/ on macOS.
+    excludeSources = [
+      "fuzz"
+    ]
+    ++ lib.optional (!isLinux) "cxa-throw.cc"
+    ++ lib.optional (!isDarwin) "darwin";
 
     includeDirs = [ "" ];
 
