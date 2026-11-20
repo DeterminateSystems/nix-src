@@ -464,16 +464,6 @@ struct JSONLogger : Logger
         write(std::move(json));
     }
 
-    void result(ActivityId act, ResultType type, const nlohmann::json & j) noexcept override
-    {
-        nlohmann::json json;
-        json["action"] = "result";
-        json["id"] = act;
-        json["type"] = type;
-        json["payload"] = j;
-        write(std::move(json));
-    }
-
     void result(ActivityId act, Metadata fields) noexcept override
     {
         nlohmann::json json;

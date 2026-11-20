@@ -50,14 +50,6 @@ typedef enum {
     resPostBuildLogLine = 107,
     resFetchStatus = 108,
     /**
-     * Emitted via the JSON `result()` overload: an object describing
-     * the response to an HTTP request, with the fields `httpStatus`
-     * (the status code, absent for non-HTTP protocols) and `bodySize`
-     * (the number of body bytes received). More fields may be added
-     * in the future.
-     */
-    resHttpStatus = 10111,
-    /**
      * The type under which field-only results (cf. the
      * `Metadata`-based `Logger::result()`) are reported in the JSON
      * log. Do not use directly.
@@ -246,8 +238,6 @@ public:
 
     virtual void result(ActivityId act, ResultType type, const Fields & fields) noexcept {};
 
-    virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept {};
-
     /**
      * Report a field-only result for an activity, typically
      * describing its current state (e.g. its progress). The fields
@@ -347,11 +337,6 @@ struct Activity
     void setExpected(ActivityType type2, uint64_t expected) const
     {
         result(resSetExpected, type2, expected);
-    }
-
-    void result(ResultType type, const nlohmann::json & json) const
-    {
-        logger.result(id, type, json);
     }
 
     template<typename... Args>

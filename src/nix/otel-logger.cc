@@ -603,24 +603,6 @@ public:
         }
     }
 
-    void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept override
-    {
-        try {
-            if (isRemoteLogSource())
-                return;
-            if (type == resHttpStatus) {
-                auto spans(spans_.lock());
-                if (auto i = spans->find(act); i != spans->end()) {
-                    if (auto status = json.find("httpStatus"); status != json.end() && status->is_number())
-                        i->second->SetAttribute("http.response.status_code", status->get<int64_t>());
-                    if (auto bodySize = json.find("bodySize"); bodySize != json.end() && bodySize->is_number())
-                        i->second->SetAttribute("http.response.body.size", bodySize->get<int64_t>());
-                }
-            }
-        } catch (...) {
-        }
-    }
-
     void result(ActivityId act, Metadata fields) noexcept override
     {
         try {

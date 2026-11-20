@@ -59,6 +59,13 @@ nix store info --json-log-path "$TEST_ROOT/log2.json" --session-id "foo"
 (( $(jq -s 'length' < "$TEST_ROOT/log2.json") > 0 ))
 (( $(jq -s --arg sid foo '[.[] | select(.sid != $sid)] | length' < "$TEST_ROOT/log2.json") == 0 ))
 
+# Test that file transfers report the response as a field-only result.
+# There is no status code for non-HTTP protocols.
+echo -n "hello world" > "$TEST_ROOT/transfer-me"
+nix store prefetch-file --json-log-path "$TEST_ROOT/log5.json" "file://$TEST_ROOT/transfer-me"
+(( $(jq -s '[.[] | select(.action == "result" and .type == 10114 and .payload."http.response.body.size" == 11
+    and (.payload | has("http.response.status_code") | not))] | length' < "$TEST_ROOT/log5.json") == 1 ))
+
 # Test that string-named activities (including those forwarded by the
 # daemon) appear in the JSON log with their name and metadata.
 if isDaemonNewer "2.36pre"; then

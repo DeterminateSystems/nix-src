@@ -92,12 +92,6 @@ public:
             logger->result(act, type, fields);
     }
 
-    void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept override
-    {
-        for (auto & logger : loggers)
-            logger->result(act, type, json);
-    }
-
     void result(ActivityId act, Metadata fields) noexcept override
     {
         for (auto & logger : loggers)

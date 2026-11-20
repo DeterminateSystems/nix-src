@@ -23,8 +23,6 @@
 
 #include <curl/curl.h>
 
-#include <nlohmann/json.hpp>
-
 #include <array>
 #include <algorithm>
 #include <array>
@@ -923,11 +921,12 @@ struct curlFileTransfer : public FileTransfer
             }
 
             if (attemptAct) {
-                nlohmann::json json;
+                /* There is no status code for non-HTTP protocols. */
+                std::vector<std::pair<std::string_view, Logger::Field>> fields;
                 if (httpStatus)
-                    json["httpStatus"] = httpStatus;
-                json["bodySize"] = result.bodySize;
-                logger->result(attemptAct->id, resHttpStatus, json);
+                    fields.emplace_back("http.response.status_code", (uint64_t) httpStatus);
+                fields.emplace_back("http.response.body.size", result.bodySize);
+                attemptAct->result(Logger::Metadata(fields));
                 attemptAct.reset();
             }
 
