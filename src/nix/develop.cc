@@ -1,4 +1,6 @@
 #include "nix/cmd/command.hh"
+
+#include "cli-config-private.hh"
 #include "nix/util/config-global.hh"
 #include "nix/expr/eval.hh"
 #include "nix/fetchers/fetch-settings.hh"
@@ -632,7 +634,7 @@ struct CmdDevelop : Common, MixEnvironment
         // prevent garbage collection until shell exits
         setEnv("NIX_GCROOT", store->printStorePath(gcroot).c_str());
 
-        std::filesystem::path shell = "bash";
+        std::filesystem::path shell = FALLBACK_BASH;
         bool foundInteractive = false;
 
         try {

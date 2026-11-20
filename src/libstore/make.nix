@@ -77,6 +77,8 @@ nixMake.mkComponent {
       NIX_STORE_DIR = "/nix/store";
       NIX_USE_WASMTIME = nixMake.config.wasm;
       PACKAGE_VERSION = lib.fileContents ../../.version;
+      # The default of the Meson option `ssh-program`.
+      SSH_PROGRAM = "ssh";
       # package.nix only has a sandbox shell on Linux.
       SANDBOX_SHELL = if isLinux then "${pkgs.busybox-sandbox-shell}/bin/busybox" else null;
     };

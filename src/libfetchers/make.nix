@@ -23,5 +23,13 @@ nixMake.mkComponent {
 
   files = nixMake.commonSupportFiles;
 
+  configHeaders = {
+    "fetchers-config-private.hh" = {
+      # The defaults of the Meson options `git-program` and `hg-program`.
+      GIT_PROGRAM = "git";
+      HG_PROGRAM = "hg";
+    };
+  };
+
   linkFlags = nixMake.wrapAssertFailFlags;
 }

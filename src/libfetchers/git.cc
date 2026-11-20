@@ -1,4 +1,6 @@
 #include "nix/util/environment-variables.hh"
+
+#include "fetchers-config-private.hh"
 #include "nix/util/error.hh"
 #include "nix/fetchers/fetchers.hh"
 #include "nix/util/users.hh"
@@ -51,7 +53,7 @@ std::optional<std::string> readHead(const std::filesystem::path & path)
 {
     auto [status, output] = runProgram(
         RunOptions{
-            .program = "git",
+            .program = GIT_PROGRAM,
             // FIXME: use 'HEAD' to avoid returning all refs
             .args = {OS_STR("ls-remote"), OS_STR("--symref"), path.native()},
             .isInteractive = true,
@@ -81,7 +83,7 @@ bool storeCachedHead(const std::string & actualUrl, bool shallow, const std::str
     std::filesystem::path cacheDir = getCachePath(actualUrl, shallow);
     try {
         runProgram(
-            "git",
+            GIT_PROGRAM,
             true,
             {
                 OS_STR("-C"),
@@ -474,7 +476,7 @@ struct GitInputScheme : InputScheme
 
         args.push_back(destDir.native());
 
-        runProgram("git", true, args, true);
+        runProgram(GIT_PROGRAM, true, args, true);
     }
 
     std::optional<std::filesystem::path> getSourcePath(const Input & input) const override
@@ -498,7 +500,7 @@ struct GitInputScheme : InputScheme
 
         auto result = runProgram(
             RunOptions{
-                .program = "git",
+                .program = GIT_PROGRAM,
                 .args{
                     OS_STR("-C"),
                     repoPath->native(),
@@ -520,7 +522,7 @@ struct GitInputScheme : InputScheme
         if (exitCode != 0) {
             // The path is not `.gitignore`d, we can add the file.
             runProgram(
-                "git",
+                GIT_PROGRAM,
                 true,
                 {
                     OS_STR("-C"),
@@ -541,7 +543,7 @@ struct GitInputScheme : InputScheme
                 // Pause the logger to allow for user input (such as a gpg passphrase) in `git commit`
                 auto suspension = logger->suspend();
                 runProgram(
-                    "git",
+                    GIT_PROGRAM,
                     true,
                     {
                         OS_STR("-C"),
@@ -917,17 +919,18 @@ struct GitInputScheme : InputScheme
                 ? [&]() {
                       // Nix < 2.20 used `git checkout` for repos with submodules.
                       StringSink sink; // don't pollute stdout
-                      runProgram2({.program = "git", .args = {"init", tmpDir, "-b", "master"}, .standardOut = &sink});
                       runProgram2(
-                          {.program = "git",
+                          {.program = GIT_PROGRAM, .args = {"init", tmpDir, "-b", "master"}, .standardOut = &sink});
+                      runProgram2(
+                          {.program = GIT_PROGRAM,
                            .args = {"-C", tmpDir, "remote", "add", "origin", repoDir},
                            .standardOut = &sink});
                       runProgram2(
-                          {.program = "git",
+                          {.program = GIT_PROGRAM,
                            .args = {"-C", tmpDir, "fetch", "--quiet", "origin", rev.gitRev()},
                            .standardOut = &sink});
                       runProgram2(
-                          {.program = "git",
+                          {.program = GIT_PROGRAM,
                            .args = {"-C", tmpDir, "checkout", "--quiet", rev.gitRev()},
                            .standardOut = &sink});
                       PathFilter filter = [&](const std::string & path) { return baseNameOf(path) != ".git"; };
@@ -943,7 +946,7 @@ struct GitInputScheme : InputScheme
                       // Nix < 2.20 used `git archive` for repos without submodules.
                       auto source = sinkToSource([&](Sink & sink) {
                           runProgram2(
-                              {.program = "git",
+                              {.program = GIT_PROGRAM,
                                .args = {"-C", repoDir, "--git-dir", repoInfo.gitDir, "archive", rev.gitRev()},
                                .standardOut = &sink});
                       });
