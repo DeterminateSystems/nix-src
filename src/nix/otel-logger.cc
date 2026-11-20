@@ -213,6 +213,7 @@ std::string_view activityName(ActivityType type)
         ACTIVITY_NAME(PostBuildHook)
         ACTIVITY_NAME(BuildWaiting)
         ACTIVITY_NAME(FetchTree)
+        ACTIVITY_NAME(FetchToStore)
 #  undef ACTIVITY_NAME
     case actStringly:
         /* Only reached via a Logger that flattens string-named

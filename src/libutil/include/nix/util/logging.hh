@@ -16,6 +16,8 @@
 
 namespace nix {
 
+/* TODO: Make these enum classes. */
+
 typedef enum {
     actUnknown = 0,
     actCopyPath = 100,
@@ -31,6 +33,22 @@ typedef enum {
     actPostBuildHook = 110,
     actBuildWaiting = 111,
     actFetchTree = 112,
+    /**
+     * Upstream Nix's activity type for a source path being copied to
+     * the store or hashed by `fetchToStore()`. Fields: [0] = source
+     * path (string), [1] = whether the path is only being hashed (1)
+     * rather than copied (0). Determinate Nix does not emit this (it
+     * uses the string-named `CopySourcePath` and `HashSourcePath`
+     * activities instead), but accepts it in log messages from other
+     * Nix versions.
+     */
+    actFetchToStore = 113,
+    /**
+     * The last of the contiguous (upstream) activity types. Determinate
+     * Nix-specific types (10000 and up) come after this; use
+     * `isKnownActivityType()` to validate a raw value.
+     */
+    actLast = actFetchToStore,
     /**
      * The type under which string-named activities (created via the
      * name-based `Activity` constructor) are reported on legacy code
@@ -56,6 +74,12 @@ typedef enum {
      * the operation completes. Fields: [0] = store path (string).
      */
     resFetchToStore = 109,
+    /**
+     * The last of the contiguous (upstream) result types. Determinate
+     * Nix-specific types (10000 and up) come after this; use
+     * `isKnownResultType()` to validate a raw value.
+     */
+    resLast = resFetchToStore,
     resBuildResult = 10110,
     /**
      * Emitted via the JSON `result()` overload: an object describing
@@ -74,6 +98,23 @@ typedef enum {
     resGCProgress = 10112,
     resHashMismatch = 10113,
 } ResultType;
+
+/**
+ * Whether `raw` (e.g. received from an untrusted source such as a
+ * builder) denotes a known activity type.
+ */
+inline bool isKnownActivityType(uint64_t raw)
+{
+    return raw == actUnknown || (raw >= actCopyPath && raw <= actLast) || raw == actStringly;
+}
+
+/**
+ * Whether `raw` denotes a known result type.
+ */
+inline bool isKnownResultType(uint64_t raw)
+{
+    return (raw >= resFileLinked && raw <= resLast) || (raw >= resBuildResult && raw <= resHashMismatch);
+}
 
 typedef uint64_t ActivityId;
 
@@ -414,13 +455,13 @@ bool isRemoteLogSource();
 /**
  * @param source A noun phrase describing the source of the message, e.g. "the builder".
  */
-std::optional<nlohmann::json> parseJSONMessage(const std::string & msg, std::string_view source);
+std::optional<nlohmann::json> parseJSONMessage(std::string_view msg, std::string_view source);
 
 /**
  * @param source A noun phrase describing the source of the message, e.g. "the builder".
  */
 bool handleJSONLogMessage(
-    nlohmann::json & json,
+    const nlohmann::json & json,
     const Activity & act,
     std::map<ActivityId, Activity> & activities,
     std::string_view source,
@@ -430,11 +471,21 @@ bool handleJSONLogMessage(
  * @param source A noun phrase describing the source of the message, e.g. "the builder".
  */
 bool handleJSONLogMessage(
+    std::string_view msg,
+    const Activity & act,
+    std::map<ActivityId, Activity> & activities,
+    std::string_view source,
+    bool trusted);
+
+inline bool handleJSONLogMessage(
     const std::string & msg,
     const Activity & act,
     std::map<ActivityId, Activity> & activities,
     std::string_view source,
-    bool trusted);
+    bool trusted)
+{
+    return handleJSONLogMessage(std::string_view(msg), act, activities, source, trusted);
+}
 
 /**
  * suppress msgs > this
