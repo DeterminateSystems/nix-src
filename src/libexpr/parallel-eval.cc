@@ -930,7 +930,7 @@ ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer expec
 
     /* Wait for another thread to finish this value. */
     if (threadId == myEvalThreadId)
-        state.error<InfiniteRecursionError>("infinite recursion encountered")
+        state.error<InfiniteRecursionError>((Value *) this, "infinite recursion encountered")
             .atPos(((Value &) *this).determinePos(noPos))
             .debugThrow();
 

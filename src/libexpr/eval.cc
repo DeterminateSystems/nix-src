@@ -2428,10 +2428,18 @@ void ExprPos::eval(EvalState & state, Env & env, Value & v)
     state.mkPos(v, pos);
 }
 
-void EvalState::fixupBlackHolePos(InfiniteRecursionError & e, PosIdx pos)
+void EvalState::fixupBlackHolePos(InfiniteRecursionError & e, const Value & v, PosIdx pos)
 {
     if (!e.hasPos())
         e.atPos(positions[pos]);
+
+    /* Mark where evaluation enters the infinite recursion, so the
+       trace distinguishes the cycle from the code leading up to it.
+       This is called for every thunk that the error propagates
+       through, but only the thunk that was found to be a blackhole
+       matches `e.v`, so the entry is added once. */
+    if (e.v == &v)
+        e.addTrace(nullptr, HintFmt(ANSI_WARNING "entering the infinite recursion" ANSI_NORMAL), TracePrint::Always);
 }
 
 void EvalState::forceValueDeep(Value & v)

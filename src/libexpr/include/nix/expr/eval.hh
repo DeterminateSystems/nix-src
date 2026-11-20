@@ -720,7 +720,7 @@ public:
      * yet the position `pos` of the thunk that it's propagating
      * through.
      */
-    void fixupBlackHolePos(InfiniteRecursionError & e, PosIdx pos);
+    void fixupBlackHolePos(InfiniteRecursionError & e, const Value & v, PosIdx pos);
 
 public:
 

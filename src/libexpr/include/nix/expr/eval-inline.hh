@@ -162,7 +162,7 @@ void ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptr
                type of the current exception there would require
                rethrowing it, which is expensive to do for every
                thunk that an error propagates through. */
-            state.fixupBlackHolePos(e, pos);
+            state.fixupBlackHolePos(e, (Value &) *this, pos);
             setStorage(new Value::Failed{.ex = std::current_exception()});
             throw;
         } catch (...) {
