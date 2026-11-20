@@ -355,6 +355,8 @@ TEST(to_string, doesntReencodeUrl)
 
 TEST(parseFlakeRef, urlInterpretationErrorsAreNotMasked)
 {
+    fetchers::Settings fetchSettings;
+
     // Errors that occur while interpreting a syntactically valid URL
     // (such as an unsupported query parameter) should be shown to the
     // user, rather than causing the flake ref to be reinterpreted as a
