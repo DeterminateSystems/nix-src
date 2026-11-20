@@ -192,6 +192,7 @@ suites = [
       'supplementary-groups.sh',
       'symlinks.sh',
       'tarball.sh',
+      'nix-daemon-acceptor-trust.sh',
       'nix-daemon-stdio-trust.sh',
       'test-infra.sh',
       'timeout.sh',

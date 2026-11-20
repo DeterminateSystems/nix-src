@@ -616,16 +616,12 @@ static int main_nix_daemon(int argc, char ** argv)
             else if (*arg == "--stdio")
                 stdio = true;
             else if (*arg == "--force-trusted") {
-                experimentalFeatureSettings.require(Xp::DaemonTrustOverride);
                 isTrustedOpt = Trusted;
             } else if (*arg == "--force-untrusted") {
-                experimentalFeatureSettings.require(Xp::DaemonTrustOverride);
                 isTrustedOpt = NotTrusted;
             } else if (*arg == "--default-trust") {
-                experimentalFeatureSettings.require(Xp::DaemonTrustOverride);
                 isTrustedOpt = std::nullopt;
             } else if (*arg == "--process-ops") {
-                experimentalFeatureSettings.require(Xp::MountedSSHStore);
                 processOps = true;
             } else
                 return false;
@@ -663,7 +659,6 @@ struct CmdDaemon : StoreConfigCommand
             .longName = "force-trusted",
             .description = "Force the daemon to trust connecting clients.",
             .handler = {[&]() { isTrustedOpt = Trusted; }},
-            .experimentalFeature = Xp::DaemonTrustOverride,
         });
 
         addFlag({
@@ -673,14 +668,12 @@ struct CmdDaemon : StoreConfigCommand
               The connection is processed by the receiving daemon before forwarding commands.
             )",
             .handler = {[&]() { isTrustedOpt = NotTrusted; }},
-            .experimentalFeature = Xp::DaemonTrustOverride,
         });
 
         addFlag({
             .longName = "default-trust",
             .description = "Use Nix's default trust.",
             .handler = {[&]() { isTrustedOpt = std::nullopt; }},
-            .experimentalFeature = Xp::DaemonTrustOverride,
         });
 
         addFlag({
@@ -691,7 +684,7 @@ struct CmdDaemon : StoreConfigCommand
               Incompatible with `--stdio`.
             )",
             .labels = {"path"},
-            .handler = {[&](std::filesystem::path s) { socketPath = std::move(s); }},
+            .handler = &socketPath,
         });
 
         addFlag({
@@ -702,7 +695,6 @@ struct CmdDaemon : StoreConfigCommand
               This is useful for the `mounted-ssh://` store where some actions need to be performed on the remote end but as connected user, and not as the user of the underlying daemon on the remote end.
             )",
             .handler = {[&]() { processOps = true; }},
-            .experimentalFeature = Xp::MountedSSHStore,
         });
     }
 
