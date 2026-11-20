@@ -200,6 +200,7 @@ sources = [ config_priv_h ] + files(
   'logging.cc',
   'memory-source-accessor.cc',
   'memory-source-accessor/json.cc',
+  'merkle-files.cc',
   'mounted-source-accessor.cc',
   'nar-accessor.cc',
   'nar-cache.cc',

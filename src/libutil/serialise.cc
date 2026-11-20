@@ -545,9 +545,16 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
 
         void finish() override
         {
-            if (coro && *coro) {
-                CoroutineGuard guard{stackCookie};
-                (*coro)(true);
+            if (coro) {
+                if (*coro) {
+                    CoroutineGuard guard{stackCookie};
+                    (*coro)(true);
+                }
+            } else {
+                /* Callers of sourceToSink expect to always be invoked, even if there's no
+                   data to read (to invoke other side effects, e.g. in Store::addToStore). */
+                StringSource empty{std::string_view()};
+                reader(empty);
             }
         }
     };
