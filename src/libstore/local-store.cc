@@ -1178,13 +1178,17 @@ static bool existsAndIsOwnedBySelf(const std::filesystem::path & path)
 
 /**
  * Move a path that was restored in a temporary directory in the store to its
- * final location. The caller must canonicalise `realPath` afterwards, since
- * the fallback below doesn't preserve permissions.
+ * final location. `tempPath` must have been restored using `hooks`
+ * (see `makeCanonicalisingRestoreHooks()`), which are also applied by the
+ * copying fallback below, so the result has canonical metadata either way.
  */
-static void moveTempPathIntoStore(const std::filesystem::path & tempPath, const std::filesystem::path & realPath)
+static void moveTempPathIntoStore(
+    const std::filesystem::path & tempPath, const std::filesystem::path & realPath, RestoreSinkHooks * hooks)
 {
     try {
-        renameFile(tempPath, realPath);
+        /* movePath and not renameFile because at this point the top-level directory is
+           read-only. */
+        movePath(tempPath, realPath);
     } catch (const SystemError & e) {
         if (!e.is(std::errc::cross_device_link))
             throw;
@@ -1193,7 +1197,7 @@ static void moveTempPathIntoStore(const std::filesystem::path & tempPath, const 
            (https://github.com/NixOS/nix/issues/6262). So we can't copy to a temporary location and rename that to
            `realPath`, since that rename would fail in the same way. Copy directly to `realPath` instead. */
         warn("can't rename %s as %s, copying instead", PathFmt(tempPath), PathFmt(realPath));
-        RestoreSink copySink{/*startFsync=*/false};
+        RestoreSink copySink{/*startFsync=*/false, /*hooks=*/hooks};
         copySink.dstPath = realPath;
         AutoDelete delRealPath(realPath);
         copyRecursive(*makeFSSourceAccessor(tempPath), CanonPath::root, copySink, CanonPath::root);
@@ -1224,7 +1228,9 @@ void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, Repai
 
     TeeSource wrapperSource{source, hashSink};
 
-    restorePath(tempPath, wrapperSource, localSettings.fsyncStorePaths);
+    auto canonicalisingRestoreHooks = makeCanonicalisingRestoreHooks(NIX_WHEN_SUPPORT_ACLS2(localSettings.ignoredAcls));
+
+    restorePath(tempPath, wrapperSource, localSettings.fsyncStorePaths, canonicalisingRestoreHooks.get());
 
     auto hashResult = hashSink.finish();
 
@@ -1287,13 +1293,11 @@ void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, Repai
     deletePath(realPath);
 
     /* Move the temporary path we restored above. */
-    moveTempPathIntoStore(tempPath, realPath);
+    moveTempPathIntoStore(tempPath, realPath, canonicalisingRestoreHooks.get());
 
     /* Clean up the staging directory. */
     delTempDir.deletePath();
     tempDirFd.close();
-
-    canonicalisePathMetaData(realPath, {NIX_WHEN_SUPPORT_ACLS(localSettings.ignoredAcls)});
 
     optimisePath(realPath, repair); // FIXME: combine with hashPath()
 
@@ -1575,6 +1579,8 @@ StorePath LocalStore::addToStoreFromDump(
        wrong sort, and we need to rehash.
        References are also in store path, if scanning we will need to move */
     bool inMemoryAndDontNeedRestore = inMemory && methodsMatch && !filterReferences;
+    auto canonicalisingRestoreHooks =
+        makeCanonicalisingRestoreHooks(NIX_WHEN_SUPPORT_ACLS2(config->getLocalSettings().ignoredAcls));
 
     if (!inMemoryAndDontNeedRestore) {
         /* Drain what we pulled so far, and then keep on pulling */
@@ -1585,7 +1591,7 @@ StorePath LocalStore::addToStoreFromDump(
         delTempDir = std::make_unique<AutoDelete>(tempDir);
         tempPath = tempDir / "x";
 
-        restorePath(tempPath, bothSource, dumpMethod, localSettings.fsyncStorePaths);
+        restorePath(tempPath, bothSource, dumpMethod, localSettings.fsyncStorePaths, canonicalisingRestoreHooks.get());
 
         std::string().swap(dump);
     }
@@ -1639,7 +1645,12 @@ StorePath LocalStore::addToStoreFromDump(
                 switch (fim) {
                 case FileIngestionMethod::Flat:
                 case FileIngestionMethod::NixArchive:
-                    restorePath(realPath, dumpSource, (FileSerialisationMethod) fim, localSettings.fsyncStorePaths);
+                    restorePath(
+                        realPath,
+                        dumpSource,
+                        (FileSerialisationMethod) fim,
+                        localSettings.fsyncStorePaths,
+                        canonicalisingRestoreHooks.get());
                     break;
                 case FileIngestionMethod::Git:
                     // doesn't correspond to serialization method, so
@@ -1648,7 +1659,7 @@ StorePath LocalStore::addToStoreFromDump(
                 }
             } else {
                 /* Move the temporary path we restored above. */
-                moveTempPathIntoStore(tempPath, realPath);
+                moveTempPathIntoStore(tempPath, realPath, canonicalisingRestoreHooks.get());
             }
 
             /* For computing the nar hash. In recursive SHA-256 mode, this
@@ -1659,9 +1670,6 @@ StorePath LocalStore::addToStoreFromDump(
                 dumpPath(realPath, narSink);
                 narHash = narSink.finish();
             }
-
-            canonicalisePathMetaData(
-                realPath, {NIX_WHEN_SUPPORT_ACLS(localSettings.ignoredAcls)}); // FIXME: merge into restorePath
 
             optimisePath(realPath, repair);
 
