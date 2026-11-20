@@ -48,6 +48,18 @@ getStoreBaseName(std::string_view storeDir, std::string_view path, std::string &
     return buf;
 }
 
+StorePath StoreDirConfig::parseStorePathCanonical(std::string_view path) const
+{
+    if (!path.starts_with(storeDir))
+        throw BadStorePath("path '%s' is not in the Nix store", path);
+    path.remove_prefix(storeDir.length());
+
+    if (!path.starts_with('/'))
+        throw BadStorePath("path '%s' is not in the Nix store", path);
+
+    return StorePath(path.substr(1));
+}
+
 StorePath StoreDirConfig::parseStorePath(std::string_view path) const
 {
     std::string buf;
@@ -73,14 +85,6 @@ std::expected<StorePath, BadStorePathReason> StoreDirConfig::maybeParseStorePath
 bool StoreDirConfig::isStorePath(std::string_view path) const
 {
     return (bool) maybeParseStorePath(path);
-}
-
-StorePathSet StoreDirConfig::parseStorePathSet(const StringSet & paths) const
-{
-    StorePathSet res;
-    for (auto & i : paths)
-        res.insert(parseStorePath(i));
-    return res;
 }
 
 std::string StoreDirConfig::printStorePath(const StorePath & path) const

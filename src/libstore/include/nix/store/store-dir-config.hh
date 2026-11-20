@@ -39,19 +39,21 @@ struct StoreDirConfig
     StorePath parseStorePath(std::string_view path) const;
 
     /**
+     * Parse a store path, requiring canonical form.
+     * Rejects paths with trailing or excess path separators
+     *
+     * @todo Try to use this as much as possible, and then rename so we
+     * have `parseStorePath` and `parseStorePathNonCanonical`.
+     */
+    StorePath parseStorePathCanonical(std::string_view path) const;
+
+    /**
      * Like `parseStorePath()`, but returns the reason instead of throwing
      * if `path` is not a valid store path.
      */
     std::expected<StorePath, BadStorePathReason> maybeParseStorePath(std::string_view path) const;
 
     std::string printStorePath(const StorePath & path) const;
-
-    /**
-     * Deprecated
-     *
-     * \todo remove
-     */
-    StorePathSet parseStorePathSet(const StringSet & paths) const;
 
     StringSet printStorePathSet(const StorePathSet & path) const;
 
