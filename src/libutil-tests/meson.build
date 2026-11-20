@@ -96,6 +96,10 @@ if host_machine.system() == 'darwin'
   subdir('darwin')
 endif
 
+if host_machine.system() == 'linux'
+  subdir('linux')
+endif
+
 include_dirs = [ include_directories('.') ]
 
 if build_unit_tests
