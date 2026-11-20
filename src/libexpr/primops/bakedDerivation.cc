@@ -1,7 +1,7 @@
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/store/derivations.hh"
-#include "nix/store/derivation/modulo.hh"
+#include "nix/store/derivation/masked.hh"
 #include "nix/store/derived-path.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/globals.hh"
@@ -101,7 +101,7 @@ static void prim_bakedDerivation(EvalState & state, CallSite callSite, Value * c
 
     /* As in `derivationStrict`, cache the derivation hash so that derivations depending on this one don't need to
        read it back from the store. */
-    derivation::modulo::hashes.insert_or_assign(drvPath, derivation::modulo::hashInput(*state.store, drv));
+    derivation::masked::hashes.insert_or_assign(drvPath, derivation::masked::hashInput(*state.store, drv));
 
     /* Return an attribute set of the same shape as `derivationStrict`: the derivation path and one string per
        output. The output strings carry string context, so that they can be used as inputs of other derivations. */

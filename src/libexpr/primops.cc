@@ -1,7 +1,7 @@
 #include "nix/store/async-path-writer.hh"
 #include "nix/store/derivations.hh"
 #include "nix/store/derivation/aterm.hh"
-#include "nix/store/derivation/modulo.hh"
+#include "nix/store/derivation/masked.hh"
 #include "nix/store/downstream-placeholder.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/expr/eval.hh"
@@ -2000,8 +2000,8 @@ static void derivationStrictInternal(
        case we don't actually write store derivations, so we can't
        read them later. */
     {
-        auto h = derivation::modulo::hashInput(*state.store, drv);
-        derivation::modulo::hashes.insert_or_assign(drvPath, std::move(h));
+        auto h = derivation::masked::hashInput(*state.store, drv);
+        derivation::masked::hashes.insert_or_assign(drvPath, std::move(h));
     }
 
     auto result = state.buildBindings(1 + drv.outputs.size());
