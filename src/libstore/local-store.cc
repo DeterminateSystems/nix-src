@@ -1257,7 +1257,7 @@ void LocalStore::doAddToStore(const ValidPathInfo & info, Source & source, Repai
             switch (fim) {
             case FileIngestionMethod::Flat:
             case FileIngestionMethod::NixArchive: {
-                HashModuloSink caSink{
+                MaskedHashSink caSink{
                     specified.hash.algo,
                     std::string{info.path.hashPart()},
                 };
