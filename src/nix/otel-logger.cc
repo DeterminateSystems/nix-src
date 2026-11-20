@@ -647,28 +647,15 @@ public:
                     else if (key == "error.message")
                         errorMessage = *str;
                 }
-
-                auto json = std::get_if<const nlohmann::json *>(&value.raw);
-                if (!json)
-                    continue;
-                if (key == "nix.build.result") {
-                    /* A failed build or substitution doesn't throw,
-                       so `stopActivity()` can't tell; the result tells
-                       us. Note: a substitution goal "failing" because
-                       there is no substituter for the path is the
-                       normal prelude to building it, so don't call
-                       that an error. */
-                    auto & res = **json;
-                    if (!res.value("success", true) && res.value("status", "") != "NoSubstituters")
-                        // FIXME: privacy (the message can include the build log tail)
-                        setError(act, span, res.value("errorMsg", "build failed"));
-                }
             }
 
-            /* An `error.type` field (cf. `Activity::fail()`) means
-               that the activity failed. */
+            /* An `error.type` field (cf. `Activity::fail()` and
+               `logBuildResult()`) means that the activity failed.
+               This matters in particular for activities that fail
+               without throwing (such as builds), since
+               `stopActivity()` can't tell in that case. */
             if (errorType)
-                // FIXME: privacy (the message can include URLs and store paths)
+                // FIXME: privacy (the message can include URLs, store paths and the build log tail)
                 setError(act, span, errorMessage && !errorMessage->empty() ? *errorMessage : *errorType);
         } catch (...) {
         }

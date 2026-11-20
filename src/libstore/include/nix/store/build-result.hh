@@ -127,6 +127,11 @@ public:
 
     bool operator==(const BuildError &) const noexcept;
     std::strong_ordering operator<=>(const BuildError &) const noexcept;
+
+    /**
+     * The name of the failure status, e.g. `PermanentFailure`.
+     */
+    std::string errorType() const override;
 };
 
 struct BuildResult
@@ -240,8 +245,11 @@ struct KeyedBuildResult : BuildResult
 
 /**
  * Report the result of a build or substitution on the activity `act`
- * as a field-only result, with fields `nix.build.status` (a string)
- * and `nix.build.result` (the JSON representation of `result`).
+ * as a field-only result, with the field `nix.build.result` (the JSON
+ * representation of `result`). If it failed, the result also has
+ * the fields `error.type` (the failure status, e.g.
+ * `PermanentFailure`) and `error.message`, except for the
+ * `NoSubstituters` status, which isn't considered an error.
  */
 void logBuildResult(ActivityId act, const KeyedBuildResult & result);
 

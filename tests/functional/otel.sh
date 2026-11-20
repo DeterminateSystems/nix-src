@@ -112,11 +112,11 @@ nix build --no-link --substitute "$drvPath^*"
 [[ $(attr Build nix.drv.path) = "$drvPath" ]]
 [[ $(attr Build nix.drv.name) = foo ]]
 [[ $(attr Build nix.drv.version) = 1.2 ]]
-[[ $(attr Build nix.build.status) = Built ]]
+[[ -z $(attr Build error.type) ]]
 [[ $(span Build .status.code) = null ]]
 # Not being able to substitute the path is the normal prelude to
 # building it, not an error.
-[[ $(attr SubstitutionGoal nix.build.status) = NoSubstituters ]]
+[[ -z $(attr SubstitutionGoal error.type) ]]
 [[ $(span SubstitutionGoal .status.code) = null ]]
 
 # A failed build marks its `Build` span as failed, with the build's
@@ -126,7 +126,7 @@ nix build --no-link --substitute "$drvPath^*"
 drvPath=$(nix-instantiate --expr 'with import ./config.nix; mkDerivation { name = "bar-1.2"; buildCommand = "echo something went wrong >&2; exit 1"; }')
 clearUploads
 expect 1 nix build --no-link "$drvPath^*"
-[[ $(attr Build nix.build.status) = PermanentFailure ]]
+[[ $(attr Build error.type) = PermanentFailure ]]
 [[ $(span Build .status.code) = 2 ]]
 span Build .status.message | grepQuiet "builder failed with exit code 1"
 
