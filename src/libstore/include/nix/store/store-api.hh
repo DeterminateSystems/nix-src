@@ -207,7 +207,7 @@ public:
     StoreDirSetting storeDir_;
 
     /**
-     * @pathType see FilePathType
+     * @param pathType see FilePathType
      */
     StoreConfigBase(const StoreReference::Params & params, FilePathType pathType);
 };
@@ -507,7 +507,7 @@ public:
      * implements nix-copy-closure's --use-substitutes
      * flag.
      *
-     * @TODO suspicious to have a Store method that uses `getBuilder`.
+     * @todo suspicious to have a Store method that uses `getBuilder`.
      */
     void substitutePaths(const StorePathSet & paths);
 
@@ -934,7 +934,7 @@ public:
      * Read a derivation, after ensuring its existence through
      * ensurePath().
      *
-     * @TODO suspicious to have a Store method that uses `getBuilder`.
+     * @todo suspicious to have a Store method that uses `getBuilder`.
      */
     Derivation derivationFromPath(const StorePath & drvPath);
 

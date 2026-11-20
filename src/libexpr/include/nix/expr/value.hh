@@ -363,7 +363,7 @@ struct ValueBase
          * to represent a flattening of the recursive sum type that is a
          * context element.
          *
-         * @See NixStringContext for an more easily understood type,
+         * @see NixStringContext for an more easily understood type,
          * that of the "builder" for this data structure.
          */
         struct Context
