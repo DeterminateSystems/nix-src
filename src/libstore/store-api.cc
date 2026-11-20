@@ -45,10 +45,6 @@ void InvalidPath::anchor() {}
 
 void Unsupported::anchor() {}
 
-void SubstituteGone::anchor() {}
-
-void SubstituterDisabled::anchor() {}
-
 void InvalidStoreReference::anchor() {}
 
 void StoreConfigBase::anchor() {}

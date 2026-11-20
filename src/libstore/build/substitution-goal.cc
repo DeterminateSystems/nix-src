@@ -112,8 +112,6 @@ Goal::Co PathSubstitutionGoal::init()
                 });
         } catch (InvalidPath &) {
             continue;
-        } catch (SubstituterDisabled & e) {
-            continue;
         } catch (Error & e) {
             lastStoresException = std::make_optional(std::move(e));
             continue;
