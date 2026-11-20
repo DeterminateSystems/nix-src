@@ -35,9 +35,16 @@ public:
           Must be used as OverlayFS lower layer for this store's store dir.
         )"};
 
+    /* The default is a placeholder, but it must still be an absolute
+       path on the host. */
     const Setting<AbsolutePath> upperLayer{
         (StoreConfig *) this,
-        "/upper-layer-must-be-set",
+#ifdef _WIN32
+        "C:\\"
+#else
+        "/"
+#endif
+        "upper-layer-must-be-set",
         "upper-layer",
         R"(
           Directory containing the OverlayFS upper layer for this store's store dir.
@@ -138,7 +145,7 @@ private:
      * First copy up any lower store realisation with the same key, so we
      * merge rather than mask it.
      */
-    void registerDrvOutput(const Realisation & info) override;
+    void registerDrvOutputUnchecked(const Realisation & info) override;
 
     /**
      * Check lower store if upper DB does not have.
@@ -212,7 +219,7 @@ private:
      * (there is no way to prevent that). This cleans up those
      * duplications.
      *
-     * @note We do not yet optomise the upper layer in the normal way
+     * @note We do not yet optimise the upper layer in the normal way
      * (hardlink) yet. We would like to, but it requires more
      * refactoring of existing code to support this sustainably.
      */

@@ -2,8 +2,11 @@
 #include "nix/fetchers/git-utils.hh"
 #include "nix/fetchers/registry.hh"
 #include "nix/util/sync.hh"
+#include "nix/util/logging.hh"
 
 namespace nix::fetchers {
+
+InputCache::~InputCache() {}
 
 InputCache::CachedResult InputCache::getAccessor(
     const Settings & settings, Store & store, const Input & originalInput, UseRegistries useRegistries)

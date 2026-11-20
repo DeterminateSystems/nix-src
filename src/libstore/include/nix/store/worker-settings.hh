@@ -137,6 +137,16 @@ public:
           > Change this setting only if you really know what you’re doing.
         )"};
 
+    Setting<uint32_t> buildHookKillTimeout{
+        this,
+        10000,
+        "build-hook-kill-timeout",
+        R"(
+          How long to wait in milliseconds for the build hook to exit before sending it `SIGKILL`.
+
+          The build hook is expected to exit by itself when its standard input is closed. It is not sent `SIGTERM`, so that it can finish what it was doing (e.g. exporting its telemetry).
+        )"};
+
     Setting<std::string> builders{
         this,
         "@" + (nixConfDir() / "machines").string(),
@@ -211,7 +221,7 @@ public:
           > Multiple builders specified on the command line:
           >
           > ```console
-          > --builders 'ssh://mac x86_64-darwin ; ssh://beastie x86_64-freebsd'
+          > --builders 'ssh://mac aarch64-darwin ; ssh://beastie x86_64-freebsd'
           > ```
 
           > **Example**

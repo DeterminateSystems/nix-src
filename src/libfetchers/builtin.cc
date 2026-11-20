@@ -7,6 +7,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <iostream>
+
 namespace nix {
 
 static void builtinFetchTree(const BuiltinBuilderContext & ctx)
@@ -17,7 +19,7 @@ static void builtinFetchTree(const BuiltinBuilderContext & ctx)
     if (!out)
         throw Error("'builtin:fetch-tree' requires an 'out' output");
 
-    if (!(ctx.drv.type().isFixed() || ctx.drv.type().isImpure()))
+    if (!(type(ctx.drv).isFixed() || type(ctx.drv).isImpure()))
         throw Error("'builtin:fetch-tree' must be a fixed-output or impure derivation");
 
     if (!ctx.drv.structuredAttrs)
@@ -32,7 +34,7 @@ static void builtinFetchTree(const BuiltinBuilderContext & ctx)
 
     // FIXME: disable use of the git/tarball cache
 
-    auto input = Input::fromAttrs(myFetchSettings, jsonToAttrs(ctx.drv.structuredAttrs->structuredAttrs.at("input")));
+    auto input = Input::fromAttrs(jsonToAttrs(ctx.drv.structuredAttrs->structuredAttrs.at("input")));
 
     std::cerr << fmt("fetching '%s'...\n", input.to_string());
 

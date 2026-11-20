@@ -7,10 +7,14 @@
 #include "nix/cmd/common-eval-args.hh"
 #include "nix/expr/eval-settings.hh" // for defexpr
 #include "nix/util/os-string.hh"
+#include "nix/util/strings.hh"
 #include "nix/util/users.hh"
 #include "nix/fetchers/tarball.hh"
 #include "self-exe.hh"
 #include "man-pages.hh"
+#include "nix/util/system-error.hh"
+
+#include <iostream>
 
 #include <fcntl.h>
 #include <regex>
@@ -44,15 +48,15 @@ static void readChannels()
 // Writes the list of channels.
 static void writeChannels()
 {
-    auto channelsFD = openNewFileForWrite(
-        channelsList,
-        0644,
-        {
-            .truncateExisting = true,
-            .followSymlinksOnTruncate = true, /* Back-compat. */
-        });
-    if (!channelsFD)
-        throw SysError("opening '%1%' for writing", channelsList.string());
+    auto channelsFD = valueOr(
+        openNewFileForWrite(
+            channelsList,
+            0644,
+            {
+                .truncateExisting = true,
+                .followSymlinksOnTruncate = true, /* Back-compat. */
+            }),
+        NIX_THROW_NATIVE_SYS_ERROR_HANDLER("opening '%1%' for writing", channelsList.string()));
     for (const auto & channel : channels)
         writeFull(channelsFD.get(), channel.second + " " + channel.first + "\n");
 }
@@ -78,9 +82,8 @@ static void removeChannel(const std::string & name)
     channels.erase(name);
     writeChannels();
 
-    runProgram(
-        getNixBin("nix-env"),
-        true,
+    runNixBin(
+        "nix-env",
         {
             OS_STR("--profile"),
             profile.native(),
@@ -140,9 +143,8 @@ static void update(const StringSet & channelNames)
 
             bool unpacked = false;
             if (std::regex_search(std::string{result.storePath.to_string()}, std::regex("\\.tar\\.(gz|bz2|xz)$"))) {
-                runProgram(
-                    getNixBin("nix-build"),
-                    false,
+                runNixBin(
+                    "nix-build",
                     {
                         OS_STR("--no-out-link"),
                         OS_STR("--expr"),
@@ -156,11 +158,30 @@ static void update(const StringSet & channelNames)
 
             if (!unpacked) {
                 // Download the channel tarball.
-                try {
-                    result = fetchers::downloadFile(*store, fetchSettings, url + "/nixexprs.tar.xz", "nixexprs.tar.xz");
-                } catch (FileTransferError & e) {
-                    result =
-                        fetchers::downloadFile(*store, fetchSettings, url + "/nixexprs.tar.bz2", "nixexprs.tar.bz2");
+
+                std::list<std::string> preferences = {"nixexprs.tar.zst", "nixexprs.tar.xz", "nixexprs.tar.bz2"};
+                std::list<std::string> downloadErrors;
+                bool downloaded = false;
+
+                for (const auto & preference : preferences) {
+                    try {
+                        result = fetchers::downloadFile(*store, fetchSettings, url + "/" + preference, preference);
+                        downloaded = true;
+                        break;
+                    } catch (FileTransferError & e) {
+                        debug(
+                            "could not download '%s/%s' channel tarball: %s", url, preference, Uncolored(e.message()));
+                        downloadErrors.push_back(e.message());
+                    }
+                }
+
+                if (!downloaded) {
+                    throw Error(
+                        "%s",
+                        Uncolored(
+                            fmt("%s: %s",
+                                "no channel tarball could be downloaded successfully",
+                                concatStringsSep("\n\t", downloadErrors))));
                 }
             }
             // Regardless of where it came from, add the expression representing this channel to accumulated expression
@@ -184,7 +205,7 @@ static void update(const StringSet & channelNames)
     for (auto & expr : exprs)
         envArgs.push_back(string_to_os_string(std::move(expr)));
     envArgs.push_back(OS_STR("--quiet"));
-    runProgram(getNixBin("nix-env"), false, envArgs);
+    runNixBin("nix-env", envArgs);
 
     // Make the channels appear in nix-env.
     PosixStat st;
@@ -283,9 +304,8 @@ For details and to offer feedback on the deprecation process, see: https://githu
         case cListGenerations:
             if (!args.empty())
                 throw UsageError("'--list-generations' expects no arguments");
-            std::cout << runProgram(
-                getNixBin("nix-env"),
-                false,
+            std::cout << runNixBin(
+                "nix-env",
                 {
                     OS_STR("--profile"),
                     profile.native(),
@@ -302,7 +322,7 @@ For details and to offer feedback on the deprecation process, see: https://githu
             } else {
                 envArgs.push_back(OS_STR("--rollback"));
             }
-            runProgram(getNixBin("nix-env"), false, envArgs);
+            runNixBin("nix-env", envArgs);
             break;
         }
 

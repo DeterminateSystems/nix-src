@@ -25,6 +25,14 @@ deps_public_maybe_subproject = [
 ]
 subdir('nix-meson-build-support/subprojects')
 
+configdata_priv = configuration_data()
+configdata_priv.set_quoted('GIT_PROGRAM', get_option('git-program'))
+configdata_priv.set_quoted('HG_PROGRAM', get_option('hg-program'))
+config_priv_h = configure_file(
+  configuration : configdata_priv,
+  output : 'fetchers-config-private.hh',
+)
+
 nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
 
@@ -36,7 +44,7 @@ deps_private += zstd
 
 subdir('nix-meson-build-support/common')
 
-sources = files(
+sources = [ config_priv_h ] + files(
   'attrs.cc',
   'builtin.cc',
   'cache.cc',
@@ -51,8 +59,10 @@ sources = files(
   'indirect.cc',
   'input-cache.cc',
   'mercurial.cc',
+  'merkle-tar-adapter.cc',
   'path.cc',
   'provenance.cc',
+  'register-library-versions.cc',
   'registry.cc',
   'tarball-cache.cc',
   'tarball.cc',
@@ -60,20 +70,13 @@ sources = files(
 
 subdir('include/nix/fetchers')
 
-# Generate builtin-flake-registry.json.gen.hh
-subdir('nix-meson-build-support/generate-header')
-
-sources += gen_header.process(
-  'builtin-flake-registry.json',
-)
-
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
 
 this_library = library(
   'nixfetchers',
   sources,
-  dependencies : deps_public + deps_private + deps_other,
+  dependencies : deps_public + deps_private + deps_public_no_pkgconfig + deps_private_no_pkgconfig,
   include_directories : include_dirs,
   link_args : linker_export_flags,
   prelink : prelink, # For C++ static initializers

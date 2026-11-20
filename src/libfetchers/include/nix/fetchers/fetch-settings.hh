@@ -14,6 +14,7 @@
 namespace nix {
 
 struct SrcToStore;
+struct GitRepoPool;
 
 } // namespace nix
 
@@ -165,7 +166,6 @@ struct Settings : public Config
 
     const ref<SrcToStore> srcToStore = createSrcToStore();
 
-
 private:
     void anchor() override;
 
@@ -179,7 +179,7 @@ private:
 namespace nix {
 
 /**
- * @todo Get rid of global setttings variables
+ * @todo Get rid of global settings variables
  */
 extern fetchers::Settings fetchSettings;
 

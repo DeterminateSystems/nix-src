@@ -51,4 +51,11 @@ CanonPath getRootCgroup();
  */
 std::set<pid_t> getPidsInCgroup(const std::filesystem::path & cgroup);
 
+/**
+ * Make `getRootCgroup()` return `cgroup`. A process that does not start
+ * in the root cgroup, such as a daemon worker, calls this before
+ * anything calls `getRootCgroup()`. It is not synchronised.
+ */
+void setRootCgroup(CanonPath cgroup);
+
 } // namespace nix::linux

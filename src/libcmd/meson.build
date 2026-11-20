@@ -71,7 +71,6 @@ config_priv_h = configure_file(
 )
 
 subdir('nix-meson-build-support/common')
-subdir('nix-meson-build-support/generate-header')
 
 sources = files(
   'built-path.cc',
@@ -99,14 +98,6 @@ if host_machine.system() != 'windows'
   )
 endif
 
-sources += [
-  gen_header.process('call-flake-schemas.nix'),
-  gen_header.process(
-    'builtin-flake-schemas/flake.nix',
-    preserve_path_from : meson.current_source_dir(),
-  ),
-]
-
 subdir('include/nix/cmd')
 
 subdir('nix-meson-build-support/export-all-symbols')
@@ -116,7 +107,7 @@ this_library = library(
   'nixcmd',
   sources,
   config_priv_h,
-  dependencies : deps_public + deps_private + deps_other,
+  dependencies : deps_public + deps_private + deps_public_no_pkgconfig + deps_private_no_pkgconfig,
   include_directories : include_dirs,
   link_args : linker_export_flags,
   prelink : prelink, # For C++ static initializers

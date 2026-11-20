@@ -15,6 +15,7 @@
 #include "nix/store/path.hh"
 #include "nix/util/override-provenance-source-accessor.hh"
 #include "nix/fetchers/provenance.hh"
+#include "nix/util/system-error.hh"
 
 #include "man-pages.hh"
 
@@ -112,9 +113,9 @@ std::tuple<StorePath, Hash> prefetchFile(
             if (executable)
                 mode = 0700;
 
-            auto fd = openNewFileForWrite(tmpFile, mode, {.truncateExisting = false});
-            if (!fd)
-                throw SysError("creating temporary file %s", PathFmt(tmpFile));
+            auto fd = valueOr(
+                openNewFileForWrite(tmpFile, mode, {.truncateExisting = false}),
+                NIX_THROW_NATIVE_SYS_ERROR_HANDLER("creating temporary file %s", PathFmt(tmpFile)));
 
             FdSink sink(fd.get());
 
@@ -215,7 +216,7 @@ static int main_nix_prefetch_url(int argc, char ** argv)
         auto store = openStore();
         auto state = std::make_shared<EvalState>(myArgs.lookupPath, store, fetchSettings, evalSettings);
 
-        Bindings & autoArgs = *myArgs.getAutoArgs(*state);
+        const Bindings & autoArgs = *myArgs.getAutoArgs(*state);
 
         /* If -A is given, get the URL from the specified Nix
            expression. */

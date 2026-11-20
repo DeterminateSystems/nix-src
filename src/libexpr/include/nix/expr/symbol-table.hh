@@ -279,6 +279,18 @@ public:
      */
     Symbol create(std::string_view s);
 
+    /**
+     * Converts a forced string value without context into a symbol.
+     *
+     * Upstream has a fast path here for strings that come from the
+     * symbol table (they carry their symbol id); with our arena-based
+     * symbol table this is a plain lookup.
+     */
+    Symbol create(const Value & v)
+    {
+        return create(v.string_view());
+    }
+
     std::vector<SymbolStr> resolve(const std::span<const Symbol> & symbols) const
     {
         std::vector<SymbolStr> result;

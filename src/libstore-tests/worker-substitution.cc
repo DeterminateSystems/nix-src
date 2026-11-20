@@ -3,6 +3,8 @@
 
 #include "nix/store/build/worker.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/derivation/resolution.hh"
+#include "nix/store/derivation/full-inputs.hh"
 #include "nix/store/dummy-store-impl.hh"
 #include "nix/store/globals.hh"
 #include "nix/util/memory-source-accessor.hh"
@@ -79,8 +81,8 @@ TEST_F(WorkerSubstitutionTest, singleStoreObject)
     Worker worker{*dummyStore, *dummyStore};
 
     // Override the substituters to use our dummy store substituter
-    ref<Store> substituerAsStore = substituter;
-    worker.getSubstituters = [substituerAsStore]() -> std::list<ref<Store>> { return {substituerAsStore}; };
+    ref<Store> substituterAsStore = substituter;
+    worker.getSubstituters = [substituterAsStore]() -> std::list<ref<Store>> { return {substituterAsStore}; };
 
     // Create a substitution goal for the path
     auto goal = worker.makePathSubstitutionGoal(pathInSubstituter);
@@ -179,16 +181,17 @@ TEST_F(WorkerSubstitutionTest, floatingDerivationOutput)
     EnableExperimentalFeature enableCA{"ca-derivations"};
 
     // Create a CA floating output derivation
-    Derivation drv;
-    drv.name = "test-ca-drv";
-    drv.outputs = {
-        {
-            "out",
-            DerivationOutput{DerivationOutput::CAFloating{
-                .method = ContentAddressMethod::Raw::NixArchive,
-                .hashAlgo = HashAlgorithm::SHA256,
-            }},
+    Derivation drv{
+        .outputs{
+            {
+                "out",
+                DerivationOutput{DerivationOutput::CAFloating{
+                    .method = ContentAddressMethod::Raw::NixArchive,
+                    .hashAlgo = HashAlgorithm::SHA256,
+                }},
+            },
         },
+        .name = "test-ca-drv",
     };
 
     // Write the derivation to the destination store
@@ -317,25 +320,32 @@ TEST_F(WorkerSubstitutionTest, floatingDerivationOutputWithDepDrv)
         });
 
     // Create the root CA floating derivation that depends on depDrv
-    Derivation rootDrv;
-    rootDrv.name = "root-drv";
-    rootDrv.outputs = {
-        {
-            "out",
-            DerivationOutput{DerivationOutput::CAFloating{
-                .method = ContentAddressMethod::Raw::NixArchive,
-                .hashAlgo = HashAlgorithm::SHA256,
-            }},
+    Derivation rootDrv{
+        .outputs{
+            {
+                "out",
+                DerivationOutput{DerivationOutput::CAFloating{
+                    .method = ContentAddressMethod::Raw::NixArchive,
+                    .hashAlgo = HashAlgorithm::SHA256,
+                }},
+            },
         },
+        // Add the dependency derivation as an input
+        .inputs{
+            SingleDerivedPath::Built{
+                .drvPath = make_ref<SingleDerivedPath>(SingleDerivedPath::Opaque{depDrvPath}),
+                .output = "out",
+            },
+        },
+        .name = "root-drv",
     };
-    // Add the dependency derivation as an input
-    rootDrv.inputDrvs = {.map = {{depDrvPath, {.value = {"out"}}}}};
 
     // Write the root derivation to the destination store
     auto rootDrvPath = dummyStore->writeDerivation(rootDrv);
 
     // Resolve the root derivation using a callback that returns the dep output path
-    auto resolvedRootDrv = rootDrv.tryResolve(
+    auto resolvedRootDrv = tryResolve(
+        rootDrv,
         *substituter,
         [&](ref<const SingleDerivedPath> drvPath, const std::string & outputName) -> std::optional<StorePath> {
             EXPECT_EQ(*drvPath, SingleDerivedPath::Opaque{depDrvPath});
@@ -345,7 +355,7 @@ TEST_F(WorkerSubstitutionTest, floatingDerivationOutputWithDepDrv)
     ASSERT_TRUE(resolvedRootDrv);
 
     // Write the resolved derivation to the substituter
-    auto resolvedRootDrvPath = substituter->writeDerivation(Derivation{*resolvedRootDrv});
+    auto resolvedRootDrvPath = substituter->writeDerivation(unresolve(*resolvedRootDrv));
 
     // Snapshot the destination store before
     checkpointJson("issue-11928/store-before", dummyStore);

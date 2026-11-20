@@ -348,7 +348,7 @@ public:
      *
      * \todo this would probably be better in the CommandClass.
      * getRoot() could be an abstract method that peels off at most one
-     * layer before recuring.
+     * layer before recurring.
      */
     MultiCommand * parent = nullptr;
 
@@ -418,6 +418,8 @@ public:
         AcceptedShorthand,
         /** Aliases that will go away */
         Deprecated,
+        /** Aliases for linguistic variation */
+        LinguisticVariation,
     };
 
     /** An alias, except for the original syntax, which is in the map key. */

@@ -16,12 +16,12 @@ private:
     uint32_t id;
 
 public:
-    explicit PosIdx(uint32_t id)
+    constexpr explicit PosIdx(uint32_t id)
         : id(id)
     {
     }
 
-    PosIdx()
+    constexpr PosIdx()
         : id(0)
     {
     }

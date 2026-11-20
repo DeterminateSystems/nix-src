@@ -1,6 +1,7 @@
 #include "nix/util/finally.hh"
 #include "nix/util/archive.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/derivation/aterm.hh"
 #include "nix/store/outputs-query.hh"
 #include "dotgraph.hh"
 #include "nix/store/globals.hh"
@@ -22,6 +23,7 @@
 #include "nix/store/posix-fs-canonicalise.hh"
 #include "nix/util/error.hh"
 #include "nix/store/gc-store.hh"
+#include "nix/store/build.hh"
 
 #include "man-pages.hh"
 
@@ -41,7 +43,7 @@
 
 namespace nix_store {
 
-using namespace nix;
+using namespace nix; // NOLINT(nix-using-namespace)
 
 typedef void (*Operation)(Strings opFlags, Strings opArgs);
 
@@ -77,7 +79,7 @@ static std::set<std::filesystem::path> realisePath(StorePathWithOutputs path, bo
 
     if (path.path.isDerivation()) {
         if (build)
-            store->buildPaths({path.toDerivedPath()});
+            store->getBuilder()->buildPaths({path.toDerivedPath()});
         auto outputPaths = deepQueryDerivationOutputMap(*store, path.path);
         Derivation drv = store->derivationFromPath(path.path);
         rootNr++;
@@ -90,7 +92,7 @@ static std::set<std::filesystem::path> realisePath(StorePathWithOutputs path, bo
         std::set<std::filesystem::path> outputs;
         for (auto & j : path.outputs) {
             /* Match outputs of a store path with outputs of the derivation that produces it. */
-            DerivationOutputs::iterator i = drv.outputs.find(j);
+            auto i = drv.outputs.find(j);
             if (i == drv.outputs.end())
                 throw Error("derivation '%s' does not have an output named '%s'", store2->printStorePath(path.path), j);
             auto outPath = outputPaths.at(i->first);
@@ -114,7 +116,7 @@ static std::set<std::filesystem::path> realisePath(StorePathWithOutputs path, bo
 
     else {
         if (build)
-            store->ensurePath(path.path);
+            store->getBuilder()->ensurePath(path.path);
         else if (!store->isValidPath(path.path))
             throw Error("path '%s' does not exist and cannot be created", store->printStorePath(path.path));
         if (store2) {
@@ -174,7 +176,7 @@ static void opRealise(Strings opFlags, Strings opArgs)
         return;
 
     /* Build all paths at the same time to exploit parallelism. */
-    store->buildPaths(toDerivedPaths(paths), buildMode);
+    store->getBuilder()->buildPaths(toDerivedPaths(paths), buildMode);
 
     if (!ignoreUnknown)
         for (auto & i : paths) {
@@ -261,7 +263,7 @@ static StorePathSet maybeUseOutputs(const StorePath & storePath, bool useOutput,
         StorePathSet outputs;
         if (forceRealise)
             return store->queryDerivationOutputs(storePath);
-        for (auto & i : drv.outputsAndOptPaths(*store)) {
+        for (auto & i : outputsAndOptPaths(drv, *store)) {
             if (!i.second.second)
                 throw UsageError(
                     "Cannot use output path of floating content-addressing derivation until we know what it is (e.g. by building it)");
@@ -863,7 +865,7 @@ static void opRepairPath(Strings opFlags, Strings opArgs)
         throw UsageError("no flags expected");
 
     for (auto & i : opArgs)
-        store->repairPath(store->followLinksToStorePath(i));
+        store->getBuilder()->repairPath(store->followLinksToStorePath(i));
 }
 
 /* Optimise the disk space usage of the Nix store by hard-linking
@@ -1009,7 +1011,7 @@ static void opServe(Strings opFlags, Strings opArgs)
 #ifndef _WIN32 // TODO figure out if Windows needs something similar
                 MonitorFdHup monitor(in.fd);
 #endif
-                store->buildPaths(toDerivedPaths(paths));
+                store->getBuilder()->buildPaths(toDerivedPaths(paths));
                 out << 0;
             } catch (Error & e) {
                 assert(e.info().status);
@@ -1025,14 +1027,14 @@ static void opServe(Strings opFlags, Strings opArgs)
 
             auto drvPath = store->parseStorePath(readString(in));
             BasicDerivation drv;
-            readDerivation(in, *store, drv, Derivation::nameFromPath(drvPath));
+            derivation::read(in, *store, drv, Derivation::nameFromPath(drvPath));
 
             getBuildSettings();
 
 #ifndef _WIN32 // TODO figure out if Windows needs something similar
             MonitorFdHup monitor(in.fd);
 #endif
-            auto status = store->buildDerivation(drvPath, drv);
+            auto status = store->getBuilder()->buildDerivation(drvPath, drv);
 
             ServeProto::write(*store, wconn, status);
             break;
@@ -1239,7 +1241,7 @@ static int main_nix_store(int argc, char ** argv)
            temporary GC roots are removed. */
         Finally releaseStore([]() { store = nullptr; });
 
-        if (op != opDump && op != opRestore) /* !!! hack */
+        if (op != opDump && op != opRestore && op != opVersion) /* !!! hack */
             store = openStore();
 
         op(std::move(opFlags), std::move(opArgs));

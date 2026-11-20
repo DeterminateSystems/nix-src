@@ -5,6 +5,9 @@
 #include "nix/store/worker-protocol.hh"
 #include "nix/store/worker-protocol-connection.hh"
 #include "nix/util/pool.hh"
+#include "nix/util/lru-cache.hh"
+
+#include <utility>
 
 namespace nix {
 
@@ -27,6 +30,15 @@ public:
      * Time this connection was established.
      */
     std::chrono::time_point<std::chrono::steady_clock> startTime;
+
+    /**
+     * Paths already pinned as temp roots on this connection.
+     * Temp roots persist for the duration of the connection, so retransmission
+     * is not required.
+     * Skipping the wire call is an optional but worthwhile optimization that
+     * reduces communication overhead. LRU eviction would cost a round-trip.
+     */
+    LRUCache<StorePath, std::monostate> tempRootsPinned{65536};
 };
 
 /**

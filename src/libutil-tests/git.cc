@@ -7,6 +7,22 @@
 
 namespace nix {
 
+/**
+ * Test implementation of merkle::DirectorySink that captures entries.
+ */
+struct TestDirectorySink : merkle::DirectorySink
+{
+    git::Tree entries;
+
+    void insertChild(std::string_view name, merkle::TreeEntry entry) override
+    {
+        auto name2 = std::string{name};
+        if (entry.mode == merkle::Mode::Directory)
+            name2 += '/';
+        entries.insert_or_assign(name2, std::move(entry));
+    }
+};
+
 class GitTest : public CharacterizationTest
 {
     std::filesystem::path unitTestData = getUnitTestData() / "git";
@@ -61,14 +77,28 @@ TEST_F(GitTest, blob_read)
     readTest("hello-world-blob.bin", [&](const auto & encoded) {
         StringSource in{encoded};
         StringSink out;
-        RegularFileSink out2{out};
         ASSERT_EQ(parseObjectType(in), ObjectType::Blob);
-        parseBlob(out2, CanonPath::root, in, BlobMode::Regular);
+        auto size = parseBlob(in);
+        in.drainInto(out, size);
 
         auto expected = readFile(goldenMaster("hello-world.bin"));
 
         ASSERT_EQ(out.s, expected);
     });
+}
+
+TEST_F(GitTest, blob_read_large_size)
+{
+    // Test that parseBlob handles sizes larger than INT_MAX (2^31 - 1)
+    // This verifies that a bad overflowing number parser isn't used.
+    uint64_t largeSize = 5000000000ULL; // ~5 GB, larger than INT_MAX
+    std::string blobHeader = std::to_string(largeSize);
+    blobHeader.push_back('\0'); // null terminator expected by parseBlob
+
+    StringSource in{blobHeader};
+    auto size = git::parseBlob(in);
+
+    ASSERT_EQ(size, largeSize);
 }
 
 TEST_F(GitTest, blob_write)
@@ -88,7 +118,7 @@ TEST_F(GitTest, blob_write)
  * so that we can check our test data in a small shell script test test
  * (`src/libutil-tests/data/git/check-data.sh`).
  */
-const static git::Tree treeSha1 = {
+static const git::Tree treeSha1 = {
     {
         "Foo",
         {
@@ -128,7 +158,7 @@ const static git::Tree treeSha1 = {
  * Same conceptual object as `treeSha1`, just different hash algorithm.
  * See that one for details.
  */
-const static git::Tree treeSha256 = {
+static const git::Tree treeSha256 = {
     {
         "Foo",
         {
@@ -168,17 +198,11 @@ static auto mkTreeReadTest(HashAlgorithm hashAlgo, git::Tree tree)
     using namespace git;
     return [hashAlgo, tree](const auto & encoded) {
         StringSource in{encoded};
-        NullFileSystemObjectSink out;
-        Tree got;
+        TestDirectorySink out;
         ASSERT_EQ(parseObjectType(in), ObjectType::Tree);
-        parseTree(out, CanonPath::root, in, hashAlgo, [&](auto & name, auto entry) {
-            auto name2 = std::string{name.rel()};
-            if (entry.mode == Mode::Directory)
-                name2 += '/';
-            got.insert_or_assign(name2, std::move(entry));
-        });
+        parseTree(out, in, hashAlgo);
 
-        ASSERT_EQ(got, tree);
+        ASSERT_EQ(out.entries, tree);
     };
 }
 
@@ -226,6 +250,7 @@ TEST_F(GitTest, both_roundrip)
     for (const auto hashAlgo : {HashAlgorithm::SHA1, HashAlgorithm::SHA256}) {
         std::map<Hash, std::string> cas;
 
+        // Dump phase: serialize files to git objects in cas
         fun<DumpHook> dumpHook = [&](const SourcePath & path) {
             StringSink s;
             HashSink hashSink{hashAlgo};
@@ -241,25 +266,58 @@ TEST_F(GitTest, both_roundrip)
 
         auto root = dumpHook(SourcePath{files});
 
+        // Parse phase: deserialize git objects back to files
         auto files2 = make_ref<MemorySourceAccessor>();
 
-        MemorySink sinkFiles2{*files2};
+        // Recursive function to parse a git object into a File
+        std::function<MemorySourceAccessor::File(merkle::TreeEntry)> parseToFile;
 
-        std::function<void(const CanonPath, const Hash &, BlobMode)> mkSinkHook;
-        mkSinkHook = [&](auto prefix, auto & hash, auto blobMode) {
-            StringSource in{cas[hash]};
-            parse(sinkFiles2, prefix, in, blobMode, hashAlgo, [&](const CanonPath & name, const auto & entry) {
-                mkSinkHook(
-                    prefix / name,
-                    entry.hash,
-                    // N.B. this cast would not be acceptable in real
-                    // code, because it would make an assert reachable,
-                    // but it should harmless in this test.
-                    static_cast<BlobMode>(entry.mode));
-            });
+        // DirectorySink that recursively parses children
+        struct RecursiveDirSink : merkle::DirectorySink
+        {
+            std::function<MemorySourceAccessor::File(merkle::TreeEntry)> & parseToFile;
+            MemorySourceAccessor::File::Directory dir;
+
+            RecursiveDirSink(std::function<MemorySourceAccessor::File(merkle::TreeEntry)> & parseToFile)
+                : parseToFile(parseToFile)
+            {
+            }
+
+            void insertChild(std::string_view name, merkle::TreeEntry entry) override
+            {
+                dir.entries.insert_or_assign(std::string{name}, parseToFile(entry));
+            }
         };
 
-        mkSinkHook(CanonPath::root, root.hash, BlobMode::Regular);
+        parseToFile = [&](merkle::TreeEntry entry) -> MemorySourceAccessor::File {
+            StringSource in{cas[entry.hash]};
+            auto type = parseObjectType(in);
+
+            switch (type) {
+            case ObjectType::Blob: {
+                StringSink content;
+                auto size = parseBlob(in);
+                in.drainInto(content, size);
+                if (entry.mode == merkle::Mode::Symlink) {
+                    return MemorySourceAccessor::File::Symlink{std::move(content.s)};
+                } else {
+                    return MemorySourceAccessor::File::Regular{
+                        .executable = entry.mode == merkle::Mode::Executable,
+                        .contents = std::move(content.s),
+                    };
+                }
+            }
+            case ObjectType::Tree: {
+                RecursiveDirSink dirSink{parseToFile};
+                parseTree(dirSink, in, hashAlgo);
+                return std::move(dirSink.dir);
+            }
+            default:
+                assert(false);
+            }
+        };
+
+        files2->root = parseToFile(root);
 
         EXPECT_EQ(files->root, files2->root);
     }

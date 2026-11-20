@@ -130,8 +130,6 @@ let
             !(stdenv.hostPlatform.isWindows || stdenv.hostPlatform.isCygwin)
             # build failure
             && !stdenv.hostPlatform.isStatic
-            # LTO breaks exception handling on x86-64-darwin.
-            && stdenv.system != "x86_64-darwin"
           )
           ''
             case "$mesonBuildType" in
@@ -213,7 +211,8 @@ let
       sanitizers =
         lib.optional scope.withASan "address"
         ++ lib.optional scope.withUBSan "undefined"
-        ++ lib.optional scope.withTSan "thread";
+        ++ lib.optional scope.withTSan "thread"
+        ++ lib.optional scope.withFuzzer "fuzzer-no-link";
     in
     # Thread sanitizer can't be used with ASan or UBSan
     assert scope.withTSan -> !(scope.withASan || scope.withUBSan);
@@ -311,6 +310,21 @@ in
     Whether meson components are built with [ThreadSanitizer](https://clang.llvm.org/docs/ThreadSanitizer.html).
   */
   withTSan = false;
+
+  /**
+    Whether meson components are built with [libFuzzer instrumentation](https://llvm.org/docs/LibFuzzer.html).
+  */
+  withFuzzer = false;
+
+  /**
+    Whether to build unit-test executables in Meson test components.
+  */
+  withUnitTests = true;
+
+  /**
+    Whether to build the libFuzzer targets in Meson test components.
+  */
+  withFuzzTargets = false;
 
   /**
     Whether meson components are checked with [clang-tidy](https://clang.llvm.org/extra/clang-tidy/).
@@ -441,6 +455,8 @@ in
     enableClangTidyLayer
     scope.mesonComponentOverrides
   ];
+
+  mkFuzzSeedCheck = callPackage ./fuzz-seed-check.nix { };
 
   nix-util = callPackage ../src/libutil/package.nix { };
   nix-util-c = callPackage ../src/libutil-c/package.nix { };

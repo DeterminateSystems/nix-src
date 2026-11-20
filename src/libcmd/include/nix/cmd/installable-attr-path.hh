@@ -43,7 +43,7 @@ class InstallableAttrPath : public InstallableValue
         return attrPath;
     };
 
-    std::pair<Value *, PosIdx> toValue(EvalState & state) override;
+    std::pair<Value *, PosIdx> toValue(EvalState & state, AutoCall autoCall) override;
 
     DerivedPathsWithInfo toDerivedPaths() override;
 

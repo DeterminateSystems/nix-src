@@ -7,10 +7,10 @@
  * functions that are placed here.
  */
 
-#include <iostream>
-
 #include "nix/util/fmt.hh"
 #include "nix/expr/print-options.hh"
+
+#include <iosfwd>
 
 namespace nix {
 

@@ -4,47 +4,10 @@
 #include "nix/expr/eval-settings.hh"
 #include "nix/util/memory-source-accessor.hh"
 
+#include "nix/util/tests/capture-logging.hh"
 #include "nix/expr/tests/libexpr.hh"
 
 namespace nix {
-class CaptureLogger : public Logger
-{
-    std::ostringstream oss;
-
-public:
-    CaptureLogger() {}
-
-    std::string get() const
-    {
-        return oss.str();
-    }
-
-    void log(Verbosity lvl, std::string_view s) noexcept override
-    {
-        oss << s << std::endl;
-    }
-
-    void logEI(const ErrorInfo & ei) noexcept override
-    {
-        showErrorInfo(oss, ei, loggerSettings.showTrace.get());
-    }
-};
-
-class CaptureLogging
-{
-    Logger * oldLogger;
-public:
-    CaptureLogging()
-    {
-        oldLogger = logger;
-        logger = new CaptureLogger();
-    }
-
-    ~CaptureLogging()
-    {
-        logger = oldLogger;
-    }
-};
 
 // Testing eval of PrimOp's
 class PrimOpTest : public LibExprTest
@@ -141,11 +104,10 @@ TEST_F(PrimOpTest, deepSeq)
 
 TEST_F(PrimOpTest, trace)
 {
-    CaptureLogging l;
+    testing::CaptureLogging l;
     auto v = eval("builtins.trace \"test string 123\" 123");
     ASSERT_THAT(v, IsIntEq(123));
-    auto text = (dynamic_cast<CaptureLogger *>(logger))->get();
-    ASSERT_NE(text.find("test string 123"), std::string::npos);
+    ASSERT_THAT(l.get(), ::testing::HasSubstr("test string 123"));
 }
 
 TEST_F(PrimOpTest, placeholder)
@@ -332,13 +294,13 @@ TEST_F(PrimOpTest, isListFalse)
     ASSERT_THAT(v, IsFalse());
 }
 
-TEST_F(PrimOpTest, elemtAt)
+TEST_F(PrimOpTest, elemAt)
 {
     auto v = eval("builtins.elemAt [0 1 2 3] 3");
     ASSERT_THAT(v, IsIntEq(3));
 }
 
-TEST_F(PrimOpTest, elemtAtOutOfBounds)
+TEST_F(PrimOpTest, elemAtOutOfBounds)
 {
     ASSERT_THROW(eval("builtins.elemAt [0 1 2 3] 5"), Error);
     ASSERT_THROW(eval("builtins.elemAt [0] 4294967296"), Error);

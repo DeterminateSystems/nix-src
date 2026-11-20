@@ -25,7 +25,7 @@ std::expected<void, BadStorePathReason> validateStorePathName(std::string_view n
     using enum BadStorePathReason;
     if (name.empty())
         return std::unexpected(NameEmpty);
-    if (name.size() > StorePath::MaxPathLen)
+    if (name.size() > StorePath::MaxNameLen)
         return std::unexpected(NameTooLong);
     // See nameRegexStr for the definition
     if (name[0] == '.') {
@@ -58,7 +58,7 @@ std::expected<void, BadStorePathReason> validateStorePathName(std::string_view n
     case NameEmpty:
         throw BadStorePathName("name must not be empty");
     case NameTooLong:
-        throw BadStorePathName("name '%s' must be no longer than %d characters", name, StorePath::MaxPathLen);
+        throw BadStorePathName("name '%s' must be no longer than %d characters", name, StorePath::MaxNameLen);
     case NameReserved:
         throw BadStorePathName("name '%s' is not valid", name);
     case NameReservedComponent:
@@ -101,11 +101,11 @@ static std::expected<void, BadStorePathReason> validateBaseName(std::string_view
     using enum BadStorePathReason;
     if (baseName.size() < StorePath::HashLen + 1)
         return std::unexpected(TooShort);
-    if (baseName[StorePath::HashLen] != '-')
-        return std::unexpected(NoDashAfterHash);
     for (auto c : baseName.substr(0, StorePath::HashLen))
         if (!isValidHashChar(c))
             return std::unexpected(IllegalHashCharacter);
+    if (baseName[StorePath::HashLen] != '-')
+        return std::unexpected(NoDashAfterHash);
     return validateStorePathName(baseName.substr(StorePath::HashLen + 1));
 }
 
@@ -118,13 +118,13 @@ static std::expected<void, BadStorePathReason> validateBaseName(std::string_view
     using enum BadStorePathReason;
     switch (reason) {
     case TooShort:
-        throw BadStorePath("'%s' is too short to be a valid store path", baseName);
+        throw BadStorePath("'%s' is too short to be a valid store path basename", baseName);
     case NoDashAfterHash:
         throw BadStorePath("'%s' can't name a store path because the hash part is not followed by a '-'", baseName);
     case IllegalHashCharacter:
         for (auto c : baseName.substr(0, StorePath::HashLen))
             if (!isValidHashChar(c))
-                throw BadStorePath("store path '%s' contains illegal base-32 character '%s'", baseName, c);
+                throw BadStorePath("store path basename '%s' contains illegal base-32 character '%s'", baseName, c);
         break;
     case NameEmpty:
     case NameTooLong:
@@ -171,7 +171,7 @@ void StorePath::requireDerivation() const
         throw FormatError("store path '%s' is not a valid derivation path", to_string());
 }
 
-StorePath StorePath::dummy("ffffffffffffffffffffffffffffffff-x");
+const StorePath StorePath::dummy("ffffffffffffffffffffffffffffffff-x");
 
 StorePath StorePath::random(std::string_view name)
 {
@@ -182,14 +182,12 @@ StorePath StorePath::random(std::string_view name)
 
 namespace nlohmann {
 
-using namespace nix;
-
-StorePath adl_serializer<StorePath>::from_json(const json & json)
+nix::StorePath adl_serializer<nix::StorePath>::from_json(const json & json)
 {
-    return StorePath{getString(json)};
+    return nix::StorePath{nix::getString(json)};
 }
 
-void adl_serializer<StorePath>::to_json(json & json, const StorePath & storePath)
+void adl_serializer<nix::StorePath>::to_json(json & json, const nix::StorePath & storePath)
 {
     json = storePath.to_string();
 }

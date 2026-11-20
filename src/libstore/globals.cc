@@ -10,6 +10,7 @@
 #include "nix/util/compute-levels.hh"
 #include "nix/util/executable-path.hh"
 #include "nix/store/filetransfer.hh"
+#include "nix/util/system-error.hh"
 
 #include <algorithm>
 #include <map>
@@ -281,7 +282,7 @@ bool Settings::isWSL1()
 #endif
 }
 
-const ExternalBuilder * LocalSettings::findExternalDerivationBuilderIfSupported(const Derivation & drv)
+const ExternalBuilder * LocalSettings::findExternalDerivationBuilderIfSupported(const BasicDerivation & drv)
 {
     if (auto it = std::ranges::find_if(
             externalBuilders.get(), [&](const auto & handler) { return handler.systems.contains(drv.platform); });
@@ -666,7 +667,7 @@ void initLibStore(bool loadConfig)
        sshd). This breaks build users because they don't have access
        to the TMPDIR, in particular in ‘nix-store --serve’. */
     if (hasPrefix(defaultTempDir().string(), "/var/folders/"))
-        unsetenv("TMPDIR");
+        unsetEnv("TMPDIR");
 #endif
 
     initLibStoreDone = true;

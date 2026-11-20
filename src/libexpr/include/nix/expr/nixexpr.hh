@@ -116,6 +116,9 @@ struct Expr
     /** Normal evaluation, implemented directly by all subclasses. */
     virtual void eval(EvalState & state, Env & env, Value & v);
 
+    /** Wrapper around the above that adds errorCtx to any thrown errors. */
+    void eval(EvalState & state, Env & env, Value & v, std::string_view errorCtx);
+
     /**
      * Create a thunk for the delayed computation of the given expression
      * in the given environment. But if the expression is a variable,
@@ -309,6 +312,9 @@ struct ExprSelect : Expr
         return pos;
     }
 
+    /**
+     * @return `std::span<const AttrName>` starting at `attrPathStart`
+     */
     std::span<const AttrName> getAttrPath() const
     {
         return {attrPathStart, nAttrPath};

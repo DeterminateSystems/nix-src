@@ -2,10 +2,23 @@
 
 badTestNames=()
 
+function reportDiffAcceptFailure() {
+    local -r testName=$1
+    # We receive the diff unified stdout/stderr output as the argument
+    printf '%s' "$2" >&2
+    diffExitCode=$?
+    echo >&2 "subtest '$testName' failed: characterised output of $testName not as expected"
+}
+
+function reportDiffAcceptSuccess() {
+    # Do nothing by default
+    :
+}
+
 # Golden test support
 #
 # Test that the output of the given test matches what is expected. If
-# `_NIX_TEST_ACCEPT` is non-empty also update the expected output so
+# `_NIX_TEST_ACCEPT` is `1` also update the expected output so
 # that next time the test succeeds.
 function diffAndAcceptInner() {
     local -r testName=$1
@@ -16,19 +29,29 @@ function diffAndAcceptInner() {
     if test -e "$expected"; then
         local -r expectedOrEmpty="$expected"
     else
-        local -r expectedOrEmpty=common/characterisation/empty
+        local -r expectedOrEmpty=$_NIX_TEST_SOURCE_DIR/common/characterisation/empty
     fi
 
     # Diff so we get a nice message
-    if ! diff >&2 --color=always --unified "$expectedOrEmpty" "$got"; then
-        echo >&2 "FAIL: evaluation result of $testName not as expected"
+    set +e
+    diffOutput=$(diff 2>&1 --color=always --unified "$expectedOrEmpty" "$got")
+    diffExitCode=$?
+    set -e
+
+    if ((diffExitCode != 0)); then
+        reportDiffAcceptFailure "$diffOutput" "$testName"
         # shellcheck disable=SC2034
         badDiff=1
         badTestNames+=("$testName")
+    else
+        reportDiffAcceptSuccess
     fi
 
-    # Update expected if `_NIX_TEST_ACCEPT` is non-empty.
-    if test -n "${_NIX_TEST_ACCEPT-}"; then
+    # Update expected if `_NIX_TEST_ACCEPT` is `1`. (Comparing against
+    # `1` exactly, rather than any non-empty value, matches the C++ unit
+    # tests' handling of this variable, and makes `_NIX_TEST_ACCEPT=0`
+    # mean "off" as one would expect.)
+    if [[ "${_NIX_TEST_ACCEPT-}" == 1 ]]; then
         cp "$got" "$expected"
         # Delete empty expected files to avoid bloating the repo with
         # empty files.
@@ -42,7 +65,7 @@ function characterisationTestExit() {
     # Make sure shellcheck knows all these will be defined by the caller
     : "${badDiff?} ${badExitCode?}"
 
-    if test -n "${_NIX_TEST_ACCEPT-}"; then
+    if [[ "${_NIX_TEST_ACCEPT-}" == 1 ]]; then
         if (( "$badDiff" )); then
             set +x
             echo >&2 'Output did mot match, but accepted output as the persisted expected output.'

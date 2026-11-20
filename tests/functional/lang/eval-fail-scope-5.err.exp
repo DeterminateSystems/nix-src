@@ -1,5 +1,11 @@
 error:
        … while evaluating the attribute 'body'
+         at /pwd/lang/eval-fail-scope-5.nix:1:1:
+            1| let {
+             | ^
+            2|
+
+       … from the definition of 'body'
          at /pwd/lang/eval-fail-scope-5.nix:13:3:
            12|
            13|   body = f { };
@@ -19,6 +25,15 @@ error:
             7|     {
              |     ^
             8|       x ? y,
+
+       … in an operand of '+'
+         at /pwd/lang/eval-fail-scope-5.nix:11:5:
+           10|     }:
+           11|     x + y;
+             |     ^
+           12|
+
+       … entering the infinite recursion
 
        error: infinite recursion encountered
        at /pwd/lang/eval-fail-scope-5.nix:11:5:

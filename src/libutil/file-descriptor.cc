@@ -2,6 +2,7 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/util.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/system-error.hh"
 
 #include "file-descriptor-private.hh"
 
@@ -243,16 +244,6 @@ void copyFdRange(Descriptor fd, off_t offset, size_t nbytes, Sink & sink, bool t
 
 //////////////////////////////////////////////////////////////////////
 
-AutoCloseFD::AutoCloseFD()
-    : fd{INVALID_DESCRIPTOR}
-{
-}
-
-AutoCloseFD::AutoCloseFD(Descriptor fd)
-    : fd{fd}
-{
-}
-
 // NOTE: This can be noexcept since we are just copying a value and resetting
 // the file descriptor in the rhs.
 AutoCloseFD::AutoCloseFD(AutoCloseFD && that) noexcept
@@ -277,11 +268,6 @@ AutoCloseFD::~AutoCloseFD()
     } catch (...) {
         ignoreExceptionInDestructor();
     }
-}
-
-Descriptor AutoCloseFD::get() const
-{
-    return fd;
 }
 
 void AutoCloseFD::close()
@@ -310,12 +296,7 @@ void AutoCloseFD::startFsync(off_t offset, off_t nbytes) const
 #endif
 }
 
-AutoCloseFD::operator bool() const
-{
-    return fd != INVALID_DESCRIPTOR;
-}
-
-Descriptor AutoCloseFD::release()
+Descriptor AutoCloseFD::release() noexcept
 {
     Descriptor oldFD = fd;
     fd = INVALID_DESCRIPTOR;

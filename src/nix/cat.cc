@@ -3,6 +3,7 @@
 #include "nix/util/archive.hh"
 #include "nix/util/serialise.hh"
 #include "nix/util/source-accessor.hh"
+#include "nix/util/system-error.hh"
 
 #include <nlohmann/json.hpp>
 
@@ -77,9 +78,8 @@ struct CmdCatNar : StoreCommand, MixCat
 
     void run(ref<Store> store) override
     {
-        auto fd = openFileReadonly(narPath);
-        if (!fd)
-            throw NativeSysError("opening NAR file %s", PathFmt(narPath));
+        auto fd = valueOr(
+            openFileReadonly(narPath), NIX_THROW_NATIVE_SYS_ERROR_HANDLER("opening NAR file %s", PathFmt(narPath)));
         auto source = FdSource{fd.get()};
 
         struct CatRegularFileSink : NullFileSystemObjectSink

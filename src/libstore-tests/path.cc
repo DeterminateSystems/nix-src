@@ -30,19 +30,20 @@ public:
 
 static std::regex nameRegex{std::string{nameRegexStr}};
 
-#define TEST_DONT_PARSE(NAME, STR)                                           \
-    TEST_F(StorePathTest, bad_##NAME)                                        \
-    {                                                                        \
-        std::string_view str = STORE_DIR HASH_PART "-" STR;                  \
-        /* ASSERT_THROW generates a duplicate goto label */                  \
-        /* A lambda isolates those labels. */                                \
-        [&]() { ASSERT_THROW(store->parseStorePath(str), BadStorePath); }(); \
-        EXPECT_FALSE(store->maybeParseStorePath(str));                       \
-        EXPECT_FALSE(StorePath::parse(HASH_PART "-" STR));                   \
-        std::string name{STR};                                               \
-        [&]() { ASSERT_THROW(nix::checkName(name), BadStorePathName); }();   \
-        EXPECT_FALSE(nix::validateStorePathName(name));                      \
-        EXPECT_FALSE(std::regex_match(name, nameRegex));                     \
+#define TEST_DONT_PARSE(NAME, STR)                                                    \
+    TEST_F(StorePathTest, bad_##NAME)                                                 \
+    {                                                                                 \
+        std::string_view str = STORE_DIR HASH_PART "-" STR;                           \
+        /* ASSERT_THROW generates a duplicate goto label */                           \
+        /* A lambda isolates those labels. */                                         \
+        [&]() { ASSERT_THROW(store->parseStorePath(str), BadStorePath); }();          \
+        [&]() { ASSERT_THROW(store->parseStorePathCanonical(str), BadStorePath); }(); \
+        EXPECT_FALSE(store->maybeParseStorePath(str));                                \
+        EXPECT_FALSE(StorePath::parse(HASH_PART "-" STR));                            \
+        std::string name{STR};                                                        \
+        [&]() { ASSERT_THROW(nix::checkName(name), BadStorePathName); }();            \
+        EXPECT_FALSE(nix::validateStorePathName(name));                               \
+        EXPECT_FALSE(std::regex_match(name, nameRegex));                              \
     }
 
 TEST_DONT_PARSE(empty, "")
@@ -69,6 +70,7 @@ TEST_DONT_PARSE(slash, "a/b")
         std::string name{p.name()};                            \
         EXPECT_EQ(p.name(), STR);                              \
         EXPECT_TRUE(store->maybeParseStorePath(str) == p);     \
+        EXPECT_EQ(store->parseStorePathCanonical(str), p);     \
         EXPECT_TRUE(StorePath::parse(HASH_PART "-" STR) == p); \
         EXPECT_TRUE(nix::validateStorePathName(name));         \
         EXPECT_TRUE(std::regex_match(name, nameRegex));        \
@@ -93,6 +95,48 @@ TEST_DO_PARSE(triple_dot, "...")
 
 #undef TEST_DO_PARSE
 
+/* Non-canonical spellings of an otherwise-valid store path:
+   `parseStorePath` normalises them away, `parseStorePathCanonical`
+   rejects them. */
+#define TEST_ONLY_PARSE_NON_CANONICAL(NAME, STR)                                      \
+    TEST_F(StorePathTest, only_non_canonical_##NAME)                                  \
+    {                                                                                 \
+        std::string_view str = STR;                                                   \
+        EXPECT_EQ(store->parseStorePath(str), StorePath{HASH_PART "-foo"});           \
+        [&]() { ASSERT_THROW(store->parseStorePathCanonical(str), BadStorePath); }(); \
+    }
+
+TEST_ONLY_PARSE_NON_CANONICAL(trailing_slash, STORE_DIR HASH_PART "-foo/")
+TEST_ONLY_PARSE_NON_CANONICAL(double_slash, "/nix/store//" HASH_PART "-foo")
+TEST_ONLY_PARSE_NON_CANONICAL(dot, STORE_DIR "./" HASH_PART "-foo")
+TEST_ONLY_PARSE_NON_CANONICAL(dot_dot, STORE_DIR "bar/../" HASH_PART "-foo")
+
+#undef TEST_ONLY_PARSE_NON_CANONICAL
+
+/* Neither function accepts these. */
+#define TEST_PARSE_NEITHER(NAME, STR)                                                 \
+    TEST_F(StorePathTest, neither_##NAME)                                             \
+    {                                                                                 \
+        std::string_view str = STR;                                                   \
+        [&]() { ASSERT_THROW(store->parseStorePath(str), Error); }();                 \
+        [&]() { ASSERT_THROW(store->parseStorePathCanonical(str), BadStorePath); }(); \
+    }
+
+TEST_PARSE_NEITHER(empty, "")
+TEST_PARSE_NEITHER(relative, HASH_PART "-foo")
+TEST_PARSE_NEITHER(outside_store, "/foo/" HASH_PART "-foo")
+TEST_PARSE_NEITHER(store_dir_itself, "/nix/store")
+TEST_PARSE_NEITHER(store_dir_slash, STORE_DIR)
+TEST_PARSE_NEITHER(subdirectory, STORE_DIR HASH_PART "-foo/bin/sh")
+TEST_PARSE_NEITHER(prefix_only, "/nix/store" HASH_PART "-foo")
+
+#undef TEST_PARSE_NEITHER
+
+RC_GTEST_FIXTURE_PROP(StorePathTest, prop_canonical_round_trip, (const StorePath & p))
+{
+    RC_ASSERT(p == store->parseStorePathCanonical(store->printStorePath(p)));
+}
+
 RC_GTEST_FIXTURE_PROP(StorePathTest, prop_regex_accept, (const StorePath & p))
 {
     RC_ASSERT(std::regex_match(std::string{p.name()}, nameRegex));
@@ -105,6 +149,15 @@ RC_GTEST_FIXTURE_PROP(StorePathTest, prop_round_rip, (const StorePath & p))
 
 RC_GTEST_FIXTURE_PROP(StorePathTest, prop_check_regex_eq_parse, ())
 {
+    /* See below for why path separators are not generated. */
+    auto notSeparator = [](char c) {
+        return c != '/'
+#ifdef _WIN32
+               && c != '\\'
+#endif
+            ;
+    };
+
     static auto nameFuzzer = rc::gen::container<std::string>(rc::gen::oneOf(
         // alphanum, repeated to weigh heavier
         rc::gen::oneOf(rc::gen::inRange('0', '9'), rc::gen::inRange('a', 'z'), rc::gen::inRange('A', 'Z')),
@@ -123,20 +176,21 @@ RC_GTEST_FIXTURE_PROP(StorePathTest, prop_check_regex_eq_parse, ())
         rc::gen::just('.'),
         rc::gen::just('-'),
         rc::gen::just('-'),
-        // ascii symbol ranges, excluding '/' (see below)
+        // ascii symbol ranges, excluding '/' (and '\\' on Windows)
         rc::gen::oneOf(
             rc::gen::inRange(' ', '.'),
             rc::gen::inRange(':', '@'),
-            rc::gen::inRange('[', '`'),
+            rc::gen::suchThat(rc::gen::inRange('[', '`'), notSeparator),
             rc::gen::inRange('{', '~')),
         // typical whitespace
         rc::gen::oneOf(rc::gen::just(' '), rc::gen::just('\t'), rc::gen::just('\n'), rc::gen::just('\r')),
-        // some chance of control codes, non-ascii or other garbage we missed, excluding '/' (see below)
-        rc::gen::suchThat(rc::gen::inRange('\0', '\xff'), [](char c) { return c != '/'; })));
+        // some chance of control codes, non-ascii or other garbage we missed, excluding separators (see below)
+        rc::gen::suchThat(rc::gen::inRange('\0', '\xff'), notSeparator)));
 
     /* Note: names containing '/' are not generated, since `parseStorePath()` canonicalises the path, so such a
        name may be parsed as a different name (e.g. a trailing slash is removed, and `/.` and `/..` components
-       are resolved) and can't be compared against the regex. `bad_slash` above covers them. */
+       are resolved) and can't be compared against the regex. `bad_slash` above covers them. The same goes for
+       '\\' on Windows, where it is a path separator too. */
     auto name = *nameFuzzer;
 
     std::string path = store->storeDir + "/575s52sh487i0ylmbs9pvi606ljdszr0-" + name;
@@ -209,7 +263,7 @@ TEST_F(StorePathTest, badStorePathReasons)
         {STORE_DIR HASH_PART "_foo", NoDashAfterHash},
         {STORE_DIR "e1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo", IllegalHashCharacter},
         {STORE_DIR HASH_PART "-", NameEmpty},
-        {STORE_DIR HASH_PART "-" + std::string(StorePath::MaxPathLen + 1, 'a'), NameTooLong},
+        {STORE_DIR HASH_PART "-" + std::string(StorePath::MaxNameLen + 1, 'a'), NameTooLong},
         {STORE_DIR HASH_PART "-..", NameReserved},
         {STORE_DIR HASH_PART "-.-a", NameReservedComponent},
         {STORE_DIR HASH_PART "-foo!", NameIllegalCharacter},
@@ -280,6 +334,15 @@ TEST_F(StorePathTest, errorMessages)
     } catch (BadStorePathName & e) {
         EXPECT_NE(std::string(e.what()).find("contains illegal character"), std::string::npos);
     }
+}
+
+TEST_F(StorePathTest, maximumLength)
+{
+    EXPECT_NO_THROW({
+        auto path = StorePath(StorePath::dummy.hashPart() + "-" + std::string(211, 'x'));
+        ASSERT_EQ(path.to_string().size(), StorePath::MaxBasenameLen);
+    });
+    EXPECT_THROW(StorePath(StorePath::dummy.hashPart() + "-" + std::string(212, 'x')), BadStorePath);
 }
 
 /* ----------------------------------------------------------------------------

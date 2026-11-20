@@ -10,10 +10,13 @@
 
 #include <filesystem>
 #include <span>
+#include <type_traits>
 
 #include <nlohmann/json_fwd.hpp>
 
 namespace nix {
+
+/* TODO: Make these enum classes. */
 
 typedef enum {
     actUnknown = 0,
@@ -30,6 +33,22 @@ typedef enum {
     actPostBuildHook = 110,
     actBuildWaiting = 111,
     actFetchTree = 112,
+    /**
+     * Upstream Nix's activity type for a source path being copied to
+     * the store or hashed by `fetchToStore()`. Fields: [0] = source
+     * path (string), [1] = whether the path is only being hashed (1)
+     * rather than copied (0). Determinate Nix does not emit this (it
+     * uses the string-named `CopySourcePath` and `HashSourcePath`
+     * activities instead), but accepts it in log messages from other
+     * Nix versions.
+     */
+    actFetchToStore = 113,
+    /**
+     * The last of the contiguous (upstream) activity types. Determinate
+     * Nix-specific types (10000 and up) come after this; use
+     * `isKnownActivityType()` to validate a raw value.
+     */
+    actLast = actFetchToStore,
     /**
      * The type under which string-named activities (created via the
      * name-based `Activity` constructor) are reported on legacy code
@@ -49,8 +68,19 @@ typedef enum {
     resSetExpected = 106,
     resPostBuildLogLine = 107,
     resFetchStatus = 108,
-    resHashMismatch = 109,
-    resBuildResult = 110,
+    /**
+     * The resulting store path of a `CopySourcePath` or
+     * `HashSourcePath` activity (see `fetchToStore()`), emitted once
+     * the operation completes. Fields: [0] = store path (string).
+     */
+    resFetchToStore = 109,
+    /**
+     * The last of the contiguous (upstream) result types. Determinate
+     * Nix-specific types (10000 and up) come after this; use
+     * `isKnownResultType()` to validate a raw value.
+     */
+    resLast = resFetchToStore,
+    resBuildResult = 10110,
     /**
      * Emitted via the JSON `result()` overload: an object describing
      * the response to an HTTP request, with the fields `httpStatus`
@@ -66,7 +96,25 @@ typedef enum {
      * found to be dead) so far, and the number of bytes freed so far.
      */
     resGCProgress = 10112,
+    resHashMismatch = 10113,
 } ResultType;
+
+/**
+ * Whether `raw` (e.g. received from an untrusted source such as a
+ * builder) denotes a known activity type.
+ */
+inline bool isKnownActivityType(uint64_t raw)
+{
+    return raw == actUnknown || (raw >= actCopyPath && raw <= actLast) || raw == actStringly;
+}
+
+/**
+ * Whether `raw` denotes a known result type.
+ */
+inline bool isKnownResultType(uint64_t raw)
+{
+    return (raw >= resFileLinked && raw <= resLast) || (raw >= resBuildResult && raw <= resHashMismatch);
+}
 
 typedef uint64_t ActivityId;
 
@@ -113,28 +161,31 @@ class Logger
     friend struct Activity;
 
 public:
-
-    struct Field
+    /* Note that there are no members and invariants in the class itself
+       inheriting is fine, because slicing won't post any issues. There are
+       public constructors for implicit conversions and convenience. */
+    struct Field : public std::variant<uint64_t, std::string>
     {
-        std::variant<std::string, uint64_t> raw;
-
         Field(const std::string & s)
-            : raw(s)
+            : variant(s)
+        {
+        }
+
+        Field(std::string && s)
+            : variant(std::move(s))
         {
         }
 
         Field(const char * s)
-            : raw(std::string(s))
+            : variant(s)
         {
         }
 
-        Field(const uint64_t & i)
-            : raw(i)
+        Field(uint64_t i)
+            : variant(i)
         {
         }
     };
-
-    typedef std::vector<Field> Fields;
 
     /**
      * Key/value meta-information about a string-named activity, cf.
@@ -209,8 +260,10 @@ public:
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
-        const Fields & fields,
-        ActivityId parent) noexcept {};
+        std::span<const Field> fields,
+        ActivityId parent) noexcept
+    {
+    }
 
     /**
      * Start a string-named activity carrying key/value
@@ -234,9 +287,9 @@ public:
 
     virtual void stopActivity(ActivityId act) noexcept {};
 
-    virtual void result(ActivityId act, ResultType type, const Fields & fields) noexcept {};
+    virtual void result(ActivityId act, ResultType type, std::span<const Field> fields) noexcept {}
 
-    virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept {};
+    virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept {}
 
     /**
      * Return distributed tracing context for the given activity as
@@ -259,25 +312,24 @@ public:
         writeToStdout(fmt(args...));
     }
 
+    /**
+     * Write text styled with ANSI escape sequences to standard output,
+     * dropping the sequences unless `shouldANSI(StandardOutputStream::Stdout)`.
+     */
+    void writeStyledToStdout(std::string_view s);
+
+    template<typename... Args>
+    inline void coutStyled(const Args &... args)
+    {
+        writeStyledToStdout(fmt(args...));
+    }
+
     virtual std::optional<char> ask(std::string_view s)
     {
         return {};
     }
 
     virtual void setPrintBuildLogs(bool printBuildLogs) {}
-};
-
-/**
- * A variadic template that does nothing.
- *
- * Useful to call a function with each argument in a parameter pack.
- */
-struct nop
-{
-    template<typename... T>
-    nop(T...)
-    {
-    }
 };
 
 ActivityId getCurActivity();
@@ -294,12 +346,17 @@ struct Activity
         Verbosity lvl,
         ActivityType type,
         const std::string & s = "",
-        const Logger::Fields & fields = {},
+        std::span<const Logger::Field> fields = {},
         ActivityId parent = getCurActivity());
 
     Activity(
-        Logger & logger, ActivityType type, const Logger::Fields & fields = {}, ActivityId parent = getCurActivity())
-        : Activity(logger, lvlError, type, "", fields, parent) {};
+        Logger & logger,
+        ActivityType type,
+        std::span<const Logger::Field> fields = {},
+        ActivityId parent = getCurActivity())
+        : Activity(logger, lvlError, type, "", fields, parent)
+    {
+    }
 
     /**
      * Start a string-named activity carrying key/value
@@ -327,20 +384,22 @@ struct Activity
         result(resSetExpected, type2, expected);
     }
 
-    void result(ResultType type, const nlohmann::json & json) const
-    {
-        logger.result(id, type, json);
-    }
+    /**
+     * Defined out of line because overload resolution against the
+     * `std::span<const Field>` overload needs `nlohmann::json` to be a
+     * complete type, and this header only has its forward declaration.
+     */
+    void result(ResultType type, const nlohmann::json & json) const;
 
     template<typename... Args>
-    void result(ResultType type, const Args &... args) const
+        requires(!(std::is_constructible_v<std::span<const Logger::Field>, std::remove_cvref_t<Args>> || ...))
+    void result(ResultType type, Args &&... args) const
     {
-        Logger::Fields fields;
-        nop{(fields.emplace_back(Logger::Field(args)), 1)...};
+        std::array<Logger::Field, sizeof...(args)> fields = {std::forward<Args>(args)...};
         result(type, fields);
     }
 
-    void result(ResultType type, const Logger::Fields & fields) const
+    void result(ResultType type, std::span<const Logger::Field> fields) const
     {
         logger.result(id, type, fields);
     }
@@ -410,13 +469,13 @@ bool isRemoteLogSource();
 /**
  * @param source A noun phrase describing the source of the message, e.g. "the builder".
  */
-std::optional<nlohmann::json> parseJSONMessage(const std::string & msg, std::string_view source);
+std::optional<nlohmann::json> parseJSONMessage(std::string_view msg, std::string_view source);
 
 /**
  * @param source A noun phrase describing the source of the message, e.g. "the builder".
  */
 bool handleJSONLogMessage(
-    nlohmann::json & json,
+    const nlohmann::json & json,
     const Activity & act,
     std::map<ActivityId, Activity> & activities,
     std::string_view source,
@@ -426,11 +485,21 @@ bool handleJSONLogMessage(
  * @param source A noun phrase describing the source of the message, e.g. "the builder".
  */
 bool handleJSONLogMessage(
+    std::string_view msg,
+    const Activity & act,
+    std::map<ActivityId, Activity> & activities,
+    std::string_view source,
+    bool trusted);
+
+inline bool handleJSONLogMessage(
     const std::string & msg,
     const Activity & act,
     std::map<ActivityId, Activity> & activities,
     std::string_view source,
-    bool trusted);
+    bool trusted)
+{
+    return handleJSONLogMessage(std::string_view(msg), act, activities, source, trusted);
+}
 
 /**
  * suppress msgs > this

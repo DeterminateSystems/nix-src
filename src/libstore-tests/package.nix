@@ -2,6 +2,7 @@
   lib,
   buildPackages,
   stdenv,
+  mkFuzzSeedCheck,
   mkMesonExecutable,
   writableTmpDirAsHomeHook,
 
@@ -21,11 +22,18 @@
   version,
   filesetToSource,
   withBenchmarks ? false,
+  withUnitTests ? true,
+  withFuzzTargets ? false,
 }:
 
 let
   inherit (lib) fileset;
+  doBenchmarks = withUnitTests && withBenchmarks;
 in
+
+assert lib.assertMsg (
+  withUnitTests || withFuzzTargets
+) "nix-store-tests requires unit tests or fuzz targets";
 
 mkMesonExecutable (finalAttrs: {
   pname = "nix-store-tests";
@@ -35,28 +43,33 @@ mkMesonExecutable (finalAttrs: {
   fileset = fileset.unions [
     ../../nix-meson-build-support
     ./nix-meson-build-support
+    ./fuzz/harnesses
     ../../.version
     ./.version
-    ./meson.build
     ./meson.options
+    (fileset.fileFilter (file: file.name == "meson.build") ./.)
     (fileset.fileFilter (file: file.hasExt "cc") ./.)
     (fileset.fileFilter (file: file.hasExt "hh") ./.)
   ];
 
   buildInputs = [
+    nix-store
+  ]
+  ++ lib.optionals withUnitTests [
     sqlite
     rapidcheck
     gtest
-    nix-store
     nix-store-c
     nix-store-test-support
   ]
-  ++ lib.optionals withBenchmarks [
+  ++ lib.optionals doBenchmarks [
     gbenchmark
   ];
 
   mesonFlags = [
-    (lib.mesonBool "benchmarks" withBenchmarks)
+    (lib.mesonBool "unit-tests" withUnitTests)
+    (lib.mesonBool "benchmarks" doBenchmarks)
+    (lib.mesonBool "fuzzers" withFuzzTargets)
   ];
 
   passthru = {
@@ -75,30 +88,74 @@ mkMesonExecutable (finalAttrs: {
         in
         runCommand "${finalAttrs.pname}-run"
           {
-            meta.broken = !stdenv.hostPlatform.emulatorAvailable buildPackages;
-            nativeBuildInputs = [
+            meta.broken = withUnitTests && !stdenv.hostPlatform.emulatorAvailable buildPackages;
+            nativeBuildInputs = lib.optionals withUnitTests [
               writableTmpDirAsHomeHook
               openssl
             ];
           }
           (
-            ''
+            lib.optionalString withUnitTests ''
               export _NIX_TEST_UNIT_DATA=${data + "/src/libstore-tests/data"}
+            ''
+            # A Unix path isn't a valid local store on Windows. See also
+            # `meson.build`.
+            + lib.optionalString (withUnitTests && !stdenv.hostPlatform.isWindows) ''
               export NIX_REMOTE=$HOME/store
+            ''
+            # The builder's `NIX_STORE` (`/nix/store`) is passed through
+            # Wine, and would become the default store directory, which
+            # isn't an absolute path on Windows.
+            + lib.optionalString (withUnitTests && stdenv.hostPlatform.isWindows) ''
+              unset NIX_STORE
+            ''
+            + lib.optionalString withUnitTests ''
               ${stdenv.hostPlatform.emulator buildPackages} ${lib.getExe finalAttrs.finalPackage}
             ''
-            + lib.optionalString withBenchmarks ''
+            + lib.optionalString doBenchmarks ''
               ${stdenv.hostPlatform.emulator buildPackages} ${lib.getExe' finalAttrs.finalPackage "nix-store-benchmarks"}
             ''
+            + ''
+              ${if withUnitTests then "test -x" else "test ! -e"} \
+                "${finalAttrs.finalPackage}/bin/${finalAttrs.pname}${stdenv.hostPlatform.extensions.executable}"
+              for target in fuzz-parse-derivation fuzz-parse-derivation-experimental fuzz-store-path; do
+                ${if withFuzzTargets then "test -x" else "test ! -e"} \
+                  "${finalAttrs.finalPackage}/bin/$target${stdenv.hostPlatform.extensions.executable}"
+              done
+            ''
+            +
+              # Sanitizer CI also builds fuzzers with unit tests. Replay only
+              # in the fuzzer-only check to avoid running every seed twice.
+              lib.optionalString
+                (
+                  !withUnitTests
+                  && withFuzzTargets
+                  && stdenv.hostPlatform.isLinux
+                  && stdenv.buildPlatform.canExecute stdenv.hostPlatform
+                )
+                ''
+                  test -e ${finalAttrs.finalPackage.runFuzzSeeds { }}
+                ''
             + ''
               touch $out
             ''
           );
     };
+  }
+  // lib.optionalAttrs withFuzzTargets {
+    /**
+      Replay every checked-in seed, then optionally run the fuzzer for `runs` mutations.
+    */
+    runFuzzSeeds = import ./fuzz/seed-check.nix {
+      inherit mkFuzzSeedCheck;
+      package = finalAttrs.finalPackage;
+    };
   };
 
   meta = {
     platforms = lib.platforms.unix ++ lib.platforms.windows;
+  }
+  // lib.optionalAttrs withUnitTests {
     mainProgram = finalAttrs.pname + stdenv.hostPlatform.extensions.executable;
   };
 

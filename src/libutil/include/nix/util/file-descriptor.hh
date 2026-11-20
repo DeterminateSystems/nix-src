@@ -9,14 +9,21 @@
  * @ref file-system-at.hh.
  */
 
-#include "nix/util/canon-path.hh"
 #include "nix/util/error.hh"
-#include "nix/util/os-string.hh"
+#include "nix/util/result.hh"
+#include "nix/util/system-error.hh"
 
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+#  include <io.h>
 #endif
+
+#include <sys/types.h>
+
+#include <span>
+#include <cstddef>
+#include <type_traits>
 
 namespace nix {
 
@@ -113,13 +120,13 @@ std::make_unsigned_t<off_t> getFileSize(Descriptor fd);
 size_t readOffset(Descriptor fd, off_t offset, std::span<std::byte> buffer);
 
 /**
- * Read \ref nbytes starting at \ref offset from a seekable file into a sink.
+ * Read @p nbytes starting at @p offset from a seekable file into a sink.
  *
  * @param tryCoW Used as a hint to use optimised file copying like copy_file_range.
  *
  * @throws SystemError if @p fd is not seekable or any operation fails
  * @throws Interrupted if the operation was interrupted
- * @throws EndOfFile if an EOF was reached before reading \ref nbytes
+ * @throws EndOfFile if an EOF was reached before reading @p nbytes
  */
 void copyFdRange(Descriptor fd, off_t offset, size_t nbytes, Sink & sink, bool tryCoW = false);
 
@@ -258,17 +265,34 @@ class AutoCloseFD
 {
     Descriptor fd;
 public:
-    AutoCloseFD();
-    AutoCloseFD(Descriptor fd);
+    AutoCloseFD() noexcept
+        : fd(INVALID_DESCRIPTOR)
+    {
+    }
+
+    AutoCloseFD(Descriptor fd) noexcept
+        : fd(fd)
+    {
+    }
+
     AutoCloseFD(const AutoCloseFD & fd) = delete;
     AutoCloseFD(AutoCloseFD && fd) noexcept;
     ~AutoCloseFD();
     AutoCloseFD & operator=(const AutoCloseFD & fd) = delete;
     // NOLINTNEXTLINE(performance-noexcept-move-constructor) - technically can throw because of close()
     AutoCloseFD & operator=(AutoCloseFD && fd);
-    Descriptor get() const;
-    explicit operator bool() const;
-    Descriptor release();
+
+    Descriptor get() const noexcept
+    {
+        return fd;
+    }
+
+    explicit operator bool() const noexcept
+    {
+        return fd != INVALID_DESCRIPTOR;
+    }
+
+    Descriptor release() noexcept;
     void close();
 
     /**
@@ -299,6 +323,13 @@ public:
  */
 AutoCloseFD dupDescriptor(Descriptor fd);
 
+/**
+ * Open a /dev/null file descriptor as read/write.
+ *
+ * @throws SystemError on error.
+ */
+AutoCloseFD openNullFD();
+
 class Pipe
 {
 public:
@@ -313,6 +344,18 @@ public:
     void close();
 };
 
+/**
+ * Prevent the given descriptor from being passed on to child processes.
+ *
+ * On Unix this sets `FD_CLOEXEC`, so the descriptor is closed on `exec`.
+ * On Windows there is no `exec`; inheritance is a per-handle property, so
+ * this clears `HANDLE_FLAG_INHERIT` instead. A Windows handle is not
+ * inheritable unless it was created that way, so the Windows call is
+ * usually redundant — it exists so that callers do not have to know
+ * which platform they are on.
+ */
+void closeOnExec(Descriptor fd);
+
 #ifndef _WIN32 // Not needed on Windows, where we don't fork
 namespace unix {
 
@@ -323,9 +366,11 @@ namespace unix {
 void closeExtraFDs();
 
 /**
- * Set the close-on-exec flag for the given file descriptor.
+ * Close all file descriptors except stdio fds (ie 0, 1, 2) and
+ * @p keepExtra.
+ * Good practice in child processes.
  */
-void closeOnExec(Descriptor fd);
+void closeExtraFDs(std::span<const Descriptor> keepExtra);
 
 /**
  * A useful primitive for asynchronous poll() loops to notify about some work
@@ -349,18 +394,33 @@ struct SelfPipe
 };
 
 } // namespace unix
+#else
+namespace windows {
+
+/**
+ * Set whether `fd` is inherited by child processes spawned with
+ * `bInheritHandles`.
+ *
+ * This is the primitive underlying `closeOnExec` on Windows; prefer that
+ * when all you want is to stop a handle leaking into children.
+ */
+void setHandleInheritability(Descriptor fd, bool inherit);
+
+} // namespace windows
 #endif
 
 MakeError(EndOfFile, Error);
 
-#ifdef _WIN32
-
 /**
- * Windows specific replacement for POSIX `lseek` that operates on a `HANDLE` and not
- * a file descriptor.
+ * Like POSIX `lseek`, on every platform.
+ *
+ * @param whence Whence [from where] to apply the offset. This
+ * position plus the offset is where to seek in the file. Must be one of
+ * `SEEK_SET`, `SEEK_CUR` or `SEEK_END`.
+ *
+ * @return The new offset, or on failure the native error code, which
+ * `NativeSysError` can be constructed from.
  */
-off_t lseek(Descriptor fd, off_t offset, int whence);
-
-#endif
+Result<off_t, NativeError> seek(Descriptor fd, off_t offset, int whence);
 
 } // namespace nix

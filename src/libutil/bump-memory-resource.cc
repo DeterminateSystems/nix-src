@@ -1,6 +1,7 @@
 #include "nix/util/bump-memory-resource.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/error.hh"
+#include "nix/util/system-error.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/alignment.hh"
 #include "nix/util/logging.hh"
@@ -90,6 +91,14 @@ BumpMemoryResource::BumpMemoryResource(std::size_t reserveSize, std::pmr::memory
     static const bool dumpEverything = getEnv("_NIX_CORE_DUMP_EVERYTHING").value_or("0") == "1";
     if (!dumpEverything && dontDump && ::madvise(p, reserveSize, MADV_DONTDUMP))
         throw SysError("calling madvise");
+#  endif
+
+#  ifdef MADV_HUGEPAGE
+    /* The region is filled front to back and never freed, so huge pages
+       waste little memory, but save most page faults and TLB misses. This
+       matters where transparent huge pages are only used on request. It is
+       only a hint, so failure is harmless. */
+    ::madvise(p, reserveSize, MADV_HUGEPAGE);
 #  endif
 #endif
 }

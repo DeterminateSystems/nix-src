@@ -5,6 +5,8 @@
 namespace nix {
 
 DerivationBuilderUnique makeWasiDerivationBuilder(
-    LocalStore & store, std::shared_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params);
+    std::shared_ptr<BuildingStore> store,
+    std::shared_ptr<DerivationBuilderCallbacks> miscMethods,
+    DerivationBuilderParams params);
 
 }

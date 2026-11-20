@@ -17,6 +17,9 @@ nixMake.mkComponent {
 
   root = ./.;
 
+  # Helpers for running the tests under Wine.
+  excludeSources = [ "windows" ];
+
   includeDirs = [ "include" ];
 
   files = nixMake.commonSupportFiles;

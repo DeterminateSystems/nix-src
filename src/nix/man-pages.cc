@@ -4,6 +4,7 @@
 #include "nix/util/current-process.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/logging.hh"
+#include "nix/util/system-error.hh"
 
 namespace nix {
 

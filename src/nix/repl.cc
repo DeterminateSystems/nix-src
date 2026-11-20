@@ -5,7 +5,6 @@
 #include "nix/cmd/installable-value.hh"
 #include "nix/cmd/repl.hh"
 #include "nix/util/os-string.hh"
-#include "nix/util/processes.hh"
 #include "nix/util/environment-variables.hh"
 #include "self-exe.hh"
 
@@ -14,17 +13,11 @@ namespace nix {
 void runNix(const std::string & program, OsStrings args)
 {
     auto subprocessEnv = getEnvOs();
+    /* TODO: Maybe we should pass only overridden settings? */
     subprocessEnv[OS_STR("NIX_CONFIG")] = string_to_os_string(globalConfig.toKeyValue());
+    /* FIXME: What about NIX_REMOTE? */
     // isInteractive avoid grabling interactive commands
-    runProgram2(
-        RunOptions{
-            .program = getNixBin(program).string(),
-            .args = std::move(args),
-            .environment = subprocessEnv,
-            .isInteractive = true,
-        });
-
-    return;
+    runNixBin2(program, args, /*isInteractive=*/true, subprocessEnv);
 }
 
 struct CmdRepl : RawInstallablesCommand
@@ -82,19 +75,8 @@ struct CmdRepl : RawInstallablesCommand
             for (auto & installable_ : installables) {
                 auto & installable = InstallableValue::require(*installable_);
                 auto what = installable.what();
-                if (file) {
-                    auto [val, pos] = installable.toValue(*state);
-                    auto what = installable.what();
-                    state->forceValue(*val, pos);
-                    auto autoArgs = getAutoArgs(*state);
-                    auto valPost = state->allocValue();
-                    state->autoCallFunction(*autoArgs, *val, *valPost);
-                    state->forceValue(*valPost, pos);
-                    values.push_back({valPost, what});
-                } else {
-                    auto [val, pos] = installable.toValue(*state);
-                    values.push_back({val, what});
-                }
+                auto * val = installable.toValue(*state, file ? AutoCall::Yes : AutoCall::No).first;
+                values.push_back({val, what});
             }
             return values;
         };

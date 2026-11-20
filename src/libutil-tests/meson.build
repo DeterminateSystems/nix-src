@@ -13,13 +13,12 @@ project(
 )
 
 cxx = meson.get_compiler('cpp')
+build_unit_tests = get_option('unit-tests')
 
 subdir('nix-meson-build-support/deps-lists')
 
 deps_private_maybe_subproject = [
   dependency('nix-util'),
-  dependency('nix-util-c'),
-  dependency('nix-util-test-support'),
 ]
 deps_public_maybe_subproject = []
 subdir('nix-meson-build-support/subprojects')
@@ -27,34 +26,9 @@ subdir('nix-meson-build-support/subprojects')
 subdir('nix-meson-build-support/export-all-symbols')
 subdir('nix-meson-build-support/windows-version')
 
-rapidcheck = dependency('rapidcheck')
-deps_private += rapidcheck
-
-gtest = dependency('gtest', main : true)
-deps_private += gtest
-
-gmock = dependency('gmock')
-deps_private += gmock
-
-zstd = dependency('libzstd', version : '>= 1.4.0')
-deps_private += zstd
-
-if host_machine.system() == 'windows'
-  # Boost.ASIO needs this unconditionally.
-  socket = cxx.find_library('ws2_32')
-  deps_other += socket
-endif
-
 subdir('nix-meson-build-support/common')
 
-configdata = configuration_data()
-configdata.set_quoted('PACKAGE_VERSION', meson.project_version())
-configdata.set('HAVE_CXA_THROW', have_cxa_throw.to_int())
-
-config_priv_h = configure_file(
-  configuration : configdata,
-  output : 'util-tests-config.hh',
-)
+fuzz_dependencies = deps_private + deps_private_no_pkgconfig
 
 sources = files(
   'alignment.cc',
@@ -62,12 +36,16 @@ sources = files(
   'args.cc',
   'base-n.cc',
   'bump-memory-resource.cc',
+  'canon-path-algebra.cc',
   'canon-path.cc',
   'checked-arithmetic.cc',
   'chunked-vector.cc',
   'closure.cc',
   'compression.cc',
   'config.cc',
+  'current-process.cc',
+  'environment-variables.cc',
+  'error.cc',
   'executable-path.cc',
   'file-content-address.cc',
   'file-descriptor.cc',
@@ -81,12 +59,15 @@ sources = files(
   'local-keys.cc',
   'logging.cc',
   'lru-cache.cc',
+  'main.cc',
   'memo.cc',
   'memory-source-accessor.cc',
   'monitorfdhup.cc',
   'nar-listing.cc',
   'nix_api_util.cc',
   'nix_api_util_internal.cc',
+  'os-canon-path.cc',
+  'os-filename.cc',
   'pool.cc',
   'position.cc',
   'processes.cc',
@@ -97,6 +78,7 @@ sources = files(
   'spawn.cc',
   'strings.cc',
   'suggestions.cc',
+  'tarfile.cc',
   'terminal.cc',
   'thread-pool.cc',
   'topo-sort.cc',
@@ -114,51 +96,88 @@ if host_machine.system() != 'windows'
   subdir('unix')
 endif
 
+if host_machine.system() == 'darwin'
+  subdir('darwin')
+endif
+
+if host_machine.system() == 'linux'
+  subdir('linux')
+endif
+
 include_dirs = [ include_directories('.') ]
 
+if build_unit_tests
+  rapidcheck = dependency('rapidcheck')
+  unit_dependencies = fuzz_dependencies + [
+    dependency('nix-util-c'),
+    dependency('nix-util-test-support'),
+    rapidcheck,
+    # See ../libutil-test-support/meson.build
+    cxx.find_library(
+      'rapidcheck',
+      dirs : [ rapidcheck.get_variable('libdir') ],
+      static : get_option('default_library') == 'static',
+    ),
+    dependency('gtest', main : false),
+    dependency('gmock'),
+    dependency('libzstd', version : '>= 1.4.0'),
+  ]
 
-this_exe = executable(
-  meson.project_name(),
-  sources,
-  config_priv_h,
-  dependencies : deps_private_subproject + deps_private + deps_other,
-  include_directories : include_dirs,
-  # TODO: -lrapidcheck, see ../libutil-support/build.meson
-  link_args : linker_export_flags + [ '-lrapidcheck' ],
-  # get main from gtest
-  install : true,
-  cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
-)
+  configdata = configuration_data()
+  configdata.set_quoted('PACKAGE_VERSION', meson.project_version())
+  configdata.set('HAVE_CXA_THROW', have_cxa_throw.to_int())
 
-test(
-  meson.project_name(),
-  this_exe,
-  env : {
-    '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
-  },
-  protocol : 'gtest',
-)
+  config_priv_h = configure_file(
+    configuration : configdata,
+    output : 'util-tests-config.hh',
+  )
 
-# Run the same tests again under `enosys -d openat2` to exercise the
-# iterative (non-openat2) fallback path on Linux.  `enosys` uses
-# seccomp to make `openat2` return `ENOSYS`, which the wrapper in
-# file-system-at.cc caches and falls back to the iterative impl.
-if host_machine.system() == 'linux'
-  enosys = find_program('enosys', required : false)
-  if enosys.found()
-    test(
-      meson.project_name() + '-without-new-syscalls',
-      enosys,
-      args : [
-        '--syscall', 'openat2',
-        '--syscall', 'fchmodat2',
-        '--',
-        this_exe,
-      ],
-      env : {
-        '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
-      },
-      protocol : 'gtest',
-    )
+  this_exe = executable(
+    meson.project_name(),
+    sources,
+    config_priv_h,
+    dependencies : unit_dependencies,
+    include_directories : include_dirs,
+    link_args : linker_export_flags,
+    install : true,
+    cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
+  )
+endif
+
+if get_option('fuzzers')
+  subdir('fuzz')
+endif
+
+if build_unit_tests
+  test(
+    meson.project_name(),
+    this_exe,
+    env : {
+      '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
+    },
+    protocol : 'gtest',
+  )
+
+  # Run the same tests again under `enosys` to exercise fallback paths on Linux.
+  if host_machine.system() == 'linux'
+    enosys = find_program('enosys', required : false)
+    if enosys.found()
+      test(
+        meson.project_name() + '-without-new-syscalls',
+        enosys,
+        args : [
+          '--syscall', 'openat2',
+          '--syscall', 'fchmodat2',
+          '--syscall', 'close_range',
+          '--syscall', 'copy_file_range',
+          '--',
+          this_exe,
+        ],
+        env : {
+          '_NIX_TEST_UNIT_DATA' : meson.current_source_dir() / 'data',
+        },
+        protocol : 'gtest',
+      )
+    endif
   endif
 endif

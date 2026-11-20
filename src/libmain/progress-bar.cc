@@ -9,30 +9,26 @@
 
 #include <map>
 #include <thread>
-#include <sstream>
-#include <iostream>
+#include <optional>
+#include <span>
 #include <chrono>
 
 namespace nix {
 
 namespace {
 
-static std::string_view getS(const std::vector<Logger::Field> & fields, size_t n)
+static std::optional<std::string_view> getS(std::span<const Logger::Field> fields, size_t n)
 {
-    if (n < fields.size()) {
-        if (auto p = std::get_if<std::string>(&fields[n].raw))
-            return *p;
-    }
-    throw Error("could not get expected log field of type 'string' at index %d", n);
+    if (n >= fields.size() || !std::holds_alternative<std::string>(fields[n]))
+        return std::nullopt;
+    return std::get<std::string>(fields[n]);
 }
 
-static uint64_t getI(const std::vector<Logger::Field> & fields, size_t n)
+static std::optional<uint64_t> getI(std::span<const Logger::Field> fields, size_t n)
 {
-    if (n < fields.size()) {
-        if (auto p = std::get_if<uint64_t>(&fields[n].raw))
-            return *p;
-    }
-    throw Error("could not get expected log field of type 'int' at index %d", n);
+    if (n >= fields.size() || !std::holds_alternative<uint64_t>(fields[n]))
+        return std::nullopt;
+    return std::get<uint64_t>(fields[n]);
 }
 
 static std::string_view storePathToName(std::string_view path)
@@ -316,7 +312,7 @@ public:
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
-        const Fields & fields,
+        std::span<const Field> fields,
         ActivityId parent) noexcept override
     {
         auto state(state_.lock());
@@ -324,33 +320,42 @@ public:
         auto i = addActivity(*state, act, lvl, type, s, parent);
 
         if (type == actBuild) {
-            auto name = storePathToNameWithoutDrvSuffix(getS(fields, 0));
-            i->s = fmt("building " ANSI_BOLD "%s" ANSI_NORMAL, name);
-            auto machineName = getS(fields, 1);
-            if (machineName != "")
-                i->s += fmt(" on " ANSI_BOLD "%s" ANSI_NORMAL, machineName);
-            i->name = DrvName(name).name;
+            if (auto path = getS(fields, 0)) {
+                auto name = storePathToNameWithoutDrvSuffix(*path);
+                i->s = fmt("building " ANSI_BOLD "%s" ANSI_NORMAL, name);
+                auto machineName = getS(fields, 1);
+                if (machineName && *machineName != "")
+                    i->s += fmt(" on " ANSI_BOLD "%s" ANSI_NORMAL, *machineName);
+                i->name = DrvName(name).name;
+            }
         }
 
         if (type == actSubstitute) {
-            auto name = storePathToName(getS(fields, 0));
+            auto path = getS(fields, 0);
             auto sub = getS(fields, 1);
-            i->s =
-                fmt(hasPrefix(sub, "local") ? "copying " ANSI_BOLD "%s" ANSI_NORMAL " from %s"
-                                            : "fetching " ANSI_BOLD "%s" ANSI_NORMAL " from %s",
-                    name,
-                    sub);
+            if (path && sub) {
+                auto name = storePathToName(*path);
+                i->s =
+                    fmt(hasPrefix(*sub, "local") ? "copying " ANSI_BOLD "%s" ANSI_NORMAL " from %s"
+                                                 : "fetching " ANSI_BOLD "%s" ANSI_NORMAL " from %s",
+                        name,
+                        *sub);
+            }
         }
 
         if (type == actPostBuildHook) {
-            auto name = storePathToNameWithoutDrvSuffix(getS(fields, 0));
-            i->s = fmt("post-build " ANSI_BOLD "%s" ANSI_NORMAL, name);
-            i->name = DrvName(name).name;
+            if (auto path = getS(fields, 0)) {
+                auto name = storePathToNameWithoutDrvSuffix(*path);
+                i->s = fmt("post-build " ANSI_BOLD "%s" ANSI_NORMAL, name);
+                i->name = DrvName(name).name;
+            }
         }
 
         if (type == actQueryPathInfo) {
-            auto name = storePathToName(getS(fields, 0));
-            i->s = fmt("querying " ANSI_BOLD "%s" ANSI_NORMAL " on %s", name, getS(fields, 1));
+            auto path = getS(fields, 0);
+            auto sub = getS(fields, 1);
+            if (path && sub)
+                i->s = fmt("querying " ANSI_BOLD "%s" ANSI_NORMAL " on %s", storePathToName(*path), *sub);
         }
 
         if ((type == actFileTransfer && hasAncestor(*state, actCopyPath, parent))
@@ -377,7 +382,7 @@ public:
             i->gc.emplace();
             for (auto & [key, value] : metadata)
                 if (key == "nix.gc.dry_run")
-                    if (auto p = std::get_if<uint64_t>(&value.raw))
+                    if (auto p = std::get_if<uint64_t>(&value))
                         i->gc->dryRun = *p != 0;
         }
 
@@ -421,95 +426,129 @@ public:
         update(*state);
     }
 
-    void result(ActivityId act, ResultType type, const std::vector<Field> & fields) noexcept override
+    void result(ActivityId act, ResultType type, std::span<const Field> fields) noexcept override
     {
         auto state(state_.lock());
 
-        if (type == resFileLinked) {
+        switch (type) {
+        case resFileLinked: {
             state->filesLinked++;
-            state->bytesLinked += getI(fields, 0);
-            update(*state);
+            state->bytesLinked += getI(fields, 0).value_or(0);
+            break;
         }
-
-        else if (type == resBuildLogLine || type == resPostBuildLogLine) {
-            auto lastLine = chomp(getS(fields, 0));
+        case resBuildLogLine:
+        case resPostBuildLogLine: {
+            auto line = getS(fields, 0);
+            if (!line)
+                return;
+            auto lastLine = chomp(*line);
             auto i = state->its.find(act);
-            assert(i != state->its.end());
-            ActInfo info = *i->second;
+            if (i == state->its.end())
+                return;
+            ActInfo & info = *i->second;
             if (printBuildLogs) {
-                auto suffix = "> ";
-                if (type == resPostBuildLogLine) {
-                    suffix = " (post)> ";
-                }
+                const char * suffix = (type == resPostBuildLogLine) ? " (post)> " : "> ";
                 log(*state, lvlInfo, ANSI_FAINT + info.name.value_or("unnamed") + suffix + ANSI_NORMAL + lastLine);
+                return; /* No need to update(). */
             } else {
-                state->activities.erase(i->second);
+                /* Bump activity for round-robin. Modify the lastLine in-place without invalidating iterators. */
+                state->activities.splice(state->activities.end(), state->activities, i->second);
                 info.lastLine = lastLine;
-                state->activities.emplace_back(info);
-                i->second = std::prev(state->activities.end());
-                update(*state);
             }
+            break;
         }
-
-        else if (type == resUntrustedPath) {
+        case resUntrustedPath:
             state->untrustedPaths++;
-            update(*state);
-        }
-
-        else if (type == resCorruptedPath) {
+            break;
+        case resCorruptedPath:
             state->corruptedPaths++;
-            update(*state);
-        }
-
-        else if (type == resSetPhase) {
+            break;
+        case resSetPhase: {
+            auto phase = getS(fields, 0);
+            if (!phase)
+                return;
             auto i = state->its.find(act);
-            assert(i != state->its.end());
-            i->second->phase = getS(fields, 0);
-            update(*state);
+            if (i == state->its.end())
+                return;
+            i->second->phase = *phase;
+            break;
         }
-
-        else if (type == resProgress) {
+        case resProgress: {
+            auto done = getI(fields, 0);
+            auto expected = getI(fields, 1);
+            auto running = getI(fields, 2);
+            auto failed = getI(fields, 3);
+            if (!done || !expected || !running || !failed)
+                return;
             auto i = state->its.find(act);
-            assert(i != state->its.end());
+            if (i == state->its.end())
+                return;
             ActInfo & actInfo = *i->second;
-            actInfo.done = getI(fields, 0);
-            actInfo.expected = getI(fields, 1);
-            actInfo.running = getI(fields, 2);
-            actInfo.failed = getI(fields, 3);
-            update(*state);
+            actInfo.done = *done;
+            actInfo.expected = *expected;
+            actInfo.running = *running;
+            actInfo.failed = *failed;
+            break;
         }
-
-        else if (type == resSetExpected) {
+        case resSetExpected: {
+            auto expectedType = getI(fields, 0);
+            auto expected = getI(fields, 1);
+            if (!expectedType || !expected)
+                return;
             auto i = state->its.find(act);
-            assert(i != state->its.end());
+            if (i == state->its.end())
+                return;
             ActInfo & actInfo = *i->second;
-            auto type = (ActivityType) getI(fields, 0);
+            auto type = (ActivityType) *expectedType;
             auto & j = actInfo.expectedByType[type];
             state->activitiesByType[type].expected -= j;
-            j = getI(fields, 1);
+            j = *expected;
             state->activitiesByType[type].expected += j;
-            update(*state);
+            break;
         }
-
-        else if (type == resFetchStatus) {
+        case resFetchStatus: {
+            auto lastLine = getS(fields, 0);
+            if (!lastLine)
+                return;
             auto i = state->its.find(act);
-            assert(i != state->its.end());
+            if (i == state->its.end())
+                return;
             ActInfo & actInfo = *i->second;
-            actInfo.lastLine = getS(fields, 0);
-            update(*state);
+            actInfo.lastLine = *lastLine;
+            break;
         }
-
-        else if (type == resGCProgress) {
+        case resGCProgress: {
             auto i = state->its.find(act);
             if (i != state->its.end() && i->second->gc) {
-                auto & gc = *i->second->gc;
-                gc.alive = getI(fields, 0);
-                gc.deleted = getI(fields, 1);
-                gc.bytesFreed = getI(fields, 2);
-                gc.haveProgress = true;
-                update(*state);
+                auto alive = getI(fields, 0);
+                auto deleted = getI(fields, 1);
+                auto bytesFreed = getI(fields, 2);
+                if (alive && deleted && bytesFreed) {
+                    auto & gc = *i->second->gc;
+                    gc.alive = *alive;
+                    gc.deleted = *deleted;
+                    gc.bytesFreed = *bytesFreed;
+                    gc.haveProgress = true;
+                    break;
+                }
             }
+            return;
         }
+        case resFetchToStore:
+            /* TODO: Do something to render this maybe? */
+            return;
+        case resBuildResult:
+        case resHttpStatus:
+        case resHashMismatch:
+            /* Not shown by the progress bar. */
+            return;
+        default:
+            /* Everything else can't happen (almost) because ResultType is a plain
+               enum and it would be UB. */
+            return;
+        }
+
+        update(*state);
     }
 
     void update(State & state) noexcept
@@ -791,8 +830,7 @@ public:
     {
         auto state(state_.lock());
         if (state->active) {
-            invalidateRedrawCache();
-            std::cerr << "\r\e[K";
+            clearProgressDisplay();
             Logger::writeToStdout(s);
             draw(*state);
         } else {
@@ -806,7 +844,7 @@ public:
         if (!state->active)
             return {};
         invalidateRedrawCache();
-        std::cerr << fmt("\r\e[K%s ", msg);
+        writeToStderr(fmt("\r\e[K%s ", msg));
         unhideCursorIfNeeded();
         auto s = trim(readLine(getStandardInput(), true));
         hideCursorIfNeeded();
@@ -826,7 +864,7 @@ public:
 
 std::unique_ptr<Logger> makeProgressBar()
 {
-    return std::make_unique<ProgressBar>(isTTY());
+    return std::make_unique<ProgressBar>(shouldANSI());
 }
 
 } // namespace nix

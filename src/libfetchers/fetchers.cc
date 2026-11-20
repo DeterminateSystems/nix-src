@@ -1,6 +1,7 @@
 #include "nix/fetchers/fetchers.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/fs-sink.hh"
+#include "nix/store/build.hh"
 #include "nix/util/source-path.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/util/json-utils.hh"
@@ -8,6 +9,7 @@
 #include "nix/fetchers/provenance.hh"
 #include "nix/util/url.hh"
 #include "nix/util/users.hh"
+#include "nix/util/logging.hh"
 #include "nix/store/pathlocks.hh"
 #include "nix/util/environment-variables.hh"
 
@@ -37,9 +39,21 @@ const InputSchemeMap & getAllInputSchemes()
     return inputSchemes();
 }
 
-Input Input::fromURL(const Settings & settings, const std::string & url, bool requireTree)
+std::optional<ParsedURL> getLocalRepoURL(const std::filesystem::path & path)
 {
-    return fromURL(settings, parseURL(url), requireTree);
+    for (auto & [_, inputScheme] : inputSchemes()) {
+        auto feature = inputScheme->experimentalFeature();
+        if (feature && !experimentalFeatureSettings.isEnabled(*feature))
+            continue;
+        if (auto url = inputScheme->localRepoURL(path))
+            return url;
+    }
+    return std::nullopt;
+}
+
+Input Input::fromURL(const std::string & url, bool requireTree)
+{
+    return fromURL(parseURL(url), requireTree);
 }
 
 static void fixupInput(Input & input)
@@ -51,10 +65,10 @@ static void fixupInput(Input & input)
     input.getLastModified();
 }
 
-Input Input::fromURL(const Settings & settings, const ParsedURL & url, bool requireTree)
+Input Input::fromURL(const ParsedURL & url, bool requireTree)
 {
     for (auto & [_, inputScheme] : inputSchemes()) {
-        auto res = inputScheme->inputFromURL(settings, url, requireTree);
+        auto res = inputScheme->inputFromURL(url, requireTree);
         if (res) {
             experimentalFeatureSettings.require(inputScheme->experimentalFeature());
             res->scheme = inputScheme;
@@ -72,7 +86,7 @@ Input Input::fromURL(const Settings & settings, const ParsedURL & url, bool requ
     throw Error("input '%s' is unsupported", url);
 }
 
-Input Input::fromAttrs(const Settings & settings, Attrs && attrs)
+Input Input::fromAttrs(Attrs && attrs)
 {
     auto schemeName = ({
         auto schemeNameOpt = maybeGetStrAttr(attrs, "type");
@@ -110,7 +124,7 @@ Input Input::fromAttrs(const Settings & settings, Attrs && attrs)
         if (name != "type" && name != "__final" && name != "__legacyExport" && allowedAttrs.count(name) == 0)
             throw Error("input attribute '%s' not supported by scheme '%s'", name, schemeName);
 
-    auto res = inputScheme->inputFromAttrs(settings, attrs);
+    auto res = inputScheme->inputFromAttrs(attrs);
     if (!res)
         return raw();
     res->scheme = inputScheme;
@@ -127,6 +141,9 @@ std::optional<std::string> Input::getFingerprint(Store & store) const
         return *cachedFingerprint;
 
     auto fingerprint = scheme->getFingerprint(store, *this);
+
+    if (fingerprint)
+        fingerprint = std::string(scheme->schemeName()) + ":" + *fingerprint;
 
     cachedFingerprint = fingerprint;
 
@@ -384,7 +401,7 @@ std::pair<ref<SourceAccessor>, Input> Input::getAccessorUnchecked(const Settings
     /* If not, try to substitute the input. */
     if (storePath) {
         try {
-            store.ensurePath(*storePath);
+            store.getBuilder()->ensurePath(*storePath);
             return makeStoreAccessor();
         }
         // Ignore any substitution error.
@@ -552,12 +569,11 @@ std::string publicKeys_to_string(const std::vector<PublicKey> & publicKeys)
 
 namespace nlohmann {
 
-using namespace nix;
-
 #ifndef DOXYGEN_SKIP
 
-fetchers::PublicKey adl_serializer<fetchers::PublicKey>::from_json(const json & json)
+nix::fetchers::PublicKey adl_serializer<nix::fetchers::PublicKey>::from_json(const json & json)
 {
+    using namespace nix;
     fetchers::PublicKey res = {};
     auto & obj = getObject(json);
     if (auto * type = optionalValueAt(obj, "type"))
@@ -568,7 +584,7 @@ fetchers::PublicKey adl_serializer<fetchers::PublicKey>::from_json(const json & 
     return res;
 }
 
-void adl_serializer<fetchers::PublicKey>::to_json(json & json, const fetchers::PublicKey & p)
+void adl_serializer<nix::fetchers::PublicKey>::to_json(json & json, const nix::fetchers::PublicKey & p)
 {
     json["type"] = p.type;
     json["key"] = p.key;

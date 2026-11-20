@@ -25,7 +25,6 @@ enum struct ExperimentalFeature {
     FetchClosure,
     AutoAllocateUids,
     Cgroups,
-    DaemonTrustOverride,
     DynamicDerivations,
     ParseTomlTimestamps,
     ReadOnlyLocalStore,

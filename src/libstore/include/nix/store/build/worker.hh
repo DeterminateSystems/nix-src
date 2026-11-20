@@ -2,7 +2,9 @@
 ///@file
 
 #include "nix/util/types.hh"
+#include "nix/util/logging.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/build.hh"
 #include "nix/store/derived-path-map.hh"
 #include "nix/store/build/goal.hh"
 #include "nix/store/build-result.hh"
@@ -22,7 +24,7 @@ struct DerivationTrampolineGoal;
 struct DerivationGoal;
 struct DerivationResolutionGoal;
 struct DerivationBuildingGoal;
-struct PathSubstitutionGoal;
+class PathSubstitutionGoal;
 class DrvOutputSubstitutionGoal;
 
 /**
@@ -68,9 +70,43 @@ struct HookInstance;
 #endif
 
 /**
+ * Owns a worker. Optimization around ensurePath to prevent a Worker from
+ * being constructed when it's not needed.
+ */
+class LocalBuilder : public Builder
+{
+public:
+    LocalBuilder(ref<Store> store, ref<Store> evalStore)
+        : store(store)
+        , evalStore(evalStore) {};
+
+    /* Builder interface — see `Builder` for documentation. */
+
+    void buildPaths(const std::vector<DerivedPath> & reqs, BuildMode buildMode) override;
+    std::vector<KeyedBuildResult>
+    buildPathsWithResults(const std::vector<DerivedPath> & reqs, BuildMode buildMode) override;
+    BuildResult buildDerivation(const StorePath & drvPath, const BasicDerivation & drv, BuildMode buildMode) override;
+    void ensurePath(const StorePath & path) override;
+    void repairPath(const StorePath & path) override;
+
+private:
+    /**
+     * Intentionally construct a new worker for each operation, to avoid
+     * reusing a worker between calls, allowing for thread safety.
+     */
+    inline std::shared_ptr<Worker> getWorker()
+    {
+        return std::make_shared<Worker>(*store, *evalStore);
+    }
+
+    ref<Store> store;
+    ref<Store> evalStore;
+};
+
+/**
  * Coordinates one or more realisations and their interdependencies.
  */
-class Worker
+class Worker : public Builder
 {
 private:
 
@@ -199,6 +235,7 @@ public:
 
     Store & store;
     Store & evalStore;
+
     const WorkerSettings & settings;
 
     /**
@@ -270,8 +307,8 @@ public:
     /**
      * @ref DerivationBuildingGoal "derivation building goal"
      */
-    std::shared_ptr<DerivationBuildingGoal> makeDerivationBuildingGoal(
-        const StorePath & drvPath, ref<const Derivation> drv, BuildMode buildMode, bool storeDerivation);
+    std::shared_ptr<DerivationBuildingGoal>
+    makeDerivationBuildingGoal(const StorePath & drvPath, ref<const BasicDerivation> drv, BuildMode buildMode);
 
     /**
      * @ref PathSubstitutionGoal "substitution goal"
@@ -390,6 +427,15 @@ public:
         act.setExpected(actFileTransfer, expectedDownloadSize + doneDownloadSize);
         act.setExpected(actCopyPath, expectedNarSize + doneNarSize);
     }
+
+    /* Builder interface — see `Builder` for documentation. */
+
+    void buildPaths(const std::vector<DerivedPath> & reqs, BuildMode buildMode) override;
+    std::vector<KeyedBuildResult>
+    buildPathsWithResults(const std::vector<DerivedPath> & reqs, BuildMode buildMode) override;
+    BuildResult buildDerivation(const StorePath & drvPath, const BasicDerivation & drv, BuildMode buildMode) override;
+    void ensurePath(const StorePath & path) override;
+    void repairPath(const StorePath & path) override;
 };
 
 } // namespace nix

@@ -61,7 +61,7 @@ struct Opaque
  * `File<std::string>` nicely defining what a "file system object"
  * is in Nix.
  *
- * With a different type arugment, it is also can be a "skeletal"
+ * With a different type argument, it is also can be a "skeletal"
  * version is that abstract syntax for a "NAR listing".
  */
 template<typename RegularContents, bool recur>
@@ -144,6 +144,10 @@ public:
      */
     File * open(const CanonPath & path, std::optional<File> create);
 
+    /**
+     * @brief Insert a new regular file into with the specified @p contents.
+     * @todo Have a way to insert "borrowed" std::string_view without copying.
+     */
     SourcePath addFile(CanonPath path, std::string && contents);
 };
 
@@ -194,29 +198,27 @@ struct json_avoids_null<MemorySourceAccessor> : std::true_type
 
 namespace nlohmann {
 
-using namespace nix;
-
-#define ARG fso::Regular<RegularContents>
+#define ARG nix::fso::Regular<RegularContents>
 template<typename RegularContents>
 JSON_IMPL_INNER(ARG);
 #undef ARG
 
-#define ARG fso::DirectoryT<Child>
+#define ARG nix::fso::DirectoryT<Child>
 template<typename Child>
 JSON_IMPL_INNER(ARG);
 #undef ARG
 
 template<>
-JSON_IMPL_INNER(fso::Symlink);
+JSON_IMPL_INNER(nix::fso::Symlink);
 
 template<>
-JSON_IMPL_INNER(fso::Opaque);
+JSON_IMPL_INNER(nix::fso::Opaque);
 
-#define ARG fso::VariantT<RegularContents, recur>
+#define ARG nix::fso::VariantT<RegularContents, recur>
 template<typename RegularContents, bool recur>
 JSON_IMPL_INNER(ARG);
 #undef ARG
 
 } // namespace nlohmann
 
-JSON_IMPL(MemorySourceAccessor)
+JSON_IMPL(nix::MemorySourceAccessor)

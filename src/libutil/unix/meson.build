@@ -22,6 +22,10 @@ check_funcs_unix = [
     'For closing many file descriptors after forking.',
   ],
   [
+    'closefrom',
+    'For closing many file descriptors after forking.',
+  ],
+  [
     'lutimes',
     'Optionally used for changing the mtime of symlinks.',
   ],
@@ -75,7 +79,6 @@ sources += files(
   'current-process.cc',
   'environment-variables.cc',
   'file-descriptor.cc',
-  'file-path.cc',
   'file-system-at.cc',
   'file-system.cc',
   'muxable-pipe.cc',

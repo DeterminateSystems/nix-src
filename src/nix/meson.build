@@ -88,6 +88,7 @@ otel_required = get_option('otel')
 otel_trace = dependency('opentelemetry_trace', required : otel_required)
 configdata.set('HAVE_OTEL', otel_trace.found().to_int())
 deps_private += otel_trace
+configdata.set_quoted('FALLBACK_BASH', get_option('bash-program'))
 
 config_priv_h = configure_file(
   configuration : configdata,
@@ -151,9 +152,11 @@ nix_sources = [ config_priv_h ] + files(
   'store-gc.cc',
   'store-info.cc',
   'store-repair.cc',
+  'store-submit-output.cc',
   'store.cc',
   'upgrade-nix.cc',
   'verify.cc',
+  'version.cc',
   'why-depends.cc',
 )
 
@@ -165,14 +168,9 @@ if host_machine.system() != 'windows'
 endif
 
 nix_sources += [
-  gen_header.process('doc/manual/generate-manpage.nix'),
-  gen_header.process('doc/manual/generate-settings.nix'),
-  gen_header.process('doc/manual/generate-store-info.nix'),
-  gen_header.process('doc/manual/utils.nix'),
-  gen_header.process('get-env.sh'),
+  # TODO: Get rid of this for good. It's used in profile.md with
+  # string literal concatenation.
   gen_header.process('profiles.md'),
-  gen_header.process('help-stores.md'),
-  gen_header.process('baked-flake.nix'),
 ]
 
 # The rest of the subdirectories aren't separate components,
@@ -230,14 +228,19 @@ endif
 
 include_dirs = [ include_directories('.') ]
 
+link_args = linker_export_flags
+if host_machine.system() == 'darwin'
+  # Bump the executable's stack size to facilitate deep recursion in the evaluator.
+  # This is done statically so that we can use posix_spawn on macOS.
+  link_args += '-Wl,-stack_size,0x3C00000'
+endif
+
 this_exe = executable(
   meson.project_name(),
   sources,
-  dependencies : deps_private_subproject + deps_private + deps_other + deps_plugin_c_apis,
+  dependencies : deps_private_subproject + deps_private + deps_private_no_pkgconfig + deps_plugin_c_apis,
   include_directories : include_dirs,
-  link_args : linker_export_flags + (
-    sentry_required.enabled() ? [ '-lsentry' ] : []
-  ),
+  link_args : link_args + (sentry_required.enabled() ? [ '-lsentry' ] : []),
   export_dynamic : get_option('plugin-c-api'),
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],

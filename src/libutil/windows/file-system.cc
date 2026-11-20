@@ -1,6 +1,9 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/logging.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/system-error.hh"
+
+#include "../file-descriptor-private.hh"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -28,49 +31,77 @@ void setWriteTime(
     warn("Changing file times is not yet implemented on Windows, path is %s", PathFmt(path));
 }
 
-AutoCloseFD openDirectory(const std::filesystem::path & path, FinalSymlink finalSymlink)
+Result<AutoCloseFD, NativeError> openDirectory(const std::filesystem::path & path, FinalSymlink finalSymlink)
 {
-    return AutoCloseFD{CreateFileW(
-        path.c_str(),
-        GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        /*lpSecurityAttributes=*/nullptr,
-        OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS | (finalSymlink == FinalSymlink::Follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
-        /*hTemplateFile=*/nullptr)};
+    return openResult(
+        ::CreateFileW(
+            path.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            /*lpSecurityAttributes=*/nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | (finalSymlink == FinalSymlink::Follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
+            /*hTemplateFile=*/nullptr));
 }
 
-AutoCloseFD openFileReadonly(const std::filesystem::path & path, FinalSymlink finalSymlink)
+Result<AutoCloseFD, NativeError> openDirectoryTraversable(const std::filesystem::path & path, FinalSymlink finalSymlink)
 {
-    return AutoCloseFD{CreateFileW(
-        path.c_str(),
-        GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_DELETE,
-        /*lpSecurityAttributes=*/nullptr,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL | (finalSymlink == FinalSymlink::Follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
-        /*hTemplateFile=*/nullptr)};
+    /* `FILE_TRAVERSE | FILE_READ_ATTRIBUTES` rather than `GENERIC_READ`,
+       so as not to require `FILE_LIST_DIRECTORY`. `FILE_READ_ATTRIBUTES`
+       is for `fstat`. `FILE_TRAVERSE` is the analogue of Unix search
+       permission: traversal is normally not checked, because everyone
+       has `SeChangeNotifyPrivilege` ("Bypass traverse checking") by
+       default, but in case we lack it, relative opens with this handle
+       as their root directory need it to have been granted. */
+    return openResult(
+        ::CreateFileW(
+            path.c_str(),
+            FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            /*lpSecurityAttributes=*/nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | (finalSymlink == FinalSymlink::Follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
+            /*hTemplateFile=*/nullptr));
 }
 
-AutoCloseFD
+Result<AutoCloseFD, NativeError> openFileReadonly(const std::filesystem::path & path, FinalSymlink finalSymlink)
+{
+    return openResult(
+        ::CreateFileW(
+            path.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_DELETE,
+            /*lpSecurityAttributes=*/nullptr,
+            OPEN_EXISTING,
+            /* `FILE_FLAG_BACKUP_SEMANTICS` so that directories can be opened
+               too, like `open(O_RDONLY)` on Unix. */
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS
+                | (finalSymlink == FinalSymlink::Follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
+            /*hTemplateFile=*/nullptr));
+}
+
+Result<AutoCloseFD, NativeError>
 openNewFileForWrite(const std::filesystem::path & path, [[maybe_unused]] mode_t mode, OpenNewFileForWriteParams params)
 {
-    return AutoCloseFD{CreateFileW(
-        path.c_str(),
-        GENERIC_WRITE | (params.writeOnly ? 0 : GENERIC_READ),
-        FILE_SHARE_READ | FILE_SHARE_DELETE,
-        /*lpSecurityAttributes=*/nullptr,
-        params.truncateExisting ? CREATE_ALWAYS : CREATE_NEW, /* TODO: Reparse points. */
-        FILE_ATTRIBUTE_NORMAL,
-        /*hTemplateFile=*/nullptr)};
+    return openResult(
+        ::CreateFileW(
+            path.c_str(),
+            GENERIC_WRITE | (params.writeOnly ? 0 : GENERIC_READ),
+            FILE_SHARE_READ | FILE_SHARE_DELETE,
+            /*lpSecurityAttributes=*/nullptr,
+            params.truncateExisting ? CREATE_ALWAYS : CREATE_NEW, /* TODO: Reparse points. */
+            FILE_ATTRIBUTE_NORMAL,
+            /*hTemplateFile=*/nullptr));
 }
 
 std::filesystem::path defaultTempDir()
 {
+    using namespace nix::windows;
+
     wchar_t buf[MAX_PATH + 1];
     DWORD len = GetTempPathW(MAX_PATH + 1, buf);
     if (len == 0 || len > MAX_PATH)
-        throw windows::WinError("getting default temporary directory");
+        throw WinError("getting default temporary directory");
     return std::filesystem::path(buf);
 }
 
@@ -90,6 +121,8 @@ void deletePath(const std::filesystem::path & path, uint64_t & bytesFreed)
 
 std::filesystem::path descriptorToPath(Descriptor handle)
 {
+    using namespace nix::windows;
+
     std::vector<wchar_t> buf(0x100);
     DWORD dw = GetFinalPathNameByHandleW(handle, buf.data(), buf.size(), FILE_NAME_OPENED);
     if (dw == 0) {
@@ -104,7 +137,7 @@ std::filesystem::path descriptorToPath(Descriptor handle)
     if (dw > buf.size()) {
         buf.resize(dw);
         if (GetFinalPathNameByHandleW(handle, buf.data(), buf.size(), FILE_NAME_OPENED) != dw - 1)
-            throw windows::WinError("GetFinalPathNameByHandleW");
+            throw WinError("GetFinalPathNameByHandleW");
         dw -= 1;
     }
     return std::filesystem::path{std::wstring{buf.data(), dw}};
@@ -161,8 +194,10 @@ void windows::statFromFileInfo(
 
 static PosixStat statFromFileInfo(const WIN32_FILE_ATTRIBUTE_DATA & attrData)
 {
+    using namespace nix::windows;
+
     PosixStat st;
-    windows::statFromFileInfo(
+    statFromFileInfo(
         st,
         attrData.dwFileAttributes,
         attrData.ftCreationTime,
@@ -175,29 +210,48 @@ static PosixStat statFromFileInfo(const WIN32_FILE_ATTRIBUTE_DATA & attrData)
 
 PosixStat lstat(const std::filesystem::path & path)
 {
+    using namespace nix::windows;
+
     WIN32_FILE_ATTRIBUTE_DATA attrData;
     if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attrData))
-        throw windows::WinError("getting status of %s", PathFmt(path));
+        throw WinError("getting status of %s", PathFmt(path));
     return statFromFileInfo(attrData);
 }
 
 std::optional<PosixStat> maybeLstat(const std::filesystem::path & path)
 {
+    using namespace nix::windows;
+
     WIN32_FILE_ATTRIBUTE_DATA attrData;
     if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attrData)) {
         auto lastError = GetLastError();
         if (lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND)
             return std::nullopt;
-        throw windows::WinError(lastError, "getting status of %s", PathFmt(path));
+        throw WinError(lastError, "getting status of %s", PathFmt(path));
     }
     return statFromFileInfo(attrData);
 }
 
+void movePath(const std::filesystem::path & src, const std::filesystem::path & dst)
+{
+    renameFile(src, dst);
+}
+
 void renameFile(const std::filesystem::path & src, const std::filesystem::path & dst)
 {
+    using namespace nix::windows;
+
     /* TODO: FileRenameInformationEx with FILE_RENAME_POSIX_SEMANTICS? */
     if (!::MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING))
-        throw windows::WinError("renaming %1% to %2%", PathFmt(src), PathFmt(dst));
+        throw WinError("renaming %1% to %2%", PathFmt(src), PathFmt(dst));
+}
+
+void createDir(const std::filesystem::path & path, [[maybe_unused]] mode_t mode)
+{
+    using namespace nix::windows;
+
+    if (!::CreateDirectoryW(path.c_str(), nullptr))
+        throw WinError("creating directory %s", PathFmt(path));
 }
 
 } // namespace nix

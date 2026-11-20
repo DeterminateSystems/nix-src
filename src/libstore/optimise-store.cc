@@ -5,6 +5,7 @@
 #include "nix/store/posix-fs-canonicalise.hh"
 #include "nix/util/source-accessor.hh"
 #include "nix/util/file-system.hh"
+#include "nix/util/system-error.hh"
 
 #include <boost/unordered/concurrent_flat_set.hpp>
 
@@ -73,9 +74,10 @@ LocalStore::InodeHash LocalStore::loadInodeHash()
     return inodeHash;
 }
 
-Strings LocalStore::readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash)
+std::list<OsFilename>
+LocalStore::readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash)
 {
-    Strings names;
+    std::list<OsFilename> names;
 
     AutoCloseDir dir(opendir(path.string().c_str()));
     if (!dir)
@@ -93,7 +95,9 @@ Strings LocalStore::readDirectoryIgnoringInodes(const std::filesystem::path & pa
         std::string name = dirent->d_name;
         if (name == "." || name == "..")
             continue;
-        names.push_back(name);
+        /* Having just filtered out `.` and `..`, the `OsFilename` invariants
+           hold, so the return type can carry them to callers. */
+        names.push_back(OsFilename::fromPathAsserting(std::move(name)));
     }
     if (errno)
         throw SysError("reading directory %s", PathFmt(path));
@@ -129,9 +133,9 @@ void LocalStore::optimisePath_(
 #endif
 
     if (S_ISDIR(st.st_mode)) {
-        Strings names = readDirectoryIgnoringInodes(path, inodeHash);
-        for (auto & i : names)
-            optimisePath_(act, stats, path / i, inodeHash, repair);
+        auto names = readDirectoryIgnoringInodes(path, inodeHash);
+        for (const auto & i : names)
+            optimisePath_(act, stats, path / i.path(), inodeHash, repair);
         return;
     }
 

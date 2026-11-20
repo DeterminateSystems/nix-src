@@ -9,11 +9,12 @@
 namespace nix {
 
 class Store;
-template<typename Input>
-struct DerivationOptions;
-struct DerivationOutput;
 
-typedef std::map<std::string, DerivationOutput> DerivationOutputs;
+namespace derivation {
+template<typename Input>
+struct Options;
+struct Output;
+} // namespace derivation
 
 struct StructuredAttrs
 {
@@ -27,7 +28,20 @@ struct StructuredAttrs
      */
     nlohmann::json structuredAttrs = nlohmann::json::object();
 
-    bool operator==(const StructuredAttrs &) const = default;
+    /**
+     * The encoding we parsed, kept verbatim because it was not the
+     * canonical one `unparse` would produce. Derivations in the wild
+     * predate us caring about this, and their encoding is part of their
+     * identity, so we must be able to reproduce it exactly.
+     */
+    std::optional<std::string> verbatim;
+
+    /**
+     * Compares encodings, not just values, since that is what must
+     * round-trip. Dumping is only needed when exactly one side has a
+     * verbatim encoding to compare against.
+     */
+    bool operator==(const StructuredAttrs & other) const;
 
     const nlohmann::json::object_t & object() const
     {
@@ -71,9 +85,9 @@ struct StructuredAttrs
 
     nlohmann::json::object_t prepareStructuredAttrs(
         Store & store,
-        const DerivationOptions<StorePath> & drvOptions,
+        const derivation::Options<StorePath> & drvOptions,
         const StorePathSet & inputPaths,
-        const DerivationOutputs & outputs) const;
+        const std::map<std::string, derivation::Output> & outputs) const;
 
     /**
      * As a convenience to bash scripts, write a shell file that

@@ -1,4 +1,5 @@
 #include "nix/expr/symbol-table.hh"
+#include "nix/util/system-error.hh"
 #include "nix/util/logging.hh"
 
 #include <sys/mman.h>

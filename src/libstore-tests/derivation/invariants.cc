@@ -29,24 +29,24 @@ protected:
      */
     StorePath makeCAFloatingDependency(std::string_view name)
     {
-        Derivation depDrv;
-        depDrv.name = name;
-        depDrv.platform = "x86_64-linux";
-        depDrv.builder = "/bin/sh";
-        depDrv.outputs = {
-            {
-                "out",
-                // will ensure that downstream is deferred
-                DerivationOutput{DerivationOutput::CAFloating{
-                    .method = ContentAddressMethod::Raw::NixArchive,
-                    .hashAlgo = HashAlgorithm::SHA256,
-                }},
+        Derivation depDrv{
+            .outputs{
+                {
+                    "out",
+                    DerivationOutput::CAFloating{
+                        .method = ContentAddressMethod::Raw::NixArchive,
+                        .hashAlgo = HashAlgorithm::SHA256,
+                    },
+                },
             },
+            .platform = "x86_64-linux",
+            .builder = "/bin/sh",
+            .env = {{"out", ""}},
+            .name = std::string{name},
         };
-        depDrv.env = {{"out", ""}};
 
         // Fill in the dependency derivation's output paths
-        depDrv.fillInOutputPaths(*store);
+        fillInOutputPaths(depDrv, *store);
 
         // Write the dependency to the store
         return store->writeDerivation(depDrv, NoRepair);
@@ -64,19 +64,18 @@ TEST_F(FillInOutputPathsTest, fillsDeferredOutputs_emptyStringEnvVar)
     using nlohmann::json;
 
     // Before: Derivation with deferred output
-    Derivation drv;
-    drv.name = "filled-in-deferred-empty-env-var";
-    drv.platform = "x86_64-linux";
-    drv.builder = "/bin/sh";
-    drv.outputs = {
-        {"out", DerivationOutput{DerivationOutput::Deferred{}}},
+    Derivation drv{
+        .outputs = {{"out", DerivationOutput::Deferred{}}},
+        .platform = "x86_64-linux",
+        .builder = "/bin/sh",
+        .env = {{"__doc", "Fill in deferred output with empty env var"}, {"out", ""}},
+        .name = "filled-in-deferred-empty-env-var",
     };
-    drv.env = {{"__doc", "Fill in deferred output with empty env var"}, {"out", ""}};
 
     // Serialize before state
     checkpointJson("filled-in-deferred-empty-env-var-pre", drv);
 
-    drv.fillInOutputPaths(*store);
+    fillInOutputPaths(drv, *store);
 
     // Serialize after state
     checkpointJson("filled-in-deferred-empty-env-var-post", drv);
@@ -95,21 +94,18 @@ TEST_F(FillInOutputPathsTest, fillsDeferredOutputs_empty_string_var)
     using nlohmann::json;
 
     // Before: Derivation with deferred output
-    Derivation drv;
-    drv.name = "filled-in-deferred-no-env-var";
-    drv.platform = "x86_64-linux";
-    drv.builder = "/bin/sh";
-    drv.outputs = {
-        {"out", DerivationOutput{DerivationOutput::Deferred{}}},
-    };
-    drv.env = {
-        {"__doc", "Fill in deferred with missing env var"},
+    Derivation drv{
+        .outputs = {{"out", DerivationOutput::Deferred{}}},
+        .platform = "x86_64-linux",
+        .builder = "/bin/sh",
+        .env = {{"__doc", "Fill in deferred with missing env var"}},
+        .name = "filled-in-deferred-no-env-var",
     };
 
     // Serialize before state
     checkpointJson("filled-in-deferred-no-env-var-pre", drv);
 
-    drv.fillInOutputPaths(*store);
+    fillInOutputPaths(drv, *store);
 
     // Serialize after state
     checkpointJson("filled-in-deferred-no-env-var-post", drv);
@@ -127,16 +123,12 @@ TEST_F(FillInOutputPathsTest, preservesInputAddressedOutputs)
 {
     auto expectedPath = StorePath{"w4bk7hpyxzgy2gx8fsa8f952435pll3i-filled-in-already"};
 
-    Derivation drv;
-    drv.name = "filled-in-already";
-    drv.platform = "x86_64-linux";
-    drv.builder = "/bin/sh";
-    drv.outputs = {
-        {"out", DerivationOutput{DerivationOutput::InputAddressed{.path = expectedPath}}},
-    };
-    drv.env = {
-        {"__doc", "Correct path stays unchanged"},
-        {"out", store->printStorePath(expectedPath)},
+    Derivation drv{
+        .outputs = {{"out", DerivationOutput{DerivationOutput::InputAddressed{.path = expectedPath}}}},
+        .platform = "x86_64-linux",
+        .builder = "/bin/sh",
+        .env = {{"__doc", "Correct path stays unchanged"}, {"out", store->printStorePath(expectedPath)}},
+        .name = "filled-in-already",
     };
 
     // Serialize before state
@@ -144,7 +136,7 @@ TEST_F(FillInOutputPathsTest, preservesInputAddressedOutputs)
 
     auto drvBefore = drv;
 
-    drv.fillInOutputPaths(*store);
+    fillInOutputPaths(drv, *store);
 
     // Should still be no change
     EXPECT_EQ(drv, drvBefore);
@@ -154,47 +146,123 @@ TEST_F(FillInOutputPathsTest, throwsOnIncorrectInputAddressedPath)
 {
     auto wrongPath = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-wrong-name"};
 
-    Derivation drv;
-    drv.name = "bad-path";
-    drv.platform = "x86_64-linux";
-    drv.builder = "/bin/sh";
-    drv.outputs = {
-        {"out", DerivationOutput{DerivationOutput::InputAddressed{.path = wrongPath}}},
-    };
-    drv.env = {
-        {"__doc", "Wrong InputAddressed path throws error"},
-        {"out", store->printStorePath(wrongPath)},
+    Derivation drv{
+        .outputs = {{"out", DerivationOutput{DerivationOutput::InputAddressed{.path = wrongPath}}}},
+        .platform = "x86_64-linux",
+        .builder = "/bin/sh",
+        .env = {{"__doc", "Wrong InputAddressed path throws error"}, {"out", store->printStorePath(wrongPath)}},
+        .name = "bad-path",
     };
 
     // Serialize before state
     checkpointJson("bad-path", drv);
 
-    ASSERT_THROW(drv.fillInOutputPaths(*store), Error);
+    ASSERT_THROW(fillInOutputPaths(drv, *store), Error);
 }
 
-#if 0
-TEST_F(FillInOutputPathsTest, throwsOnIncorrectEnvVar)
+TEST_F(FillInOutputPathsTest, warnsOnIncorrectEnvVarForDeferred)
 {
     auto wrongPath = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-wrong-name"};
 
-    Derivation drv;
-    drv.name = "bad-env-var";
-    drv.platform = "x86_64-linux";
-    drv.builder = "/bin/sh";
-    drv.outputs = {
-        {"out", DerivationOutput{DerivationOutput::Deferred{}}},
-    };
-    drv.env = {
-        {"__doc", "Wrong env var value throws error"},
-        {"out", store->printStorePath(wrongPath)},
+    Derivation drv{
+        .outputs = {{"out", DerivationOutput{DerivationOutput::Deferred{}}}},
+        .platform = "x86_64-linux",
+        .builder = "/bin/sh",
+        .env = {{"__doc", "Wrong env var for deferred output only warns"}, {"out", store->printStorePath(wrongPath)}},
+        .name = "bad-env-var",
     };
 
-    // Serialize before state
-    checkpointJson("bad-env-var", drv);
+    /* An incorrect pre-existing env var for a formerly-deferred output
+       only warns, for compatibility with derivations produced by older
+       versions of Nix. This will become an error in future versions of
+       Nix; then this test should `ASSERT_THROW` instead. */
+    fillInOutputPaths(drv, *store);
 
-    ASSERT_THROW(drv.fillInOutputPaths(*store), Error);
+    // The output itself is still filled in...
+    ASSERT_TRUE(std::get_if<DerivationOutput::InputAddressed>(&drv.outputs.at("out").raw));
+
+    // ...and the env var is corrected so later validation passes.
+    auto & filled = std::get<DerivationOutput::InputAddressed>(drv.outputs.at("out").raw);
+    EXPECT_EQ(drv.env.at("out"), store->printStorePath(filled.path));
+    ASSERT_NO_THROW(checkInvariants(drv, *store));
 }
-#endif
+
+TEST_F(FillInOutputPathsTest, throwsOnMixedOutputTypes)
+{
+    Derivation drv{
+        .outputs =
+            {
+                {"dev",
+                 DerivationOutput{DerivationOutput::CAFloating{
+                     .method = ContentAddressMethod::Raw::NixArchive,
+                     .hashAlgo = HashAlgorithm::SHA256,
+                 }}},
+                {"out", DerivationOutput{DerivationOutput::Deferred{}}},
+            },
+        .platform = "x86_64-linux",
+        .builder = "/bin/sh",
+        .env = {{"__doc", "Mixed output types are a catchable error, not an abort"}, {"out", ""}, {"dev", ""}},
+        .name = "mixed-output-types",
+    };
+
+    // Must throw, not panic (std::terminate) inside fullyMaskDerivation.
+    ASSERT_THROW(fillInOutputPaths(drv, *store), Error);
+    ASSERT_THROW(checkInvariants(drv, *store), Error);
+}
+
+TEST_F(FillInOutputPathsTest, skipsEnvVarsWithBuilderRpc)
+{
+    Derivation drv{
+        .outputs{
+            {
+                "out",
+                DerivationOutput{DerivationOutput::CAFixed{
+                    .ca =
+                        ContentAddress{
+                            .method = ContentAddressMethod::Raw::NixArchive,
+                            .hash = hashString(HashAlgorithm::SHA256, "foo"),
+                        },
+                }},
+            },
+        },
+        .platform = "x86_64-linux",
+        .builder = "/bin/sh",
+        .env =
+            {{"__doc", "builder-rpc-v0 derivations have no output env vars"},
+             {"requiredSystemFeatures", "builder-rpc-v0"}},
+        .name = "rpc-outputs",
+    };
+
+    auto drvBefore = drv;
+
+    /* With `builder-rpc-v0`, outputs are communicated to the builder
+       over RPC, so there is deliberately no `out` env var: fill-in must
+       not invent one, and validation must not demand one. */
+    fillInOutputPaths(drv, *store);
+    EXPECT_EQ(drv, drvBefore);
+
+    EXPECT_NO_THROW(checkInvariants(drv, *store));
+}
+
+TEST_F(FillInOutputPathsTest, rejectsBuilderRpcForInputAddressed)
+{
+    Derivation drv{
+        .outputs = {{"out", DerivationOutput{DerivationOutput::Deferred{}}}},
+        .platform = "x86_64-linux",
+        .builder = "/bin/sh",
+        .env =
+            {{"__doc", "builder-rpc-v0 requires content addressing"},
+             {"requiredSystemFeatures", "builder-rpc-v0"},
+             {"out", ""}},
+        .name = "rpc-input-addressed",
+    };
+
+    /* `builder-rpc-v0` may only be used with content-addressing
+       derivations; input-addressed (including deferred) derivations
+       claiming it are rejected. */
+    ASSERT_THROW(fillInOutputPaths(drv, *store), Error);
+    ASSERT_THROW(checkInvariants(drv, *store), Error);
+}
 
 TEST_F(FillInOutputPathsTest, preservesDeferredWithInputDrvs)
 {
@@ -204,19 +272,21 @@ TEST_F(FillInOutputPathsTest, preservesDeferredWithInputDrvs)
     auto depDrvPath = makeCAFloatingDependency("dependency");
 
     // Create a derivation that depends on the dependency
-    Derivation drv;
-    drv.name = "depends-on-drv";
-    drv.platform = "x86_64-linux";
-    drv.builder = "/bin/sh";
-    drv.outputs = {
-        {"out", DerivationOutput{DerivationOutput::Deferred{}}},
+    Derivation drv{
+        .outputs{
+            {"out", DerivationOutput::Deferred{}},
+        },
+        .inputs{
+            SingleDerivedPath::Built{
+                .drvPath = makeConstantStorePathRef(depDrvPath),
+                .output = "out",
+            },
+        },
+        .platform = "x86_64-linux",
+        .builder = "/bin/sh",
+        .env = {{"__doc", "Deferred stays deferred with CA dependencies"}, {"out", ""}},
+        .name = "depends-on-drv",
     };
-    drv.env = {
-        {"__doc", "Deferred stays deferred with CA dependencies"},
-        {"out", ""},
-    };
-    // Add the real input derivation dependency
-    drv.inputDrvs = {.map = {{depDrvPath, {.value = {"out"}}}}};
 
     // Serialize before state
     checkpointJson("depends-on-drv-pre", drv);
@@ -224,13 +294,13 @@ TEST_F(FillInOutputPathsTest, preservesDeferredWithInputDrvs)
     auto drvBefore = drv;
 
     // Apply fillInOutputPaths
-    drv.fillInOutputPaths(*store);
+    fillInOutputPaths(drv, *store);
 
     // Derivation should be unchanged
     EXPECT_EQ(drv, drvBefore);
 }
 
-TEST_F(FillInOutputPathsTest, throwsOnPatWhenShouldBeDeffered)
+TEST_F(FillInOutputPathsTest, throwsOnPatWhenShouldBeDeferred)
 {
     using nlohmann::json;
 
@@ -240,25 +310,32 @@ TEST_F(FillInOutputPathsTest, throwsOnPatWhenShouldBeDeffered)
     auto wrongPath = StorePath{"c015dhfh5l0lp6wxyvdn7bmwhbbr6hr9-wrong-name"};
 
     // Create a derivation that depends on the dependency
-    Derivation drv;
-    drv.name = "depends-on-drv";
-    drv.platform = "x86_64-linux";
-    drv.builder = "/bin/sh";
-    drv.outputs = {
-        {"out", DerivationOutput{DerivationOutput::InputAddressed{.path = wrongPath}}},
+    Derivation drv{
+        .outputs{
+            {
+                "out",
+                DerivationOutput{DerivationOutput::InputAddressed{
+                    .path = wrongPath,
+                }},
+            },
+        },
+        .inputs{
+            SingleDerivedPath::Built{
+                .drvPath = makeConstantStorePathRef(depDrvPath),
+                .output = "out",
+            },
+        },
+        .platform = "x86_64-linux",
+        .builder = "/bin/sh",
+        .env = {{"__doc", "InputAddressed throws when should be deferred"}, {"out", ""}},
+        .name = "depends-on-drv",
     };
-    drv.env = {
-        {"__doc", "InputAddressed throws when should be deferred"},
-        {"out", ""},
-    };
-    // Add the real input derivation dependency
-    drv.inputDrvs = {.map = {{depDrvPath, {.value = {"out"}}}}};
 
     // Serialize before state
     checkpointJson("bad-depends-on-drv-pre", drv);
 
     // Apply fillInOutputPaths
-    ASSERT_THROW(drv.fillInOutputPaths(*store), Error);
+    ASSERT_THROW(fillInOutputPaths(drv, *store), Error);
 }
 
 } // namespace nix

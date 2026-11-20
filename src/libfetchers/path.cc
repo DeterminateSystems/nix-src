@@ -1,6 +1,7 @@
 #include "nix/fetchers/fetchers.hh"
 #include "nix/store/store-api.hh"
 #include "nix/util/archive.hh"
+#include "nix/util/logging.hh"
 #include "nix/fetchers/cache.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/fetchers/fetch-settings.hh"
@@ -9,7 +10,7 @@ namespace nix::fetchers {
 
 struct PathInputScheme : InputScheme
 {
-    std::optional<Input> inputFromURL(const Settings & settings, const ParsedURL & url, bool requireTree) const override
+    std::optional<Input> inputFromURL(const ParsedURL & url, bool requireTree) const override
     {
         if (url.scheme != "path")
             return {};
@@ -78,7 +79,7 @@ struct PathInputScheme : InputScheme
         return attrs;
     }
 
-    std::optional<Input> inputFromAttrs(const Settings & settings, const Attrs & attrs) const override
+    std::optional<Input> inputFromAttrs(const Attrs & attrs) const override
     {
         getStrAttr(attrs, "path");
 

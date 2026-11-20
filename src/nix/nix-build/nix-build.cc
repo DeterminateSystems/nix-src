@@ -1,3 +1,4 @@
+#include "cli-config-private.hh"
 #include <cstring>
 #include <iostream>
 #include <filesystem>
@@ -16,6 +17,7 @@
 #include "nix/store/globals.hh"
 #include "nix/store/realisation.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/derivation/resolution.hh"
 #include "nix/store/outputs-query.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/path-with-outputs.hh"
@@ -28,12 +30,10 @@
 #include "nix/util/users.hh"
 #include "nix/cmd/network-proxy.hh"
 #include "nix/cmd/compatibility-settings.hh"
+#include "nix/store/build.hh"
 #include "nix/util/fun.hh"
 #include "man-pages.hh"
-
-using namespace std::string_literals;
-
-extern char ** environ __attribute__((weak));
+#include "nix/util/system-error.hh"
 
 namespace nix {
 
@@ -451,7 +451,7 @@ static void main_nix_build(int argc, char ** argv)
             printMissing(ref<Store>(store), paths);
 
         if (!dryRun)
-            store->buildPaths(paths, buildMode, evalStore);
+            store->getBuilder(evalStore)->buildPaths(paths, buildMode);
     };
 
     if (isNixShell) {
@@ -496,39 +496,34 @@ static void main_nix_build(int argc, char ** argv)
 
             } catch (Error & e) {
                 logError(e.info());
-                notice("uses bash from your environment");
-                shell = "bash";
+                notice("falling back to '%s' as the interactive shell", FALLBACK_BASH);
+                shell = FALLBACK_BASH;
             }
         }
-
-        auto accumDerivedPath = [&](this auto & self,
-                                    ref<SingleDerivedPath> inputDrv,
-                                    const DerivedPathMap<StringSet>::ChildNode & inputNode) -> void {
-            if (!inputNode.value.empty())
-                pathsToBuild.push_back(
-                    DerivedPath::Built{
-                        .drvPath = inputDrv,
-                        .outputs = OutputsSpec::Names{inputNode.value},
-                    });
-            for (const auto & [outputName, childNode] : inputNode.childMap)
-                self(make_ref<SingleDerivedPath>(SingleDerivedPath::Built{inputDrv, outputName}), childNode);
-        };
 
         // Build or fetch all dependencies of the derivation.
-        for (const auto & [inputDrv0, inputNode] : drv.inputDrvs.map) {
-            // To get around lambda capturing restrictions in the
-            // standard.
-            const auto & inputDrv = inputDrv0;
-            if (std::all_of(envExclude.cbegin(), envExclude.cend(), [&](const std::string & exclude) {
-                    return !std::regex_search(store->printStorePath(inputDrv), std::regex(exclude));
-                })) {
-                accumDerivedPath(makeConstantStorePathRef(inputDrv), inputNode);
-                pathsToCopy.insert(inputDrv);
-            }
-        }
-        for (const auto & src : drv.inputSrcs) {
-            pathsToBuild.emplace_back(DerivedPath::Opaque{src});
-            pathsToCopy.insert(src);
+        for (const auto & input : drv.inputs) {
+            // Check exclusion for top-level drvs
+            bool excluded = false;
+            std::visit(
+                overloaded{
+                    [&](const SingleDerivedPath::Opaque & op) { pathsToCopy.insert(op.path); },
+                    [&](const SingleDerivedPath::Built & built) {
+                        /* For a dynamic derivation input, this is the
+                           root derivation the chain is ultimately built
+                           from. */
+                        auto & inputDrvPath = built.drvPath->getBaseStorePath();
+                        excluded =
+                            !std::all_of(envExclude.cbegin(), envExclude.cend(), [&](const std::string & exclude) {
+                                return !std::regex_search(store->printStorePath(inputDrvPath), std::regex(exclude));
+                            });
+                        if (!excluded)
+                            pathsToCopy.insert(inputDrvPath);
+                    },
+                },
+                input.raw());
+            if (!excluded)
+                pathsToBuild.push_back(DerivedPath::fromSingle(input));
         }
 
         buildPaths(pathsToBuild);
@@ -537,14 +532,19 @@ static void main_nix_build(int argc, char ** argv)
             return;
 
         if (shellDrv) {
+            // Only "out" needs to be realized here, so query partially rather than requiring every output.
             auto shellDrvOutputs = deepQueryPartialDerivationOutputMap(*store, shellDrv.value(), &*evalStore);
-            shell = store->printStorePath(shellDrvOutputs.at("out").value()) + "/bin/bash";
+            auto & outPath = shellDrvOutputs.at("out");
+            if (!outPath)
+                throw MissingRealisation(*store, shellDrv.value(), "out");
+            shell = store->printStorePath(*outPath) + "/bin/bash";
         }
 
-        if (drv.shouldResolve()) {
-            auto resolvedDrv = drv.tryResolve(*store);
-            assert(resolvedDrv && "Successfully resolved the derivation");
-            drv = *resolvedDrv;
+        if (shouldResolve(drv)) {
+            auto resolvedDrv = tryResolve(drv, *store);
+            if (!resolvedDrv)
+                throw Error("failed to resolve derivation '%s'", store->printStorePath(packageInfo.requireDrvPath()));
+            drv = unresolve(*resolvedDrv);
         }
 
         // Set the environment.
@@ -591,19 +591,8 @@ static void main_nix_build(int argc, char ** argv)
         if (drv.structuredAttrs) {
             StorePathSet inputs;
 
-            fun<void(const StorePath &, const DerivedPathMap<StringSet>::ChildNode &)> accumInputClosure =
-                [&](const StorePath & inputDrv, const DerivedPathMap<StringSet>::ChildNode & inputNode) {
-                    auto outputs = deepQueryPartialDerivationOutputMap(*store, inputDrv, &*evalStore);
-                    for (auto & i : inputNode.value) {
-                        auto o = outputs.at(i);
-                        store->computeFSClosure(*o, inputs);
-                    }
-                    for (const auto & [outputName, childNode] : inputNode.childMap)
-                        accumInputClosure(*outputs.at(outputName), childNode);
-                };
-
-            for (const auto & [inputDrv, inputNode] : drv.inputDrvs.map)
-                accumInputClosure(inputDrv, inputNode);
+            for (const auto & input : drv.inputs)
+                store->computeFSClosure(resolveDerivedPath(*store, input, evalStore.get()), inputs);
 
             auto json = drv.structuredAttrs->prepareStructuredAttrs(*store, drvOptions, inputs, drv.outputs);
 
@@ -626,6 +615,9 @@ static void main_nix_build(int argc, char ** argv)
         auto rcfile = (tmpDir.path() / "rc").string();
         auto tz = getEnv("TZ");
         auto tzExport = tz ? "export TZ=" + escapeShellArgAlways(*tz) + "; " : "";
+
+        using namespace std::string_literals;
+
         std::string rc = fmt(
                 (R"(_nix_shell_clean_tmpdir() { command rm -rf %1%; };)"s
                   "trap _nix_shell_clean_tmpdir EXIT; "
@@ -665,15 +657,9 @@ static void main_nix_build(int argc, char ** argv)
         vomit("Sourcing nix-shell with file %s and contents:\n%s", rcfile, rc);
         writeFile(rcfile, rc);
 
-        Strings envStrs;
-        for (auto & i : env)
-            envStrs.push_back(i.first + "=" + i.second);
-
         auto args = interactive ? Strings{"bash", "--rcfile", rcfile} : Strings{"bash", rcfile};
 
-        auto envPtrs = stringsToCharPtrs(envStrs);
-
-        environ = envPtrs.data();
+        replaceEnv(env);
 
         auto argPtrs = stringsToCharPtrs(args);
 
@@ -683,7 +669,7 @@ static void main_nix_build(int argc, char ** argv)
         logger->stop();
         logger->flush();
 
-        execvp(shell->c_str(), argPtrs.data());
+        execvp(requireCString(shell.value()), argPtrs.data());
 
         throw SysError("executing shell '%s'", *shell);
     }
@@ -733,7 +719,8 @@ static void main_nix_build(int argc, char ** argv)
                 drvPrefix += fmt("-%d", counter + 1);
 
             auto outPath = deepQueryPartialDerivationOutput(*store, drvPath, outputName, &*evalStore);
-            assert(outPath);
+            if (!outPath)
+                throw MissingRealisation(*store, drvPath, outputName);
             auto outputPath = *outPath;
 
             if (auto store2 = store.dynamic_pointer_cast<LocalFSStore>()) {

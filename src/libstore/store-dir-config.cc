@@ -35,7 +35,13 @@ getStoreBaseName(std::string_view storeDir, std::string_view path, std::string &
     // support remote stores whose store dir is a non-native path (e.g.
     // Windows <-> Unix ssh-ing).
 #ifdef _WIN32
-    auto p = std::filesystem::path(path);
+    /* `canonPath` requires an absolute path, which `/nix/store` is not
+       on Windows, so just normalise lexically. */
+    auto p = std::filesystem::path(path).lexically_normal();
+    /* `lexically_normal` keeps a trailing separator (as an empty final
+       component), but `canonPath` drops it. */
+    if (!p.has_filename())
+        p = p.parent_path();
 #else
     /* `canonPath()` throws on relative paths. */
     if (path[0] != '/')
@@ -46,6 +52,21 @@ getStoreBaseName(std::string_view storeDir, std::string_view path, std::string &
         return std::unexpected(NotInStore);
     buf = p.filename().string();
     return buf;
+}
+
+StorePath StoreDirConfig::parseStorePathCanonical(std::string_view path) const
+{
+    /* Just for reporting the full string in case of an error. */
+    const std::string_view original = path;
+
+    if (!path.starts_with(storeDir))
+        throw BadStorePath("path '%s' is not in the Nix store", original);
+    path.remove_prefix(storeDir.length());
+
+    if (!path.starts_with('/'))
+        throw BadStorePath("path '%s' is not in the Nix store", original);
+
+    return StorePath(path.substr(1));
 }
 
 StorePath StoreDirConfig::parseStorePath(std::string_view path) const
@@ -73,14 +94,6 @@ std::expected<StorePath, BadStorePathReason> StoreDirConfig::maybeParseStorePath
 bool StoreDirConfig::isStorePath(std::string_view path) const
 {
     return (bool) maybeParseStorePath(path);
-}
-
-StorePathSet StoreDirConfig::parseStorePathSet(const StringSet & paths) const
-{
-    StorePathSet res;
-    for (auto & i : paths)
-        res.insert(parseStorePath(i));
-    return res;
 }
 
 std::string StoreDirConfig::printStorePath(const StorePath & path) const

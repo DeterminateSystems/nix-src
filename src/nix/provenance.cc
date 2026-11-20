@@ -1,5 +1,6 @@
 #include "nix/cmd/command.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/build.hh"
 #include "nix/store/store-open.hh"
 #include "nix/expr/provenance.hh"
 #include "nix/store/provenance.hh"
@@ -96,7 +97,7 @@ struct CmdProvenanceShow : StorePathsCommand
                 }
                 if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(next)) {
                     FlakeRef flakeRef(
-                        fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs)),
+                        fetchers::Input::fromAttrs(fetchers::jsonToAttrs(*tree->attrs)),
                         std::string(flakePath.parent().value_or(CanonPath::root).rel()));
                     logger->cout(
                         "← %sinstantiated from %sflake output " ANSI_BOLD "%s#%s" ANSI_NORMAL,
@@ -112,7 +113,7 @@ struct CmdProvenanceShow : StorePathsCommand
             }
 
             else if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(provenance)) {
-                auto input = fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs));
+                auto input = fetchers::Input::fromAttrs(fetchers::jsonToAttrs(*tree->attrs));
                 logger->cout(
                     "← from %stree " ANSI_BOLD "%s" ANSI_NORMAL,
                     input.isLocked(fetchSettings) ? "" : ANSI_RED "unlocked" ANSI_NORMAL " ",
@@ -257,9 +258,14 @@ struct TrackingStore : public Store
         return next->queryPathFromHashPart(hashPart);
     }
 
-    void registerDrvOutput(const Realisation & output) override
+    void registerDrvOutputUnchecked(const Realisation & output) override
     {
-        next->registerDrvOutput(output);
+        next->registerDrvOutput(output, NoCheckSigs);
+    }
+
+    void registerDrvOutput(const Realisation & output, CheckSigsFlag checkSigs) override
+    {
+        next->registerDrvOutput(output, checkSigs);
     }
 
     ref<SourceAccessor> getFSAccessor(bool requireValidPath) override
@@ -386,7 +392,7 @@ struct CmdProvenanceVerify : StorePathsCommand
                     "⏭️ skipped rebuild of derivation '%s^%s'", store.printStorePath(build->drvPath), build->output);
             } else {
                 try {
-                    store.buildPaths(
+                    store.getBuilder()->buildPaths(
                         {DerivedPath::Built{
                             .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{build->drvPath}),
                             .outputs = OutputsSpec::Names{build->output},
@@ -474,7 +480,7 @@ struct CmdProvenanceVerify : StorePathsCommand
         }
 
         else if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(provenance)) {
-            auto input = fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs));
+            auto input = fetchers::Input::fromAttrs(fetchers::jsonToAttrs(*tree->attrs));
             try {
                 auto [accessor, final] = input.getAccessor(fetchSettings, store);
                 if (!input.isLocked(fetchSettings))

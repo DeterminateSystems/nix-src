@@ -15,6 +15,20 @@ option(
 )
 
 option(
+  'fuzzers',
+  type : 'boolean',
+  value : false,
+  description : 'Build fuzz targets',
+)
+
+option(
+  'fuzzing-engine',
+  type : 'string',
+  value : '',
+  description : 'One compiler-driver argument for linking an external fuzzing engine',
+)
+
+option(
   'functional-tests',
   type : 'boolean',
   value : true,

@@ -13,12 +13,67 @@
 
 namespace nix {
 
+class Store;
+
 struct StoreDirConfig;
-struct BasicDerivation;
+
+namespace derivation {
+template<typename Inputs, typename Out>
+struct Derivation;
+struct Output;
+} // namespace derivation
+
+using BasicDerivation = derivation::Derivation<StorePathSet, derivation::Output>;
+
 struct StructuredAttrs;
 
 template<typename V>
 struct DerivedPathMap;
+
+namespace derivation {
+
+template<typename Input>
+struct OutputChecks
+{
+    bool ignoreSelfRefs = false;
+    std::optional<uint64_t> maxSize, maxClosureSize;
+
+    using DrvRef = nix::DrvRef<Input>;
+
+    /**
+     * env: allowedReferences
+     *
+     * A value of `nullopt` indicates that the check is skipped.
+     * This means that all references are allowed.
+     */
+    std::optional<std::set<DrvRef>> allowedReferences;
+
+    /**
+     * env: disallowedReferences
+     *
+     * No needed for `std::optional`, because skipping the check is
+     * the same as disallowing the references.
+     */
+    std::set<DrvRef> disallowedReferences;
+
+    /**
+     * env: allowedRequisites
+     *
+     * See `allowedReferences`
+     */
+    std::optional<std::set<DrvRef>> allowedRequisites;
+
+    /**
+     * env: disallowedRequisites
+     *
+     * See `disallowedReferences`
+     */
+    std::set<DrvRef> disallowedRequisites;
+
+    bool operator==(const OutputChecks &) const = default;
+};
+
+} // namespace derivation
 
 /**
  * This represents all the special options on a `Derivation`.
@@ -37,54 +92,17 @@ struct DerivedPathMap;
  * separately. That would be nice to separate concerns, and not make any
  * environment variable names magical.
  */
+namespace derivation {
+
 template<typename Input>
-struct DerivationOptions
+struct Options
 {
-    struct OutputChecks
-    {
-        bool ignoreSelfRefs = false;
-        std::optional<uint64_t> maxSize, maxClosureSize;
-
-        using DrvRef = nix::DrvRef<Input>;
-
-        /**
-         * env: allowedReferences
-         *
-         * A value of `nullopt` indicates that the check is skipped.
-         * This means that all references are allowed.
-         */
-        std::optional<std::set<DrvRef>> allowedReferences;
-
-        /**
-         * env: disallowedReferences
-         *
-         * No needed for `std::optional`, because skipping the check is
-         * the same as disallowing the references.
-         */
-        std::set<DrvRef> disallowedReferences;
-
-        /**
-         * env: allowedRequisites
-         *
-         * See `allowedReferences`
-         */
-        std::optional<std::set<DrvRef>> allowedRequisites;
-
-        /**
-         * env: disallowedRequisites
-         *
-         * See `disallowedReferences`
-         */
-        std::set<DrvRef> disallowedRequisites;
-
-        bool operator==(const OutputChecks &) const = default;
-    };
-
     /**
      * Either one set of checks for all outputs, or separate checks
      * per-output.
      */
-    std::variant<OutputChecks, std::map<std::string, OutputChecks, std::less<>>> outputChecks = OutputChecks{};
+    std::variant<derivation::OutputChecks<Input>, std::map<std::string, derivation::OutputChecks<Input>, std::less<>>>
+        outputChecks = derivation::OutputChecks<Input>{};
 
     /**
      * Whether to avoid scanning for references for a given output.
@@ -173,27 +191,32 @@ struct DerivationOptions
      */
     bool allowSubstitutes = true;
 
-    bool operator==(const DerivationOptions &) const = default;
+    bool operator==(const Options &) const = default;
 
     /**
      * @param drv Must be the same derivation we parsed this from. In
      * the future we'll flip things around so a `BasicDerivation` has
      * `DerivationOptions` instead.
      */
-    StringSet getRequiredSystemFeatures(const BasicDerivation & drv) const;
+    template<typename Inputs>
+    StringSet getRequiredSystemFeatures(const Derivation<Inputs, Output> & drv) const;
 
     bool substitutesAllowed(const WorkerSettings & workerSettings) const;
 
     /**
      * @param drv See note on `getRequiredSystemFeatures`
      */
-    bool useUidRange(const BasicDerivation & drv) const;
+    template<typename Inputs>
+    bool useUidRange(const Derivation<Inputs, Output> & drv) const;
 };
 
-extern template struct DerivationOptions<StorePath>;
-extern template struct DerivationOptions<SingleDerivedPath>;
+extern template struct Options<StorePath>;
+extern template struct Options<SingleDerivedPath>;
 
-struct DerivationOutput;
+} // namespace derivation
+
+template<typename Input>
+using DerivationOptions = derivation::Options<Input>;
 
 /**
  * Parse this information from its legacy encoding as part of the
@@ -203,7 +226,7 @@ struct DerivationOutput;
  */
 DerivationOptions<SingleDerivedPath> derivationOptionsFromStructuredAttrs(
     const StoreDirConfig & store,
-    const DerivedPathMap<StringSet> & inputDrvs,
+    const std::set<SingleDerivedPath> & inputs,
     const StringMap & env,
     const StructuredAttrs * parsed,
     bool shouldWarn = true,
@@ -216,23 +239,27 @@ DerivationOptions<StorePath> derivationOptionsFromStructuredAttrs(
     bool shouldWarn = true,
     const ExperimentalFeatureSettings & mockXpSettings = experimentalFeatureSettings);
 
+namespace derivation {
+
 /**
  * This is the counterpart of `Derivation::tryResolve`. In particular,
- * it takes the same sort of callback, which is used to reolve
+ * it takes the same sort of callback, which is used to resolve
  * non-constant deriving paths.
  *
  * We need this function when resolving a derivation, and we will use
  * this as part of that if/when `Derivation` includes
  * `DerivationOptions`
  */
-std::optional<DerivationOptions<StorePath>> tryResolve(
-    const DerivationOptions<SingleDerivedPath> & drvOptions,
+std::optional<Options<StorePath>> tryResolve(
+    const Options<SingleDerivedPath> & drvOptions,
     fun<std::optional<StorePath>(ref<const SingleDerivedPath> drvPath, const std::string & outputName)>
         queryResolutionChain);
+
+} // namespace derivation
 
 }; // namespace nix
 
 JSON_IMPL(nix::DerivationOptions<nix::StorePath>);
 JSON_IMPL(nix::DerivationOptions<nix::SingleDerivedPath>);
-JSON_IMPL(nix::DerivationOptions<nix::StorePath>::OutputChecks)
-JSON_IMPL(nix::DerivationOptions<nix::SingleDerivedPath>::OutputChecks)
+JSON_IMPL(nix::derivation::OutputChecks<nix::StorePath>)
+JSON_IMPL(nix::derivation::OutputChecks<nix::SingleDerivedPath>)

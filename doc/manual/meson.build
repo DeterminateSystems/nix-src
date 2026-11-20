@@ -9,6 +9,10 @@ fs = import('fs')
 
 doc_url = 'https://manual.determinate.systems/'
 
+# Whether to hide the release notes of the upcoming release (see
+# `source/meson.build`).
+official_release = get_option('official-release')
+
 nix = find_program('nix', native : true)
 
 bash = find_program('bash', native : true)
@@ -207,6 +211,7 @@ nix_nested_manpages = [
       'query',
       'read-log',
       'realise',
+      'register-validity',
       'repair-path',
       'restore',
       'serve',
@@ -356,6 +361,7 @@ nix3_manpages = [
   'nix3-store-sign',
   'nix3-store-verify',
   'nix3-upgrade-nix',
+  'nix3-version',
   'nix3-why-depends',
 ]
 

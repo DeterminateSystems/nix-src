@@ -51,11 +51,26 @@ rec {
     final: prev: {
       withASan = withSanitizers;
       withUBSan = withSanitizers;
+      withFuzzer = withSanitizers;
+      # Build the fuzz targets in CI.
+      withFuzzTargets = withSanitizers;
 
       nix-store-tests = prev.nix-store-tests.override { withBenchmarks = true; };
+      nix-expr-tests = prev.nix-expr-tests.override { withBenchmarks = true; };
       # Boehm is incompatible with ASAN.
       nix-expr = prev.nix-expr.override { enableGC = !withSanitizers; };
 
+      mesonComponentOverrides = lib.composeManyExtensions componentOverrides;
+    }
+  );
+
+  nixComponentsFuzzerOnly = nixComponents.overrideScope (
+    _: _: {
+      withUnitTests = false;
+      withASan = withSanitizers;
+      withUBSan = withSanitizers;
+      withFuzzer = withSanitizers;
+      withFuzzTargets = withSanitizers;
       mesonComponentOverrides = lib.composeManyExtensions componentOverrides;
     }
   );
@@ -95,8 +110,69 @@ rec {
     packaging-overriding =
       let
         nix = packages'.nix;
+        checkFuzzConfiguration =
+          withUnitTests: withFuzzer: withFuzzTargets:
+          let
+            components = nixComponents.overrideScope (
+              _: _: {
+                inherit withUnitTests withFuzzer withFuzzTargets;
+              }
+            );
+          in
+          lib.all
+            (
+              name:
+              let
+                flags = components.${name}.mesonFlags;
+              in
+              lib.elem (lib.mesonBool "unit-tests" withUnitTests) flags
+              && !(lib.elem (lib.mesonBool "unit-tests" (!withUnitTests)) flags)
+              && ((lib.elem (lib.mesonOption "b_sanitize" "fuzzer-no-link") flags) == withFuzzer)
+              && lib.elem (lib.mesonBool "fuzzers" withFuzzTargets) flags
+              && !(lib.elem (lib.mesonBool "fuzzers" (!withFuzzTargets)) flags)
+            )
+            [
+              "nix-util-tests"
+              "nix-store-tests"
+            ];
+        fuzzerOnlyComponents = nixComponents.overrideScope (
+          _: _: {
+            withUnitTests = false;
+            withFuzzTargets = true;
+          }
+        );
+        emptyTestComponents = nixComponents.overrideScope (
+          _: _: {
+            withUnitTests = false;
+            withFuzzTargets = false;
+          }
+        );
+        emptyInstrumentedTestComponents = nixComponents.overrideScope (
+          _: _: {
+            withUnitTests = false;
+            withFuzzer = true;
+            withFuzzTargets = false;
+          }
+        );
+        utilFuzzerOnly = fuzzerOnlyComponents.nix-util-tests;
+        storeFuzzerOnly = fuzzerOnlyComponents.nix-store-tests;
       in
       assert (nix.appendPatches [ pkgs.emptyFile ]).libs.nix-util.src.patches == [ pkgs.emptyFile ];
+      assert checkFuzzConfiguration false false true;
+      assert checkFuzzConfiguration false true true;
+      assert checkFuzzConfiguration true false false;
+      assert checkFuzzConfiguration true false true;
+      assert checkFuzzConfiguration true true false;
+      assert checkFuzzConfiguration true true true;
+      assert utilFuzzerOnly.buildInputs == [ (lib.getDev fuzzerOnlyComponents.nix-util) ];
+      assert storeFuzzerOnly.buildInputs == [ (lib.getDev fuzzerOnlyComponents.nix-store) ];
+      assert !(utilFuzzerOnly.tests ? run-without-new-syscalls);
+      assert !(utilFuzzerOnly.meta ? mainProgram);
+      assert !(storeFuzzerOnly.meta ? mainProgram);
+      assert !(builtins.tryEval emptyTestComponents.nix-util-tests.drvPath).success;
+      assert !(builtins.tryEval emptyTestComponents.nix-store-tests.drvPath).success;
+      assert !(builtins.tryEval emptyInstrumentedTestComponents.nix-util-tests.drvPath).success;
+      assert !(builtins.tryEval emptyInstrumentedTestComponents.nix-store-tests.drvPath).success;
       if pkgs.stdenv.buildPlatform.isDarwin then
         lib.warn "packaging-overriding check currently disabled because of a permissions issue on macOS" pkgs.emptyFile
       else
@@ -135,6 +211,12 @@ rec {
         }
       ) (pkg.tests or { })
     ) nixComponentsInstrumented)
+    // lib.optionalAttrs withSanitizers {
+      "${componentTestsPrefix}nix-util-tests-fuzzer-only" =
+        nixComponentsFuzzerOnly.nix-util-tests.tests.run;
+      "${componentTestsPrefix}nix-store-tests-fuzzer-only" =
+        nixComponentsFuzzerOnly.nix-store-tests.tests.run;
+    }
     // lib.optionalAttrs (pkgs.stdenv.hostPlatform == pkgs.stdenv.buildPlatform) {
       "${componentTestsPrefix}nix-functional-tests" = nixComponentsInstrumented.nix-functional-tests;
       "${componentTestsPrefix}nix-json-schema-checks" = nixComponentsInstrumented.nix-json-schema-checks;

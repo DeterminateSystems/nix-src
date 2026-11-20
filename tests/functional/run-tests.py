@@ -47,9 +47,27 @@ HELPER_PATTERNS = ["common.sh", "*-common.sh", "*-inner.sh"]
 # with the reason. They can still be run by naming them explicitly.
 EXCLUDED_TESTS = {
     "parallel.sh": "unreliable; Meson does not run it either",
-    "plugins.sh": "needs the test plugin built by Meson",
+    "suites/plugins/export-c-api.sh": "needs the test plugin built by Meson",
+    "suites/plugins/register-setting-and-primop.sh": "needs the test plugin built by Meson",
     "test-libstoreconsumer.sh": "needs the test program built by Meson",
 }
+
+# Test suites under `suites/`, reproducing their meson.build files. Unlike
+# other tests, their scripts don't source the harness themselves: it is
+# loaded via `BASH_ENV` (relative to the suite directory), so every `*.sh`
+# file directly in the suite directory, other than helpers, is a test.
+# `tap` lists the tests that report their result using the TAP protocol
+# rather than through their exit code.
+SUITES = {
+    "suites/repl": {"name": "repl", "bash_env": "common.sh", "tap": ["characterisation.sh"]},
+    # Not runnable without Meson (see EXCLUDED_TESTS), but listed so that its
+    # tests can be named explicitly.
+    "suites/plugins": {"name": "plugins", "bash_env": None, "tap": []},
+}
+
+
+def is_helper(path):
+    return any(fnmatch.fnmatch(path.name, pattern) for pattern in HELPER_PATTERNS)
 
 
 def discover_tests(source_dir):
@@ -64,11 +82,30 @@ def discover_tests(source_dir):
         rel = path.relative_to(source_dir)
         if rel.parts[0] == "common" or str(rel) in EXCLUDED_TESTS:
             continue
-        if any(fnmatch.fnmatch(path.name, pattern) for pattern in HELPER_PATTERNS):
+        if is_helper(path):
+            continue
+        if rel.parts[0] == "suites":
+            # See SUITES. Anything deeper than the suite directory (e.g.
+            # `suites/repl/common/functions.sh`) is a helper.
+            if str(rel.parent) in SUITES:
+                tests.append(str(rel))
             continue
         if re.search(r"^\s*(source|\.)\s+\S+\.sh\b", path.read_text(errors="replace"), re.MULTILINE):
             tests.append(str(rel))
     return tests
+
+
+def tap_failed(log_path):
+    """Whether the TAP output in a test log reports a failure."""
+    saw_plan = False
+    for line in log_path.read_text(errors="replace").splitlines():
+        if line.startswith("not ok") and not re.search(r"#\s*(TODO|SKIP)\b", line, re.IGNORECASE):
+            return True
+        if line.startswith("Bail out!"):
+            return True
+        if re.match(r"1\.\.\d+", line):
+            saw_plan = True
+    return not saw_plan
 
 
 def which_or_die(name):
@@ -119,7 +156,7 @@ class Runner:
         self.lock = threading.Lock()
         self.interrupted = False
 
-    def env_for(self, suite, name):
+    def env_for(self, suite, name, bash_env=None):
         env = dict(os.environ)
         # The harness tests `[[ -n $NIX_STORE ]]` under `set -u` to detect
         # running inside a Nix build (where nested builds cannot sandbox).
@@ -137,6 +174,8 @@ class Runner:
                 "ASAN_OPTIONS": "abort_on_error=1:print_summary=1:detect_leaks=0",
             }
         )
+        if bash_env:
+            env["BASH_ENV"] = str(bash_env)
         return env
 
     @staticmethod
@@ -160,6 +199,11 @@ class Runner:
         path = Path(script)
         subdir = path.parent
         suite = self.args.suite if subdir == Path() else str(subdir)
+        # A test under `suites/` gets its suite's name and harness (see SUITES).
+        suite_config = SUITES.get(str(subdir), {})
+        suite = suite_config.get("name", suite)
+        bash_env = self.source_dir / subdir / suite_config["bash_env"] if suite_config.get("bash_env") else None
+        is_tap = path.name in suite_config.get("tap", [])
         test = path.name[: -len(".sh")] if path.name.endswith(".sh") else path.name
         name = str(subdir / test)
         log_path = self.log_dir / (name.replace("/", "-") + ".log")
@@ -168,7 +212,7 @@ class Runner:
             child = subprocess.Popen(
                 ["bash", "-x", "-e", "-u", "-o", "pipefail", path.name],
                 cwd=self.source_dir / subdir,
-                env=self.env_for(suite, test),
+                env=self.env_for(suite, test, bash_env),
                 # No terminal on stdin (as with Meson): tests must not read
                 # from it, and programs like an interactive bash would change
                 # its settings, mangling the output.
@@ -185,6 +229,10 @@ class Runner:
             try:
                 child.wait(timeout=self.args.timeout)
                 status = {0: "OK", SKIP_EXIT_CODE: "SKIP"}.get(child.returncode, "FAIL")
+                if is_tap and status == "OK":
+                    log.flush()
+                    if tap_failed(log_path):
+                        status = "FAIL"
             except subprocess.TimeoutExpired:
                 self.kill_group(child)
                 status = "TIMEOUT"

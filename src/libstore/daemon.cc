@@ -1,8 +1,11 @@
 #include "nix/store/daemon.hh"
+#include "nix/util/configuration.hh"
+#include "nix/util/file-content-address.hh"
 #include "nix/util/signals.hh"
 #include "nix/store/worker-protocol.hh"
 #include "nix/store/worker-protocol-connection.hh"
 #include "nix/store/worker-protocol-impl.hh"
+#include "nix/store/build.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/store-cast.hh"
 #include "nix/store/filetransfer.hh"
@@ -14,6 +17,8 @@
 #include "nix/util/finally.hh"
 #include "nix/util/archive.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/derivation/resolution.hh"
+#include "nix/store/derivation/aterm.hh"
 #include "nix/util/args.hh"
 #include "nix/util/logging.hh"
 #include "nix/store/globals.hh"
@@ -22,6 +27,7 @@
 #include "nix/util/async.hh"
 
 #include <variant>
+#include <utility>
 
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
 #  include "nix/util/monitor-fd.hh"
@@ -33,17 +39,20 @@ namespace nix::daemon {
 
 static void writeField(Sink & sink, const Logger::Field & field)
 {
-    if (auto p = std::get_if<uint64_t>(&field.raw)) {
-        sink << 0;
-        sink << *p;
-    } else if (auto p = std::get_if<std::string>(&field.raw)) {
-        sink << 1;
-        sink << *p;
-    } else
-        unreachable();
+    std::visit(
+        overloaded{
+            [&sink](uint64_t i) {
+                sink << 0;
+                sink << i;
+            },
+            [&sink](const std::string & s) {
+                sink << 1;
+                sink << s;
+            }},
+        field);
 }
 
-Sink & operator<<(Sink & sink, const Logger::Fields & fields)
+Sink & operator<<(Sink & sink, std::span<const Logger::Field> fields)
 {
     sink << fields.size();
     for (auto & f : fields)
@@ -160,7 +169,7 @@ struct TunnelLogger : public Logger
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
-        const Fields & fields,
+        std::span<const Field> fields,
         ActivityId parent) noexcept override
     {
         if (clientVersion.number < WorkerProto::Version::Number{1, 20}) {
@@ -170,7 +179,7 @@ struct TunnelLogger : public Logger
         }
 
         StringSink buf;
-        buf << STDERR_START_ACTIVITY << act << lvl << type << s << fields << parent;
+        buf << STDERR_START_ACTIVITY << act << std::to_underlying(lvl) << type << s << fields << parent;
         enqueueMsg(buf.s);
     }
 
@@ -187,7 +196,7 @@ struct TunnelLogger : public Logger
             return Logger::startActivity(act, lvl, name, metadata, s, parent);
 
         StringSink buf;
-        buf << STDERR_START_ACTIVITY_STRINGLY << act << lvl << name << s << metadata.size();
+        buf << STDERR_START_ACTIVITY_STRINGLY << act << std::to_underlying(lvl) << name << s << metadata.size();
         for (auto & [key, value] : metadata) {
             buf << key;
             writeField(buf, value);
@@ -205,7 +214,7 @@ struct TunnelLogger : public Logger
         enqueueMsg(buf.s);
     }
 
-    void result(ActivityId act, ResultType type, const Fields & fields) noexcept override
+    void result(ActivityId act, ResultType type, std::span<const Field> fields) noexcept override
     {
         if (clientVersion.number < WorkerProto::Version::Number{1, 20})
             return;
@@ -340,10 +349,41 @@ static void performOp(
     TrustedFlag trusted,
     RecursiveFlag recursive,
     WorkerProto::BasicServerConnection & conn,
-    WorkerProto::Op op)
+    WorkerProto::Op op,
+    Builder & builder)
 {
     WorkerProto::ReadConn rconn(conn);
     WorkerProto::WriteConn wconn(conn);
+
+    if (recursive == daemon::RecursiveFlag::RecursiveSubmitted) {
+        // Limit valid calls to reduce opportunities for nonreproducability in builds
+        // Since this is an allowlist, it's easiest to put it at the top before the switch
+        static constexpr std::array validOperations = {
+            // All the types of "Add" should be allowed
+            WorkerProto::Op::AddToStore,
+            WorkerProto::Op::AddMultipleToStore,
+            WorkerProto::Op::AddToStoreNar,
+            WorkerProto::Op::AddToStoreScanning,
+            // SubmitOutput is designed specifically for this use case
+            WorkerProto::Op::SubmitOutput,
+            // Used by nix cli, should never change actual outputs
+            WorkerProto::Op::AddTempRoot,
+            // Used by nix cli, restricted store will prevent it from seeing derivations it shouldn't
+            WorkerProto::Op::IsValidPath,
+        };
+        if (std::ranges::find(validOperations, op) == validOperations.end()) {
+            throw Error("Operation %d not allowed inside derivation", op);
+        }
+    } else {
+        // Operations designed only for the experimental builder-rpc-v0 should never be exposed outside
+        // derivaitons that use it.
+        // AddToStoreScanning is still acceptable in ordinary recursive derivations, though.
+        // Throw the same error we do when using an unknown operation.
+        if (op == WorkerProto::Op::SubmitOutput
+            || (op == WorkerProto::Op::AddToStoreScanning && recursive == daemon::RecursiveFlag::NotRecursive)) {
+            throw Error("invalid operation %1%", op);
+        }
+    }
 
     switch (op) {
 
@@ -601,7 +641,7 @@ static void performOp(
         if (mode == bmRepair && !trusted)
             throw Error("repairing is not allowed because you are not in 'trusted-users'");
         logger->startWork();
-        store->buildPaths(drvs, mode);
+        builder.buildPaths(drvs, mode);
         logger->stopWork();
         conn.to << 1;
         break;
@@ -620,7 +660,7 @@ static void performOp(
             throw Error("repairing is not allowed because you are not in 'trusted-users'");
 
         logger->startWork();
-        auto results = store->buildPathsWithResults(drvs, mode);
+        auto results = builder.buildPathsWithResults(drvs, mode);
         logger->stopWork();
 
         WorkerProto::write(*store, wconn, results);
@@ -634,17 +674,17 @@ static void performOp(
         /*
          * Note: unlike wopEnsurePath, this operation reads a
          * derivation-to-be-realized from the client with
-         * readDerivation(Source,Store) rather than reading it from
+         * derivation::read(Source,Store) rather than reading it from
          * the local store with Store::readDerivation().  Since the
          * derivation-to-be-realized is not registered in the store
          * it cannot be trusted that its outPath was calculated
          * correctly.
          */
-        readDerivation(conn.from, *store, drv, Derivation::nameFromPath(drvPath));
+        derivation::read(conn.from, *store, drv, Derivation::nameFromPath(drvPath));
         auto buildMode = WorkerProto::Serialise<BuildMode>::read(*store, rconn);
         logger->startWork();
 
-        auto drvType = drv.type();
+        auto drvType = type(drv);
 
         /* Content-addressing derivations are trustless because their output paths
            are verified by their content alone, so any derivation is free to
@@ -694,12 +734,10 @@ static void performOp(
                paths. */
             assert(drvType.isCA());
 
-            Derivation drv2;
-            static_cast<BasicDerivation &>(drv2) = drv;
-            drvPath = store->writeDerivation(Derivation{drv2});
+            drvPath = store->writeDerivation(unresolve(drv));
         }
 
-        auto res = store->buildDerivation(drvPath, drv, buildMode);
+        auto res = builder.buildDerivation(drvPath, drv, buildMode);
         logger->stopWork();
         WorkerProto::write(*store, wconn, res);
         break;
@@ -708,7 +746,7 @@ static void performOp(
     case WorkerProto::Op::EnsurePath: {
         auto path = WorkerProto::Serialise<StorePath>::read(*store, rconn);
         logger->startWork();
-        store->ensurePath(path);
+        builder.ensurePath(path);
         logger->stopWork();
         conn.to << 1;
         break;
@@ -838,11 +876,11 @@ static void performOp(
         clientSettings.keepFailed = readInt(conn.from);
         clientSettings.keepGoing = readInt(conn.from);
         clientSettings.tryFallback = readInt(conn.from);
-        clientSettings.verbosity = (Verbosity) readInt(conn.from);
+        clientSettings.verbosity = WorkerProto::Serialise<Verbosity>::read(*store, conn);
         clientSettings.maxBuildJobs = readInt(conn.from);
         clientSettings.maxSilentTime = readInt(conn.from);
         readInt(conn.from); // obsolete useBuildHook
-        clientSettings.verboseBuild = lvlError == (Verbosity) readInt(conn.from);
+        clientSettings.verboseBuild = (readInt(conn.from) == 0);
         readInt(conn.from); // obsolete logType
         readInt(conn.from); // obsolete printBuildTrace
         clientSettings.buildCores = readInt(conn.from);
@@ -859,7 +897,7 @@ static void performOp(
 
         // FIXME: use some setting in recursive mode. Will need to use
         // non-global variables.
-        if (!recursive)
+        if (recursive == RecursiveFlag::NotRecursive)
             clientSettings.apply(trusted);
 
         logger->stopWork();
@@ -1072,7 +1110,7 @@ static void performOp(
     case WorkerProto::Op::RegisterDrvOutput: {
         logger->startWork();
         auto realisation = WorkerProto::Serialise<Realisation>::read(*store, rconn);
-        store->registerDrvOutput(realisation);
+        store->registerDrvOutput(realisation, CheckSigs);
         logger->stopWork();
         break;
     }
@@ -1119,6 +1157,55 @@ static void performOp(
         break;
     }
 
+    case WorkerProto::Op::AddToStoreScanning: {
+        auto name = readString(conn.from);
+        auto camStr = readString(conn.from);
+
+        experimentalFeatureSettings.require(Xp::DynamicDerivations);
+
+        if (!conn.protoVersion.features.contains(WorkerProto::featureAddToStoreScanning))
+            throw Error("Adding to store with scanning was requested, but not supported in negotiated protocol");
+
+        if (recursive == daemon::RecursiveFlag::NotRecursive)
+            throw Error(
+                "AddToStoreScanning only valid within derivation with `builder-rpc-v0` or `recursive-nix` feature");
+
+        auto & submitStore = require<SubmitStore>(*store);
+
+        logger->startWork();
+        auto pathInfo = [&]() {
+            // NB: FramedSource must be out of scope before logger->stopWork();
+            // FIXME: this means that if there is an error
+            // half-way through, the client will keep sending
+            // data, since we haven't sent it the error yet.
+            auto [contentAddressMethod, hashAlgo] = ContentAddressMethod::parseWithAlgo(camStr);
+            FramedSource source(conn.from);
+            FileSerialisationMethod dumpMethod = contentAddressMethod.getFileSerialisationMethod();
+            return submitStore.addToStoreScanning(source, name, dumpMethod, contentAddressMethod, hashAlgo);
+        }();
+        logger->stopWork();
+
+        WorkerProto::Serialise<ValidPathInfo>::write(*store, wconn, *pathInfo);
+        break;
+    }
+
+    case WorkerProto::Op::SubmitOutput: {
+        experimentalFeatureSettings.require(Xp::DynamicDerivations);
+        if (recursive != daemon::RecursiveFlag::RecursiveSubmitted)
+            throw Error("SubmitOutput only valid within derivation with `builder-rpc-v0` feature");
+
+        auto path = WorkerProto::Serialise<SingleDerivedPath>::read(*store, rconn);
+        auto output = WorkerProto::Serialise<OutputName>::read(*store, rconn);
+
+        auto & submitStore = require<SubmitStore>(*store);
+
+        logger->startWork();
+        submitStore.submitOutput(path, output);
+        logger->stopWork();
+        conn.to << 1;
+        break;
+    }
+
     default:
         throw Error("invalid operation %1%", op);
     }
@@ -1130,6 +1217,7 @@ void processConnection(
     FdSink && to,
     TrustedFlag trusted,
     RecursiveFlag recursive,
+    std::shared_ptr<Builder> builder,
     std::function<void(std::string_view traceparent)> setupTelemetry)
 {
 #ifndef _WIN32 // TODO need graceful async exit support on Windows?
@@ -1142,7 +1230,7 @@ void processConnection(
        still trigger the interrupt after we've cleared it. */
     Finally clearInterrupt([]() { setInterrupted(false); });
 
-    auto monitor = !recursive ? std::make_unique<MonitorFdHup>(from.fd) : nullptr;
+    auto monitor = (recursive == RecursiveFlag::NotRecursive) ? std::make_unique<MonitorFdHup>(from.fd) : nullptr;
     (void) monitor; // suppress warning
     ReceiveInterrupts receiveInterrupts;
 
@@ -1157,10 +1245,21 @@ void processConnection(
     });
 #endif
 
+    if (!builder)
+        builder = store->getBuilder();
+
     /* Exchange the greeting. */
-    auto localVersion = WorkerProto::latest;
-    if (recursive)
+    WorkerProto::Version localVersion;
+
+    if (recursive == RecursiveFlag::RecursiveSubmitted) {
+        localVersion = WorkerProto::builderRpcV0;
+    } else if (recursive == RecursiveFlag::Recursive) {
+        localVersion = WorkerProto::latest;
         localVersion.features.insert(std::string{WorkerProto::featureDisableSetOptions});
+        localVersion.features.insert(std::string{WorkerProto::featureAddToStoreScanning});
+    } else {
+        localVersion = WorkerProto::latest;
+    }
     if (!experimentalFeatureSettings.isEnabled(Xp::Provenance))
         localVersion.features.erase(std::string(WorkerProto::featureProvenance));
 
@@ -1180,7 +1279,7 @@ void processConnection(
     auto tunnelLogger = new TunnelLogger(conn.to, conn.protoVersion);
     auto prevLogger = logger;
     // FIXME
-    if (!recursive) {
+    if (recursive == RecursiveFlag::NotRecursive) {
         logger = tunnelLogger;
         applyJSONLogger();
     }
@@ -1190,7 +1289,7 @@ void processConnection(
 
     unsigned int opCount = 0;
 
-    Finally finally([&]() { printMsgUsing(prevLogger, lvlDebug, "%d operations", opCount); });
+    Finally logOpCount([&]() { printMsgUsing(prevLogger, lvlDebug, "%d operations", opCount); });
 
     conn.postHandshake(
         *store,
@@ -1247,7 +1346,7 @@ void processConnection(
             }
 
             try {
-                performOp(tunnelLogger, store, trusted, recursive, conn, op);
+                performOp(tunnelLogger, store, trusted, recursive, conn, op, *builder);
             } catch (Error & e) {
                 /* If we're not in a state where we can send replies, then
                    something went wrong processing the input of the

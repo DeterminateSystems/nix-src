@@ -12,41 +12,6 @@
 #include "nix_api_store_internal.h"
 #include "nix_api_value.h"
 
-// Internal helper functions to check [in] and [out] `Value *` parameters
-static const nix::Value & check_value_not_null(const nix_value * value)
-{
-    if (!value) {
-        throw std::runtime_error("nix_value is null");
-    }
-    return *value->value;
-}
-
-static nix::Value & check_value_not_null(nix_value * value)
-{
-    if (!value) {
-        throw std::runtime_error("nix_value is null");
-    }
-    return *value->value;
-}
-
-static const nix::Value & check_value_in(const nix_value * value)
-{
-    auto & v = check_value_not_null(value);
-    if (!v.isValid()) {
-        throw std::runtime_error("Uninitialized nix_value");
-    }
-    return v;
-}
-
-static nix::Value & check_value_in(nix_value * value)
-{
-    auto & v = check_value_not_null(value);
-    if (!v.isValid()) {
-        throw std::runtime_error("Uninitialized nix_value");
-    }
-    return v;
-}
-
 static nix::Value & check_value_out(nix_value * value)
 {
     auto & v = check_value_not_null(value);
@@ -76,8 +41,8 @@ static void nix_c_primop_wrapper(
     void * userdata,
     int arity,
     nix::EvalState & state,
-    const nix::PosIdx pos,
-    nix::Value ** args,
+    nix::CallSite callSite,
+    nix::Value * const * args,
     nix::Value & v)
 {
     nix_c_context ctx;
@@ -108,16 +73,16 @@ static void nix_c_primop_wrapper(
     if (ctx.last_err_code != NIX_OK) {
         if (ctx.last_err_code == NIX_ERR_RECOVERABLE) {
             state.error<nix::RecoverableEvalError>("Recoverable error from custom function: %s", *ctx.last_err)
-                .atPos(pos)
+                .atPos(nix::noPos)
                 .debugThrow();
         } else {
-            state.error<nix::EvalError>("Error from custom function: %s", *ctx.last_err).atPos(pos).debugThrow();
+            state.error<nix::EvalError>("Error from custom function: %s", *ctx.last_err).atPos(nix::noPos).debugThrow();
         }
     }
 
     if (!vTmp.isValid()) {
         state.error<nix::EvalError>("Implementation error in custom function: return value was not initialized")
-            .atPos(pos)
+            .atPos(nix::noPos)
             .debugThrow();
     }
 
@@ -126,7 +91,7 @@ static void nix_c_primop_wrapper(
         // e.g. implementing tail recursion by returning a thunk to the next
         // "iteration". Until then, this is most likely a mistake or misunderstanding.
         state.error<nix::EvalError>("Implementation error in custom function: return value must not be a thunk")
-            .atPos(pos)
+            .atPos(nix::noPos)
             .debugThrow();
     }
 
@@ -335,7 +300,7 @@ ExternalValue * nix_get_external(nix_c_context * context, nix_value * value)
     if (context)
         context->last_err_code = NIX_OK;
     try {
-        auto & v = check_value_out(value);
+        auto & v = check_value_in(value);
         assert(v.type() == nix::nExternal);
         return (ExternalValue *) v.external();
     }

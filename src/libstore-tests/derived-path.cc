@@ -59,10 +59,6 @@ TEST_F(DerivedPathTest, built_opaque)
  */
 TEST_F(DerivedPathTest, built_built)
 {
-    /**
-     * We set these in tests rather than the regular globals so we don't have
-     * to worry about race conditions if the tests run concurrently.
-     */
     ExperimentalFeatureSettings mockXpSettings;
     mockXpSettings.set("experimental-features", "dynamic-derivations ca-derivations");
 
@@ -193,7 +189,7 @@ TEST_JSON(DerivedPath, multi_opaque, DerivedPath::Opaque{StorePath{"g1w7hy3qg1w7
 
 TEST_JSON(
     DerivedPath,
-    mutli_built,
+    multi_built,
     (DerivedPath::Built{
         .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{
             StorePath{"g1w7hy3qg1w7hy3qg1w7hy3qg1w7hy3q-foo.drv"}}),

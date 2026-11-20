@@ -6,6 +6,8 @@
 #include "nix/util/processes.hh"
 #include "nix/util/finally.hh"
 #include "nix/util/serialise.hh"
+#include "nix/util/config.hh"
+#include "nix/util/system-error.hh"
 
 #include <cerrno>
 #include <filesystem>
@@ -15,12 +17,12 @@
 #include <iostream>
 #include <atomic>
 #include <thread>
-using namespace std::chrono_literals;
 
 #include <grp.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #ifdef __APPLE__
 #  include <sys/syscall.h>
@@ -56,7 +58,7 @@ Pid::Pid(pid_t pid)
 Pid::~Pid()
 {
     try {
-        if (pid != -1)
+        if (pid != unix::INVALID_PID)
             kill(/*allowInterrupts=*/false);
     } catch (...) {
         ignoreExceptionInDestructor();
@@ -65,20 +67,27 @@ Pid::~Pid()
 
 void Pid::operator=(pid_t pid)
 {
-    if (this->pid != -1 && this->pid != pid)
+    if (this->pid != unix::INVALID_PID && this->pid != pid)
         kill();
     this->pid = pid;
     killSignal = SIGKILL; // reset signal to default
 }
 
-Pid::operator pid_t()
+Pid::operator pid_t() const
 {
     return pid;
 }
 
+Pid::operator bool() const noexcept
+{
+    using namespace nix::unix;
+
+    return pid != INVALID_PID;
+}
+
 int Pid::kill(bool allowInterrupts)
 {
-    assert(pid != -1);
+    assert(pid != unix::INVALID_PID);
 
     debug("killing process %1%", pid);
 
@@ -98,6 +107,8 @@ int Pid::kill(bool allowInterrupts)
     /* Note: the thread must not use `pid`, since `wait()` sets it to
        -1 when the child has exited. */
     pid_t target = separatePG ? -pid : pid;
+
+    using namespace std::chrono_literals;
 
     if (killTimeout > 0ms && killSignal != SIGKILL)
         killThread = std::thread([&, target]() {
@@ -129,12 +140,14 @@ int Pid::kill(bool allowInterrupts)
 
 int Pid::wait(bool allowInterrupts)
 {
-    assert(pid != -1);
+    using namespace nix::unix;
+
+    assert(pid != INVALID_PID);
     while (1) {
         int status;
         int res = waitpid(pid, &status, 0);
         if (res == pid) {
-            pid = -1;
+            pid = INVALID_PID;
             return status;
         }
         if (errno != EINTR)
@@ -180,12 +193,14 @@ void Pid::setKillTimeout(std::chrono::milliseconds duration)
 
 pid_t Pid::release()
 {
+    using namespace nix::unix;
+
     pid_t p = pid;
     /* We use the move assignment operator rather than setting the individual fields so we aren't duplicating the
        default values from the header, which would be hard to keep in sync. If we just used the assignment operator
        without manually resetting pid first it would kill that process, however, so we do manually reset that one field.
      */
-    pid = -1;
+    pid = INVALID_PID;
     *this = Pid();
     return p;
 }
@@ -240,17 +255,9 @@ void killUser(uid_t uid)
 
 using ChildWrapperFunction = fun<void()>;
 
-/* Wrapper around vfork to prevent the child process from clobbering
-   the caller's stack frame in the parent. */
-static pid_t doFork(bool allowVfork, ChildWrapperFunction & fun) __attribute__((noinline));
-
-static pid_t doFork(bool allowVfork, ChildWrapperFunction & fun)
+static pid_t doFork(ChildWrapperFunction & fun)
 {
-#ifdef __linux__
-    pid_t pid = allowVfork ? vfork() : fork();
-#else
     pid_t pid = fork();
-#endif
     if (pid != 0)
         return pid;
     fun();
@@ -289,42 +296,64 @@ static pid_t doCloneIntoCgroup(int cloneFlags, int cgroupFd, ChildWrapperFunctio
 
 pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
 {
+    using namespace nix::unix;
+
     auto newLogger = makeSimpleLogger().release();
     ChildWrapperFunction wrapper = [&] {
-        if (!options.allowVfork) {
-            /* Set a simple logger, while leaking (not destroying)
-               the parent logger. We don't want to run the parent
-               logger's destructor since that will crash (e.g. when
-               ~ProgressBar() tries to join a thread that doesn't
-               exist. */
-            logger = newLogger;
+        /* Set a simple logger, while leaking (not destroying)
+           the parent logger. We don't want to run the parent
+           logger's destructor since that will crash (e.g. when
+           ~ProgressBar() tries to join a thread that doesn't
+           exist. */
+        logger = newLogger;
 
-            /* Discard other state that doesn't survive the fork,
-               such as objects owning a thread. */
-            for (auto & callback : RegisterForkCallback::callbacks()) {
-                try {
-                    callback();
-                } catch (...) {
-                }
+        /* Discard other state that doesn't survive the fork,
+           such as objects owning a thread. */
+        for (auto & callback : RegisterForkCallback::callbacks()) {
+            try {
+                callback();
+            } catch (...) {
             }
         }
+
+        unsigned int exitCode = 1;
+
+        auto handleException = [&](const std::exception & e) {
+            try {
+                std::cerr << options.errorPrefix << e.what() << "\n";
+            } catch (...) {
+                /* The above code likely can't throw, but let's be safe. */
+            }
+
+            try {
+                std::rethrow_exception(std::current_exception());
+            } catch (const Error & error) {
+                /* Fish out the exit code. This is used by spawnProgram to report
+                   a 127 exit code for housekeeping errors to match posix_spawn. */
+                exitCode = error.info().status;
+                assert(exitCode); /* It really shouldn't be zero. */
+            } catch (...) {
+            }
+        };
+
         try {
 #ifdef __linux__
+            /* Note that if the processMain changes credentials, this is too early
+               to set parent-death signal. */
             if (options.dieWithParent && prctl(PR_SET_PDEATHSIG, SIGKILL) == -1)
                 throw SysError("setting death signal");
 #endif
             processMain();
-        } catch (std::exception & e) {
-            try {
-                std::cerr << options.errorPrefix << e.what() << "\n";
-            } catch (...) {
-            }
+        } catch (const std::exception & e) {
+            auto ex = std::current_exception();
+            handleException(e);
         } catch (...) {
         }
-        _exit(1);
+
+        _exit(exitCode);
     };
 
-    pid_t pid = -1;
+    pid_t pid = INVALID_PID;
 
     if (options.cgroupFd != -1) {
 #ifdef __linux__
@@ -351,94 +380,83 @@ pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
         throw Error("clone flags are only supported on Linux");
 #endif
     } else
-        pid = doFork(options.allowVfork, wrapper);
+        pid = doFork(wrapper);
 
-    if (pid == -1)
+    if (pid == INVALID_PID)
         throw SysError("unable to fork");
 
     return pid;
 }
 
-std::string runProgram(std::filesystem::path program, bool lookupPath, const OsStrings & args, bool isInteractive)
+/* On Linux, the vfork()-based spawnProgram in linux/processes.cc is used
+   instead, except with ASan. See the comment there for why. */
+#if (!defined(__linux__) || NIX_ASAN_ENABLED) && !defined(__APPLE__)
+
+Pid spawnProgram(const SpawnOptions & options, std::span<const FdRedirection> fdr)
 {
-    auto res = runProgram(
-        RunOptions{
-            .program = program,
-            .lookupPath = lookupPath,
-            .args = args,
-            .isInteractive = isInteractive,
-        });
-
-    if (!statusOk(res.first))
-        throw ExecError(res.first, "program %s %s", PathFmt(program), statusToString(res.first));
-
-    return res.second;
-}
-
-void runProgram2(const RunOptions & options)
-{
-    checkInterrupt();
-
-    /* Create a pipe. */
-    Pipe out;
-    if (options.standardOut)
-        out.create();
-
-    ProcessOptions processOptions;
-    // vfork implies that the environment of the main process and the fork will
-    // be shared (technically this is undefined, but in practice that's the
-    // case), so we can't use it if we alter the environment
-    processOptions.allowVfork = !options.environment;
-
-    auto suspension = logger->suspendIf(options.isInteractive);
-
-    /* Fork. */
-    Pid pid = startProcess(
+    return startProcess(
         [&] {
-            if (options.environment)
-                replaceEnv(*options.environment);
-            if (options.standardOut && dup2(out.writeSide.get(), STDOUT_FILENO) == -1)
-                throw SysError("dupping stdout");
-            if (options.mergeStderrToStdout)
-                if (dup2(STDOUT_FILENO, STDERR_FILENO) == -1)
-                    throw SysError("cannot dup stdout into stderr");
+            try {
+                if (options.environment)
+                    replaceEnv(*options.environment);
 
-            if (options.chdir && chdir((*options.chdir).c_str()) == -1)
-                throw SysError("chdir failed");
-            if (options.gid && setgid(*options.gid) == -1)
-                throw SysError("setgid failed");
-            /* Drop all other groups if we're setgid. */
-            if (options.gid && setgroups(0, 0) == -1)
-                throw SysError("setgroups failed");
-            if (options.uid && setuid(*options.uid) == -1)
-                throw SysError("setuid failed");
+                std::vector<Descriptor> keepExtraFDs;
+                for (const auto & [from, to] : fdr) {
+                    /* dup2 does nothing when from == to, but we still need to clear the CLOEXEC flag. */
+                    if (from == to) {
+                        if (int prev = ::fcntl(from, F_GETFD);
+                            prev == -1 || ::fcntl(from, F_SETFD, prev & ~FD_CLOEXEC) == -1)
+                            throw SysError("clearing FD_CLOEXEC");
+                    } else if (::dup2(from, to) == -1)
+                        throw SysError("dupping fd %d -> %d", from, to);
+                    keepExtraFDs.push_back(to);
+                }
+                if (options.chdir && chdir((*options.chdir).c_str()) == -1)
+                    throw SysError("chdir failed");
+                if (options.gid && setgid(*options.gid) == -1)
+                    throw SysError("setgid failed");
+                /* Drop all other groups if we're setgid. */
+                if (options.gid && setgroups(0, 0) == -1)
+                    throw SysError("setgroups failed");
+                if (options.uid && setuid(*options.uid) == -1)
+                    throw SysError("setuid failed");
 
-            Strings args_(options.args);
-            args_.push_front(options.program.native());
+                Strings args_(options.args);
+                /* Allow the caller to specify an alternative argv[0]. Useful for self-exec
+                   trickery. */
+                args_.push_front(options.argv0.value_or(options.program.native()));
 
-            restoreProcessContext();
+                restoreProcessContext(options.restoreMounts);
 
-            if (options.lookupPath)
-                execvp(options.program.c_str(), stringsToCharPtrs(args_).data());
-            // This allows you to refer to a program with a pathname relative
-            // to the PATH variable.
-            else
-                execv(options.program.c_str(), stringsToCharPtrs(args_).data());
+                /* Unlike the Linux case, it doesn't matter much that we are closing
+                   the FDs before or after restoreProcessContext(), but on Linux
+                   it's crucial that it happens *after* restoreProcessContext() call
+                   because that re-enters the saved mountns. */
+                unix::closeExtraFDs(keepExtraFDs);
 
-            throw SysError("executing %s", PathFmt(options.program));
+                if (options.setSid && ::setsid() == -1)
+                    throw SysError("creating a new session");
+
+                if (options.lookupPath)
+                    execvp(options.program.c_str(), stringsToCharPtrs(args_).data());
+                // This allows you to refer to a program with a pathname relative
+                // to the PATH variable.
+                else
+                    execv(options.program.c_str(), stringsToCharPtrs(args_).data());
+
+                throw SysError("executing %s", PathFmt(options.program));
+            } catch (Error & e) {
+                e.withExitStatus(127); /* Like posix_spawn. */
+                throw;
+            }
         },
-        processOptions);
-
-    out.writeSide.close();
-
-    if (options.standardOut)
-        drainFD(out.readSide.get(), *options.standardOut);
-
-    /* Wait for the child to finish. */
-    int status = pid.wait();
-    if (status)
-        throw ExecError(status, "program %1% %2%", PathFmt(options.program), statusToString(status));
+        {
+            /* TODO: This isn't really implemented on non-Linux. */
+            .dieWithParent = options.dieWithParent,
+        });
 }
+
+#endif
 
 //////////////////////////////////////////////////////////////////////
 

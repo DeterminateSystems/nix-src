@@ -1,58 +1,98 @@
 #include <queue>
 
+#include "nix/store/derivations.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/build-result.hh"
+#include "nix/util/hash.hh"
 
 #include "derivation-check.hh"
 
 namespace nix {
 
-void checkCAFixedOutput(
-    StoreDirConfig & store,
+void checkCAOutput(
+    const StoreDirConfig & store,
     const StorePath & drvPath,
     const DerivationOutput & outputSpec,
     const ValidPathInfo & info,
+    const std::string & outputName,
     Activity & act)
 {
-    if (const auto * dof = std::get_if<DerivationOutput::CAFixed>(&outputSpec.raw)) {
-        auto & wanted = dof->ca.hash;
+    std::visit(
+        overloaded{
+            [&](const DerivationOutput::CAFixed & dof) {
+                auto & wanted = dof.ca.hash;
 
-        /* Check wanted hash */
-        assert(info.ca);
-        auto & got = info.ca->hash;
-        if (wanted != got) {
-            /* Throw an error after registering the path as
-               valid. */
-            act.result(
-                resHashMismatch,
-                {
-                    {"storePath", store.printStorePath(drvPath)},
-                    {"wanted", wanted},
-                    {"got", got},
-                });
-            throw BuildError(
-                BuildResult::Failure::HashMismatch,
-                "hash mismatch in fixed-output derivation '%s':\n  specified: %s\n     got:    %s",
-                store.printStorePath(drvPath),
-                wanted.to_string(HashFormat::SRI, true),
-                got.to_string(HashFormat::SRI, true));
-        }
-        if (!info.references.empty()) {
-            auto numViolations = info.references.size();
-            throw BuildError(
-                BuildResult::Failure::HashMismatch,
-                "fixed-output derivations must not reference store paths: '%s' references %d distinct paths, e.g. '%s'",
-                store.printStorePath(drvPath),
-                numViolations,
-                store.printStorePath(*info.references.begin()));
-        }
-    }
+                /* Check wanted hash */
+                assert(info.ca);
+                auto & got = info.ca->hash;
+                if (wanted != got) {
+                    /* Throw an error after registering the path as
+                       valid. */
+                    act.result(
+                        resHashMismatch,
+                        {
+                            {"storePath", store.printStorePath(drvPath)},
+                            {"wanted", wanted},
+                            {"got", got},
+                        });
+                    throw BuildError(
+                        BuildResult::Failure::HashMismatch,
+                        "hash mismatch in fixed-output derivation '%s':\n  specified: %s\n     got:    %s",
+                        store.printStorePath(drvPath),
+                        wanted.to_string(HashFormat::SRI, true),
+                        got.to_string(HashFormat::SRI, true));
+                }
+                if (!info.references.empty()) {
+                    auto numViolations = info.references.size();
+                    throw BuildError(
+                        BuildResult::Failure::HashMismatch,
+                        "fixed-output derivations must not reference store paths: '%s' references %d distinct paths, e.g. '%s'",
+                        store.printStorePath(drvPath),
+                        numViolations,
+                        store.printStorePath(*info.references.begin()));
+                }
+            },
+            [&](const DerivationOutput::CAFloating & dof) {
+                if (!info.ca.has_value()) {
+                    throw BuildError(
+                        BuildResult::Failure::OutputRejected,
+                        "floating content-addressing derivation '%s' output '%s' (at '%s') was not content-addressed",
+                        store.printStorePath(drvPath),
+                        outputName,
+                        store.printStorePath(info.path));
+                }
+                if (info.ca->method != dof.method) {
+                    throw BuildError(
+                        BuildResult::Failure::OutputRejected,
+                        "content-addressing derivation '%s' output '%s' (at '%s') was hashed with method '%s', expected '%s'",
+                        store.printStorePath(drvPath),
+                        outputName,
+                        store.printStorePath(info.path),
+                        info.ca->method.render(),
+                        dof.method.render());
+                }
+                if (info.ca->hash.algo != dof.hashAlgo) {
+                    throw BuildError(
+                        BuildResult::Failure::OutputRejected,
+                        "content-addressing derivation '%s' output '%s' (at '%s') was hashed with algorithm '%s', expected '%s'",
+                        store.printStorePath(drvPath),
+                        outputName,
+                        store.printStorePath(info.path),
+                        printHashAlgo(info.ca->hash.algo),
+                        printHashAlgo(dof.hashAlgo));
+                }
+            },
+            [&](const DerivationOutput::Deferred & _) {},
+            [&](const DerivationOutput::Impure & _) {},
+            [&](const DerivationOutput::InputAddressed & _) {},
+        },
+        outputSpec.raw);
 }
 
 void checkOutputs(
     Store & store,
     const StorePath & drvPath,
-    const decltype(Derivation::outputs) & drvOutputs,
+    const BasicDerivation & drv,
     const decltype(DerivationOptions<StorePath>::outputChecks) & outputChecks,
     const std::map<std::string, ValidPathInfo> & outputs,
     Activity & act)
@@ -67,10 +107,28 @@ void checkOutputs(
         const std::string & outputName = pair.first;
         const auto & info = pair.second;
 
-        auto * outputSpec = get(drvOutputs, outputName);
-        assert(outputSpec);
+        auto * outputSpec = get(drv.outputs, outputName);
+        if (!outputSpec) {
+            throw BuildError(
+                BuildResult::Failure::OutputRejected,
+                "builder for '%s' submitted unknown output '%s' (Valid outputs are [%s])",
+                store.printStorePath(drvPath),
+                outputName,
+                concatMapStringsSep(", ", outputs, [](auto & o) { return o.first; }));
+        }
 
-        checkCAFixedOutput(store, drvPath, *outputSpec, info, act);
+        if (outputPathName(drv.name, outputName) != info.path.name()) {
+            throw BuildError(
+                BuildResult::Failure::OutputRejected,
+                "derivation '%s' output '%s' (at '%s') was named '%s', expected '%s'",
+                store.printStorePath(drvPath),
+                outputName,
+                store.printStorePath(info.path),
+                info.path.name(),
+                outputPathName(drv.name, outputName));
+        }
+
+        checkCAOutput(store, drvPath, *outputSpec, info, outputName, act);
 
         /* Compute the closure and closure size of some output. This
            is slightly tricky because some of its references (namely
@@ -103,7 +161,7 @@ void checkOutputs(
             return std::make_pair(std::move(pathsDone), closureSize);
         };
 
-        auto applyChecks = [&](const DerivationOptions<StorePath>::OutputChecks & checks) {
+        auto applyChecks = [&](const derivation::OutputChecks<StorePath> & checks) {
             if (checks.maxSize && info.narSize > *checks.maxSize)
                 throw BuildError(
                     BuildResult::Failure::OutputRejected,
@@ -136,8 +194,6 @@ void checkOutputs(
                                 if (auto output = get(outputs, refOutputName))
                                     spec.insert(output->path);
                                 else {
-                                    std::string outputsListing =
-                                        concatMapStringsSep(", ", outputs, [](auto & o) { return o.first; });
                                     throw BuildError(
                                         BuildResult::Failure::OutputRejected,
                                         "derivation '%s' output check for '%s' contains output name '%s',"
@@ -146,7 +202,7 @@ void checkOutputs(
                                         store.printStorePath(drvPath),
                                         outputName,
                                         refOutputName,
-                                        outputsListing);
+                                        concatMapStringsSep(", ", outputs, [](auto & o) { return o.first; }));
                                 }
                             }},
                         i);
@@ -203,9 +259,8 @@ void checkOutputs(
 
         std::visit(
             overloaded{
-                [&](const DerivationOptions<StorePath>::OutputChecks & checks) { applyChecks(checks); },
-                [&](const std::map<std::string, DerivationOptions<StorePath>::OutputChecks, std::less<>> &
-                        checksPerOutput) {
+                [&](const derivation::OutputChecks<StorePath> & checks) { applyChecks(checks); },
+                [&](const std::map<std::string, derivation::OutputChecks<StorePath>, std::less<>> & checksPerOutput) {
                     if (auto outputChecks = get(checksPerOutput, outputName))
 
                         applyChecks(*outputChecks);

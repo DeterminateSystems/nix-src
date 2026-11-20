@@ -2,16 +2,17 @@
 #include "nix/expr/eval-inline.hh"
 #include "nix/store/derivations.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/build.hh"
 #include "nix/store/globals.hh"
 
 namespace nix {
 
-static void prim_unsafeDiscardStringContext(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_unsafeDiscardStringContext(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
     NixStringContext context, filtered;
 
     auto s = state.coerceToString(
-        pos, *args[0], context, "while evaluating the argument passed to builtins.unsafeDiscardStringContext");
+        noPos, *args[0], context, "while evaluating the argument passed to builtins.unsafeDiscardStringContext");
 
     for (auto & c : context)
         if (auto * p = std::get_if<NixStringContextElem::Path>(&c.raw))
@@ -37,10 +38,10 @@ bool hasContext(const NixStringContext & context)
     return false;
 }
 
-static void prim_hasContext(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_hasContext(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
     NixStringContext context;
-    state.forceString(*args[0], context, pos, "while evaluating the argument passed to builtins.hasContext");
+    state.forceString(*args[0], context, noPos, "while evaluating the argument passed to builtins.hasContext");
     v.mkBool(hasContext(context));
 }
 
@@ -67,11 +68,11 @@ static RegisterPrimOp primop_hasContext(
     )",
      .impl = prim_hasContext});
 
-static void prim_unsafeDiscardOutputDependency(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_unsafeDiscardOutputDependency(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
     NixStringContext context;
     auto s = state.coerceToString(
-        pos, *args[0], context, "while evaluating the argument passed to builtins.unsafeDiscardOutputDependency");
+        noPos, *args[0], context, "while evaluating the argument passed to builtins.unsafeDiscardOutputDependency");
 
     NixStringContext context2;
     for (auto && c : context) {
@@ -109,16 +110,16 @@ static RegisterPrimOp primop_unsafeDiscardOutputDependency(
     )",
      .impl = prim_unsafeDiscardOutputDependency});
 
-static void prim_addDrvOutputDependencies(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_addDrvOutputDependencies(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
     NixStringContext context;
     auto s = state.coerceToString(
-        pos, *args[0], context, "while evaluating the argument passed to builtins.addDrvOutputDependencies");
+        noPos, *args[0], context, "while evaluating the argument passed to builtins.addDrvOutputDependencies");
 
     auto contextSize = context.size();
     if (contextSize != 1) {
         state.error<EvalError>("context of string '%s' must have exactly one element, but has %d", *s, contextSize)
-            .atPos(pos)
+            .atPos(noPos)
             .debugThrow();
     }
     NixStringContext context2{
@@ -127,7 +128,7 @@ static void prim_addDrvOutputDependencies(EvalState & state, const PosIdx pos, V
                 [&](const NixStringContextElem::Opaque & c) -> NixStringContextElem::DrvDeep {
                     if (!c.path.isDerivation()) {
                         state.error<EvalError>("path '%s' is not a derivation", state.store->printStorePath(c.path))
-                            .atPos(pos)
+                            .atPos(noPos)
                             .debugThrow();
                     }
                     return NixStringContextElem::DrvDeep{
@@ -139,7 +140,7 @@ static void prim_addDrvOutputDependencies(EvalState & state, const PosIdx pos, V
                         .error<EvalError>(
                             "`addDrvOutputDependencies` can only act on derivations, not on a derivation output such as '%1%'",
                             c.output)
-                        .atPos(pos)
+                        .atPos(noPos)
                         .debugThrow();
                 },
                 [&](const NixStringContextElem::DrvDeep & c) -> NixStringContextElem::DrvDeep {
@@ -150,7 +151,7 @@ static void prim_addDrvOutputDependencies(EvalState & state, const PosIdx pos, V
                 },
                 [&](const NixStringContextElem::Path & p) -> NixStringContextElem::DrvDeep {
                     state.error<EvalError>("`addDrvOutputDependencies` does not work on a string without context")
-                        .atPos(pos)
+                        .atPos(noPos)
                         .debugThrow();
                 },
             },
@@ -198,7 +199,7 @@ static RegisterPrimOp primop_addDrvOutputDependencies(
    Note that for a given path any combination of the above attributes
    may be present.
 */
-static void prim_getContext(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_getContext(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
     struct ContextInfo
     {
@@ -208,7 +209,7 @@ static void prim_getContext(EvalState & state, const PosIdx pos, Value ** args, 
     };
 
     NixStringContext context;
-    state.forceString(*args[0], context, pos, "while evaluating the argument passed to builtins.getContext");
+    state.forceString(*args[0], context, noPos, "while evaluating the argument passed to builtins.getContext");
     auto contextInfos = std::map<StorePath, ContextInfo>();
     for (auto && i : context) {
         std::visit(
@@ -277,13 +278,13 @@ static RegisterPrimOp primop_getContext(
    See the commentary above getContext for details of the
    context representation.
 */
-static void prim_appendContext(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_appendContext(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
     NixStringContext context;
     auto orig = state.forceString(
         *args[0], context, noPos, "while evaluating the first argument passed to builtins.appendContext");
 
-    state.forceAttrs(*args[1], pos, "while evaluating the second argument passed to builtins.appendContext");
+    state.forceAttrs(*args[1], noPos, "while evaluating the second argument passed to builtins.appendContext");
 
     auto sPath = state.symbols.create("path");
     auto sAllOutputs = state.symbols.create("allOutputs");
@@ -295,7 +296,7 @@ static void prim_appendContext(EvalState & state, const PosIdx pos, Value ** arg
         if (!settings.readOnlyMode) {
             /* The path may be a derivation that is still being written asynchronously. */
             state.waitForPath(namePath);
-            state.store->ensurePath(namePath);
+            state.store->getBuilder()->ensurePath(namePath);
         }
         state.forceAttrs(*i.value, i.pos, "while evaluating the value of a string context");
 

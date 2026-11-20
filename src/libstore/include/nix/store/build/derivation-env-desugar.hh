@@ -7,9 +7,19 @@
 namespace nix {
 
 class Store;
+
+struct SingleDerivedPath;
+
+namespace derivation {
+template<typename Inputs, typename Out>
 struct Derivation;
+struct Output;
 template<typename Input>
-struct DerivationOptions;
+struct Options;
+} // namespace derivation
+
+using Derivation = derivation::Derivation<std::set<SingleDerivedPath>, derivation::Output>;
+using BasicDerivation = derivation::Derivation<StorePathSet, derivation::Output>;
 
 /**
  * Derivations claim to "just" specify their environment variables, but
@@ -79,8 +89,8 @@ struct DesugaredEnv
      */
     static DesugaredEnv create(
         Store & store,
-        const Derivation & drv,
-        const DerivationOptions<StorePath> & drvOptions,
+        const BasicDerivation & drv,
+        const derivation::Options<StorePath> & drvOptions,
         const StorePathSet & inputPaths);
 };
 

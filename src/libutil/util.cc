@@ -2,15 +2,21 @@
 #include "nix/util/ref.hh"
 #include "nix/util/fmt.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/error.hh"
 
 #include <array>
 #include <cctype>
+#include <mutex>
 #include <new>
 
 #include <openssl/crypto.h>
 #include <sodium.h>
 #include <boost/lexical_cast.hpp>
 #include <stdint.h>
+
+#ifdef _WIN32
+#  include <winsock2.h>
+#endif
 
 #ifdef NDEBUG
 #  error "Nix may not be built with assertions disabled (i.e. with -DNDEBUG)."
@@ -24,53 +30,64 @@ bad_ref_cast::~bad_ref_cast() {}
 
 void initLibUtil()
 {
-    static std::atomic_flag done = ATOMIC_FLAG_INIT;
-    if (done.test_and_set())
-        return;
+    static std::once_flag done;
+    std::call_once(done, []() {
+        // Check that exception handling works. Exception handling has been observed
+        // not to work on darwin when the linker flags aren't quite right.
+        // In this case we don't want to expose the user to some unrelated uncaught
+        // exception, but rather tell them exactly that exception handling is
+        // broken.
+        // When exception handling fails, the message tends to be printed by the
+        // C++ runtime, followed by an abort.
+        // For example on macOS we might see an error such as
+        // libc++abi: terminating with uncaught exception of type nix::Error: error: C++ exception handling is
+        // broken. This would appear to be a problem with the way Nix was compiled and/or linked and/or loaded.
+        bool caught = false;
+        try {
+            throwExceptionSelfCheck();
+        } catch (const nix::Error & _e) {
+            caught = true;
+        }
+        // This is not actually the main point of this check, but let's make sure anyway:
+        assert(caught);
 
-    // Check that exception handling works. Exception handling has been observed
-    // not to work on darwin when the linker flags aren't quite right.
-    // In this case we don't want to expose the user to some unrelated uncaught
-    // exception, but rather tell them exactly that exception handling is
-    // broken.
-    // When exception handling fails, the message tends to be printed by the
-    // C++ runtime, followed by an abort.
-    // For example on macOS we might see an error such as
-    // libc++abi: terminating with uncaught exception of type nix::SystemError: error: C++ exception handling is broken.
-    // This would appear to be a problem with the way Nix was compiled and/or linked and/or loaded.
-    bool caught = false;
-    try {
-        throwExceptionSelfCheck();
-    } catch (const nix::Error & _e) {
-        caught = true;
-    }
-    // This is not actually the main point of this check, but let's make sure anyway:
-    assert(caught);
+        if (sodium_init() == -1)
+            throw Error("could not initialise libsodium");
 
-    if (sodium_init() == -1)
-        throw Error("could not initialise libsodium");
+        /* Prevent OpenSSL from registering its atexit() handler
+           (OPENSSL_cleanup()). If we exit() while other threads that use
+           OpenSSL are still running, OPENSSL_cleanup() frees OpenSSL's
+           thread-local state handlers; when those threads then exit, their
+           thread-specific-data destructors (init_thread_stop()) crash on
+           the freed state (e.g. when library destructors run by
+           _dl_fini(), such as aws-crt-cpp's, stop their worker threads
+           *after* OPENSSL_cleanup() has already run). The Nix CLI and
+           nix-daemon workers exit via quickExit(), which doesn't run
+           atexit() handlers (except in coverage builds), but other
+           programs that use libutil do exit() normally. Since we're
+           exiting anyway, skipping the cleanup is harmless. This must run
+           before any other use of OpenSSL, since only the first
+           initialisation takes effect. */
+        if (OPENSSL_init_crypto(OPENSSL_INIT_NO_ATEXIT, nullptr) != 1)
+            throw Error("could not initialise OpenSSL");
 
-    /* Prevent OpenSSL from registering its atexit() handler
-       (OPENSSL_cleanup()). If we exit() while other threads that use
-       OpenSSL are still running, OPENSSL_cleanup() frees OpenSSL's
-       thread-local state handlers; when those threads then exit, their
-       thread-specific-data destructors (init_thread_stop()) crash on
-       the freed state (e.g. when library destructors run by
-       _dl_fini(), such as aws-crt-cpp's, stop their worker threads
-       *after* OPENSSL_cleanup() has already run). The Nix CLI and
-       nix-daemon workers exit via quickExit(), which doesn't run
-       atexit() handlers (except in coverage builds), but other
-       programs that use libutil do exit() normally. Since we're
-       exiting anyway, skipping the cleanup is harmless. This must run
-       before any other use of OpenSSL, since only the first
-       initialisation takes effect. */
-    if (OPENSSL_init_crypto(OPENSSL_INIT_NO_ATEXIT, nullptr) != 1)
-        throw Error("could not initialise OpenSSL");
+        /* Make sure that failing memory allocations don't result in an
+           opaque abort() (e.g. from mimalloc's `operator new` override,
+           which cannot throw `std::bad_alloc`). */
+        std::set_new_handler(outOfMemory);
 
-    /* Make sure that failing memory allocations don't result in an
-       opaque abort() (e.g. from mimalloc's `operator new` override,
-       which cannot throw `std::bad_alloc`). */
-    std::set_new_handler(outOfMemory);
+#ifdef _WIN32
+        /* Winsock needs this once per process before any socket call; without
+           it every socket() fails with WSANOTINITIALISED. No matching
+           WSACleanup(), for the same reason the OpenSSL atexit() handler is
+           suppressed above. The error code comes from the return value because
+           WSAGetLastError() is not usable until Winsock is up, and must be a
+           DWORD to pick the explicit-code WinError constructor. */
+        WSADATA wsaData;
+        if (DWORD err = static_cast<DWORD>(WSAStartup(MAKEWORD(2, 2), &wsaData)); err != 0)
+            throw windows::WinError(err, "could not initialise Winsock");
+#endif
+    });
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -78,9 +95,9 @@ void initLibUtil()
 std::vector<char *> stringsToCharPtrs(const Strings & ss)
 {
     std::vector<char *> res;
-    for (auto & s : ss)
-        res.push_back((char *) s.c_str());
-    res.push_back(0);
+    for (const auto & s : ss)
+        res.push_back(const_cast<char *>(requireCString(s)));
+    res.push_back(nullptr);
     return res;
 }
 
@@ -129,7 +146,7 @@ rewriteStrings(std::string s, const StringMap & rewrites, std::set<uint64_t> * m
     return s;
 }
 
-template<class N>
+template<std::integral N>
 std::optional<N> string2Int(const std::string_view s)
 {
     if (s.substr(0, 1) == "-" && !std::numeric_limits<N>::is_signed)
@@ -142,12 +159,10 @@ std::optional<N> string2Int(const std::string_view s)
 }
 
 // Explicitly instantiated in one place for faster compilation
-template std::optional<unsigned char> string2Int<unsigned char>(const std::string_view s);
 template std::optional<unsigned short> string2Int<unsigned short>(const std::string_view s);
 template std::optional<unsigned int> string2Int<unsigned int>(const std::string_view s);
 template std::optional<unsigned long> string2Int<unsigned long>(const std::string_view s);
 template std::optional<unsigned long long> string2Int<unsigned long long>(const std::string_view s);
-template std::optional<signed char> string2Int<signed char>(const std::string_view s);
 template std::optional<signed short> string2Int<signed short>(const std::string_view s);
 template std::optional<signed int> string2Int<signed int>(const std::string_view s);
 template std::optional<signed long> string2Int<signed long>(const std::string_view s);

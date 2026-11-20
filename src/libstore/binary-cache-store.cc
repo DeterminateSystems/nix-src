@@ -16,6 +16,7 @@
 
 #include <chrono>
 #include <future>
+#include <array>
 #include <regex>
 #include <sstream>
 #include <variant>
@@ -153,7 +154,8 @@ void BinaryCacheStore::writeNarInfo(ref<NarInfo> narInfo)
 
     upsertFile(narInfoFile, narInfo->to_string(*this), "text/x-nix-narinfo");
 
-    pathInfoCache->lock()->upsert(narInfo->path, PathInfoCacheValue{.value = std::shared_ptr<NarInfo>(narInfo)});
+    if (pathInfoCache)
+        pathInfoCache->lock()->upsert(narInfo->path, PathInfoCacheValue{.value = std::shared_ptr<NarInfo>(narInfo)});
 
     if (diskCache)
         diskCache->upsertNarInfo(
@@ -308,14 +310,8 @@ ref<NarInfo> BinaryCacheStore::uploadData(Source & narSource, RepairFlag repair,
     if (repair || !fileExists(narInfo->url)) {
         FdSource source{fdTemp.get()};
         source.restart(); /* Seek back to the start of the file. */
-        stats.narWrite++;
         upsertFile(narInfo->url, source, "application/x-nix-nar", narInfo->fileSize);
-    } else
-        stats.narWriteAverted++;
-
-    stats.narWriteBytes += info.narSize;
-    stats.narWriteCompressedBytes += fileSize;
-    stats.narWriteCompressionTimeMs += duration;
+    }
 
     return narInfo;
 }
@@ -339,8 +335,6 @@ void BinaryCacheStore::uploadNarInfo(ref<NarInfo> narInfo)
 
     /* Atomically write the NAR info file.*/
     writeNarInfo(narInfo);
-
-    stats.narInfoWrite++;
 }
 
 ref<const ValidPathInfo> BinaryCacheStore::addToStoreCommon(
@@ -595,26 +589,13 @@ void BinaryCacheStore::narFromPath(const StorePath & storePath, Sink & sink)
 {
     auto info = queryPathInfo(storePath).cast<const NarInfo>();
 
-    uint64_t narSize = 0;
-
-    LambdaSink uncompressedSink{
-        [&](std::string_view data) {
-            narSize += data.size();
-            sink(data);
-        },
-        [&]() {
-            stats.narRead++;
-            // stats.narReadCompressedBytes += nar->size(); // FIXME
-            stats.narReadBytes += narSize;
-        }};
-
     /* makeDecompressionSink used to treat empty strings as "none". It seems
        impossible that it would actually end up here with an empty string though
        (since an empty `Compression: ' is treated as bzip2 when parsed from a
        .narinfo file and the narinfo disk cache wouldn't handle empty strings).
        TODO: Revisit this and convert to an assert probably or even made
        compression a non-optional field. */
-    auto decompressor = makeDecompressionSink(info->compression.value_or(CompressionAlgo::none), uncompressedSink);
+    auto decompressor = makeDecompressionSink(info->compression.value_or(CompressionAlgo::none), sink);
 
     try {
         getFile(info->url, *decompressor);
@@ -623,8 +604,6 @@ void BinaryCacheStore::narFromPath(const StorePath & storePath, Sink & sink)
     }
 
     decompressor->finish();
-
-    // Note: don't do anything here because it's never reached if we're called as a coroutine.
 }
 
 void BinaryCacheStore::queryPathInfoUncached(
@@ -640,7 +619,7 @@ void BinaryCacheStore::queryPathInfoUncached(
             lvlTalkative,
             actQueryPathInfo,
             fmt("querying info about '%s' on '%s'", storePathS, uri),
-            Logger::Fields{storePathS, uri});
+            std::to_array<Logger::Field>({storePathS, uri}));
         PushActivity pact(act->id);
 
         auto narInfoFile = narInfoFileFor(storePath);
@@ -651,8 +630,6 @@ void BinaryCacheStore::queryPathInfoUncached(
 
                         if (!data)
                             return (*callbackPtr)({});
-
-                        stats.narInfoRead++;
 
                         (*callbackPtr)(
                             (std::shared_ptr<ValidPathInfo>) std::make_shared<NarInfo>(*this, *data, narInfoFile));
@@ -746,7 +723,7 @@ void BinaryCacheStore::queryRealisationUncached(
     getFile(outputInfoFilePath, std::move(newCallback));
 }
 
-void BinaryCacheStore::registerDrvOutput(const Realisation & info)
+void BinaryCacheStore::registerDrvOutputUnchecked(const Realisation & info)
 {
     if (diskCache)
         diskCache->upsertRealisation(config.getReference().render(/*FIXME withParams=*/false), info);

@@ -5,6 +5,7 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/processes.hh"
 
+#include <chrono>
 #include <functional>
 
 namespace nix {
@@ -39,15 +40,6 @@ struct HookInstance
      */
     Pid pid;
 
-    /**
-     * The remote machine on which we're building.
-     *
-     * @Invariant When the hook instance is owned by the `Worker`, this
-     * is the empty string. When it is owned by a `Goal`, this should be
-     * set.
-     */
-    std::string machineName;
-
     FdSink sink;
 
     std::map<ActivityId, Activity> activities;
@@ -58,7 +50,7 @@ struct HookInstance
      */
     std::function<void()> onKillChild;
 
-    HookInstance(const Strings & buildHook);
+    HookInstance(const Strings & buildHook, std::chrono::milliseconds timeout);
 
     ~HookInstance();
 };
