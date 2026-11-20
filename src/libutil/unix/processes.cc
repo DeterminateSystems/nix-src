@@ -55,7 +55,7 @@ Pid::Pid(pid_t pid)
 Pid::~Pid()
 {
     try {
-        if (pid != -1)
+        if (pid != unix::INVALID_PID)
             kill(/*allowInterrupts=*/false);
     } catch (...) {
         ignoreExceptionInDestructor();
@@ -64,20 +64,27 @@ Pid::~Pid()
 
 void Pid::operator=(pid_t pid)
 {
-    if (this->pid != -1 && this->pid != pid)
+    if (this->pid != unix::INVALID_PID && this->pid != pid)
         kill();
     this->pid = pid;
     killSignal = SIGKILL; // reset signal to default
 }
 
-Pid::operator pid_t()
+Pid::operator pid_t() const
 {
     return pid;
 }
 
+Pid::operator bool() const noexcept
+{
+    using namespace unix;
+
+    return pid != INVALID_PID;
+}
+
 int Pid::kill(bool allowInterrupts)
 {
-    assert(pid != -1);
+    assert(pid != unix::INVALID_PID);
 
     debug("killing process %1%", pid);
 
@@ -130,12 +137,14 @@ int Pid::kill(bool allowInterrupts)
 
 int Pid::wait(bool allowInterrupts)
 {
-    assert(pid != -1);
+    using namespace unix;
+
+    assert(pid != INVALID_PID);
     while (1) {
         int status;
         int res = waitpid(pid, &status, 0);
         if (res == pid) {
-            pid = -1;
+            pid = INVALID_PID;
             return status;
         }
         if (errno != EINTR)
@@ -181,12 +190,14 @@ void Pid::setKillTimeout(std::chrono::milliseconds duration)
 
 pid_t Pid::release()
 {
+    using namespace unix;
+
     pid_t p = pid;
     /* We use the move assignment operator rather than setting the individual fields so we aren't duplicating the
        default values from the header, which would be hard to keep in sync. If we just used the assignment operator
        without manually resetting pid first it would kill that process, however, so we do manually reset that one field.
      */
-    pid = -1;
+    pid = INVALID_PID;
     *this = Pid();
     return p;
 }
@@ -282,6 +293,8 @@ static pid_t doCloneIntoCgroup(int cloneFlags, int cgroupFd, ChildWrapperFunctio
 
 pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
 {
+    using namespace unix;
+
     auto newLogger = makeSimpleLogger().release();
     ChildWrapperFunction wrapper = [&] {
         /* Set a simple logger, while leaking (not destroying)
@@ -315,7 +328,7 @@ pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
         _exit(1);
     };
 
-    pid_t pid = -1;
+    pid_t pid = INVALID_PID;
 
     if (options.cgroupFd != -1) {
 #ifdef __linux__
@@ -344,7 +357,7 @@ pid_t startProcess(fun<void()> processMain, const ProcessOptions & options)
     } else
         pid = doFork(wrapper);
 
-    if (pid == -1)
+    if (pid == INVALID_PID)
         throw SysError("unable to fork");
 
     return pid;

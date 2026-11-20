@@ -2,7 +2,7 @@
 
 #if NIX_USE_WASMTIME
 
-#  include "derivation-builder-impl.hh"
+#  include "unix-derivation-builder-impl.hh"
 
 #  include <wasmtime.hh>
 
@@ -23,11 +23,11 @@ static std::span<uint8_t> string2span(std::string_view s)
     return std::span<uint8_t>((uint8_t *) s.data(), s.size());
 }
 
-struct WasiDerivationBuilder : DerivationBuilderImpl
+struct WasiDerivationBuilder : UnixDerivationBuilderImpl
 {
     WasiDerivationBuilder(
         LocalStore & store, std::shared_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
-        : DerivationBuilderImpl(store, std::move(miscMethods), std::move(params))
+        : UnixDerivationBuilderImpl(store, std::move(miscMethods), std::move(params))
     {
         experimentalFeatureSettings.require(Xp::WasmDerivations);
     }
