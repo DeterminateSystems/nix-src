@@ -49,7 +49,6 @@ typedef enum {
     resSetExpected = 106,
     resPostBuildLogLine = 107,
     resFetchStatus = 108,
-    resHashMismatch = 109,
     /**
      * Emitted via the JSON `result()` overload: an object describing
      * the response to an HTTP request, with the fields `httpStatus`

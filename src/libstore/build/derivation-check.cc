@@ -24,12 +24,11 @@ void checkCAFixedOutput(
             /* Throw an error after registering the path as
                valid. */
             act.result(
-                resHashMismatch,
-                {
-                    {"storePath", store.printStorePath(drvPath)},
-                    {"wanted", wanted},
-                    {"got", got},
-                });
+                std::to_array<std::pair<std::string_view, Logger::Field>>({
+                    {"nix.drv.path", store.printStorePath(drvPath)},
+                    {"nix.hash.wanted", wanted.to_string(HashFormat::SRI, true)},
+                    {"nix.hash.got", got.to_string(HashFormat::SRI, true)},
+                }));
             throw BuildError(
                 BuildResult::Failure::HashMismatch,
                 "hash mismatch in fixed-output derivation '%s':\n  specified: %s\n     got:    %s",
