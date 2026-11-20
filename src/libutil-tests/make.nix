@@ -67,8 +67,7 @@ tests
     };
   }
   # Run the same tests with newer syscalls disabled via seccomp, to
-  # exercise fallback paths (iterative openat for openat2, /proc/self/fd
-  # for fchmodat2). Linux only, as in Meson.
+  # exercise fallback paths. Linux only, as in Meson.
   // lib.optionalAttrs isLinux {
     run-without-new-syscalls = nixMake.runTest {
       name = "${tests.name}-run-without-new-syscalls";
@@ -78,6 +77,10 @@ tests
         "openat2"
         "--syscall"
         "fchmodat2"
+        "--syscall"
+        "close_range"
+        "--syscall"
+        "copy_file_range"
         "--"
         exe
       ];
