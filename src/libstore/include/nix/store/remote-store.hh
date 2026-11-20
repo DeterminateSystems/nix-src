@@ -57,6 +57,18 @@ struct RemoteStore : public virtual Store,
 private:
     void anchor() override;
 
+    /**
+     * Add a content-addressable store path. `dump` will be drained.
+     */
+    ref<const ValidPathInfo> addCAToStore(
+        Source & dump,
+        std::string_view name,
+        ContentAddressMethod caMethod,
+        HashAlgorithm hashAlgo,
+        const StorePathSet & references,
+        RepairFlag repair,
+        std::shared_ptr<const Provenance> provenance);
+
 public:
     using Config = RemoteStoreConfig;
 
@@ -92,19 +104,6 @@ public:
     StorePathSet querySubstitutablePaths(const StorePathSet & paths) override;
 
     void querySubstitutablePathInfos(const StorePathCAMap & paths, SubstitutablePathInfos & infos) override;
-
-    /**
-     * Add a content-addressable store path. `dump` will be drained.
-     */
-    ref<const ValidPathInfo> addCAToStore(
-        Source & dump,
-        std::string_view name,
-        ContentAddressMethod caMethod,
-        HashAlgorithm hashAlgo,
-        const StorePathSet & references,
-        RepairFlag repair,
-        std::shared_ptr<const Provenance> provenance);
-
     /**
      * Add a content-addressable store path. `dump` will be drained.
      */
@@ -140,6 +139,8 @@ public:
     ref<Builder> getBuilder(std::shared_ptr<Store> evalStore) override;
 
     void addTempRoots(const StorePathSet & paths, bool skipIfSlow) override;
+
+    void addTempRoot(const StorePath & path) override;
 
     Roots findRoots(bool censor) override;
 
