@@ -13,6 +13,9 @@ namespace nix {
 
 struct Hash;
 
+MakeError(BadStorePath, Error);
+MakeError(BadStorePathName, BadStorePath);
+
 /**
  * Why a string is not a valid store path, store path base name or
  * store path name.
