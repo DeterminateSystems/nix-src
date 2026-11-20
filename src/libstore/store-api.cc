@@ -18,6 +18,7 @@
 #include "nix/util/signals.hh"
 #include "nix/util/environment-variables.hh"
 #include "nix/util/file-system.hh"
+#include "nix/store/provenance.hh"
 
 #include "store-config-private.hh"
 
@@ -142,6 +143,24 @@ std::pair<StorePath, CanonPath> StoreDirConfig::toStorePath(std::string_view pat
         return {parseStorePath(path.substr(0, slash)), CanonPath{path.substr(slash)}};
 }
 
+std::expected<std::pair<StorePath, CanonPath>, BadStorePathReason>
+StoreDirConfig::maybeToStorePath(const CanonPath & path) const
+{
+    std::string_view s = path.abs();
+    if (s.size() <= storeDir.size() + 1 || !s.starts_with(storeDir) || s[storeDir.size()] != '/')
+        return std::unexpected(BadStorePathReason::NotInStore);
+    auto rest = s.substr(storeDir.size() + 1);
+    auto slash = rest.find('/');
+    return StorePath::parse(rest.substr(0, slash)).transform([&](StorePath && storePath) {
+        return std::pair{
+            std::move(storePath),
+            /* A suffix of a canonical path starting at a slash is
+               canonical. */
+            slash == rest.npos ? CanonPath::root
+                               : CanonPath(CanonPath::unchecked_t(), std::string(rest.substr(slash)))};
+    });
+}
+
 std::filesystem::path Store::followLinksToStore(std::string_view _path) const
 {
     auto path = absPath(std::string(_path));
@@ -197,9 +216,14 @@ StorePath Store::addToStore(
     std::optional<StorePath> storePath;
     auto sink = sourceToSink([&](Source & source) {
         LengthSource lengthSource(source);
-        storePath = addToStoreFromDump(lengthSource, name, fsm, method, hashAlgo, references, repair);
-        if (settings.warnLargePathThreshold && lengthSource.total >= settings.warnLargePathThreshold)
-            warn("copied large path '%s' to the store (%s)", path, renderSize(lengthSource.total));
+        storePath =
+            addToStoreFromDump(lengthSource, name, fsm, method, hashAlgo, references, repair, path.getProvenance());
+        if (settings.warnLargePathThreshold && lengthSource.total >= settings.warnLargePathThreshold) {
+            static bool failOnLargePath = getEnv("_NIX_TEST_FAIL_ON_LARGE_PATH").value_or("") == "1";
+            if (failOnLargePath)
+                throw Error("doesn't copy large path '%s' to the store (%d)", path, renderSize(lengthSource.total));
+            warn("copied large path '%s' to the store (%d)", path, renderSize(lengthSource.total));
+        }
     });
     dumpPath(path, *sink, fsm, filter);
     sink->finish();
@@ -362,6 +386,7 @@ ValidPathInfo Store::addToStoreSlow(
             }),
         narHash);
     info.narSize = narSize;
+    info.provenance = srcPath.getProvenance();
 
     if (!isValidPath(info.path)) {
         auto source = sinkToSource([&](Sink & scratchpadSink) { srcPath.dumpPath(scratchpadSink); });
@@ -573,6 +598,23 @@ ref<const ValidPathInfo> Store::queryPathInfo(const StorePath & storePath)
     return promise.get_future().get();
 }
 
+std::shared_ptr<const ValidPathInfo> Store::maybeQueryPathInfo(const StorePath & storePath)
+{
+    std::promise<std::shared_ptr<const ValidPathInfo>> promise;
+
+    queryPathInfo(storePath, {[&](std::future<ref<const ValidPathInfo>> result) {
+                      try {
+                          promise.set_value(result.get());
+                      } catch (InvalidPath &) {
+                          promise.set_value(nullptr);
+                      } catch (...) {
+                          promise.set_exception(std::current_exception());
+                      }
+                  }});
+
+    return promise.get_future().get();
+}
+
 static bool goodStorePath(const StorePath & expected, const StorePath & actual)
 {
     return expected.hashPart() == actual.hashPart()
@@ -649,6 +691,25 @@ void Store::queryPathInfo(const StorePath & storePath, Callback<ref<const ValidP
                 callbackPtr->rethrow();
             }
         }});
+}
+
+asio::awaitable<void> Store::queryPathInfos(
+    const std::set<StorePath> & paths,
+    fun<void(std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>>)> callback)
+{
+    /* Default implementation: query each path individually, reporting
+       each result as it arrives. */
+    co_await forEachAsync(paths, [&](const StorePath & path) -> asio::awaitable<void> {
+        std::shared_ptr<const ValidPathInfo> info;
+        try {
+            auto i = co_await callbackToAwaitable<ref<const ValidPathInfo>>(
+                [&](Callback<ref<const ValidPathInfo>> cb) { queryPathInfo(path, std::move(cb)); });
+            info = i.get_ptr();
+        } catch (InvalidPath &) {
+        }
+        std::vector<std::pair<StorePath, std::shared_ptr<const ValidPathInfo>>> result{{path, info}};
+        callback(std::move(result));
+    });
 }
 
 void Store::queryRealisation(
@@ -900,13 +961,26 @@ makeCopyPathMessage(const StoreConfig & srcCfg, const StoreConfig & dstCfg, std:
         "copying path '%s' from '%s' to '%s'", storePath, srcCfg.getHumanReadableURI(), dstCfg.getHumanReadableURI());
 }
 
-void copyStorePath(
+/**
+ * Wrap upstream provenance in a "copied" provenance record to record
+ * where the path was copied from. But uninformative origins like
+ * LocalStore are omitted.
+ */
+static std::shared_ptr<const Provenance>
+addCopiedProvenance(std::shared_ptr<const Provenance> provenance, Store & srcStore)
+{
+    if (!srcStore.includeInProvenance())
+        return provenance;
+    return std::make_shared<const CopiedProvenance>(srcStore.config.getReference().render(false), provenance);
+}
+
+std::shared_ptr<const ValidPathInfo> copyStorePath(
     Store & srcStore, Store & dstStore, const StorePath & storePath, RepairFlag repair, CheckSigsFlag checkSigs)
 {
     /* Bail out early (before starting a download from srcStore) if
        dstStore already has this path. */
     if (!repair && dstStore.isValidPath(storePath))
-        return;
+        return nullptr;
 
     const auto & srcCfg = srcStore.config;
     const auto & dstCfg = dstStore.config;
@@ -919,25 +993,22 @@ void copyStorePath(
         {storePathS, srcCfg.getHumanReadableURI(), dstCfg.getHumanReadableURI()});
     PushActivity pact(act.id);
 
-    auto info = srcStore.queryPathInfo(storePath);
+    auto srcInfo = srcStore.queryPathInfo(storePath);
+    auto info = std::make_shared<ValidPathInfo>(*srcInfo);
 
     uint64_t total = 0;
 
     // recompute store path on the chance dstStore does it differently
     if (info->ca && info->references.empty()) {
-        auto info2 = make_ref<ValidPathInfo>(*info);
-        info2->path =
+        info->path =
             dstStore.makeFixedOutputPathFromCA(info->path.name(), info->contentAddressWithReferences().value());
         if (dstStore.storeDir == srcStore.storeDir)
-            assert(info->path == info2->path);
-        info = info2;
+            assert(info->path == srcInfo->path);
     }
 
-    if (info->ultimate) {
-        auto info2 = make_ref<ValidPathInfo>(*info);
-        info2->ultimate = false;
-        info = info2;
-    }
+    info->ultimate = false;
+
+    info->provenance = addCopiedProvenance(info->provenance, srcStore);
 
     if (getEnv("_NIX_TEST_CONCURRENT_SUBSTITUTION"))
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -959,6 +1030,8 @@ void copyStorePath(
         });
 
     dstStore.addToStore(*info, *source, repair, checkSigs);
+
+    return info;
 }
 
 std::map<StorePath, StorePath> copyPaths(
@@ -1011,6 +1084,10 @@ std::map<StorePath, StorePath> copyPaths(
     CheckSigsFlag checkSigs,
     SubstituteFlag substitute)
 {
+    /* This is optional to avoid a performance regression when talking to old daemons that don't have the AddTempRoots
+     * operation. */
+    dstStore.addTempRoots(storePaths, true);
+
     auto valid = dstStore.queryValidPaths(storePaths, substitute);
 
     StorePathSet missing;
@@ -1060,11 +1137,12 @@ std::map<StorePath, StorePath> copyPaths(
 
         ValidPathInfo infoForDst = *info;
         infoForDst.path = storePathForDst;
+        infoForDst.provenance = addCopiedProvenance(info->provenance, srcStore);
 
         auto source = sinkToSource([&, narSize = info->narSize](Sink & sink) {
             // We can reasonably assume that the copy will happen whenever we
             // read the path, so log something about that at that point
-            uint64_t total = 0;
+            uint64_t total = 0, latch = 0;
             const auto & srcCfg = srcStore.config;
             const auto & dstCfg = dstStore.config;
             auto storePathS = srcStore.printStorePath(missingPath);
@@ -1077,12 +1155,23 @@ std::map<StorePath, StorePath> copyPaths(
             PushActivity pact(act.id);
 
             LambdaSink progressSink([&](std::string_view data) {
+                /* Accumulate progress. narFromPath implementation will almost
+                   certainly either emit dumpPath or tee parseDump, which gives
+                   us data in small pieces like NAR framing. 128 KiB seems like
+                   a reasonable threshold. */
+                static constexpr size_t progressThreshold = 128 * 1024;
                 total += data.size();
-                act.progress(total, narSize);
+                latch += data.size();
+                /* Emit progress update once we cross the threshold. */
+                if (latch >= progressThreshold) {
+                    latch = 0;
+                    act.progress(total, narSize);
+                }
             });
             TeeSink tee{sink, progressSink};
 
             srcStore.narFromPath(missingPath, tee);
+            act.progress(total, narSize);
         });
         pathsToCopy.emplace_back(std::move(infoForDst), std::move(source));
     }
@@ -1242,8 +1331,7 @@ void Store::signPathInfo(ValidPathInfo & info)
     auto secretKeyFiles = settings.secretKeyFiles;
 
     for (auto & secretKeyFile : secretKeyFiles.get()) {
-        SecretKey secretKey(readFile(secretKeyFile));
-        LocalSigner signer(std::move(secretKey));
+        LocalSigner signer(SecretKey::parse(readFile(secretKeyFile)));
         info.sign(*this, signer);
     }
 }
@@ -1255,8 +1343,7 @@ void Store::signRealisation(Realisation & realisation)
     auto secretKeyFiles = settings.secretKeyFiles;
 
     for (auto & secretKeyFile : secretKeyFiles.get()) {
-        SecretKey secretKey(readFile(secretKeyFile));
-        LocalSigner signer(std::move(secretKey));
+        LocalSigner signer(SecretKey::parse(readFile(secretKeyFile)));
         realisation.sign(realisation.id, signer);
     }
 }

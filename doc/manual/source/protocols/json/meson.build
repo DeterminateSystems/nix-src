@@ -15,6 +15,7 @@ schemas = [
   'store-path-v1',
   'signature-v2',
   'store-object-info-v3',
+  'provenance-v1',
   'derivation-v4',
   'derivation-resolved-v4',
   'derivation-options-v1',

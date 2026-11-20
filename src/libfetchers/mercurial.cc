@@ -122,7 +122,7 @@ struct MercurialInputScheme : InputScheme
         return input;
     }
 
-    ParsedURL toURL(const Input & input) const override
+    ParsedURL toURL(const Input & input, bool abbreviate) const override
     {
         auto url = parseURL(getStrAttr(input.attrs, "url"));
         url.scheme = "hg+" + url.scheme;
@@ -278,9 +278,7 @@ struct MercurialInputScheme : InputScheme
 
         auto revInfoKey = [&](const Hash & rev) {
             if (rev.algo != HashAlgorithm::SHA1)
-                throw Error(
-                    "Hash '%s' is not supported by Mercurial. Only sha1 is supported.",
-                    rev.to_string(HashFormat::Base16, true));
+                throw Error("Hash '%s' is not supported by Mercurial. Only sha1 is supported.", rev.gitRev());
 
             return Cache::Key{"hgRev", {{"store", store.storeDir}, {"name", name}, {"rev", input.getRev()->gitRev()}}};
         };
@@ -344,22 +342,30 @@ struct MercurialInputScheme : InputScheme
             }
         }
 
-        /* Fetch the remote rev or ref. */
-        auto tokens = tokenizeString<std::vector<std::string>>(runHg({
-            OS_STR("log"),
-            OS_STR("-R"),
-            cacheDir.native(),
-            OS_STR("-r"),
-            string_to_os_string(input.getRev() ? input.getRev()->gitRev() : *input.getRef()),
-            OS_STR("--template"),
-            OS_STR("{node} {rev} {branch}"),
-        }));
-        assert(tokens.size() == 3);
+        /* Fetch the remote rev or ref. Since a ref is evaluated as a
+           revset, it can match any number of revisions. The fields are
+           separated by newlines because branch names can contain
+           spaces (but not newlines). */
+        auto revOrRef = input.getRev() ? input.getRev()->gitRev() : *input.getRef();
+        auto lines = tokenizeString<std::vector<std::string>>(
+            runHg({
+                OS_STR("log"),
+                OS_STR("-R"),
+                cacheDir.native(),
+                OS_STR("-r"),
+                string_to_os_string(revOrRef),
+                OS_STR("--template"),
+                OS_STR("{node}\n{rev}\n{branch}\n"),
+            }),
+            "\n");
+        if (lines.size() != 3)
+            throw Error(
+                "'%s' does not identify exactly one revision in Mercurial repository '%s'", revOrRef, actualUrl);
 
-        auto rev = Hash::parseAny(tokens[0], HashAlgorithm::SHA1);
+        auto rev = Hash::parseAny(lines[0], HashAlgorithm::SHA1);
         input.attrs.insert_or_assign("rev", rev.gitRev());
-        auto revCount = std::stoull(tokens[1]);
-        input.attrs.insert_or_assign("ref", tokens[2]);
+        auto revCount = std::stoull(lines[1]);
+        input.attrs.insert_or_assign("ref", lines[2]);
 
         /* Now that we have the rev, check the cache again for a
            cached store path. */
@@ -402,7 +408,7 @@ struct MercurialInputScheme : InputScheme
         auto storePath = fetchToStore(settings, store, input);
         auto accessor = store.requireStoreObjectAccessor(storePath);
 
-        accessor->setPathDisplay("«" + input.to_string() + "»");
+        accessor->setPathDisplay("«" + input.to_string(true) + "»");
 
         return {accessor, input};
     }
@@ -415,7 +421,7 @@ struct MercurialInputScheme : InputScheme
     std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
     {
         if (auto rev = input.getRev())
-            return rev->gitRev();
+            return "hg:" + rev->gitRev();
         else
             return std::nullopt;
     }

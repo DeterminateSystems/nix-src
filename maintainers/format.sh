@@ -9,7 +9,14 @@ if test -z "$_NIX_PRE_COMMIT_HOOKS_CONFIG"; then
   exit 1;
 fi;
 
-while ! pre-commit run --config "$_NIX_PRE_COMMIT_HOOKS_CONFIG" --all-files; do
+# The argument is either `--until-stable` or the ID of the single
+# hook to run.
+hook=""
+if [ "${1:-}" != "--until-stable" ]; then
+    hook="${1:-}"
+fi
+
+while ! pre-commit run --config "$_NIX_PRE_COMMIT_HOOKS_CONFIG" --all-files ${hook:+"$hook"}; do
     if [ "${1:-}" != "--until-stable" ]; then
         exit 1
     fi

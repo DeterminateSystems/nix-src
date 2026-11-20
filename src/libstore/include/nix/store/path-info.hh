@@ -13,6 +13,7 @@ namespace nix {
 
 class Store;
 struct StoreDirConfig;
+struct Provenance;
 
 /**
  * JSON format version for path info output.
@@ -117,6 +118,12 @@ struct UnkeyedValidPathInfo
      */
     std::optional<ContentAddress> ca;
 
+    /**
+     * The provenance of this store path, i.e. a link back to the Nix
+     * expression used to create it.
+     */
+    std::shared_ptr<const Provenance> provenance;
+
     UnkeyedValidPathInfo(const UnkeyedValidPathInfo & other) = default;
 
     UnkeyedValidPathInfo(const StoreDirConfig & store, Hash narHash);
@@ -179,11 +186,16 @@ struct ValidPathInfo : virtual UnkeyedValidPathInfo
      * @return The `ContentAddressWithReferences` that determines the
      * store path for a content-addressed store object, `std::nullopt`
      * for an input-addressed store object.
+     *
+     * @throws Error if the path is text-hashed but refers to itself,
+     * which no valid text-hashed store object can.
      */
     std::optional<ContentAddressWithReferences> contentAddressWithReferences() const;
 
     /**
      * @return true iff the path is verifiably content-addressed.
+     *
+     * @throws Error if `contentAddressWithReferences()` does.
      */
     bool isContentAddressed(const StoreDirConfig & store) const;
 

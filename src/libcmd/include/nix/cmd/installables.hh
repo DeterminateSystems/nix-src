@@ -96,6 +96,22 @@ typedef std::vector<DerivedPathWithInfo> DerivedPathsWithInfo;
 
 struct Installable;
 
+struct InstallableWithBuildResult
+{
+    ref<Installable> installable;
+
+    using Success = BuiltPathWithResult;
+
+    using Failure = BuildResult; // must be a `BuildResult::Failure`
+
+    std::variant<Success, Failure> result;
+
+    /**
+     * Throw an exception if this represents a failure, otherwise returns a `BuiltPathWithResult`.
+     */
+    const BuiltPathWithResult & getSuccess() const;
+};
+
 /**
  * Shorthand, for less typing and helping us keep the choice of
  * collection in sync.
@@ -160,12 +176,14 @@ struct Installable
         const Installables & installables,
         BuildMode bMode = bmNormal);
 
-    static std::vector<std::pair<ref<Installable>, BuiltPathWithResult>> build2(
+    static std::vector<InstallableWithBuildResult> build2(
         ref<Store> evalStore,
         ref<Store> store,
         Realise mode,
         const Installables & installables,
         BuildMode bMode = bmNormal);
+
+    static void throwBuildErrors(std::vector<InstallableWithBuildResult> & buildResults, const Store & store);
 
     static std::set<StorePath> toStorePathSet(
         ref<Store> evalStore, ref<Store> store, Realise mode, OperateOn operateOn, const Installables & installables);

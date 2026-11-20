@@ -71,6 +71,7 @@ config_priv_h = configure_file(
 )
 
 subdir('nix-meson-build-support/common')
+subdir('nix-meson-build-support/generate-header')
 
 sources = files(
   'built-path.cc',
@@ -78,6 +79,7 @@ sources = files(
   'command.cc',
   'common-eval-args.cc',
   'editor-for.cc',
+  'flake-schemas.cc',
   'get-build-log.cc',
   'installable-attr-path.cc',
   'installable-derived-path.cc',
@@ -97,6 +99,14 @@ if host_machine.system() != 'windows'
   )
 endif
 
+sources += [
+  gen_header.process('call-flake-schemas.nix'),
+  gen_header.process(
+    'builtin-flake-schemas/flake.nix',
+    preserve_path_from : meson.current_source_dir(),
+  ),
+]
+
 subdir('include/nix/cmd')
 
 subdir('nix-meson-build-support/export-all-symbols')
@@ -106,11 +116,10 @@ this_library = library(
   'nixcmd',
   sources,
   config_priv_h,
-  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,
-  prelink : true, # For C++ static initializers
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )

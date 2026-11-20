@@ -9,8 +9,13 @@ namespace nix {
 
 struct SrcToStore
 {
+    /* Note: the key identifies the source accessor by its number
+       rather than by a reference to it, since the cache must not
+       keep accessors (and thus the stores they may refer to) alive:
+       it's owned by the global `fetchSettings`, so it's never
+       destroyed. */
     boost::concurrent_flat_map<
-        std::tuple<SourcePath, ContentAddressMethod::Raw, std::string>,
+        std::tuple<size_t, CanonPath, ContentAddressMethod::Raw, std::string>,
         std::tuple<StorePath, Hash, FetchMode>>
         cache;
 };
@@ -51,7 +56,7 @@ std::pair<StorePath, Hash> fetchToStore2(
     PathFilter * filter,
     RepairFlag repair)
 {
-    auto srcToStoreKey = std::make_tuple(path, method.raw, std::string(name));
+    auto srcToStoreKey = std::make_tuple(path.accessor->number, path.path, method.raw, std::string(name));
 
     if (!filter) {
         auto dstPathCached = getConcurrent(settings.srcToStore->cache, srcToStoreKey);
@@ -76,7 +81,7 @@ std::pair<StorePath, Hash> fetchToStore2(
             if (mode != FetchMode::DryRun)
                 store.addTempRoot(storePath);
 
-            if (mode == FetchMode::DryRun || store.isValidPath(storePath)) {
+            if (mode == FetchMode::DryRun || store.maybeQueryPathInfo(storePath)) {
                 debug(
                     "source path '%s' cache hit in '%s' (hash '%s')",
                     path,
@@ -89,7 +94,7 @@ std::pair<StorePath, Hash> fetchToStore2(
         }
     } else {
         static auto barf = getEnv("_NIX_TEST_BARF_ON_UNCACHEABLE").value_or("") == "1";
-        if (barf && !filter)
+        if (barf && !filter && !(path.to_string().starts_with("/") || path.to_string().starts_with("«path:/")))
             throw Error("source path '%s' is uncacheable (filter=%d)", path, (bool) filter);
         debug("source path '%s' is uncacheable", path);
     }
@@ -97,7 +102,10 @@ std::pair<StorePath, Hash> fetchToStore2(
     Activity act(
         *logger,
         lvlChatty,
-        actUnknown,
+        mode == FetchMode::DryRun ? "HashSourcePath" : "CopySourcePath",
+        std::to_array<std::pair<std::string_view, Logger::Field>>({
+            {"nix.source.path", path.to_string()},
+        }),
         fmt(mode == FetchMode::DryRun ? "hashing '%s'" : "copying '%s' to the store", path));
 
     auto filter2 = filter ? *filter : defaultPathFilter;

@@ -210,7 +210,7 @@ nixComponents.callPackage (
       };
 
       # Remove the version suffix to avoid unnecessary attempts to substitute in nix develop
-      version = lib.fileContents ../.version;
+      version = lib.fileContents ../.version-determinate;
       name = finalAttrs.pname;
 
       installFlags = "sysconfdir=$(out)/etc";
@@ -318,7 +318,10 @@ nixComponents.callPackage (
               (pkgs.writeScriptBin "pre-commit-hooks-install" modular.pre-commit.settings.installationScript)
               pkgs.buildPackages.nixfmt
               pkgs.buildPackages.shellcheck
-              pkgs.buildPackages.include-what-you-use
+              pkgs.buildPackages.zizmor
+              # Disabled because it requires a different LLVM version than the default, which
+              # isn't cached in DSP.
+              #pkgs.buildPackages.include-what-you-use
             ]
             ++ lib.optional stdenv.hostPlatform.isUnix pkgs.buildPackages.gdb
             ++ lib.optional (stdenv.cc.isClang && stdenv.hostPlatform == stdenv.buildPlatform) (

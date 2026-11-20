@@ -200,6 +200,20 @@ enum struct FinalSymlink : bool { DontFollow = false, Follow = true };
 AutoCloseFD openDirectory(const std::filesystem::path & path, FinalSymlink finalSymlink = FinalSymlink::Follow);
 
 /**
+ * Open a `Descriptor` to the given directory only for traversing it:
+ * using it as the base of `*at` calls, or `fstat`ing it.
+ *
+ * Unlike @ref nix::openDirectory(), this needs only search (traverse)
+ * permission on the directory, not read (list) permission, where the OS
+ * allows asking for that. In exchange, the descriptor may not support
+ * listing the directory or `fsync`ing it.
+ *
+ * @param finalSymlink If `DontFollow`, fail if the path is a symlink.
+ */
+AutoCloseFD
+openDirectoryTraversable(const std::filesystem::path & path, FinalSymlink finalSymlink = FinalSymlink::Follow);
+
+/**
  * Open a `Descriptor` with read-only access to the given file.
  *
  * @note For directories use @ref openDirectory.
@@ -278,6 +292,11 @@ void recursiveSync(const std::filesystem::path & path);
  */
 void deletePath(const std::filesystem::path & path);
 
+/**
+ * @param[out] bytesFreed Estimation of how many bytes of disk space have
+ *                        been reclaimed. Initialised to zero internally, so
+ *                        the caller doesn't need to initialise it.
+ */
 void deletePath(const std::filesystem::path & path, uint64_t & bytesFreed);
 
 /**
@@ -328,19 +347,11 @@ void createSymlink(const std::filesystem::path & target, const std::filesystem::
 void replaceSymlink(const std::filesystem::path & target, const std::filesystem::path & link);
 
 /**
- * Similar to 'renameFile', but fallback to a copy+remove if `src` and `dst`
- * are on a different filesystem.
- *
- * Beware that this might not be atomic because of the copy that happens behind
- * the scenes
- */
-void moveFile(const std::filesystem::path & src, const std::filesystem::path & dst);
-
-/**
  * Recursively copy the content of `oldPath` to `newPath`. If `andDelete` is
- * `true`, then also remove `oldPath` (making this equivalent to `moveFile`, but
- * with the guaranty that the destination will be “fresh”, with no stale inode
- * or file descriptor pointing to it).
+ * `true`, then also remove `oldPath`.
+ *
+ * @todo Delete this. This function is prone to TOCTOU races and follows
+ * symlinks in the destination.
  *
  * If contents is set, always create a regular file, even if the source is a
  * link.
@@ -535,6 +546,11 @@ void unlinkIfExists(const std::filesystem::path & path);
 void tryUnlink(const std::filesystem::path & path);
 
 /**
+ * @brief Thin wrapper around ::rename that throws SystemError on errors.
+ */
+void renameFile(const std::filesystem::path & src, const std::filesystem::path & dst);
+
+/**
  * @brief A directory iterator that can be used to iterate over the
  * contents of a directory. It is similar to std::filesystem::directory_iterator
  * but throws NixError on failure instead of std::filesystem::filesystem_error.
@@ -603,6 +619,7 @@ public:
 
 
 private:
+    std::filesystem::path dir_;
     std::filesystem::directory_iterator it_;
 };
 

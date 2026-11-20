@@ -1,0 +1,13 @@
+{
+    "from": "https://cache.example.org",
+    "next": {
+        "buildHost": null,
+        "drv": "lhj2ix9nrbw9wjab4ywsg9xvc86fm8in-hello-2.12.2.drv",
+        "next": null,
+        "output": "out",
+        "system": "x86_64-linux",
+        "tags": {},
+        "type": "build"
+    },
+    "type": "copied"
+}

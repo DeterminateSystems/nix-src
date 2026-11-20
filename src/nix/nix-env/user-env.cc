@@ -40,8 +40,10 @@ bool createUserEnv(
        exist already. */
     std::vector<StorePathWithOutputs> drvsToBuild;
     for (auto & i : elems)
-        if (auto drvPath = i.queryDrvPath())
+        if (auto drvPath = i.queryDrvPath()) {
+            state.waitForPath(*drvPath);
             drvsToBuild.push_back({*drvPath});
+        }
 
     debug("building user environment dependencies");
     state.store->buildPaths(toDerivedPaths(drvsToBuild), state.repair ? bmRepair : bmNormal);
@@ -78,7 +80,6 @@ bool createUserEnv(
 
             /* This is only necessary when installing store paths, e.g.,
                `nix-env -i /nix/store/abcd...-foo'. */
-            state.store->addTempRoot(*j.second);
             state.store->ensurePath(*j.second);
 
             references.insert(*j.second);
@@ -154,6 +155,7 @@ bool createUserEnv(
     debug("building user environment");
     std::vector<StorePathWithOutputs> topLevelDrvs;
     topLevelDrvs.push_back({topLevelDrv});
+    state.waitForPath(topLevelDrv);
     state.store->buildPaths(toDerivedPaths(topLevelDrvs), state.repair ? bmRepair : bmNormal);
 
     /* Switch the current user environment to the output path. */

@@ -19,16 +19,20 @@ namespace {
 
 static std::string_view getS(const std::vector<Logger::Field> & fields, size_t n)
 {
-    if (n >= fields.size() || fields[n].type != Logger::Field::tString)
-        throw Error("could not get expected log field of type 'string' at index %d", n);
-    return fields[n].s;
+    if (n < fields.size()) {
+        if (auto p = std::get_if<std::string>(&fields[n].raw))
+            return *p;
+    }
+    throw Error("could not get expected log field of type 'string' at index %d", n);
 }
 
 static uint64_t getI(const std::vector<Logger::Field> & fields, size_t n)
 {
-    if (n >= fields.size() || fields[n].type != Logger::Field::tInt)
-        throw Error("could not get expected log field of type 'int' at index %d", n);
-    return fields[n].i;
+    if (n < fields.size()) {
+        if (auto p = std::get_if<uint64_t>(&fields[n].raw))
+            return *p;
+    }
+    throw Error("could not get expected log field of type 'int' at index %d", n);
 }
 
 static std::string_view storePathToName(std::string_view path)
@@ -46,6 +50,16 @@ static std::string_view storePathToNameWithoutDrvSuffix(std::string_view path)
     return res;
 }
 
+/**
+ * Progress of a garbage collection, cf. `resGCProgress`.
+ */
+struct GCStatus
+{
+    bool dryRun = false;
+    bool haveProgress = false;
+    uint64_t alive = 0, deleted = 0, bytesFreed = 0;
+};
+
 class ProgressBar final : public Logger
 {
 private:
@@ -62,6 +76,12 @@ private:
         ActivityId parent;
         std::optional<std::string> name;
         std::chrono::time_point<std::chrono::steady_clock> startTime;
+        bool logged = false;
+
+        /**
+         * Set for `CollectGarbage` activities.
+         */
+        std::optional<GCStatus> gc;
     };
 
     struct ActivitiesByType
@@ -105,7 +125,7 @@ private:
     bool printBuildLogs = false;
     bool isTTY;
 
-    std::unique_ptr<InterruptCallback> interruptCallback;
+    std::unique_ptr<InterruptCallback> interruptCallback, stopCallback, contCallback, winchCallback;
 
     void hideCursorIfNeeded() const
     {
@@ -124,12 +144,38 @@ public:
     ProgressBar(bool isTTY)
         : isTTY(isTTY)
         , interruptCallback(createInterruptCallback([&]() {
-            pause();
+            /* Don't print the current activities, since we're about
+               to abort them anyway. */
+            pause(false);
             redraw("\rshutting down\e[K");
         }))
     {
         hideCursorIfNeeded();
         state_.lock()->active = isTTY;
+
+        /* On Ctrl-Z, unhide the cursor before the process is
+           stopped. */
+        stopCallback = createSignalCallback(SignalType::Stop, [&]() {
+            auto state(state_.lock());
+            if (state->active && !state->isPaused())
+                unhideCursorIfNeeded();
+        });
+
+        /* Redraw the progress bar when the process is resumed or the
+           terminal size changes. */
+        auto redrawCallback = [&]() {
+            auto state(state_.lock());
+            if (state->active && !state->isPaused()) {
+                /* Force a redraw, since the new output may be
+                   identical to the one cached by redraw(). */
+                invalidateRedrawCache();
+                hideCursorIfNeeded();
+                update(*state);
+            }
+        };
+        contCallback = createSignalCallback(SignalType::Cont, redrawCallback);
+        winchCallback = createSignalCallback(SignalType::Winch, redrawCallback);
+
         updateThread = std::thread([&]() {
             auto state(state_.lock());
             auto nextWakeup = std::chrono::milliseconds::max();
@@ -166,6 +212,11 @@ public:
 
     void pause() override
     {
+        pause(true);
+    }
+
+    void pause(bool showActivities)
+    {
         auto state(state_.lock());
         state->suspensions++;
         if (state->suspensions > 1) {
@@ -175,6 +226,12 @@ public:
 
         if (state->active) {
             clearProgressDisplay();
+            /* Show activities that were previously only shown on the
+               progress bar. Otherwise the user won't know what's
+               happening. */
+            if (showActivities)
+                for (auto & act : state->activities)
+                    logActivity(*state, lvlNotice, act);
             unhideCursorIfNeeded();
         }
     }
@@ -203,7 +260,7 @@ public:
         return printBuildLogs;
     }
 
-    void log(Verbosity lvl, std::string_view s) override
+    void log(Verbosity lvl, std::string_view s) noexcept override
     {
         if (lvl > verbosity)
             return;
@@ -211,7 +268,7 @@ public:
         log(*state, lvl, s);
     }
 
-    void logEI(const ErrorInfo & ei) override
+    void logEI(const ErrorInfo & ei) noexcept override
     {
         auto state(state_.lock());
 
@@ -221,7 +278,7 @@ public:
         log(*state, ei.level, oss.view());
     }
 
-    void log(State & state, Verbosity lvl, std::string_view s)
+    void log(State & state, Verbosity lvl, std::string_view s) noexcept
     {
         if (state.active) {
             invalidateRedrawCache();
@@ -232,24 +289,39 @@ public:
         }
     }
 
+    void logActivity(State & state, Verbosity lvl, ActInfo & act) noexcept
+    {
+        if (!act.logged && lvl <= verbosity && !act.s.empty() && act.type != actBuildWaiting) {
+            log(state, lvl, act.s + "...");
+            act.logged = true;
+        }
+    }
+
+    std::list<ActInfo>::iterator addActivity(
+        State & state, ActivityId act, Verbosity lvl, ActivityType type, std::string s, ActivityId parent) noexcept
+    {
+        state.activities.emplace_back(
+            ActInfo{.s = std::move(s), .type = type, .parent = parent, .startTime = std::chrono::steady_clock::now()});
+        auto i = std::prev(state.activities.end());
+        state.its.emplace(act, i);
+        state.activitiesByType[type].its.emplace(act, i);
+
+        logActivity(state, lvl, *i);
+
+        return i;
+    }
+
     void startActivity(
         ActivityId act,
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
         const Fields & fields,
-        ActivityId parent) override
+        ActivityId parent) noexcept override
     {
         auto state(state_.lock());
 
-        if (lvl <= verbosity && !s.empty() && type != actBuildWaiting)
-            log(*state, lvl, s + "...");
-
-        state->activities.emplace_back(
-            ActInfo{.s = s, .type = type, .parent = parent, .startTime = std::chrono::steady_clock::now()});
-        auto i = std::prev(state->activities.end());
-        state->its.emplace(act, i);
-        state->activitiesByType[type].its.emplace(act, i);
+        auto i = addActivity(*state, act, lvl, type, s, parent);
 
         if (type == actBuild) {
             auto name = storePathToNameWithoutDrvSuffix(getS(fields, 0));
@@ -257,12 +329,6 @@ public:
             auto machineName = getS(fields, 1);
             if (machineName != "")
                 i->s += fmt(" on " ANSI_BOLD "%s" ANSI_NORMAL, machineName);
-
-            // Used to be curRound and nrRounds, but the
-            // implementation was broken for a long time.
-            if (getI(fields, 2) != 1 || getI(fields, 3) != 1) {
-                throw Error("log message indicated repeating builds, but this is not currently implemented");
-            }
             i->name = DrvName(name).name;
         }
 
@@ -295,6 +361,29 @@ public:
         update(*state);
     }
 
+    void startActivity(
+        ActivityId act,
+        Verbosity lvl,
+        std::string_view name,
+        ActivityMetadata metadata,
+        std::string_view s,
+        ActivityId parent) noexcept override
+    {
+        auto state(state_.lock());
+
+        auto i = addActivity(*state, act, lvl, actStringly, std::string(s), parent);
+
+        if (name == "CollectGarbage") {
+            i->gc.emplace();
+            for (auto & [key, value] : metadata)
+                if (key == "nix.gc.dry_run")
+                    if (auto p = std::get_if<uint64_t>(&value.raw))
+                        i->gc->dryRun = *p != 0;
+        }
+
+        update(*state);
+    }
+
     /* Check whether an activity has an ancestor with the specified
        type. */
     bool hasAncestor(State & state, ActivityType type, ActivityId act)
@@ -310,7 +399,7 @@ public:
         return false;
     }
 
-    void stopActivity(ActivityId act) override
+    void stopActivity(ActivityId act) noexcept override
     {
         auto state(state_.lock());
 
@@ -332,7 +421,7 @@ public:
         update(*state);
     }
 
-    void result(ActivityId act, ResultType type, const std::vector<Field> & fields) override
+    void result(ActivityId act, ResultType type, const std::vector<Field> & fields) noexcept override
     {
         auto state(state_.lock());
 
@@ -409,9 +498,21 @@ public:
             actInfo.lastLine = getS(fields, 0);
             update(*state);
         }
+
+        else if (type == resGCProgress) {
+            auto i = state->its.find(act);
+            if (i != state->its.end() && i->second->gc) {
+                auto & gc = *i->second->gc;
+                gc.alive = getI(fields, 0);
+                gc.deleted = getI(fields, 1);
+                gc.bytesFreed = getI(fields, 2);
+                gc.haveProgress = true;
+                update(*state);
+            }
+        }
     }
 
-    void update(State & state)
+    void update(State & state) noexcept
     {
         state.haveUpdate = true;
         updateCV.notify_one();
@@ -424,7 +525,7 @@ public:
      * with text selection in some terminals, including libvte-based terminal
      * emulators.
      */
-    void redraw(std::string newOutput)
+    void redraw(std::string newOutput) noexcept
     {
         auto lastOutput(lastOutput_.lock());
         if (newOutput != *lastOutput) {
@@ -444,7 +545,7 @@ public:
         writeToStderr("\r\e[K");
     }
 
-    std::chrono::milliseconds draw(State & state)
+    std::chrono::milliseconds draw(State & state) noexcept
     {
         auto nextWakeup = std::chrono::milliseconds::max();
 
@@ -499,16 +600,12 @@ public:
             }
         }
 
-        auto width = getWindowSize().second;
-        if (width <= 0)
-            width = std::numeric_limits<decltype(width)>::max();
-
-        redraw("\r" + filterANSIEscapes(line, false, width) + ANSI_NORMAL + "\e[K");
+        redraw("\r" + filterANSIEscapes(line, false, getWindowWidth()) + ANSI_NORMAL + "\e[K");
 
         return nextWakeup;
     }
 
-    std::string getStatus(State & state)
+    std::string getStatus(State & state) noexcept
     {
         std::string res;
 
@@ -659,6 +756,17 @@ public:
                     res += ", ";
                 res += s;
             }
+        }
+
+        for (auto & [_, i] : state.activitiesByType[actStringly].its) {
+            if (!i->gc || !i->gc->haveProgress)
+                continue;
+            auto & gc = *i->gc;
+            if (gc.dryRun)
+                maybeAppendToResult(fmt("%d paths alive, %d paths dead", gc.alive, gc.deleted));
+            else
+                maybeAppendToResult(
+                    fmt("%d paths alive, %d paths deleted, %s freed", gc.alive, gc.deleted, renderSize(gc.bytesFreed)));
         }
 
         // FIXME: don't show "done" paths in green.

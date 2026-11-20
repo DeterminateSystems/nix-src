@@ -17,6 +17,11 @@ StringMap getCgroups(const std::filesystem::path & cgroupFile);
 struct CgroupStats
 {
     std::optional<std::chrono::microseconds> cpuUser, cpuSystem;
+
+    /**
+     * Resident memory (anonymous + mapped file pages) in bytes.
+     */
+    std::optional<uint64_t> memory;
 };
 
 /**
@@ -40,5 +45,10 @@ CanonPath getCurrentCgroup();
  * returned, and then all subsequent calls will return the original cgroup.
  */
 CanonPath getRootCgroup();
+
+/**
+ * Get the PIDs of all processes in the given cgroup.
+ */
+std::set<pid_t> getPidsInCgroup(const std::filesystem::path & cgroup);
 
 } // namespace nix::linux

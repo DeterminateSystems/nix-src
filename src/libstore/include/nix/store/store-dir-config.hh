@@ -34,9 +34,18 @@ struct StoreDirConfig
 
     // pure methods
 
+    /**
+     * Parse a store path, i.e. a direct child of the store directory.
+     *
+     * @throws BadStorePath if `path` is not a valid store path.
+     */
     StorePath parseStorePath(std::string_view path) const;
 
-    std::optional<StorePath> maybeParseStorePath(std::string_view path) const;
+    /**
+     * Like `parseStorePath()`, but returns the reason instead of throwing
+     * if `path` is not a valid store path.
+     */
+    std::expected<StorePath, BadStorePathReason> maybeParseStorePath(std::string_view path) const;
 
     std::string printStorePath(const StorePath & path) const;
 
@@ -70,6 +79,13 @@ struct StoreDirConfig
      * `/nix/store/<hash>-<name>` and `/<bla>`.
      */
     std::pair<StorePath, CanonPath> toStorePath(std::string_view path) const;
+
+    /**
+     * Like `toStorePath()`, but for a canonical path, and returns the
+     * reason instead of throwing if `path` is not inside a valid store
+     * path. Since `path` is canonical, this is a cheap prefix check.
+     */
+    std::expected<std::pair<StorePath, CanonPath>, BadStorePathReason> maybeToStorePath(const CanonPath & path) const;
 
     /**
      * Constructs a unique store path name.

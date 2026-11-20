@@ -54,7 +54,10 @@ subdir('nix-meson-build-support/libatomic')
 
 if host_machine.system() == 'windows'
   socket = cxx.find_library('ws2_32')
-  deps_other += socket
+  # `NtCreateFile` and `RtlNtStatusToDosError`, used by the `*at`-style file
+  # system functions in `windows/file-system-at.cc`, live here.
+  nt = cxx.find_library('ntdll')
+  deps_other += [ socket, nt ]
 elif host_machine.system() == 'sunos'
   socket = cxx.find_library('socket')
   network_service_library = cxx.find_library('nsl')
@@ -136,6 +139,10 @@ config_priv_h = configure_file(
 
 subdir('nix-meson-build-support/common')
 
+if have_cxa_throw
+  deps_other += cxa_throw_dep
+endif
+
 sources = [ config_priv_h ] + files(
   'archive.cc',
   'args.cc',
@@ -161,6 +168,7 @@ sources = [ config_priv_h ] + files(
   'file-content-address.cc',
   'file-descriptor.cc',
   'file-system.cc',
+  'forwarding-source-accessor.cc',
   'fs-sink.cc',
   'git.cc',
   'hash.cc',
@@ -177,6 +185,7 @@ sources = [ config_priv_h ] + files(
   'position.cc',
   'posix-source-accessor.cc',
   'processes.cc',
+  'provenance.cc',
   'serialise.cc',
   'signature/local-keys.cc',
   'signature/signer.cc',
@@ -224,11 +233,10 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixutil',
   sources,
-  soversion : nix_soversion,
   dependencies : deps_public + deps_private + deps_other,
   include_directories : include_dirs,
   link_args : linker_export_flags,
-  prelink : true, # For C++ static initializers
+  prelink : prelink, # For C++ static initializers
   install : true,
   cpp_pch : do_pch ? [ 'pch/precompiled-headers.hh' ] : [],
 )
@@ -239,7 +247,7 @@ libraries_private = []
 if host_machine.system() == 'windows'
   # `libraries_private` cannot contain ad-hoc dependencies (from
   # `find_library), so we need to do this manually
-  libraries_private += [ '-lws2_32' ]
+  libraries_private += [ '-lws2_32', '-lntdll' ]
 endif
 
 subdir('nix-meson-build-support/export')

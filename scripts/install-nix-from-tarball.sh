@@ -180,13 +180,17 @@ for i in $(cd "$self/store" >/dev/null && echo ./*); do
         if [ "$OS" = "Darwin" ] || [ "$OS" = "FreeBSD" ]; then
             cp -RPp "$self/store/$i" "$i_tmp"
         else
-            cp -RP --preserve=ownership,timestamps "$self/store/$i" "$i_tmp"
+            cp -RP --preserve=timestamps "$self/store/$i" "$i_tmp"
         fi
         chmod -R a-w "$i_tmp"
         chmod +w "$i_tmp"
         mv "$i_tmp" "$dest/store/$i"
         chmod -w "$dest/store/$i"
     fi
+    # BusyBox tar is bad at preserving mtime because it doesn't seem to do the correct
+    # thing of doing a final fixup pass for fixing parent directory permissions and doesn't
+    # handle symlinks at all. So we can set the correct mtime here.
+    find "$dest/store/$i" -depth -exec touch -hmd "@1" {} +
 done
 echo "" >&2
 

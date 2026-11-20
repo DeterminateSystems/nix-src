@@ -65,6 +65,17 @@ nix formatter run ./file ./folder | grep "PRJ_ROOT=$TEST_HOME Formatting(2): ./f
 cd subflake
 nix fmt ./file | grep "PRJ_ROOT=$TEST_HOME/subflake Formatting(1): ./file"
 
+# A flake that has no local directory (here because _NIX_FORCE_HTTP makes the
+# Git fetcher treat the repository as remote) can't be formatted, since there is
+# nothing to set PRJ_ROOT to.
+gitFlake="$TEST_HOME/git-flake"
+mkdir "$gitFlake"
+cp "$TEST_HOME"/{flake.nix,simple.nix,simple.builder.sh,formatter.simple.sh,config.nix} "$gitFlake"
+initGitRepo "$gitFlake"
+git -C "$gitFlake" add .
+git -C "$gitFlake" commit -m init
+(cd "$gitFlake" && _NIX_FORCE_HTTP=1 expectStderr 1 nix fmt ./file) | grepQuiet "cannot run the formatter because flake .* does not have a local directory"
+
 # Build checks
 ## Defaults to a ./result.
 nix formatter build | grep ".\+/bin/formatter"
@@ -82,4 +93,6 @@ rm ./my-result
 
 # Flake outputs check.
 nix flake check
-nix flake show | grep -P "package 'formatter'"
+
+clearStore
+expectStderr 0 nix flake show | grepQuiet ": formatter"

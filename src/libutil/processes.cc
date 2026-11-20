@@ -5,6 +5,12 @@ namespace nix {
 
 void ExecError::anchor() {}
 
+RegisterForkCallback::Callbacks & RegisterForkCallback::callbacks()
+{
+    static Callbacks callbacks;
+    return callbacks;
+}
+
 Pid & Pid::operator=(Pid && other) noexcept
 {
     swap(*this, other);

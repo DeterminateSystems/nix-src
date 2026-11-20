@@ -35,7 +35,7 @@ namespace {
 struct LocalStoreAccessor : SourceAccessor
 {
 private:
-    void anchor() override {};
+    void anchor() override {}
 
 public:
     ref<SourceAccessor> accessor;
@@ -51,7 +51,7 @@ public:
 
     void requireStoreObject(const StorePath & storePath)
     {
-        if (requireValidPath && !store->isValidPath(storePath))
+        if (requireValidPath && !store->maybeQueryPathInfo(storePath))
             throw InvalidPath("path '%1%' is not a valid store path", store->printStorePath(storePath));
     }
 
@@ -61,14 +61,6 @@ public:
         if (path.isRoot())
             throw BadStorePath("path '%1%' is not a valid store path", path);
         return StorePath(*path.begin());
-    }
-
-    static std::optional<StorePath> maybeGetStoreObjectPath(const CanonPath & path)
-    try {
-        return getStoreObjectPath(path);
-    } catch (BadStorePath &) {
-        /* FIXME: Stop using exceptions for control flow. */
-        return std::nullopt;
     }
 
     void requireStoreObject(const CanonPath & path)
@@ -86,10 +78,10 @@ public:
         /* Querying existence should not fail for things like
            `/nix/store/foo.nix`. The store cannot contain such files (unless
            some weird impurities sneak in, but that's UB from nix's PoV). */
-        auto maybeStorePath = maybeGetStoreObjectPath(path);
-        if (!maybeStorePath)
+        auto storePath = StorePath::parse(*path.begin());
+        if (!storePath)
             return std::nullopt;
-        requireStoreObject(*maybeStorePath);
+        requireStoreObject(*storePath);
         return accessor->maybeLstat(path);
     }
 
@@ -106,6 +98,19 @@ public:
 
     DirEntries readDirectory(const CanonPath & path) override
     {
+        /* Trying to list the whole store directory. */
+        if (path.isRoot()) {
+            DirEntries entries;
+            if (!requireValidPath) /* Don't go through the store. */
+                return accessor->readDirectory(CanonPath::root);
+            auto paths = store->queryAllValidPaths();
+            for (const auto & path : paths)
+                /* Don't know the type, so nullopt to query lazily. */
+                entries.emplace(path.to_string(), std::nullopt);
+            return entries;
+        }
+
+        /* Otherwise, just a single store object. */
         requireStoreObject(path);
         return accessor->readDirectory(path);
     }
@@ -114,18 +119,27 @@ public:
         const CanonPath & dirPath,
         std::function<void(SourceAccessor & subdirAccessor, const CanonPath & subdirRelPath)> callback) override
     {
+        /* Delegate to the base implementation if reading the root directory. */
+        if (dirPath.isRoot())
+            return SourceAccessor::readDirectory(dirPath, std::move(callback));
+
+        /* Otherwise, delegate to the fs accessor for the particular directory. */
         requireStoreObject(dirPath);
         return accessor->readDirectory(dirPath, std::move(callback));
     }
 
     void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override
     {
+        if (path.isRoot())
+            throw NotARegularFile("'%1%' is a directory", accessor->showPath(path));
         requireStoreObject(path);
         return accessor->readFile(path, sink, sizeCallback);
     }
 
     std::string readLink(const CanonPath & path) override
     {
+        if (path.isRoot())
+            throw NotASymlink("'%1%' is a directory", accessor->showPath(path));
         requireStoreObject(path);
         return accessor->readLink(path);
     }

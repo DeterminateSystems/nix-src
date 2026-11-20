@@ -12,6 +12,7 @@ namespace nix {
 
 #define WORKER_MAGIC_1 0x6e697863
 #define WORKER_MAGIC_2 0x6478696f
+#define WORKER_MAGIC_ACCESS_DENIED 0xab9a9ff0 // = 🚫
 
 /* Note: you generally shouldn't change the protocol version. Define a
    new `WorkerProto::Feature` instead. */
@@ -27,6 +28,7 @@ namespace nix {
 #define STDERR_START_ACTIVITY 0x53545254
 #define STDERR_STOP_ACTIVITY 0x53544f50
 #define STDERR_RESULT 0x52534c54
+#define STDERR_START_ACTIVITY_STRINGLY 0x5354524e // requires `featureNamedActivities`
 
 struct StoreDirConfig;
 struct Source;
@@ -119,6 +121,12 @@ struct WorkerProto
 
     static const Version minimum;
 
+    static constexpr std::string_view featureQueryActiveBuilds = "queryActiveBuilds";
+    static constexpr std::string_view featureProvenance = "provenance";
+    static constexpr std::string_view featureVersionedAddToStoreMultiple = "versionedAddToStoreMultiple";
+    static constexpr std::string_view featureAddTempRoots = "addTempRoots";
+    static constexpr std::string_view featureQueryPathInfos = "queryPathInfos";
+
     /**
      * Feature for transmitting `UnkeyedRealisation` and `DrvOutput`
      * using drvPath (store path) instead of the old hash-based JSON format.
@@ -136,6 +144,20 @@ struct WorkerProto
     static constexpr std::string_view featureDisableSetOptions = "disable-set-options";
 
     /**
+     * Feature for propagating OpenTelemetry trace context from the
+     * client to the daemon: after the handshake, the client sends a
+     * W3C `traceparent` string (empty if the client is not tracing).
+     */
+    static constexpr std::string_view featureOpenTelemetry = "open-telemetry";
+
+    /**
+     * Feature for forwarding string-named activities from the daemon
+     * to the client, using the `STDERR_START_ACTIVITY_STRINGLY`
+     * message.
+     */
+    static constexpr std::string_view featureNamedActivities = "named-activities";
+
+    /**
      * A unidirectional read connection, to be used by the read half of the
      * canonical serializers below.
      */
@@ -143,6 +165,7 @@ struct WorkerProto
     {
         Source & from;
         const Version & version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -153,6 +176,7 @@ struct WorkerProto
     {
         Sink & to;
         const Version & version;
+        bool shortStorePaths = false;
     };
 
     /**
@@ -256,6 +280,9 @@ enum struct WorkerProto::Op : uint64_t {
     AddBuildLog = 45,
     BuildPathsWithResults = 46,
     AddPermRoot = 47,
+    QueryActiveBuilds = 48,
+    AddTempRoots = 49,
+    QueryPathInfos = 50,
 };
 
 struct WorkerProto::ClientHandshakeInfo

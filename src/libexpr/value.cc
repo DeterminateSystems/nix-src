@@ -1,14 +1,6 @@
 #include "nix/expr/value.hh"
 
-#include "expr-config-private.hh"
-
-#if HAVE_LIBCPUID
-#  include <libcpuid/libcpuid.h>
-#endif
-
 namespace nix {
-
-Value::ExceptionRef::~ExceptionRef() {}
 
 Value Value::vEmptyList = []() {
     Value res;
@@ -33,20 +25,5 @@ Value Value::vFalse = []() {
     res.mkBool(false);
     return res;
 }();
-
-template<>
-bool ValueStorage<8>::isAtomic()
-{
-#if HAVE_LIBCPUID
-    struct cpu_id_t data;
-
-    if (cpu_identify(NULL, &data) < 0)
-        return false;
-
-    return data.flags[CPU_FEATURE_AVX];
-#else
-    return false; // Can't tell
-#endif
-}
 
 } // namespace nix

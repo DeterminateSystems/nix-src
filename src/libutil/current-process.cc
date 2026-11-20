@@ -1,15 +1,27 @@
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
+#include <ranges>
 
 #include "nix/util/current-process.hh"
 #include "nix/util/util.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/environment-variables.hh"
+#include "nix/util/sync.hh"
 #include <math.h>
+
+#ifndef _WIN32
+#  include <signal.h>
+#  include <sys/mman.h>
+#  include <unistd.h>
+#endif
 
 #ifdef __APPLE__
 #  include <mach-o/dyld.h>
+#  include <mach/mach.h>
 #endif
 
 #ifdef __linux__
@@ -91,6 +103,90 @@ void ensureStackSizeAtLeast(size_t stackSize)
         }
     }
 }
+
+namespace {
+
+/**
+ * The alternate signal stack of a thread, allocated by
+ * `ensureSignalStack()`. It has a guard page on either side: the lower
+ * one turns an overflow of the signal stack into a crash rather than
+ * memory corruption, and both keep crash reporters (which capture a
+ * thread's stack from the stack pointer to the end of its mapping,
+ * including adjacent readable mappings) from capturing unrelated
+ * memory when the stack pointer of the crashed thread is unusable.
+ */
+struct SignalStack
+{
+    /**
+     * The size of the stack, without the guard pages: 64 KiB (like
+     * Sentry's signal stack), or the size recommended by the C
+     * library, if that's bigger. The latter is a multiple of the size
+     * of the kernel's signal frame, which depends on the CPU's register
+     * state, e.g. it's more than 64 KiB on arm64 with the largest
+     * streaming vector length of SME.
+     */
+    static size_t getSize()
+    {
+        static const size_t size = []() {
+            size_t size = 64 * 1024;
+#  ifdef _SC_SIGSTKSZ
+            if (auto n = sysconf(_SC_SIGSTKSZ); n > 0)
+                size = std::max(size, static_cast<size_t>(n));
+#  endif
+            size_t pageSize = getpagesize();
+            return (size + pageSize - 1) / pageSize * pageSize;
+        }();
+        return size;
+    }
+
+    /**
+     * The start of the mapping, i.e. of the lower guard page.
+     */
+    char * mem = nullptr;
+
+    ~SignalStack()
+    {
+        if (!mem)
+            return;
+        size_t pageSize = getpagesize();
+        /* Stop using the stack before unmapping it, unless something
+           else has replaced it in the meantime. */
+        stack_t ss{}, old{};
+        ss.ss_flags = SS_DISABLE;
+        if (sigaltstack(&ss, &old) == 0 && old.ss_sp != mem + pageSize)
+            sigaltstack(&old, nullptr);
+        munmap(mem, getSize() + 2 * pageSize);
+    }
+};
+
+thread_local SignalStack signalStack;
+
+} // namespace
+
+void ensureSignalStack()
+{
+    size_t pageSize = getpagesize();
+
+    if (!signalStack.mem) {
+        auto mem = static_cast<char *>(
+            mmap(nullptr, SignalStack::getSize() + 2 * pageSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+        if (mem == MAP_FAILED)
+            throw SysError("allocating the alternate signal stack");
+        if (mprotect(mem + pageSize, SignalStack::getSize(), PROT_READ | PROT_WRITE) != 0) {
+            SysError error("allocating the alternate signal stack");
+            munmap(mem, SignalStack::getSize() + 2 * pageSize);
+            throw error;
+        }
+        signalStack.mem = mem;
+    }
+
+    stack_t ss{};
+    ss.ss_sp = signalStack.mem + pageSize;
+    ss.ss_size = SignalStack::getSize();
+    ss.ss_flags = 0;
+    if (sigaltstack(&ss, nullptr) != 0)
+        throw SysError("setting the alternate signal stack");
+}
 #endif
 
 void restoreProcessContext(bool restoreMounts)
@@ -112,6 +208,15 @@ void restoreProcessContext(bool restoreMounts)
             setrlimit(RLIMIT_STACK, &limit);
         }
     }
+#endif
+
+#ifdef __APPLE__
+    /* Reset the Mach exception ports. Otherwise, if a crashpad_handler is attached to this process, it will be
+       inherited across execve() and receive spurious crash reports from unrelated programs (e.g. in `nix run`).
+       FIXME: it would be better to have Sentry tell crashpad_handler to quit, but it doesn't appear to have an API for
+       that. */
+    task_set_exception_ports(
+        mach_task_self(), EXC_MASK_ALL | EXC_MASK_CRASH, MACH_PORT_NULL, EXCEPTION_DEFAULT, THREAD_STATE_NONE);
 #endif
 }
 
@@ -157,6 +262,46 @@ std::optional<std::filesystem::path> getSelfExe()
 #endif
     }();
     return cached;
+}
+
+static Sync<std::vector<fun<void()>>> & quickExitHandlers()
+{
+    /* Leaked, so that it's never destroyed by static destructors. */
+    static auto & handlers = *new Sync<std::vector<fun<void()>>>;
+    return handlers;
+}
+
+void atQuickExit(fun<void()> f)
+{
+    quickExitHandlers().lock()->push_back(std::move(f));
+}
+
+void quickExit(int status)
+{
+    /* Take ownership of the handlers, so that they don't run again if
+       a handler (or another thread) calls quickExit(). */
+    auto handlers = std::exchange(*quickExitHandlers().lock(), {});
+
+    for (auto & f : std::views::reverse(handlers)) {
+        try {
+            f();
+        } catch (...) {
+            ignoreExceptionInDestructor();
+        }
+    }
+
+    std::cout.flush();
+    std::cerr.flush();
+    std::clog.flush();
+    std::fflush(nullptr);
+
+#ifdef __LLVM_INSTR_PROFILE_GENERATE
+    /* In coverage builds, each instrumented library writes its
+       profile from an `atexit()` handler, so we have to run them. */
+    std::exit(status);
+#else
+    std::_Exit(status);
+#endif
 }
 
 } // namespace nix
