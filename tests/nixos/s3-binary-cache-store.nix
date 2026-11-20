@@ -67,7 +67,12 @@ in
       };
 
     client =
-      { config, pkgs, ... }:
+      {
+        config,
+        lib,
+        pkgs,
+        ...
+      }:
       {
         virtualisation.writableStore = true;
         virtualisation.cores = 2;
