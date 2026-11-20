@@ -31,24 +31,36 @@
 
 namespace nix::daemon {
 
-static void writeField(Sink & sink, const Logger::Field & field)
+/**
+ * Write a log field. JSON fields are only supported by clients that
+ * negotiated `featureStringlyResults`; for other clients, they're
+ * sent as strings.
+ */
+static void writeField(Sink & sink, const Logger::Field & field, bool supportsJSON)
 {
-    if (auto p = std::get_if<uint64_t>(&field.raw)) {
-        sink << 0;
-        sink << *p;
-    } else if (auto p = std::get_if<std::string>(&field.raw)) {
-        sink << 1;
-        sink << *p;
-    } else
-        unreachable();
+    std::visit(
+        overloaded{
+            [&](uint64_t n) { sink << 0 << n; },
+            [&](const std::string & s) { sink << 1 << s; },
+            [&](const nlohmann::json * json) { sink << (supportsJSON ? 2 : 1) << json->dump(); },
+        },
+        field.raw);
 }
 
-Sink & operator<<(Sink & sink, const Logger::Fields & fields)
+static void writeMetadata(Sink & sink, Logger::Metadata metadata, bool supportsJSON)
+{
+    sink << metadata.size();
+    for (auto & [key, value] : metadata) {
+        sink << key;
+        writeField(sink, value, supportsJSON);
+    }
+}
+
+static void writeFields(Sink & sink, const Logger::Fields & fields, bool supportsJSON)
 {
     sink << fields.size();
     for (auto & f : fields)
-        writeField(sink, f);
-    return sink;
+        writeField(sink, f, supportsJSON);
 }
 
 namespace {
@@ -170,7 +182,9 @@ struct TunnelLogger : public Logger
         }
 
         StringSink buf;
-        buf << STDERR_START_ACTIVITY << act << lvl << type << s << fields << parent;
+        buf << STDERR_START_ACTIVITY << act << lvl << type << s;
+        writeFields(buf, fields, supportsJSON());
+        buf << parent;
         enqueueMsg(buf.s);
     }
 
@@ -178,7 +192,7 @@ struct TunnelLogger : public Logger
         ActivityId act,
         Verbosity lvl,
         std::string_view name,
-        ActivityMetadata metadata,
+        Metadata metadata,
         std::string_view s,
         ActivityId parent) noexcept override
     {
@@ -187,11 +201,8 @@ struct TunnelLogger : public Logger
             return Logger::startActivity(act, lvl, name, metadata, s, parent);
 
         StringSink buf;
-        buf << STDERR_START_ACTIVITY_STRINGLY << act << lvl << name << s << metadata.size();
-        for (auto & [key, value] : metadata) {
-            buf << key;
-            writeField(buf, value);
-        }
+        buf << STDERR_START_ACTIVITY_STRINGLY << act << lvl << name << s;
+        writeMetadata(buf, metadata, supportsJSON());
         buf << parent;
         enqueueMsg(buf.s);
     }
@@ -210,8 +221,28 @@ struct TunnelLogger : public Logger
         if (clientVersion.number < WorkerProto::Version::Number{1, 20})
             return;
         StringSink buf;
-        buf << STDERR_RESULT << act << type << fields;
+        buf << STDERR_RESULT << act << type;
+        writeFields(buf, fields, supportsJSON());
         enqueueMsg(buf.s);
+    }
+
+    void result(ActivityId act, Metadata fields) noexcept override
+    {
+        if (clientVersion.number < WorkerProto::Version::Number{1, 20} || !supportsJSON())
+            return;
+        StringSink buf;
+        buf << STDERR_RESULT_STRINGLY << act;
+        writeMetadata(buf, fields, true);
+        enqueueMsg(buf.s);
+    }
+
+    /**
+     * Whether the client supports field-only results, and JSON log
+     * fields.
+     */
+    bool supportsJSON() const
+    {
+        return clientVersion.features.contains(WorkerProto::featureStringlyResults);
     }
 };
 

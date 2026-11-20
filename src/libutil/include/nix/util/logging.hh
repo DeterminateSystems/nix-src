@@ -49,23 +49,12 @@ typedef enum {
     resSetExpected = 106,
     resPostBuildLogLine = 107,
     resFetchStatus = 108,
-    resHashMismatch = 109,
-    resBuildResult = 110,
     /**
-     * Emitted via the JSON `result()` overload: an object describing
-     * the response to an HTTP request, with the fields `httpStatus`
-     * (the status code, absent for non-HTTP protocols) and `bodySize`
-     * (the number of body bytes received). More fields may be added
-     * in the future.
+     * The type under which field-only results (cf. the
+     * `Metadata`-based `Logger::result()`) are reported in the JSON
+     * log. Do not use directly.
      */
-    resHttpStatus = 10111,
-    /**
-     * Progress of a garbage collection (the `CollectGarbage`
-     * activity), as absolute counts: the number of paths found to be
-     * alive so far, the number of paths deleted (or, in a dry run,
-     * found to be dead) so far, and the number of bytes freed so far.
-     */
-    resGCProgress = 10112,
+    resStringly = 10114,
 } ResultType;
 
 typedef uint64_t ActivityId;
@@ -116,7 +105,14 @@ public:
 
     struct Field
     {
-        std::variant<std::string, uint64_t> raw;
+        /**
+         * A JSON value is not owned by the field: it must outlive
+         * every use of the field. This is intended for field-only
+         * results (cf. the `Metadata`-based `result()`), which are
+         * only borrowed for the duration of the call, so a temporary
+         * in the full-expression that calls `result()` is fine.
+         */
+        std::variant<std::string, uint64_t, const nlohmann::json *> raw;
 
         Field(const std::string & s)
             : raw(s)
@@ -132,15 +128,21 @@ public:
             : raw(i)
         {
         }
+
+        Field(const nlohmann::json * j)
+            : raw(j)
+        {
+        }
     };
 
     typedef std::vector<Field> Fields;
 
     /**
-     * Key/value meta-information about a string-named activity, cf.
-     * the name-based `startActivity()`.
+     * Key/value information about a string-named activity (cf. the
+     * name-based `startActivity()`) or the fields of a field-only
+     * result (cf. the `Metadata`-based `result()`).
      */
-    using ActivityMetadata = std::span<const std::pair<std::string_view, Field>>;
+    using Metadata = std::span<const std::pair<std::string_view, Field>>;
 
     virtual ~Logger();
 
@@ -225,7 +227,7 @@ public:
         ActivityId act,
         Verbosity lvl,
         std::string_view name,
-        ActivityMetadata metadata,
+        Metadata metadata,
         std::string_view s,
         ActivityId parent) noexcept
     {
@@ -236,7 +238,17 @@ public:
 
     virtual void result(ActivityId act, ResultType type, const Fields & fields) noexcept {};
 
-    virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept {};
+    /**
+     * Report a field-only result for an activity, typically
+     * describing its current state (e.g. its progress). The fields
+     * are the entire result: there is no result type. A result may
+     * carry a subset of the keys that an activity reports; later
+     * values for a key supersede earlier ones. Keys follow the same
+     * conventions as activity metadata, cf. the name-based
+     * `startActivity()`. The default implementation discards the
+     * result.
+     */
+    virtual void result(ActivityId act, Metadata fields) noexcept {};
 
     /**
      * Return distributed tracing context for the given activity as
@@ -309,7 +321,7 @@ struct Activity
         Logger & logger,
         Verbosity lvl,
         std::string_view name,
-        Logger::ActivityMetadata metadata = {},
+        Logger::Metadata metadata = {},
         std::string_view s = {},
         ActivityId parent = getCurActivity());
 
@@ -327,11 +339,6 @@ struct Activity
         result(resSetExpected, type2, expected);
     }
 
-    void result(ResultType type, const nlohmann::json & json) const
-    {
-        logger.result(id, type, json);
-    }
-
     template<typename... Args>
     void result(ResultType type, const Args &... args) const
     {
@@ -344,6 +351,25 @@ struct Activity
     {
         logger.result(id, type, fields);
     }
+
+    /**
+     * Report a field-only result, cf. the `Metadata`-based
+     * `Logger::result()`.
+     */
+    void result(Logger::Metadata fields) const
+    {
+        logger.result(id, fields);
+    }
+
+    /**
+     * Report that this activity failed because of the exception
+     * `ex`, as a field-only result with the fields `error.type` (cf.
+     * `BaseError::errorType()`) and `error.message`. Call this from
+     * the `catch` block that handles `ex` (typically before
+     * rethrowing it), since the exception can't be retrieved while
+     * the `Activity` is being destroyed by stack unwinding.
+     */
+    void fail(const std::exception_ptr & ex) const noexcept;
 
     friend class Logger;
 };

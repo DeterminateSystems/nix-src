@@ -72,7 +72,7 @@ public:
         ActivityId act,
         Verbosity lvl,
         std::string_view name,
-        ActivityMetadata metadata,
+        Metadata metadata,
         std::string_view s,
         ActivityId parent) noexcept override
     {
@@ -92,10 +92,10 @@ public:
             logger->result(act, type, fields);
     }
 
-    void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept override
+    void result(ActivityId act, Metadata fields) noexcept override
     {
         for (auto & logger : loggers)
-            logger->result(act, type, json);
+            logger->result(act, fields);
     }
 
     Headers getTraceContext(ActivityId act) override

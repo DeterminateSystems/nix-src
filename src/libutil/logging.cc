@@ -8,6 +8,7 @@
 #include "nix/util/sync.hh"
 #include "nix/util/unix-domain-socket.hh"
 #include "nix/util/exit.hh"
+#include "nix/util/demangle.hh"
 
 #include <atomic>
 #include <sstream>
@@ -261,7 +262,7 @@ Activity::Activity(
     Logger & logger,
     Verbosity lvl,
     std::string_view name,
-    Logger::ActivityMetadata metadata,
+    Logger::Metadata metadata,
     std::string_view s,
     ActivityId parent)
     : logger(logger)
@@ -313,18 +314,32 @@ struct JSONLogger : Logger
         return true;
     }
 
+    static nlohmann::json fieldToJSON(const Field & field)
+    {
+        return std::visit(
+            overloaded{
+                [](const std::string & s) -> nlohmann::json { return s; },
+                [](uint64_t n) -> nlohmann::json { return n; },
+                [](const nlohmann::json * j) -> nlohmann::json { return *j; },
+            },
+            field.raw);
+    }
+
+    static nlohmann::json metadataToJSON(Metadata metadata)
+    {
+        auto payload = nlohmann::json::object();
+        for (auto & [key, value] : metadata)
+            payload[std::string(key)] = fieldToJSON(value);
+        return payload;
+    }
+
     void addFields(nlohmann::json & json, const Fields & fields)
     {
         if (fields.empty())
             return;
         auto & arr = json["fields"] = nlohmann::json::array();
         for (auto & f : fields)
-            if (auto p = std::get_if<uint64_t>(&f.raw))
-                arr.push_back(*p);
-            else if (auto p = std::get_if<std::string>(&f.raw))
-                arr.push_back(*p);
-            else
-                unreachable();
+            arr.push_back(fieldToJSON(f));
     }
 
     struct State
@@ -416,7 +431,7 @@ struct JSONLogger : Logger
         ActivityId act,
         Verbosity lvl,
         std::string_view name,
-        ActivityMetadata metadata,
+        Metadata metadata,
         std::string_view s,
         ActivityId parent) noexcept override
     {
@@ -428,10 +443,7 @@ struct JSONLogger : Logger
         json["text"] = s;
         json["parent"] = parent;
         json["name"] = name;
-        auto payload = nlohmann::json::object();
-        for (auto & [key, value] : metadata)
-            std::visit([&](auto & v) { payload[std::string(key)] = v; }, value.raw);
-        json["payload"] = std::move(payload);
+        json["payload"] = metadataToJSON(metadata);
         write(std::move(json));
     }
 
@@ -453,13 +465,13 @@ struct JSONLogger : Logger
         write(std::move(json));
     }
 
-    void result(ActivityId act, ResultType type, const nlohmann::json & j) noexcept override
+    void result(ActivityId act, Metadata fields) noexcept override
     {
         nlohmann::json json;
         json["action"] = "result";
         json["id"] = act;
-        json["type"] = type;
-        json["payload"] = j;
+        json["type"] = resStringly;
+        json["payload"] = metadataToJSON(fields);
         write(std::move(json));
     }
 };
@@ -569,8 +581,25 @@ bool handleJSONLogMessage(
 
         else if (action == "result") {
             auto i = activities.find((ActivityId) json["id"]);
-            if (i != activities.end())
-                i->second.result((ResultType) json["type"], getFields(json["fields"]));
+            if (i != activities.end()) {
+                auto type = (ResultType) json["type"];
+                if (type == resStringly) {
+                    /* Other JSON values are passed by reference into
+                       `json`, which outlives the call. */
+                    std::vector<std::pair<std::string, Logger::Field>> fields;
+                    for (auto & [key, value] : json["payload"].items()) {
+                        if (value.is_number_unsigned())
+                            fields.emplace_back(key, Logger::Field(value.get<uint64_t>()));
+                        else if (value.is_string())
+                            fields.emplace_back(key, Logger::Field(value.get<std::string>()));
+                        else
+                            fields.emplace_back(key, Logger::Field(&value));
+                    }
+                    std::vector<std::pair<std::string_view, Logger::Field>> fieldRefs(fields.begin(), fields.end());
+                    i->second.result(Logger::Metadata(fieldRefs));
+                } else
+                    i->second.result(type, getFields(json["fields"]));
+            }
         }
 
         else if (action == "setPhase") {
@@ -602,6 +631,32 @@ bool handleJSONLogMessage(
         return false;
 
     return handleJSONLogMessage(*json, act, activities, source, trusted);
+}
+
+void Activity::fail(const std::exception_ptr & ex) const noexcept
+{
+    try {
+        std::string type, message;
+        try {
+            std::rethrow_exception(ex);
+        } catch (BaseError & e) {
+            type = e.errorType();
+            message = filterANSIEscapes(e.message(), true);
+        } catch (std::exception & e) {
+            type = demangle(typeid(e).name());
+            message = e.what();
+        } catch (...) {
+            /* The OpenTelemetry fallback value for `error.type`. */
+            type = "_OTHER";
+        }
+        result(
+            std::to_array<std::pair<std::string_view, Logger::Field>>({
+                {"error.type", type},
+                {"error.message", message},
+            }));
+    } catch (...) {
+        /* Logging is best-effort. */
+    }
 }
 
 Activity::~Activity()

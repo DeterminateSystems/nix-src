@@ -1,6 +1,7 @@
 #include "nix/store/build-result.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/util/provenance.hh"
+#include "nix/util/terminal.hh"
 
 #include <array>
 
@@ -130,6 +131,11 @@ static BuildResult::Failure::Status failureStatusFromString(std::string_view str
     throw Error("unknown built result failure status '%s'", str);
 }
 
+std::string BuildError::errorType() const
+{
+    return std::string(failureStatusToString(status));
+}
+
 bool BuildError::operator==(const BuildError & other) const noexcept
 {
     return status == other.status && isNonDeterministic == other.isNonDeterministic && message() == other.message();
@@ -142,6 +148,22 @@ std::strong_ordering BuildError::operator<=>(const BuildError & other) const noe
     if (auto cmp = isNonDeterministic <=> other.isNonDeterministic; cmp != 0)
         return cmp;
     return message() <=> other.message();
+}
+
+void logBuildResult(ActivityId act, const KeyedBuildResult & result)
+{
+    nlohmann::json json(result);
+    std::vector<std::pair<std::string_view, Logger::Field>> fields{{"nix.build.result", &json}};
+
+    /* Note: a substitution goal "failing" because there is no
+       substituter for the path is the normal prelude to building it,
+       so don't call that an error. */
+    if (auto failure = result.tryGetFailure(); failure && failure->status != BuildResult::Failure::NoSubstituters) {
+        fields.emplace_back("error.type", failure->errorType());
+        fields.emplace_back("error.message", filterANSIEscapes(failure->message(), true));
+    }
+
+    logger->result(act, Logger::Metadata(fields));
 }
 
 } // namespace nix

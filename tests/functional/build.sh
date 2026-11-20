@@ -181,6 +181,18 @@ test "$(<<<"$out" grep -cE '^error:')" = 1
 <<<"$out" grepQuiet -vE "hash mismatch in fixed-output derivation '.*-x3\\.drv'"
 <<<"$out" grepQuiet -vE "hash mismatch in fixed-output derivation '.*-x2\\.drv'"
 
+# The hash mismatch is reported as a field-only result in the JSON log.
+expect 1 nix build -f fod-failing.nix x1 --no-link --json-log-path "$TEST_ROOT/fod-log.json"
+hashMismatchAct=$(jq -s '[.[] | select(.action == "result" and .type == 10114 and (.payload | has("nix.hash.wanted"))
+    and (.payload."nix.drv.path" | test("-x1\\.drv$"))
+    and (.payload."nix.hash.wanted" | startswith("sha256-"))
+    and (.payload."nix.hash.got" | startswith("sha256-"))
+    and .payload."nix.hash.wanted" != .payload."nix.hash.got") | .id] | if length == 1 then .[0] else error("expected exactly one hash mismatch result") end' < "$TEST_ROOT/fod-log.json")
+# The same activity is marked as failed because of the hash mismatch.
+(( $(jq -s --argjson id "$hashMismatchAct" '[.[] | select(.action == "result" and .type == 10114 and .id == $id
+    and .payload."error.type" == "HashMismatch"
+    and (.payload."error.message" | startswith("hash mismatch in fixed-output derivation")))] | length' < "$TEST_ROOT/fod-log.json") == 1 ))
+
 out="$(nix build -f fod-failing.nix -L x1 x2 x3 --keep-going 2>&1)" && status=0 || status=$?
 test "$status" = 1
 # three "hash mismatch" errors - for each failing fod

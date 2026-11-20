@@ -29,6 +29,7 @@ namespace nix {
 #define STDERR_STOP_ACTIVITY 0x53544f50
 #define STDERR_RESULT 0x52534c54
 #define STDERR_START_ACTIVITY_STRINGLY 0x5354524e // requires `featureNamedActivities`
+#define STDERR_RESULT_STRINGLY 0x52534c4e         // requires `featureStringlyResults`
 
 struct StoreDirConfig;
 struct Source;
@@ -156,6 +157,13 @@ struct WorkerProto
      * message.
      */
     static constexpr std::string_view featureNamedActivities = "named-activities";
+
+    /**
+     * Feature for forwarding field-only results (cf. the
+     * `Metadata`-based `Logger::result()`) from the daemon to the
+     * client, using the `STDERR_RESULT_STRINGLY` message.
+     */
+    static constexpr std::string_view featureStringlyResults = "stringly-results";
 
     /**
      * A unidirectional read connection, to be used by the read half of the

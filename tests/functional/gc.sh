@@ -74,9 +74,20 @@ cat "$outPath/reference-to-input-2/bar"
 # Check that the derivation has been GC'd.
 if test -e "$drvPath"; then false; fi
 
+# Check that a dry run reports its progress as field-only results.
+if isDaemonNewer "2.36pre"; then
+    nix store gc --dry-run --json-log-path "$TEST_ROOT/gc-dry-run.json"
+    (( $(jq -s '[.[] | select(.action == "result" and .type == 10114 and .payload."nix.gc.alive_paths" > 0 and .payload."nix.gc.dead_paths" == 0)] | length' < "$TEST_ROOT/gc-dry-run.json") > 0 ))
+fi
+
 rm "$NIX_STATE_DIR/gcroots/foo"
 
-nix-collect-garbage
+if isDaemonNewer "2.36pre"; then
+    nix store gc --json-log-path "$TEST_ROOT/gc.json"
+    (( $(jq -s '[.[] | select(.action == "result" and .type == 10114 and .payload."nix.gc.deleted_paths" > 0 and .payload."nix.gc.freed_bytes" > 0)] | length' < "$TEST_ROOT/gc.json") > 0 ))
+else
+    nix-collect-garbage
+fi
 
 # Check that the output has been GC'd.
 if test -e "$outPath/foobar"; then false; fi

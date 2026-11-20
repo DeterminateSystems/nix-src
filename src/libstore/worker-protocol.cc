@@ -37,6 +37,7 @@ const WorkerProto::Version WorkerProto::latest = {
             std::string{WorkerProto::featureQueryPathInfos},
             std::string{WorkerProto::featureOpenTelemetry},
             std::string{WorkerProto::featureNamedActivities},
+            std::string{WorkerProto::featureStringlyResults},
         },
 };
 

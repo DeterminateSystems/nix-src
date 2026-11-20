@@ -452,8 +452,8 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
             options.pathsToDelete))
         return;
 
-    /* The progress of the garbage collector is reported as
-       `resGCProgress` results on this activity. */
+    /* The progress of the garbage collector is reported as field-only
+       results on this activity, cf. `reportProgress()`. */
     Activity act(
         *logger,
         lvlDebug,
@@ -709,15 +709,37 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
        alive, the number of paths deleted (or found to be dead in a
        dry run), and the number of bytes freed so far, if any of them
        have changed since the last report. */
-    std::array<uint64_t, 3> lastProgress{0, 0, 0};
+    struct Progress
+    {
+        uint64_t alivePaths = 0;
+        uint64_t deadPaths = 0;
+        uint64_t bytesFreed = 0;
+
+        bool operator==(const Progress &) const = default;
+    };
+
+    Progress lastProgress;
     auto reportProgress = [&]() {
-        std::array<uint64_t, 3> progress{
-            (uint64_t) alive.size(),
-            (uint64_t) (shouldDelete ? results.paths.size() : dead.size()),
-            results.bytesFreed,
+        Progress progress{
+            .alivePaths = alive.size(),
+            .deadPaths = shouldDelete ? results.paths.size() : dead.size(),
+            .bytesFreed = results.bytesFreed,
         };
         if (progress != lastProgress) {
-            act.result(resGCProgress, progress[0], progress[1], progress[2]);
+            if (shouldDelete)
+                act.result(
+                    std::to_array<std::pair<std::string_view, Logger::Field>>({
+                        {"nix.gc.alive_paths", progress.alivePaths},
+                        {"nix.gc.deleted_paths", progress.deadPaths},
+                        {"nix.gc.freed_bytes", progress.bytesFreed},
+                    }));
+            else
+                /* Bytes freed is always 0 in a dry run. */
+                act.result(
+                    std::to_array<std::pair<std::string_view, Logger::Field>>({
+                        {"nix.gc.alive_paths", progress.alivePaths},
+                        {"nix.gc.dead_paths", progress.deadPaths},
+                    }));
             lastProgress = progress;
         }
     };
