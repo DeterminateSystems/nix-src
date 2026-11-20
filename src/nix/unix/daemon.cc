@@ -264,6 +264,7 @@ static void daemonLoop(
     std::optional<TrustedFlag> forceTrustClientOpt,
     std::filesystem::path socketPath)
 {
+    using namespace nix::unix;
     using namespace nix::daemon;
 
     if (chdir("/") == -1)
@@ -331,7 +332,7 @@ static void daemonLoop(
     static constexpr unsigned crashLimit = 64;
 
     try {
-        unix::serveUnixSocket(
+        serveUnixSocket(
             {
                 .socketPath = std::move(socketPath),
                 .socketMode = 0666,
@@ -359,21 +360,21 @@ static void daemonLoop(
                             }
 
                             if (crashCount >= crashLimit)
-                                throw unix::AbortServeSocket("too many daemon worker crashes (%1%)", crashLimit);
+                                throw AbortServeSocket("too many daemon worker crashes (%1%)", crashLimit);
                         }
                     },
             },
             [&](AutoCloseFD remote, std::function<void()> closeListeners) {
-                unix::closeOnExec(remote.get());
+                closeOnExec(remote.get());
 
-                unix::PeerInfo peer;
+                PeerInfo peer;
                 TrustedFlag trusted;
                 std::optional<std::string> userName;
 
                 if (forceTrustClientOpt)
                     trusted = *forceTrustClientOpt;
                 else {
-                    peer = unix::getPeerInfo(remote.get());
+                    peer = getPeerInfo(remote.get());
                     try {
                         auto [_trusted, _userName] = authPeer(peer);
                         trusted = _trusted;

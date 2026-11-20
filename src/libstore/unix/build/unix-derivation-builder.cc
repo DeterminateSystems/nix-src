@@ -771,7 +771,7 @@ void UnixDerivationBuilderImpl::startDaemon()
                 throw SysError("accepting connection");
             }
 
-            unix::closeOnExec(remote.get());
+            closeOnExec(remote.get());
 
             debug("received daemon connection");
 

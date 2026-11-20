@@ -8,6 +8,7 @@
 #include "nix/util/signals.hh"
 #include "nix/util/logging.hh"
 #include "nix/util/util.hh"
+#include "nix/util/socket.hh"
 
 #include "nix/store/s3-url.hh"
 #include <optional>
@@ -664,14 +665,12 @@ struct curlFileTransfer : public FileTransfer
             return ((TransferItem *) userp)->readCallback(buffer, size, nitems);
         }
 
-#if !defined(_WIN32)
         static int cloexec_callback(void *, curl_socket_t curlfd, curlsocktype purpose)
         {
-            unix::closeOnExec(curlfd);
+            closeOnExec(fromSocket(curlfd));
             vomit("cloexec set for fd %i", curlfd);
             return CURL_SOCKOPT_OK;
         }
-#endif
 
         size_t seekCallback(curl_off_t offset, int origin) noexcept
         try {
@@ -839,9 +838,7 @@ struct curlFileTransfer : public FileTransfer
                 curl_easy_setopt(req, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
 #endif
 
-#if !defined(_WIN32)
             curl_easy_setopt(req, CURLOPT_SOCKOPTFUNCTION, cloexec_callback);
-#endif
             curl_easy_setopt(req, CURLOPT_CONNECTTIMEOUT, fileTransfer.settings.connectTimeout.get());
 
             /* Enable TCP keepalive to detect dead connections and server closures.
