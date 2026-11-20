@@ -13,6 +13,10 @@
 #include <boost/lexical_cast.hpp>
 #include <stdint.h>
 
+#ifdef _WIN32
+#  include <winsock2.h>
+#endif
+
 #ifdef NDEBUG
 #  error "Nix may not be built with assertions disabled (i.e. with -DNDEBUG)."
 #endif
@@ -70,6 +74,18 @@ void initLibUtil()
            opaque abort() (e.g. from mimalloc's `operator new` override,
            which cannot throw `std::bad_alloc`). */
         std::set_new_handler(outOfMemory);
+
+#ifdef _WIN32
+        /* Winsock needs this once per process before any socket call; without
+           it every socket() fails with WSANOTINITIALISED. No matching
+           WSACleanup(), for the same reason the OpenSSL atexit() handler is
+           suppressed above. The error code comes from the return value because
+           WSAGetLastError() is not usable until Winsock is up, and must be a
+           DWORD to pick the explicit-code WinError constructor. */
+        WSADATA wsaData;
+        if (DWORD err = static_cast<DWORD>(WSAStartup(MAKEWORD(2, 2), &wsaData)); err != 0)
+            throw windows::WinError(err, "could not initialise Winsock");
+#endif
     });
 }
 
