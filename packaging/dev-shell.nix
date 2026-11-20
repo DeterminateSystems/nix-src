@@ -347,7 +347,7 @@ nixComponents.callPackage (
             ++ [
               pkgs.buildPackages.gnused
               modular.pre-commit.settings.package
-              (pkgs.writeScriptBin "pre-commit-hooks-install" modular.pre-commit.settings.installationScript)
+              (pkgs.writeShellScriptBin "pre-commit-hooks-install" modular.pre-commit.settings.installationScript)
               pkgs.buildPackages.nixfmt
               pkgs.buildPackages.shellcheck
               pkgs.buildPackages.zizmor
