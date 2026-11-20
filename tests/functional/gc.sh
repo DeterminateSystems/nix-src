@@ -60,7 +60,8 @@ if isDaemonNewer "2.35.4"; then
     test -e "$staleTempRoots"
 fi
 
-[[ -z $(nix-collect-garbage 2>"$TEST_ROOT/stderr") ]]
+nix-collect-garbage >"$TEST_ROOT/stdout" 2>"$TEST_ROOT/stderr"
+[[ ! -s "$TEST_ROOT/stdout" ]]
 grepQuiet "store paths deleted, .* freed" "$TEST_ROOT/stderr"
 
 # Check that the stale temporary roots file has been deleted.
