@@ -62,7 +62,7 @@ struct WasiDerivationBuilder : UnixDerivationBuilderImpl
                 /* fs_mutable = */ true))
             throw Error("cannot add temporary directory to WASI config");
 
-        auto module = unwrap(Module::compile(engine, string2span(readFile(realPathInHost(drv.builder)))));
+        auto module = unwrap(Module::compile(engine, string2span(readFile(realPathInHost(store.parseStorePath(drv.builder))))));
         wasmtime::Store wasmStore(engine);
         unwrap(wasmStore.context().set_wasi(std::move(wasiConfig)));
         auto instance = unwrap(linker.instantiate(wasmStore, module));
