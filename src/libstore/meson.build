@@ -310,6 +310,7 @@ sources = files(
   'derivation/json.cc',
   'derivation/modulo.cc',
   'derivation/output.cc',
+  'derivation/resolution.cc',
   'derivations.cc',
   'derived-path-map.cc',
   'derived-path.cc',
