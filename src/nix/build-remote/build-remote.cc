@@ -23,6 +23,7 @@
 
 #include "otel-logger.hh"
 #include "nix/util/strings.hh"
+#include "nix/util/util.hh"
 #include "nix/store/derivations.hh"
 #include "nix/store/derivation/full-inputs.hh"
 #include "nix/store/local-store.hh"
@@ -88,7 +89,10 @@ static int main_build_remote(int argc, char ** argv)
         if (argc != 2)
             throw UsageError("called without required arguments");
 
-        verbosity = (Verbosity) std::stoll(argv[1]);
+        auto rawVerbosity = string2Int<unsigned>(argv[1]);
+        if (!rawVerbosity)
+            throw UsageError("invalid verbosity '%s'", argv[1]);
+        verbosity = verbosityFromIntClamped(*rawVerbosity);
 
         FdSource source(STDIN_FILENO);
 
