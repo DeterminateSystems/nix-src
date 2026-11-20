@@ -5,6 +5,7 @@
 #include "nix/util/system-error.hh"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 #include <regex>
 
 namespace nix {

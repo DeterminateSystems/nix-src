@@ -384,10 +384,12 @@ struct Activity
         result(resSetExpected, type2, expected);
     }
 
-    void result(ResultType type, const nlohmann::json & json) const
-    {
-        logger.result(id, type, json);
-    }
+    /**
+     * Defined out of line because overload resolution against the
+     * `std::span<const Field>` overload needs `nlohmann::json` to be a
+     * complete type, and this header only has its forward declaration.
+     */
+    void result(ResultType type, const nlohmann::json & json) const;
 
     template<typename... Args>
         requires(!(std::is_constructible_v<std::span<const Logger::Field>, std::remove_cvref_t<Args>> || ...))

@@ -9,8 +9,8 @@
 
 #include <map>
 #include <thread>
-#include <sstream>
-#include <iostream>
+#include <optional>
+#include <span>
 #include <chrono>
 
 namespace nix {
@@ -830,8 +830,7 @@ public:
     {
         auto state(state_.lock());
         if (state->active) {
-            invalidateRedrawCache();
-            std::cerr << "\r\e[K";
+            clearProgressDisplay();
             Logger::writeToStdout(s);
             draw(*state);
         } else {
@@ -845,7 +844,7 @@ public:
         if (!state->active)
             return {};
         invalidateRedrawCache();
-        std::cerr << fmt("\r\e[K%s ", msg);
+        writeToStderr(fmt("\r\e[K%s ", msg));
         unhideCursorIfNeeded();
         auto s = trim(readLine(getStandardInput(), true));
         hideCursorIfNeeded();

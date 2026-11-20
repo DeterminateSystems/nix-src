@@ -20,6 +20,9 @@
 #include <boost/uuid/time_generator_v7.hpp>
 #include <boost/uuid/uuid_io.hpp>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 namespace nix {
 
 void LoggerSettings::anchor() {}
@@ -640,6 +643,11 @@ bool handleJSONLogMessage(
         return false;
 
     return handleJSONLogMessage(*json, act, activities, source, trusted);
+}
+
+void Activity::result(ResultType type, const nlohmann::json & json) const
+{
+    logger.result(id, type, json);
 }
 
 Activity::~Activity()

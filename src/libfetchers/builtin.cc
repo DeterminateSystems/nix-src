@@ -7,6 +7,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <iostream>
+
 namespace nix {
 
 static void builtinFetchTree(const BuiltinBuilderContext & ctx)

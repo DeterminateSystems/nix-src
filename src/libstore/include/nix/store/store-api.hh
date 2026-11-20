@@ -384,6 +384,8 @@ public:
     }
 };
 
+struct Activity;
+
 /**
  * A Store (client)
  *
@@ -849,10 +851,7 @@ public:
      * @warning If you need to add just one path, prefer to use addTempRoot.
      * addTempRoots is implemented on best-effort basis and might be a no-op.
      */
-    virtual void addTempRoots(const StorePathSet & paths, bool skipIfSlow = false)
-    {
-        debug("not creating temporary roots, store doesn't support GC");
-    }
+    virtual void addTempRoots(const StorePathSet & paths, bool skipIfSlow = false);
 
     /**
      * @return a string representing information about the path that

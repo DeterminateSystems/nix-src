@@ -241,6 +241,11 @@ StorePath Store::addToStore(
     return storePath.value();
 }
 
+void Store::addTempRoots(const StorePathSet & paths, bool skipIfSlow)
+{
+    debug("not creating temporary roots, store doesn't support GC");
+}
+
 void Store::addMultipleToStore(PathsSource && pathsToCopy, Activity & act, RepairFlag repair, CheckSigsFlag checkSigs)
 {
     std::atomic<size_t> nrDone{0};

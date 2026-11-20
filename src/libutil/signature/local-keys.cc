@@ -6,6 +6,7 @@
 #include <openssl/pem.h>
 
 #include "nix/util/base-n.hh"
+#include "nix/util/configuration.hh"
 #include "nix/util/signature/local-keys.hh"
 #include "nix/util/json-utils.hh"
 #include "nix/util/util.hh"

@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iostream>
 #include <sstream>
 
 #ifndef _WIN32
