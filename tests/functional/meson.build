@@ -90,6 +90,7 @@ suites = [
       'dump-db.sh',
       'eval-deep-store-copy.sh',
       'eval-store.sh',
+      'eval-write-to.sh',
       'eval.sh',
       'experimental-features.sh',
       'export-graph.sh',
