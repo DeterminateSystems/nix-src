@@ -38,7 +38,7 @@ void onTerminate()
 {
     /* The progress bar may have hidden the cursor, and it won't get a
        chance to unhide it, so do that here. */
-    if (isTTY())
+    if (shouldANSI())
         writeToStderr("\e[?25h");
 
     logFatal(

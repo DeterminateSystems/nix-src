@@ -180,7 +180,7 @@ struct CmdSearch : InstallableValueCommand, MixJSON
                             if (description != "")
                                 out += fmt(
                                     "\n  %s", hiliteMatches(description, descriptionMatches, ANSI_GREEN, ANSI_NORMAL));
-                            logger->cout(out);
+                            logger->coutStyled(out);
                         }
                     }
                 }

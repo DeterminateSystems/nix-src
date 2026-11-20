@@ -112,7 +112,7 @@ void printClosureDiff(
             }
             if (showDelta)
                 items.push_back(fmt("%s%s" ANSI_NORMAL, sizeDelta > 0 ? ANSI_RED : ANSI_GREEN, renderSize(sizeDelta)));
-            logger->cout("%s%s: %s", indent, name, concatStringsSep(", ", items));
+            logger->coutStyled("%s%s: %s", indent, name, concatStringsSep(", ", items));
         }
     }
 }

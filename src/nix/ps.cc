@@ -237,7 +237,8 @@ struct CmdPs : MixJSON, StoreCommand
             }
         }
 
-        auto width = isTTY() && isatty(STDOUT_FILENO) ? getWindowWidth() : std::numeric_limits<unsigned int>::max();
+        auto width = isOutputARealTerminal(StandardOutputStream::Stdout) ? getWindowWidth()
+                                                                         : std::numeric_limits<unsigned int>::max();
 
         printTable(std::cout, table, width);
     }

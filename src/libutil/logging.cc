@@ -108,6 +108,11 @@ void Logger::writeToStdout(std::string_view s)
     writeFull(standard_out, "\n");
 }
 
+void Logger::writeStyledToStdout(std::string_view s)
+{
+    writeToStdout(shouldANSI(StandardOutputStream::Stdout) ? s : std::string_view{stripANSIEscapes(s)});
+}
+
 Logger::Suspension Logger::suspend()
 {
     pause();
@@ -134,7 +139,7 @@ public:
         : printBuildLogs(printBuildLogs)
     {
         systemd = getEnv("IN_SYSTEMD") == "1";
-        tty = isTTY();
+        tty = shouldANSI();
     }
 
     bool isVerbose() override

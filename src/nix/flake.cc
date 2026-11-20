@@ -232,29 +232,30 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                 j["fingerprint"] = fingerprint->to_string(HashFormat::Base16, false);
             printJSON(j);
         } else {
-            logger->cout(ANSI_BOLD "Resolved URL:" ANSI_NORMAL "  %s", flake.resolvedRef.to_string());
+            logger->coutStyled(ANSI_BOLD "Resolved URL:" ANSI_NORMAL "  %s", flake.resolvedRef.to_string());
             if (flake.lockedRef.input.isLocked(fetchSettings))
-                logger->cout(ANSI_BOLD "Locked URL:" ANSI_NORMAL "    %s", flake.lockedRef.to_string());
+                logger->coutStyled(ANSI_BOLD "Locked URL:" ANSI_NORMAL "    %s", flake.lockedRef.to_string());
             if (flake.description)
-                logger->cout(ANSI_BOLD "Description:" ANSI_NORMAL "   %s", *flake.description);
+                logger->coutStyled(ANSI_BOLD "Description:" ANSI_NORMAL "   %s", *flake.description);
             if (storePath)
-                logger->cout(ANSI_BOLD "Path:" ANSI_NORMAL "          %s", store->printStorePath(*storePath));
+                logger->coutStyled(ANSI_BOLD "Path:" ANSI_NORMAL "          %s", store->printStorePath(*storePath));
             if (auto rev = flake.lockedRef.input.getRev())
-                logger->cout(ANSI_BOLD "Revision:" ANSI_NORMAL "      %s", rev->to_string(HashFormat::Base16, false));
+                logger->coutStyled(
+                    ANSI_BOLD "Revision:" ANSI_NORMAL "      %s", rev->to_string(HashFormat::Base16, false));
             if (auto dirtyRev = fetchers::maybeGetStrAttr(flake.lockedRef.toAttrs(), "dirtyRev"))
-                logger->cout(ANSI_BOLD "Revision:" ANSI_NORMAL "      %s", *dirtyRev);
+                logger->coutStyled(ANSI_BOLD "Revision:" ANSI_NORMAL "      %s", *dirtyRev);
             if (auto revCount = flake.lockedRef.input.getRevCount())
-                logger->cout(ANSI_BOLD "Revisions:" ANSI_NORMAL "     %s", *revCount);
+                logger->coutStyled(ANSI_BOLD "Revisions:" ANSI_NORMAL "     %s", *revCount);
             if (auto lastModified = flake.lockedRef.input.getLastModified())
-                logger->cout(
+                logger->coutStyled(
                     ANSI_BOLD "Last modified:" ANSI_NORMAL " %s",
                     std::put_time(std::localtime(&*lastModified), "%F %T"));
             if (auto fingerprint = lockedFlake.getFingerprint(*store, fetchSettings))
-                logger->cout(
+                logger->coutStyled(
                     ANSI_BOLD "Fingerprint:" ANSI_NORMAL "   %s", fingerprint->to_string(HashFormat::Base16, false));
 
             if (!lockedFlake.lockFile.root->inputs.empty())
-                logger->cout(ANSI_BOLD "Inputs:" ANSI_NORMAL);
+                logger->coutStyled(ANSI_BOLD "Inputs:" ANSI_NORMAL);
 
             std::set<ref<flake::Node>> visited{lockedFlake.lockFile.root};
 
@@ -264,7 +265,7 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                         std::string lastModifiedStr = "";
                         if (auto lastModified = (*lockedNode)->lockedRef.input.getLastModified())
                             lastModifiedStr = fmt(" (%s)", std::put_time(std::gmtime(&*lastModified), "%F %T"));
-                        logger->cout(
+                        logger->coutStyled(
                             "%s" ANSI_BOLD "%s" ANSI_NORMAL ": %s%s",
                             prefix + (last ? treeLast : treeConn),
                             input.first,
@@ -276,7 +277,7 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
                         if (firstVisit)
                             recurse(**lockedNode, prefix + (last ? treeNull : treeLine));
                     } else if (auto follows = std::get_if<1>(&input.second)) {
-                        logger->cout(
+                        logger->coutStyled(
                             "%s" ANSI_BOLD "%s" ANSI_NORMAL " follows input '%s'",
                             prefix + (last ? treeLast : treeConn),
                             input.first,
@@ -985,7 +986,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 if (isLegacy != j.end() && (bool) *isLegacy)
                     s += " " ANSI_WARNING "omitted" ANSI_NORMAL " (use '--legacy' to show)";
 
-                logger->cout(s);
+                logger->coutStyled(s);
 
                 auto children = j.find("children");
 
@@ -1003,7 +1004,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 }
             };
 
-            logger->cout("%s", fmt(ANSI_BOLD "%s" ANSI_NORMAL, flake->flake.lockedRef));
+            logger->coutStyled("%s", fmt(ANSI_BOLD "%s" ANSI_NORMAL, flake->flake.lockedRef));
 
             for (const auto & [i, child] : enumerate(inv.items())) {
                 bool last = i + 1 == inv.size();
@@ -1014,7 +1015,7 @@ struct CmdFlakeShow : FlakeCommand, MixJSON, MixFlakeSchemas
                 if (output != child.value().end())
                     render(*output, headerPrefix, nextPrefix);
                 else if (child.value().contains("unknown"))
-                    logger->cout(headerPrefix + ANSI_WARNING " unknown flake output" ANSI_NORMAL);
+                    logger->coutStyled(headerPrefix + ANSI_WARNING " unknown flake output" ANSI_NORMAL);
             }
         }
     }
