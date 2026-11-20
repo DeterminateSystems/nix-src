@@ -313,11 +313,22 @@ struct JSONLogger : Logger
         return true;
     }
 
+    static nlohmann::json fieldToJSON(const Field & field)
+    {
+        return std::visit(
+            overloaded{
+                [](const std::string & s) -> nlohmann::json { return s; },
+                [](uint64_t n) -> nlohmann::json { return n; },
+                [](const nlohmann::json * j) -> nlohmann::json { return *j; },
+            },
+            field.raw);
+    }
+
     static nlohmann::json metadataToJSON(Metadata metadata)
     {
         auto payload = nlohmann::json::object();
         for (auto & [key, value] : metadata)
-            std::visit([&](auto & v) { payload[std::string(key)] = v; }, value.raw);
+            payload[std::string(key)] = fieldToJSON(value);
         return payload;
     }
 
@@ -327,12 +338,7 @@ struct JSONLogger : Logger
             return;
         auto & arr = json["fields"] = nlohmann::json::array();
         for (auto & f : fields)
-            if (auto p = std::get_if<uint64_t>(&f.raw))
-                arr.push_back(*p);
-            else if (auto p = std::get_if<std::string>(&f.raw))
-                arr.push_back(*p);
-            else
-                unreachable();
+            arr.push_back(fieldToJSON(f));
     }
 
     struct State
@@ -587,6 +593,8 @@ bool handleJSONLogMessage(
             if (i != activities.end()) {
                 auto type = (ResultType) json["type"];
                 if (type == resStringly) {
+                    /* Other JSON values are passed by reference into
+                       `json`, which outlives the call. */
                     std::vector<std::pair<std::string, Logger::Field>> fields;
                     for (auto & [key, value] : json["payload"].items()) {
                         if (value.is_number_unsigned())
@@ -594,7 +602,7 @@ bool handleJSONLogMessage(
                         else if (value.is_string())
                             fields.emplace_back(key, Logger::Field(value.get<std::string>()));
                         else
-                            throw Error("unsupported JSON type %d", (int) value.type());
+                            fields.emplace_back(key, Logger::Field(&value));
                     }
                     std::vector<std::pair<std::string_view, Logger::Field>> fieldRefs(fields.begin(), fields.end());
                     i->second.result(Logger::Metadata(fieldRefs));

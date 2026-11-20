@@ -50,7 +50,6 @@ typedef enum {
     resPostBuildLogLine = 107,
     resFetchStatus = 108,
     resHashMismatch = 109,
-    resBuildResult = 110,
     /**
      * Emitted via the JSON `result()` overload: an object describing
      * the response to an HTTP request, with the fields `httpStatus`
@@ -115,7 +114,14 @@ public:
 
     struct Field
     {
-        std::variant<std::string, uint64_t> raw;
+        /**
+         * A JSON value is not owned by the field: it must outlive
+         * every use of the field. This is intended for field-only
+         * results (cf. the `Metadata`-based `result()`), which are
+         * only borrowed for the duration of the call, so a temporary
+         * in the full-expression that calls `result()` is fine.
+         */
+        std::variant<std::string, uint64_t, const nlohmann::json *> raw;
 
         Field(const std::string & s)
             : raw(s)
@@ -129,6 +135,11 @@ public:
 
         Field(const uint64_t & i)
             : raw(i)
+        {
+        }
+
+        Field(const nlohmann::json * j)
+            : raw(j)
         {
         }
     };

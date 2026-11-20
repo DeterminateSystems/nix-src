@@ -4,6 +4,10 @@
 #include "nix/store/build-result.hh"
 #include "nix/store/derivations.hh"
 
+#include <list>
+
+#include <nlohmann/json.hpp>
+
 namespace nix {
 
 WorkerProto::BasicClientConnection::~BasicClientConnection()
@@ -15,23 +19,32 @@ WorkerProto::BasicClientConnection::~BasicClientConnection()
     }
 }
 
-static Logger::Field readField(Source & from)
+/**
+ * Storage for the JSON values of log fields read from the daemon,
+ * since `Logger::Field` doesn't own them. It must outlive the fields.
+ * (A list keeps the addresses of its elements stable.)
+ */
+using JSONStorage = std::list<nlohmann::json>;
+
+static Logger::Field readField(Source & from, JSONStorage & jsonStorage)
 {
     auto type = readInt(from);
     if (type == 0)
         return readNum<uint64_t>(from);
     else if (type == 1)
         return readString(from);
+    else if (type == 2)
+        return &jsonStorage.emplace_back(nlohmann::json::parse(readString(from)));
     else
         throw Error("got unsupported field type %x from Nix daemon", (int) type);
 }
 
-static Logger::Fields readFields(Source & from)
+static Logger::Fields readFields(Source & from, JSONStorage & jsonStorage)
 {
     Logger::Fields fields;
     size_t size = readInt(from);
     for (size_t n = 0; n < size; n++)
-        fields.push_back(readField(from));
+        fields.push_back(readField(from, jsonStorage));
     return fields;
 }
 
@@ -40,13 +53,13 @@ static Logger::Fields readFields(Source & from)
  * caller needs to convert the result into a vector of
  * `std::string_view`-keyed pairs to pass it as `Logger::Metadata`.
  */
-static std::vector<std::pair<std::string, Logger::Field>> readMetadata(Source & from)
+static std::vector<std::pair<std::string, Logger::Field>> readMetadata(Source & from, JSONStorage & jsonStorage)
 {
     std::vector<std::pair<std::string, Logger::Field>> metadata;
     size_t size = readInt(from);
     for (size_t n = 0; n < size; n++) {
         auto key = readString(from);
-        metadata.emplace_back(std::move(key), readField(from));
+        metadata.emplace_back(std::move(key), readField(from, jsonStorage));
     }
     return metadata;
 }
@@ -101,7 +114,8 @@ WorkerProto::BasicClientConnection::processStderrReturn(Sink * sink, Source * so
             auto lvl = (Verbosity) readInt(from);
             auto type = (ActivityType) readInt(from);
             auto s = readString(from);
-            auto fields = readFields(from);
+            JSONStorage jsonStorage;
+            auto fields = readFields(from, jsonStorage);
             auto parent = readNum<ActivityId>(from);
             RemoteLogSource remoteLogSource;
             logger->startActivity(act, lvl, type, s, fields, parent);
@@ -112,7 +126,8 @@ WorkerProto::BasicClientConnection::processStderrReturn(Sink * sink, Source * so
             auto lvl = (Verbosity) readInt(from);
             auto name = readString(from);
             auto s = readString(from);
-            auto metadata = readMetadata(from);
+            JSONStorage jsonStorage;
+            auto metadata = readMetadata(from, jsonStorage);
             auto parent = readNum<ActivityId>(from);
             RemoteLogSource remoteLogSource;
             std::vector<std::pair<std::string_view, Logger::Field>> metadataRefs(metadata.begin(), metadata.end());
@@ -128,14 +143,16 @@ WorkerProto::BasicClientConnection::processStderrReturn(Sink * sink, Source * so
         else if (msg == STDERR_RESULT) {
             auto act = readNum<ActivityId>(from);
             auto type = (ResultType) readInt(from);
-            auto fields = readFields(from);
+            JSONStorage jsonStorage;
+            auto fields = readFields(from, jsonStorage);
             RemoteLogSource remoteLogSource;
             logger->result(act, type, fields);
         }
 
         else if (msg == STDERR_RESULT_STRINGLY) {
             auto act = readNum<ActivityId>(from);
-            auto fields = readMetadata(from);
+            JSONStorage jsonStorage;
+            auto fields = readMetadata(from, jsonStorage);
             RemoteLogSource remoteLogSource;
             std::vector<std::pair<std::string_view, Logger::Field>> fieldRefs(fields.begin(), fields.end());
             logger->result(act, Logger::Metadata(fieldRefs));

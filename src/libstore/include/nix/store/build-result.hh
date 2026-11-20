@@ -10,6 +10,7 @@
 #include "nix/util/error.hh"
 #include "nix/util/fmt.hh"
 #include "nix/util/json-impls.hh"
+#include "nix/util/logging.hh"
 
 namespace nix {
 
@@ -236,6 +237,13 @@ struct KeyedBuildResult : BuildResult
     {
     }
 };
+
+/**
+ * Report the result of a build or substitution on the activity `act`
+ * as a field-only result, with fields `nix.build.status` (a string)
+ * and `nix.build.result` (the JSON representation of `result`).
+ */
+void logBuildResult(ActivityId act, const KeyedBuildResult & result);
 
 /**
  * Flags tracking different types of build failures for exit status computation.

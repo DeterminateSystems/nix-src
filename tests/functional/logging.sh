@@ -36,12 +36,18 @@ fi
 clearStore
 nix build -vv --file dependencies.nix --no-link --json-log-path "$TEST_ROOT/log.json" 2>&1 | grepQuiet 'building.*dependencies-top.drv'
 grep '{"action":"start","fields":\[".*-dependencies-top.drv","",1,1\],"id":.*,"level":3,"parent":[1-9]' "$TEST_ROOT/log.json" >&2
-grep -E '{"action":"result","id":[^,]+,"payload":{"builtOutputs":{"out":{"outPath":"[^-]+-dependencies-top".*"status":"Built".*"success":true' "$TEST_ROOT/log.json" >&2
+(( $(jq -s '[.[] | select(.action == "result" and .type == 10114 and .payload."nix.build.status" == "Built"
+    and .payload."nix.build.result".success == true
+    and (.payload."nix.build.result".builtOutputs.out.outPath | test("-dependencies-top$")))] | length' < "$TEST_ROOT/log.json") > 0 ))
 (( $(grep -c '{"action":"msg","level":5,"msg":"executing builder .*"}' "$TEST_ROOT/log.json" ) == 5 ))
 
 rm "$TEST_ROOT/log.json"
 expect 1 nix build -vv --file timeout.nix silent --timeout 1 --no-link --json-log-path "$TEST_ROOT/log.json"
-grep -E '{"action":"result","id":[^,]+,"payload":{"errorMsg":"timed out.*",.*"startTime":[1-9][0-9]*,"status":"TimedOut","stopTime":0,"success":false,' "$TEST_ROOT/log.json" >&2
+(( $(jq -s '[.[] | select(.action == "result" and .type == 10114 and .payload."nix.build.status" == "TimedOut"
+    and .payload."nix.build.result".success == false
+    and (.payload."nix.build.result".errorMsg | startswith("timed out"))
+    and .payload."nix.build.result".startTime > 0
+    and .payload."nix.build.result".stopTime == 0)] | length' < "$TEST_ROOT/log.json") > 0 ))
 
 # Check that all log entries have the same session ID.
 sid=$(head -n1 < "$TEST_ROOT/log.json" | jq -r '.sid')
@@ -68,6 +74,9 @@ if isDaemonNewer "2.36pre"; then
     nix build --no-link --substitute --substituters "file://$cacheDir" --trusted-public-keys "$(nix key convert-secret-to-public < "$TEST_ROOT/sk")" \
         --json-log-path "$TEST_ROOT/log3.json" "$path"
     (( $(jq -s --arg path "$path" '[.[] | select(.action == "start" and .type == 10113 and .name == "SubstitutionGoal" and .payload."nix.store.path" == $path)] | length' < "$TEST_ROOT/log3.json") == 1 ))
+    # Check that the daemon forwards build results, including their JSON field.
+    (( $(jq -s --arg path "${path##*/}" '[.[] | select(.action == "result" and .type == 10114 and .payload."nix.build.status" == "Substituted"
+        and .payload."nix.build.result".success == true and .payload."nix.build.result".path == $path)] | length' < "$TEST_ROOT/log3.json") > 0 ))
 
     # Test that field-only results are forwarded by the daemon.
     nix store gc --json-log-path "$TEST_ROOT/log4.json"

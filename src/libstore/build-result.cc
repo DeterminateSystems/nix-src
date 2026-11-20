@@ -144,6 +144,18 @@ std::strong_ordering BuildError::operator<=>(const BuildError & other) const noe
     return message() <=> other.message();
 }
 
+void logBuildResult(ActivityId act, const KeyedBuildResult & result)
+{
+    nlohmann::json json(result);
+    std::string status = json.value("status", "");
+    logger->result(
+        act,
+        std::to_array<std::pair<std::string_view, Logger::Field>>({
+            {"nix.build.status", status},
+            {"nix.build.result", &json},
+        }));
+}
+
 } // namespace nix
 
 namespace nlohmann {

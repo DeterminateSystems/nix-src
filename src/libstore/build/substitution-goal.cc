@@ -37,7 +37,7 @@ Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failu
 {
     auto res = Goal::doneFailure(result, std::move(failure));
 
-    logger->result(act, resBuildResult, nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+    logBuildResult(act, KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath}));
 
     return res;
 }
@@ -348,8 +348,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
 
     auto success = BuildResult::Success{.status = BuildResult::Success::Substituted, .provenance = provenance};
 
-    logger->result(
-        parentAct, resBuildResult, nlohmann::json(KeyedBuildResult({success}, DerivedPath::Opaque{storePath})));
+    logBuildResult(parentAct, KeyedBuildResult({success}, DerivedPath::Opaque{storePath}));
 
     co_return doneSuccess(std::move(success));
 }

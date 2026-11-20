@@ -376,6 +376,8 @@ class OpenTelemetryLogger : public Logger
 
     /**
      * Record activity metadata or result fields as span attributes.
+     * JSON-valued fields are skipped, since attributes can't hold
+     * objects; they need to be handled specifically.
      */
     static void setAttributes(opentelemetry::trace::Span & span, Metadata fields)
     {
@@ -614,24 +616,6 @@ public:
                     if (auto bodySize = json.find("bodySize"); bodySize != json.end() && bodySize->is_number())
                         i->second->SetAttribute("http.response.body.size", bodySize->get<int64_t>());
                 }
-            } else if (type == resBuildResult) {
-                /* A failed build or substitution doesn't throw, so
-                   `stopActivity()` can't tell; the result tells us. */
-                auto spans(spans_.lock());
-                if (auto i = spans->find(act); i != spans->end()) {
-                    auto status = json.value("status", "");
-                    if (!status.empty())
-                        i->second->SetAttribute("nix.build.status", status);
-                    /* Note: a substitution goal "failing" because there
-                       is no substituter for the path is the normal
-                       prelude to building it, so don't call that an
-                       error. */
-                    if (!json.value("success", true) && status != "NoSubstituters") {
-                        // FIXME: privacy (the message can include the build log tail)
-                        auto msg = json.value("errorMsg", "build failed");
-                        i->second->SetStatus(opentelemetry::trace::StatusCode::kError, filterANSIEscapes(msg, true));
-                    }
-                }
             }
         } catch (...) {
         }
@@ -643,8 +627,32 @@ public:
             if (isRemoteLogSource())
                 return;
             auto spans(spans_.lock());
-            if (auto i = spans->find(act); i != spans->end())
-                setAttributes(*i->second, fields);
+            auto i = spans->find(act);
+            if (i == spans->end())
+                return;
+            auto & span = *i->second;
+
+            setAttributes(span, fields);
+
+            for (auto & [key, value] : fields) {
+                auto json = std::get_if<const nlohmann::json *>(&value.raw);
+                if (!json)
+                    continue;
+                if (key == "nix.build.result") {
+                    /* A failed build or substitution doesn't throw,
+                       so `stopActivity()` can't tell; the result tells
+                       us. Note: a substitution goal "failing" because
+                       there is no substituter for the path is the
+                       normal prelude to building it, so don't call
+                       that an error. */
+                    auto & res = **json;
+                    if (!res.value("success", true) && res.value("status", "") != "NoSubstituters") {
+                        // FIXME: privacy (the message can include the build log tail)
+                        auto msg = res.value("errorMsg", "build failed");
+                        span.SetStatus(opentelemetry::trace::StatusCode::kError, filterANSIEscapes(msg, true));
+                    }
+                }
+            }
         } catch (...) {
         }
     }

@@ -1438,12 +1438,11 @@ Goal::Done DerivationBuildingGoal::doneSuccess(
             .provenance = provenance,
         });
 
-    logger->result(
+    logBuildResult(
         act,
-        resBuildResult,
-        nlohmann::json(KeyedBuildResult(
+        KeyedBuildResult(
             buildResult,
-            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}}));
 
     return res;
 }
@@ -1460,12 +1459,11 @@ Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex, ActivityId act)
 
     auto res = Goal::doneFailure(ecFailed, std::move(ex));
 
-    logger->result(
+    logBuildResult(
         act,
-        resBuildResult,
-        nlohmann::json(KeyedBuildResult(
+        KeyedBuildResult(
             buildResult,
-            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}})));
+            DerivedPath::Built{.drvPath = makeConstantStorePathRef(drvPath), .outputs = OutputsSpec::All{}}));
 
     return res;
 }
