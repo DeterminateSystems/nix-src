@@ -44,7 +44,7 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nix-expr-test-support',
   sources,
-  dependencies : deps_public + deps_private + deps_other,
+  dependencies : deps_public + deps_private + deps_public_no_pkgconfig + deps_private_no_pkgconfig,
   include_directories : include_dirs,
   # TODO: Remove `-lrapidcheck` when https://github.com/emil-e/rapidcheck/pull/326
   #       is available. See also ../libutil/build.meson

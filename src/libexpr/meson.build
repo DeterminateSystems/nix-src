@@ -45,9 +45,8 @@ boost = dependency(
   ],
   include_type : 'system',
 )
-# boost is a public dependency, but not a pkg-config dependency unfortunately, so we
-# put in `deps_other`.
-deps_other += boost
+# boost is a public dependency, but not a pkg-config dependency unfortunately.
+deps_public_no_pkgconfig += boost
 
 nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
 deps_public += nlohmann_json
@@ -112,7 +111,7 @@ configdata_priv.set(
   toml11.version().version_compare('>= 4.0.0').to_int(),
 )
 
-deps_other += toml11
+deps_private_no_pkgconfig += toml11
 
 config_priv_h = configure_file(
   configuration : configdata_priv,
@@ -234,7 +233,7 @@ parser_library = static_library(
   lexer_tab,
   'lexer-helpers.cc',
   cpp_args : parser_library_cpp_args,
-  dependencies : deps_public + deps_private + deps_other,
+  dependencies : deps_public + deps_private + deps_public_no_pkgconfig + deps_private_no_pkgconfig,
   include_directories : include_dirs,
   # 1. Stdlib and regular assertions regress parser performance significantly, so build without
   # them for this one library when building in a release configuration.
@@ -254,7 +253,7 @@ this_library = library(
   config_priv_h,
   parser_tab[1],
   lexer_tab[1],
-  dependencies : deps_public + deps_private + deps_other,
+  dependencies : deps_public + deps_private + deps_public_no_pkgconfig + deps_private_no_pkgconfig,
   include_directories : include_dirs,
   link_args : linker_export_flags + link_args,
   link_whole : [ parser_library ],

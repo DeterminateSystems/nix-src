@@ -68,7 +68,7 @@ subdir('nix-meson-build-support/windows-version')
 this_library = library(
   'nixfetchers',
   sources,
-  dependencies : deps_public + deps_private + deps_other,
+  dependencies : deps_public + deps_private + deps_public_no_pkgconfig + deps_private_no_pkgconfig,
   include_directories : include_dirs,
   link_args : linker_export_flags,
   prelink : prelink, # For C++ static initializers
