@@ -68,4 +68,8 @@ if isDaemonNewer "2.36pre"; then
     nix build --no-link --substitute --substituters "file://$cacheDir" --trusted-public-keys "$(nix key convert-secret-to-public < "$TEST_ROOT/sk")" \
         --json-log-path "$TEST_ROOT/log3.json" "$path"
     (( $(jq -s --arg path "$path" '[.[] | select(.action == "start" and .type == 10113 and .name == "SubstitutionGoal" and .payload."nix.store.path" == $path)] | length' < "$TEST_ROOT/log3.json") == 1 ))
+
+    # Test that field-only results are forwarded by the daemon.
+    nix store gc --json-log-path "$TEST_ROOT/log4.json"
+    (( $(jq -s '[.[] | select(.action == "result" and .type == 10114 and .payload."nix.gc.deleted_paths" > 0)] | length' < "$TEST_ROOT/log4.json") > 0 ))
 fi

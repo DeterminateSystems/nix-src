@@ -313,6 +313,14 @@ struct JSONLogger : Logger
         return true;
     }
 
+    static nlohmann::json metadataToJSON(Metadata metadata)
+    {
+        auto payload = nlohmann::json::object();
+        for (auto & [key, value] : metadata)
+            std::visit([&](auto & v) { payload[std::string(key)] = v; }, value.raw);
+        return payload;
+    }
+
     void addFields(nlohmann::json & json, const Fields & fields)
     {
         if (fields.empty())
@@ -428,10 +436,7 @@ struct JSONLogger : Logger
         json["text"] = s;
         json["parent"] = parent;
         json["name"] = name;
-        auto payload = nlohmann::json::object();
-        for (auto & [key, value] : metadata)
-            std::visit([&](auto & v) { payload[std::string(key)] = v; }, value.raw);
-        json["payload"] = std::move(payload);
+        json["payload"] = metadataToJSON(metadata);
         write(std::move(json));
     }
 
@@ -460,6 +465,16 @@ struct JSONLogger : Logger
         json["id"] = act;
         json["type"] = type;
         json["payload"] = j;
+        write(std::move(json));
+    }
+
+    void result(ActivityId act, Metadata fields) noexcept override
+    {
+        nlohmann::json json;
+        json["action"] = "result";
+        json["id"] = act;
+        json["type"] = resStringly;
+        json["payload"] = metadataToJSON(fields);
         write(std::move(json));
     }
 };
@@ -569,8 +584,23 @@ bool handleJSONLogMessage(
 
         else if (action == "result") {
             auto i = activities.find((ActivityId) json["id"]);
-            if (i != activities.end())
-                i->second.result((ResultType) json["type"], getFields(json["fields"]));
+            if (i != activities.end()) {
+                auto type = (ResultType) json["type"];
+                if (type == resStringly) {
+                    std::vector<std::pair<std::string, Logger::Field>> fields;
+                    for (auto & [key, value] : json["payload"].items()) {
+                        if (value.is_number_unsigned())
+                            fields.emplace_back(key, Logger::Field(value.get<uint64_t>()));
+                        else if (value.is_string())
+                            fields.emplace_back(key, Logger::Field(value.get<std::string>()));
+                        else
+                            throw Error("unsupported JSON type %d", (int) value.type());
+                    }
+                    std::vector<std::pair<std::string_view, Logger::Field>> fieldRefs(fields.begin(), fields.end());
+                    i->second.result(Logger::Metadata(fieldRefs));
+                } else
+                    i->second.result(type, getFields(json["fields"]));
+            }
         }
 
         else if (action == "setPhase") {

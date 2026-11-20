@@ -98,6 +98,12 @@ public:
             logger->result(act, type, json);
     }
 
+    void result(ActivityId act, Metadata fields) noexcept override
+    {
+        for (auto & logger : loggers)
+            logger->result(act, fields);
+    }
+
     Headers getTraceContext(ActivityId act) override
     {
         for (auto & logger : loggers) {

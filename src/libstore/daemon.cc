@@ -43,6 +43,15 @@ static void writeField(Sink & sink, const Logger::Field & field)
         unreachable();
 }
 
+static void writeMetadata(Sink & sink, Logger::Metadata metadata)
+{
+    sink << metadata.size();
+    for (auto & [key, value] : metadata) {
+        sink << key;
+        writeField(sink, value);
+    }
+}
+
 Sink & operator<<(Sink & sink, const Logger::Fields & fields)
 {
     sink << fields.size();
@@ -187,11 +196,8 @@ struct TunnelLogger : public Logger
             return Logger::startActivity(act, lvl, name, metadata, s, parent);
 
         StringSink buf;
-        buf << STDERR_START_ACTIVITY_STRINGLY << act << lvl << name << s << metadata.size();
-        for (auto & [key, value] : metadata) {
-            buf << key;
-            writeField(buf, value);
-        }
+        buf << STDERR_START_ACTIVITY_STRINGLY << act << lvl << name << s;
+        writeMetadata(buf, metadata);
         buf << parent;
         enqueueMsg(buf.s);
     }
@@ -211,6 +217,17 @@ struct TunnelLogger : public Logger
             return;
         StringSink buf;
         buf << STDERR_RESULT << act << type << fields;
+        enqueueMsg(buf.s);
+    }
+
+    void result(ActivityId act, Metadata fields) noexcept override
+    {
+        if (clientVersion.number < WorkerProto::Version::Number{1, 20}
+            || !clientVersion.features.contains(WorkerProto::featureStringlyResults))
+            return;
+        StringSink buf;
+        buf << STDERR_RESULT_STRINGLY << act;
+        writeMetadata(buf, fields);
         enqueueMsg(buf.s);
     }
 };

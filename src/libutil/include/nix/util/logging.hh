@@ -60,12 +60,11 @@ typedef enum {
      */
     resHttpStatus = 10111,
     /**
-     * Progress of a garbage collection (the `CollectGarbage`
-     * activity), as absolute counts: the number of paths found to be
-     * alive so far, the number of paths deleted (or, in a dry run,
-     * found to be dead) so far, and the number of bytes freed so far.
+     * The type under which field-only results (cf. the
+     * `Metadata`-based `Logger::result()`) are reported in the JSON
+     * log. Do not use directly.
      */
-    resGCProgress = 10112,
+    resStringly = 10114,
 } ResultType;
 
 typedef uint64_t ActivityId;
@@ -240,6 +239,18 @@ public:
     virtual void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept {};
 
     /**
+     * Report a field-only result for an activity, typically
+     * describing its current state (e.g. its progress). The fields
+     * are the entire result: there is no result type. A result may
+     * carry a subset of the keys that an activity reports; later
+     * values for a key supersede earlier ones. Keys follow the same
+     * conventions as activity metadata, cf. the name-based
+     * `startActivity()`. The default implementation discards the
+     * result.
+     */
+    virtual void result(ActivityId act, Metadata fields) noexcept {};
+
+    /**
      * Return distributed tracing context for the given activity as
      * W3C Trace Context headers (`traceparent`, `tracestate`), for
      * propagation to another process (e.g. as HTTP request headers).
@@ -344,6 +355,15 @@ struct Activity
     void result(ResultType type, const Logger::Fields & fields) const
     {
         logger.result(id, type, fields);
+    }
+
+    /**
+     * Report a field-only result, cf. the `Metadata`-based
+     * `Logger::result()`.
+     */
+    void result(Logger::Metadata fields) const
+    {
+        logger.result(id, fields);
     }
 
     friend class Logger;

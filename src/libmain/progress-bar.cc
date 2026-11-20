@@ -51,7 +51,8 @@ static std::string_view storePathToNameWithoutDrvSuffix(std::string_view path)
 }
 
 /**
- * Progress of a garbage collection, cf. `resGCProgress`.
+ * Progress of a garbage collection, as reported by the `nix.gc.*`
+ * fields of field-only results on the `CollectGarbage` activity.
  */
 struct GCStatus
 {
@@ -498,17 +499,30 @@ public:
             actInfo.lastLine = getS(fields, 0);
             update(*state);
         }
+    }
 
-        else if (type == resGCProgress) {
-            auto i = state->its.find(act);
-            if (i != state->its.end() && i->second->gc) {
-                auto & gc = *i->second->gc;
-                gc.alive = getI(fields, 0);
-                gc.deleted = getI(fields, 1);
-                gc.bytesFreed = getI(fields, 2);
-                gc.haveProgress = true;
-                update(*state);
+    void result(ActivityId act, Metadata fields) noexcept override
+    {
+        auto state(state_.lock());
+
+        auto i = state->its.find(act);
+        if (i == state->its.end())
+            return;
+
+        if (auto & gc = i->second->gc) {
+            for (auto & [key, value] : fields) {
+                auto n = std::get_if<uint64_t>(&value.raw);
+                if (!n)
+                    continue;
+                if (key == "nix.gc.alive_paths")
+                    gc->alive = *n;
+                else if (key == "nix.gc.deleted_paths" || key == "nix.gc.dead_paths")
+                    gc->deleted = *n;
+                else if (key == "nix.gc.freed_bytes")
+                    gc->bytesFreed = *n;
             }
+            gc->haveProgress = true;
+            update(*state);
         }
     }
 

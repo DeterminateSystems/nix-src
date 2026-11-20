@@ -374,6 +374,19 @@ class OpenTelemetryLogger : public Logger
         return span;
     }
 
+    /**
+     * Record activity metadata or result fields as span attributes.
+     */
+    static void setAttributes(opentelemetry::trace::Span & span, Metadata fields)
+    {
+        for (auto & [key, value] : fields) {
+            if (auto str = std::get_if<std::string>(&value.raw))
+                span.SetAttribute(key, *str);
+            else if (auto n = std::get_if<uint64_t>(&value.raw))
+                span.SetAttribute(key, (int64_t) *n);
+        }
+    }
+
 public:
     OpenTelemetryLogger(
         std::string_view serviceName,
@@ -559,12 +572,7 @@ public:
             if (!s.empty())
                 span->SetAttribute("nix.activity.text", filterANSIEscapes(s, true));
 
-            for (auto & [key, value] : metadata) {
-                if (auto str = std::get_if<std::string>(&value.raw))
-                    span->SetAttribute(key, *str);
-                else if (auto n = std::get_if<uint64_t>(&value.raw))
-                    span->SetAttribute(key, (int64_t) *n);
-            }
+            setAttributes(*span, metadata);
 
             spans->emplace(act, std::move(span));
         } catch (...) {
@@ -625,6 +633,18 @@ public:
                     }
                 }
             }
+        } catch (...) {
+        }
+    }
+
+    void result(ActivityId act, Metadata fields) noexcept override
+    {
+        try {
+            if (isRemoteLogSource())
+                return;
+            auto spans(spans_.lock());
+            if (auto i = spans->find(act); i != spans->end())
+                setAttributes(*i->second, fields);
         } catch (...) {
         }
     }

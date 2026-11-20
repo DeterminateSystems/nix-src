@@ -35,6 +35,22 @@ static Logger::Fields readFields(Source & from)
     return fields;
 }
 
+/**
+ * Read key/value pairs sent by `writeMetadata()` in the daemon. The
+ * caller needs to convert the result into a vector of
+ * `std::string_view`-keyed pairs to pass it as `Logger::Metadata`.
+ */
+static std::vector<std::pair<std::string, Logger::Field>> readMetadata(Source & from)
+{
+    std::vector<std::pair<std::string, Logger::Field>> metadata;
+    size_t size = readInt(from);
+    for (size_t n = 0; n < size; n++) {
+        auto key = readString(from);
+        metadata.emplace_back(std::move(key), readField(from));
+    }
+    return metadata;
+}
+
 std::exception_ptr
 WorkerProto::BasicClientConnection::processStderrReturn(Sink * sink, Source * source, bool flush, bool block)
 {
@@ -96,12 +112,7 @@ WorkerProto::BasicClientConnection::processStderrReturn(Sink * sink, Source * so
             auto lvl = (Verbosity) readInt(from);
             auto name = readString(from);
             auto s = readString(from);
-            std::vector<std::pair<std::string, Logger::Field>> metadata;
-            size_t size = readInt(from);
-            for (size_t n = 0; n < size; n++) {
-                auto key = readString(from);
-                metadata.emplace_back(std::move(key), readField(from));
-            }
+            auto metadata = readMetadata(from);
             auto parent = readNum<ActivityId>(from);
             RemoteLogSource remoteLogSource;
             std::vector<std::pair<std::string_view, Logger::Field>> metadataRefs(metadata.begin(), metadata.end());
@@ -120,6 +131,14 @@ WorkerProto::BasicClientConnection::processStderrReturn(Sink * sink, Source * so
             auto fields = readFields(from);
             RemoteLogSource remoteLogSource;
             logger->result(act, type, fields);
+        }
+
+        else if (msg == STDERR_RESULT_STRINGLY) {
+            auto act = readNum<ActivityId>(from);
+            auto fields = readMetadata(from);
+            RemoteLogSource remoteLogSource;
+            std::vector<std::pair<std::string_view, Logger::Field>> fieldRefs(fields.begin(), fields.end());
+            logger->result(act, Logger::Metadata(fieldRefs));
         }
 
         else if (msg == STDERR_LAST) {
