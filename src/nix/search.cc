@@ -206,7 +206,7 @@ struct CmdSearch : InstallableValueCommand, MixJSON
         };
 
         Executor::WorkItems work;
-        for (auto & cursor : installable->getCursors(*state, false))
+        for (auto & cursor : installable->getCursors(*state, AutoCall::Yes, false))
             state->addWork(work, 1, [cursor, visit]() { visit(*cursor, cursor->getAttrPath(), true); });
 
         futures.spawn(std::move(work));

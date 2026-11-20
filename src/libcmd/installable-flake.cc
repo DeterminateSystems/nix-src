@@ -64,7 +64,7 @@ DerivedPathsWithInfo InstallableFlake::toDerivedPaths()
         fmt("evaluating derivation '%s'", what()));
     PushActivity pact(act.id);
 
-    auto attr = getCursor(*state);
+    auto attr = getCursor(*state, AutoCall::No);
 
     auto attrPath = attr->getAttrPathStr();
 
@@ -139,9 +139,9 @@ DerivedPathsWithInfo InstallableFlake::toDerivedPaths()
     }};
 }
 
-std::pair<Value *, PosIdx> InstallableFlake::toValue(EvalState & state, AutoCall)
+std::pair<Value *, PosIdx> InstallableFlake::toValue(EvalState & state, AutoCall autoCall)
 {
-    return {&getCursor(state)->getValue(), noPos};
+    return {&getCursor(state, autoCall)->getValue(), noPos};
 }
 
 std::vector<AttrPath> InstallableFlake::getAttrPaths(bool useDefaultAttrPath, ref<eval_cache::AttrCursor> inventory)
@@ -211,7 +211,8 @@ std::vector<AttrPath> InstallableFlake::getAttrPaths(bool useDefaultAttrPath, re
     return attrPaths;
 }
 
-std::vector<ref<eval_cache::AttrCursor>> InstallableFlake::getCursors(EvalState & state, bool useDefaultAttrPath)
+std::vector<ref<eval_cache::AttrCursor>>
+InstallableFlake::getCursors(EvalState & state, AutoCall autoCall, bool useDefaultAttrPath)
 {
     auto cache = openEvalCache();
 

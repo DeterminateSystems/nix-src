@@ -68,7 +68,8 @@ struct InstallableFlake : InstallableValue
      * Get a cursor to every attrpath in getActualAttrPaths() that
      * exists. However if none exists, throw an exception.
      */
-    std::vector<ref<eval_cache::AttrCursor>> getCursors(EvalState & state, bool useDefaultAttrPath) override;
+    std::vector<ref<eval_cache::AttrCursor>>
+    getCursors(EvalState & state, AutoCall autoCall, bool useDefaultAttrPath) override;
 
     void getCompletions(const std::string & flakeRefS, AddCompletions & completions);
 

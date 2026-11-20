@@ -646,7 +646,7 @@ struct CmdFlakeInitCommon : virtual Args, EvalCommand, MixFlakeSchemas
             lockFlags,
             {});
 
-        auto cursor = installable.getCursor(*evalState);
+        auto cursor = installable.getCursor(*evalState, AutoCall::No);
 
         auto templateDirAttr = cursor->getAttr("path")->forceValue();
         NixStringContext context;
