@@ -149,6 +149,15 @@ TEST_P(CompressionDecompressionTest, failingSink)
         SysError);
 }
 
+TEST(DecompressionSink, abandonCoroutine)
+{
+    StringSink strSink;
+    auto decompressionSink = makeDecompressionSink(CompressionAlgo::bzip2, strSink);
+    (*decompressionSink)("BZh");
+    /* Abandon the coroutine. It will be unwound via forced_unwind. */
+    decompressionSink.reset();
+}
+
 INSTANTIATE_TEST_SUITE_P(
     CompressionDecompression,
     CompressionDecompressionTest,
