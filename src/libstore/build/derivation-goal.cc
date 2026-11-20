@@ -328,7 +328,7 @@ Goal::Co DerivationGoal::haveDerivation(bool storeDerivation)
         }
     }
 
-    co_return amDone(g->exitCode);
+    co_return amDone(*g->exitCode);
 }
 
 Goal::Co DerivationGoal::repairClosure()
