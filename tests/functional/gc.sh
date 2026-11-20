@@ -36,6 +36,14 @@ test -e "$inUse"
 expectStderr 1 nix-store --delete "$outPath" | grepQuiet "Cannot delete path.*because it's referenced by the GC root "
 test -e "$outPath"
 
+if [[ -e /dev/full ]]; then
+    expect 1 nix-store --delete "$outPath" >/dev/full 2>"$TEST_ROOT/stderr"
+    grepQuiet "Cannot delete path.*because it's referenced by the GC root " "$TEST_ROOT/stderr"
+    expect 1 nix store delete "$outPath" >/dev/full 2>"$TEST_ROOT/stderr"
+    grepQuiet "Cannot delete path.*because it's referenced by the GC root " "$TEST_ROOT/stderr"
+fi
+test -e "$outPath"
+
 for i in "$NIX_STORE_DIR"/*; do
     if [[ $i =~ /trash ]]; then continue; fi # compat with old daemon
     touch "$i.lock"
@@ -52,7 +60,9 @@ if isDaemonNewer "2.35.4"; then
     test -e "$staleTempRoots"
 fi
 
-nix-collect-garbage
+nix-collect-garbage >"$TEST_ROOT/stdout" 2>"$TEST_ROOT/stderr"
+[[ ! -s "$TEST_ROOT/stdout" ]]
+grepQuiet "store paths deleted, .* freed" "$TEST_ROOT/stderr"
 
 # Check that the stale temporary roots file has been deleted.
 if test -e "$staleTempRoots"; then false; fi

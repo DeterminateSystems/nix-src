@@ -426,9 +426,9 @@ void printFreed(bool dryRun, const GCResults & results)
 {
     /* bytesFreed cannot be reliably computed without actually deleting store paths because of hardlinking. */
     if (dryRun)
-        logger->cout("%d store paths would be deleted", results.paths.size());
+        printInfo("%d store paths would be deleted", results.paths.size());
     else
-        logger->cout("%d store paths deleted, %s freed", results.paths.size(), renderSize(results.bytesFreed));
+        printInfo("%d store paths deleted, %s freed", results.paths.size(), renderSize(results.bytesFreed));
 }
 
 } // namespace nix
