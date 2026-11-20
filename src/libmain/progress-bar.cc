@@ -365,7 +365,7 @@ public:
         ActivityId act,
         Verbosity lvl,
         std::string_view name,
-        ActivityMetadata metadata,
+        Metadata metadata,
         std::string_view s,
         ActivityId parent) noexcept override
     {

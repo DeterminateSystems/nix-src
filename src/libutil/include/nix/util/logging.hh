@@ -137,10 +137,11 @@ public:
     typedef std::vector<Field> Fields;
 
     /**
-     * Key/value meta-information about a string-named activity, cf.
-     * the name-based `startActivity()`.
+     * Key/value information about a string-named activity (cf. the
+     * name-based `startActivity()`) or the fields of a field-only
+     * result (cf. the `Metadata`-based `result()`).
      */
-    using ActivityMetadata = std::span<const std::pair<std::string_view, Field>>;
+    using Metadata = std::span<const std::pair<std::string_view, Field>>;
 
     virtual ~Logger();
 
@@ -225,7 +226,7 @@ public:
         ActivityId act,
         Verbosity lvl,
         std::string_view name,
-        ActivityMetadata metadata,
+        Metadata metadata,
         std::string_view s,
         ActivityId parent) noexcept
     {
@@ -309,7 +310,7 @@ struct Activity
         Logger & logger,
         Verbosity lvl,
         std::string_view name,
-        Logger::ActivityMetadata metadata = {},
+        Logger::Metadata metadata = {},
         std::string_view s = {},
         ActivityId parent = getCurActivity());
 

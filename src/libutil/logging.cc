@@ -261,7 +261,7 @@ Activity::Activity(
     Logger & logger,
     Verbosity lvl,
     std::string_view name,
-    Logger::ActivityMetadata metadata,
+    Logger::Metadata metadata,
     std::string_view s,
     ActivityId parent)
     : logger(logger)
@@ -416,7 +416,7 @@ struct JSONLogger : Logger
         ActivityId act,
         Verbosity lvl,
         std::string_view name,
-        ActivityMetadata metadata,
+        Metadata metadata,
         std::string_view s,
         ActivityId parent) noexcept override
     {
