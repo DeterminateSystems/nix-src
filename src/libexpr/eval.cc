@@ -381,7 +381,12 @@ EvalState::EvalState(
     , attrSelects(make_ref<decltype(attrSelects)::element_type>())
     , executor{make_ref<Executor>(settings)}
 {
-#ifndef _WIN32
+    /* On darwin, we increase the primary thread's stack size via a linker option.
+       Note that this helps us in using posix_spawn for spawning processes since we don't have
+       to do non-standard housekeeping in the child to restore the rlimit.
+       Ideally we'd just run evaluation on a separate thread whose stack size we control fully. */
+
+#if !(defined(__APPLE__) || defined(_WIN32))
     static std::once_flag stackSizeBumped;
     std::call_once(stackSizeBumped, []() {
         // Increase the default stack size for the evaluator and for

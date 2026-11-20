@@ -2,7 +2,7 @@
 { lib, nixMake }:
 
 let
-  inherit (nixMake.hostPlatform) isLinux isx86_64;
+  inherit (nixMake.hostPlatform) isDarwin isLinux isx86_64;
 in
 
 nixMake.mkComponent {
@@ -17,7 +17,8 @@ nixMake.mkComponent {
     "windows"
     "freebsd"
   ]
-  ++ lib.optional (!isLinux) "linux";
+  ++ lib.optional (!isLinux) "linux"
+  ++ lib.optional (!isDarwin) "darwin";
 
   includeDirs = [
     ""

@@ -68,7 +68,10 @@ nixMake.mkComponent {
     };
   };
 
-  linkFlags = nixMake.wrapAssertFailFlags;
+  linkFlags =
+    nixMake.wrapAssertFailFlags
+    # Bump the stack size of the main thread, as in meson.build.
+    ++ lib.optional nixMake.hostPlatform.isDarwin "-Wl,-stack_size,0x3C00000";
 
   binSymlinks = [
     "nix-build"
