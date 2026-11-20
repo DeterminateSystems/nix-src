@@ -8,10 +8,12 @@
 #include "nix/store/indirect-root-store.hh"
 #include "nix/store/active-builds.hh"
 #include "nix/util/sync.hh"
+#include "nix/util/os-filename.hh"
 
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <list>
 #include <string>
 #include <boost/unordered/concurrent_flat_set_fwd.hpp>
 
@@ -577,7 +579,7 @@ private:
     typedef boost::concurrent_flat_set<ino_t> InodeHash;
 
     InodeHash loadInodeHash();
-    Strings readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash);
+    std::list<OsFilename> readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash);
     void optimisePath_(
         Activity * act,
         OptimiseStats & stats,
