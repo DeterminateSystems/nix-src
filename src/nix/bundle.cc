@@ -64,7 +64,7 @@ struct CmdBundle : InstallableValueCommand
     {
         auto evalState = getEvalState();
 
-        auto val = installable->toValue(*evalState).first;
+        auto val = installable->toValue(*evalState, AutoCall::Yes).first;
 
         auto [bundlerFlakeRef, bundlerName, extendedOutputsSpec] =
             parseFlakeRefWithFragmentAndExtendedOutputsSpec(bundler, std::filesystem::current_path().string());
@@ -80,7 +80,7 @@ struct CmdBundle : InstallableValueCommand
             getDefaultFlakeSchemas()};
 
         auto vRes = evalState->allocValue();
-        evalState->callFunction(*bundler.toValue(*evalState).first, *val, *vRes, noPos);
+        evalState->callFunction(*bundler.toValue(*evalState, AutoCall::No).first, *val, *vRes, noPos);
 
         if (!evalState->isDerivation(*vRes))
             throw Error("the bundler '%s' does not produce a derivation", bundler.what());

@@ -78,7 +78,7 @@ struct CmdEval : MixJSON, InstallableValueCommand, MixReadOnlyOption
 
         auto state = getEvalState();
 
-        auto [v, pos] = installable->toValue(*state);
+        auto [v, pos] = installable->toValue(*state, AutoCall::No);
         state->forceValue(*v, pos);
         NixStringContext context;
 
