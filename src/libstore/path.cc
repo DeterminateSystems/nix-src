@@ -101,11 +101,11 @@ static std::expected<void, BadStorePathReason> validateBaseName(std::string_view
     using enum BadStorePathReason;
     if (baseName.size() < StorePath::HashLen + 1)
         return std::unexpected(TooShort);
-    if (baseName[StorePath::HashLen] != '-')
-        return std::unexpected(NoDashAfterHash);
     for (auto c : baseName.substr(0, StorePath::HashLen))
         if (!isValidHashChar(c))
             return std::unexpected(IllegalHashCharacter);
+    if (baseName[StorePath::HashLen] != '-')
+        return std::unexpected(NoDashAfterHash);
     return validateStorePathName(baseName.substr(StorePath::HashLen + 1));
 }
 
@@ -118,13 +118,13 @@ static std::expected<void, BadStorePathReason> validateBaseName(std::string_view
     using enum BadStorePathReason;
     switch (reason) {
     case TooShort:
-        throw BadStorePath("'%s' is too short to be a valid store path", baseName);
+        throw BadStorePath("'%s' is too short to be a valid store path basename", baseName);
     case NoDashAfterHash:
         throw BadStorePath("'%s' can't name a store path because the hash part is not followed by a '-'", baseName);
     case IllegalHashCharacter:
         for (auto c : baseName.substr(0, StorePath::HashLen))
             if (!isValidHashChar(c))
-                throw BadStorePath("store path '%s' contains illegal base-32 character '%s'", baseName, c);
+                throw BadStorePath("store path basename '%s' contains illegal base-32 character '%s'", baseName, c);
         break;
     case NameEmpty:
     case NameTooLong:
