@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <span>
+#include <algorithm>
 #include <atomic>
 #include <vector>
 
@@ -112,14 +113,21 @@ static int unix_close_range(unsigned int first, unsigned int last, int flags)
 
 void unix::closeExtraFDs()
 {
-    constexpr int MAX_KEPT_FD = 2;
-    static_assert(std::max({STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) == MAX_KEPT_FD);
+    closeExtraFDs(/*keepExtra=*/{});
+}
+
+void unix::closeExtraFDs(std::span<const Descriptor> keepExtra)
+{
+    /* Just some sanity compile-time checks. */
+    static constexpr Descriptor maxKeptStdio = 2;
+    static_assert(std::max({STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) == maxKeptStdio);
 
     /* The logic here is a bit convoluted and platform-dependent.
      * Keep in mind that this function is free to assume that it's the only thread running
      * in the process (it's usually called right after fork()-ing).
      *
-     * - We always keep stdio file descriptors, and close the [MAX_KEPT_FD + 1, ...) range.
+     * - First, figure out the lower bound of the [maxKept + 1, ...) range we can close in
+     *   one go. We always keep stdio file descriptors.
      *
      * - Attempt platform-specific ways to close the above:
      *   On Linux (>= 5.9) and FreeBSD, we try close_range syscall.
@@ -129,11 +137,30 @@ void unix::closeExtraFDs()
      * - If none of the above works, do the silliest possible thing and attempt
      *   closing all FDs below _SC_OPEN_MAX. Keep in mind that it's huge for the
      *   daemon process, so we really should use something more optimised.
+     *
+     * - Then go through the [3, maxKept] range and close all the holes.
      */
 
+    auto maxKeptIt = std::max_element(keepExtra.begin(), keepExtra.end());
+    Descriptor maxKept = STDERR_FILENO;
+
+    if (maxKeptIt != keepExtra.end())
+        maxKept = std::max(maxKept, *maxKeptIt);
+
+    auto finish = [&] -> void {
+        /* We closed everything in one go already. */
+        if (keepExtra.empty())
+            return;
+
+        /* Otherwise, clean up remaining holes. */
+        for (Descriptor fd = maxKeptStdio + 1; fd < maxKept; ++fd)
+            if (!std::ranges::contains(keepExtra, fd))
+                ::close(fd); /* ignore result */
+    };
+
 #if defined(__linux__) || defined(__FreeBSD__)
-    if (unix_close_range(MAX_KEPT_FD + 1, ~0U, 0) == 0)
-        return;
+    if (unix_close_range(maxKept + 1, ~0U, 0) == 0)
+        return finish();
 #endif
 
     /* Platform-specific ways of listing open FDs. */
@@ -148,7 +175,7 @@ void unix::closeExtraFDs()
             auto fd = string2Int<int>(s.path().filename().native());
             if (!fd)
                 continue;
-            if (*fd > MAX_KEPT_FD)
+            if (*fd > maxKept)
                 openFds.push_back(*fd);
         }
         for (auto fd : openFds)
@@ -170,21 +197,23 @@ void unix::closeExtraFDs()
             throw SysError("listing open file descriptors");
         fds.resize(bufSize / sizeof(::proc_fdinfo));
         for (const auto & fdinfo : fds)
-            if (fdinfo.proc_fd > MAX_KEPT_FD)
+            if (fdinfo.proc_fd > maxKept)
                 ::close(fdinfo.proc_fd); /* ignore result */
 #  endif
-        return;
+        return finish();
     } catch (const SystemError & e) {
         /* Try the last resort fallback. */
     }
 #endif
 
-    int maxFD = 0;
+    Descriptor maxFD = 0;
 #if HAVE_SYSCONF
     maxFD = sysconf(_SC_OPEN_MAX);
 #endif
-    for (int fd = MAX_KEPT_FD + 1; fd < maxFD; ++fd)
-        close(fd); /* ignore result */
+    for (Descriptor fd = maxKept + 1; fd < maxFD; ++fd)
+        ::close(fd); /* ignore result */
+
+    finish();
 }
 
 void closeOnExec(Descriptor fd)

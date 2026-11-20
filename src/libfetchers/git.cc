@@ -53,9 +53,12 @@ std::optional<std::string> readHead(const std::filesystem::path & path)
 {
     auto [status, output] = runProgram(
         RunOptions{
-            .program = GIT_PROGRAM,
-            // FIXME: use 'HEAD' to avoid returning all refs
-            .args = {OS_STR("ls-remote"), OS_STR("--symref"), path.native()},
+            .spawnOptions =
+                {
+                    .program = GIT_PROGRAM,
+                    // FIXME: use 'HEAD' to avoid returning all refs
+                    .args = {OS_STR("ls-remote"), OS_STR("--symref"), path.native()},
+                },
             .isInteractive = true,
         });
     if (status != 0)
@@ -500,16 +503,16 @@ struct GitInputScheme : InputScheme
 
         auto result = runProgram(
             RunOptions{
-                .program = GIT_PROGRAM,
-                .args{
-                    OS_STR("-C"),
-                    repoPath->native(),
-                    OS_STR("--git-dir"),
-                    string_to_os_string(repoInfo.gitDir),
-                    OS_STR("check-ignore"),
-                    OS_STR("--quiet"),
-                    string_to_os_string(std::string(path.rel())),
-                },
+                {.program = GIT_PROGRAM,
+                 .args{
+                     OS_STR("-C"),
+                     repoPath->native(),
+                     OS_STR("--git-dir"),
+                     string_to_os_string(repoInfo.gitDir),
+                     OS_STR("check-ignore"),
+                     OS_STR("--quiet"),
+                     string_to_os_string(std::string(path.rel())),
+                 }},
             });
         auto exitCode =
 #ifndef WIN32 // TODO abstract over exit status handling on Windows
@@ -920,18 +923,20 @@ struct GitInputScheme : InputScheme
                       // Nix < 2.20 used `git checkout` for repos with submodules.
                       StringSink sink; // don't pollute stdout
                       runProgram2(
-                          {.program = GIT_PROGRAM, .args = {"init", tmpDir, "-b", "master"}, .standardOut = &sink});
-                      runProgram2(
-                          {.program = GIT_PROGRAM,
-                           .args = {"-C", tmpDir, "remote", "add", "origin", repoDir},
+                          {.spawnOptions = {.program = GIT_PROGRAM, .args = {"init", tmpDir, "-b", "master"}},
                            .standardOut = &sink});
                       runProgram2(
-                          {.program = GIT_PROGRAM,
-                           .args = {"-C", tmpDir, "fetch", "--quiet", "origin", rev.gitRev()},
+                          {.spawnOptions =
+                               {.program = GIT_PROGRAM, .args = {"-C", tmpDir, "remote", "add", "origin", repoDir}},
                            .standardOut = &sink});
                       runProgram2(
-                          {.program = GIT_PROGRAM,
-                           .args = {"-C", tmpDir, "checkout", "--quiet", rev.gitRev()},
+                          {.spawnOptions =
+                               {.program = GIT_PROGRAM,
+                                .args = {"-C", tmpDir, "fetch", "--quiet", "origin", rev.gitRev()}},
+                           .standardOut = &sink});
+                      runProgram2(
+                          {.spawnOptions =
+                               {.program = GIT_PROGRAM, .args = {"-C", tmpDir, "checkout", "--quiet", rev.gitRev()}},
                            .standardOut = &sink});
                       PathFilter filter = [&](const std::string & path) { return baseNameOf(path) != ".git"; };
                       return store.addToStore(
@@ -946,8 +951,9 @@ struct GitInputScheme : InputScheme
                       // Nix < 2.20 used `git archive` for repos without submodules.
                       auto source = sinkToSource([&](Sink & sink) {
                           runProgram2(
-                              {.program = GIT_PROGRAM,
-                               .args = {"-C", repoDir, "--git-dir", repoInfo.gitDir, "archive", rev.gitRev()},
+                              {.spawnOptions =
+                                   {.program = GIT_PROGRAM,
+                                    .args = {"-C", repoDir, "--git-dir", repoInfo.gitDir, "archive", rev.gitRev()}},
                                .standardOut = &sink});
                       });
 

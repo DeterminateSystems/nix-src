@@ -500,10 +500,13 @@ PathsInChroot UnixDerivationBuilderImpl::getPathsInSandbox()
 
         auto [hookStatus, lines] = runProgram(
             RunOptions{
-                .program = localSettings.preBuildHook.get(),
-                .lookupPath = false,
-                .args = getPreBuildHookArgs(),
-                .environment = std::move(hookEnv),
+                .spawnOptions =
+                    {
+                        .program = localSettings.preBuildHook.get(),
+                        .lookupPath = false,
+                        .args = getPreBuildHookArgs(),
+                        .environment = std::move(hookEnv),
+                    },
             });
         if (!statusOk(hookStatus))
             throw ExecError(

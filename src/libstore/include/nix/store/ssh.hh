@@ -50,9 +50,7 @@ private:
     void addCommonSSHOpts(OsStrings & args, std::optional<std::filesystem::path> socketPath);
     bool isMasterRunning(std::filesystem::path socketPath);
 
-#ifndef _WIN32 // TODO re-enable on Windows, once we can start processes.
     std::optional<std::filesystem::path> startMaster();
-#endif
 
 public:
 

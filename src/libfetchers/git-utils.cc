@@ -778,7 +778,12 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
             gitArgs.push_back(string_to_os_string(url));
             gitArgs.push_back(string_to_os_string(refspec));
 
-            auto status = runProgram(RunOptions{.program = GIT_PROGRAM, .args = gitArgs, .isInteractive = true}).first;
+            auto status = runProgram(
+                              RunOptions{
+                                  .spawnOptions = {.program = GIT_PROGRAM, .args = gitArgs},
+                                  .isInteractive = true,
+                              })
+                              .first;
 
             if (status > 0)
                 throw Error("Failed to fetch git repository '%s'", url);
@@ -839,15 +844,18 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
 
         // Run verification command
         auto [status, output] = runProgram({
-            .program = GIT_PROGRAM,
-            .args{
-                OS_STR("-c"),
-                OS_STR("gpg.ssh.allowedSignersFile=") + allowedSignersFile.native(),
-                OS_STR("-C"),
-                path.native(),
-                OS_STR("verify-commit"),
-                string_to_os_string(rev.gitRev()),
-            },
+            .spawnOptions =
+                {
+                    .program = GIT_PROGRAM,
+                    .args{
+                        OS_STR("-c"),
+                        OS_STR("gpg.ssh.allowedSignersFile=") + allowedSignersFile.native(),
+                        OS_STR("-C"),
+                        path.native(),
+                        OS_STR("verify-commit"),
+                        string_to_os_string(rev.gitRev()),
+                    },
+                },
             .mergeStderrToStdout = true,
         });
 
