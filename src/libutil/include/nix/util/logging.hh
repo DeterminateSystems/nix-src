@@ -50,8 +50,13 @@ typedef enum {
     resSetExpected = 106,
     resPostBuildLogLine = 107,
     resFetchStatus = 108,
-    resHashMismatch = 109,
-    resBuildResult = 110,
+    /**
+     * The resulting store path of a `CopySourcePath` or
+     * `HashSourcePath` activity (see `fetchToStore()`), emitted once
+     * the operation completes. Fields: [0] = store path (string).
+     */
+    resFetchToStore = 109,
+    resBuildResult = 10110,
     /**
      * Emitted via the JSON `result()` overload: an object describing
      * the response to an HTTP request, with the fields `httpStatus`
@@ -67,6 +72,7 @@ typedef enum {
      * found to be dead) so far, and the number of bytes freed so far.
      */
     resGCProgress = 10112,
+    resHashMismatch = 10113,
 } ResultType;
 
 typedef uint64_t ActivityId;

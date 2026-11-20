@@ -143,6 +143,8 @@ std::pair<StorePath, Hash> fetchToStore2(
                   return std::make_pair(storePath, hash);
               }();
 
+    act.result(resFetchToStore, store.printStorePath(storePath));
+
     if (cacheKey)
         settings.getCache()->upsert(*cacheKey, {{"hash", hash.to_string(HashFormat::SRI, true)}});
 
