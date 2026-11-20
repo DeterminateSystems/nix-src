@@ -179,7 +179,7 @@ private:
 namespace nix {
 
 /**
- * @todo Get rid of global setttings variables
+ * @todo Get rid of global settings variables
  */
 extern fetchers::Settings fetchSettings;
 

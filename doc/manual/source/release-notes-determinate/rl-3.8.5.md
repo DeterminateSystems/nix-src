@@ -20,7 +20,7 @@ PR: [DeterminateSystems/nix-src#162](https://github.com/DeterminateSystems/nix-s
 ### Faster Nix evaluation by reducing duplicate Nix daemon queries
 
 Determinate Nix more effectively caches store path validity data within a single evaluation.
-Previously, the Nix client would perform many thousands of exra Nix daemon requests.
+Previously, the Nix client would perform many thousands of extra Nix daemon requests.
 Each extra request takes real time, and this change reduced a sample evaluation by over 12,000 requests.
 
 PR: [DeterminateSystems/nix-src#157](https://github.com/DeterminateSystems/nix-src/pull/157)

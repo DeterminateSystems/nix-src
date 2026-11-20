@@ -660,7 +660,7 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs(LocalStore & localStore)
                This is also good so that if a fixed-output produces the
                wrong path, we still store the result (just don't consider
                the derivation successful, so if someone fixes the problem by
-               just changing the wanted hash, the redownload (or whatever
+               just changing the wanted hash, the redownload (or whateer
                possibly quite slow thing it was) doesn't have to be done
                again. */
             if (newInfo.ca)

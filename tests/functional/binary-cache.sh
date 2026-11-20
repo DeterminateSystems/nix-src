@@ -163,7 +163,7 @@ nix-store -r "${slowPaths[@]}" --substituters "$httpBinaryCacheUrl" --no-require
     --option filetransfer-retry-attempts 1 \
     --debug 2> "$TEST_ROOT/log" || { cat "$TEST_ROOT/log"; fail "substitution failed"; }
 # Check that the second download actually had to wait.
-grepQuiet "timed out waiting for a connection, requeueing" "$TEST_ROOT/log"
+grepQuiet "timed out waiting for a connection, requeuing" "$TEST_ROOT/log"
 grepQuietInverse "unable to download" "$TEST_ROOT/log"
 nix path-info "${slowPaths[@]}"
 unset _NIX_TEST_NIX_SERVE_NAR_DURATION

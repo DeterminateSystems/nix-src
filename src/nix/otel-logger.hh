@@ -18,8 +18,8 @@ namespace nix {
  * If `remoteParentTraceparent` is non-empty, the root span's parent is
  * the given W3C trace context, e.g. received from the client during
  * the daemon handshake, or from a parent process via the `TRACEPARENT`
- * environment variable. An invalid value yields an unparented root
- * span. If `isServer` is set, the root span is a server span (i.e. it
+ * environment variable. An invalid value yields a root span
+ * without a parent. If `isServer` is set, the root span is a server span (i.e. it
  * handles a request from another process, as in the daemon).
  *
  * The logger owns the exporter and its worker thread, so a forked

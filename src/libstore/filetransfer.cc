@@ -1107,7 +1107,7 @@ struct curlFileTransfer : public FileTransfer
                         waitingForConnectionSince = attemptStartTime;
                     if (canRequeueAfterWaiting(finishTime)) {
                         debug(
-                            "%s of '%s' timed out waiting for a connection, requeueing",
+                            "%s of '%s' timed out waiting for a connection, requeuing",
                             Uncolored(request.noun()),
                             request.displayUri());
                         requeue(std::move(exc));

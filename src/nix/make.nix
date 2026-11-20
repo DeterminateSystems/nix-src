@@ -37,7 +37,7 @@ nixMake.mkComponent {
   # Every .cc file under the root (including the legacy commands in
   # subdirectories and unix/) is a compilation unit. The `doc`, `misc`
   # and `scripts` symlinks are ignored by the scanner, so the files that
-  # are `#embed`ded through them are listed in `files`.
+  # are embedded (`#embed`) through them are listed in `files`.
   includeDirs = [ "" ];
 
   files = nixMake.commonSupportFiles // {
