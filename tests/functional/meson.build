@@ -112,6 +112,7 @@ suites = [
       'formatter.sh',
       'function-trace.sh',
       'gc-auto.sh',
+      'gc-build-input.sh',
       'gc-closure.sh',
       'gc-concurrent.sh',
       'gc-mark-alive-unlocked.sh',
