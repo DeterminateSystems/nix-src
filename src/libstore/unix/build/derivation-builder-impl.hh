@@ -353,10 +353,14 @@ protected:
      */
     struct RunChildArgs
     {
+        std::string netrcData;
+        std::string caFileData;
 #if NIX_WITH_AWS_AUTH
         std::optional<AwsCredentials> awsCredentials;
 #endif
     };
+
+    RunChildArgs makeRunChildArgs();
 
     /**
      * Run the builder's process.
