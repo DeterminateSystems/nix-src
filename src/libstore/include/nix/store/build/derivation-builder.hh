@@ -175,7 +175,8 @@ public:
 
     /**
      * Master side of the pseudoterminal used for the builder's
-     * standard output/error.
+     * standard output/error. On macOS, once the builder has started,
+     * this is a pipe that carries what was read from the master side.
      */
     AutoCloseFD builderOut;
 

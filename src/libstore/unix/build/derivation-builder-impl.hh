@@ -6,6 +6,10 @@
 #include "nix/store/local-store.hh"
 #include "nix/store/user-lock.hh"
 
+#ifdef __APPLE__
+#  include "pty-relay.hh"
+#endif
+
 namespace nix {
 
 /**
@@ -42,6 +46,14 @@ protected:
     const LocalSettings & localSettings = store.config->getLocalSettings();
 
     std::shared_ptr<DerivationBuilderCallbacks> miscMethods;
+
+#ifdef __APPLE__
+    /**
+     * The thread that reads the output of the builder from the
+     * pseudoterminal. `builderOut` is its pipe.
+     */
+    std::unique_ptr<PtyRelay> ptyRelay;
+#endif
 
 public:
 
