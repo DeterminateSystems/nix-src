@@ -1011,11 +1011,9 @@ struct curlFileTransfer : public FileTransfer
                     //   * 511 we're behind a captive portal
                     err = Misc;
                 } else {
-// Don't bother retrying on certain cURL errors either
+                    // Don't bother retrying on certain cURL errors either
 
-// Allow selecting a subset of enum values
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch-enum"
+                    NIX_INCOMPLETE_SWITCH_BEGIN
                     switch (code) {
                     case CURLE_FAILED_INIT:
                     case CURLE_URL_MALFORMAT:
@@ -1037,7 +1035,7 @@ struct curlFileTransfer : public FileTransfer
                     default: // Shut up warnings
                         break;
                     }
-#pragma GCC diagnostic pop
+                    NIX_INCOMPLETE_SWITCH_END
                 }
 
                 std::optional<std::string> response;

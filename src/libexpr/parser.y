@@ -14,10 +14,6 @@
 
 %code requires {
 
-// bison adds a bunch of switch statements with default:
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch-enum"
-
 #ifndef BISON_HEADER
 #define BISON_HEADER
 
@@ -149,6 +145,7 @@ static Expr * makeCall(Exprs & exprs, PosIdx pos, Expr * fn, Expr * arg) {
     return exprs.add<ExprCall>(pos, fn, {arg});
 }
 
+NIX_INCOMPLETE_SWITCH_BEGIN
 
 %}
 
@@ -682,6 +679,6 @@ ExprAttrs * parseReplBindingsFromBuf(
     return bindings;
 }
 
-
 }
-#pragma GCC diagnostic pop // end ignored "-Wswitch-enum"
+
+NIX_INCOMPLETE_SWITCH_END

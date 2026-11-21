@@ -733,10 +733,38 @@ size_t readString(char * buf, size_t max, Source & source)
 std::string readString(Source & source, size_t max)
 {
     auto len = readNum<size_t>(source);
+    std::string res;
+    /* In practice this will limit the string to 2GiB on 32 bit systems. */
+    max = std::min(max, res.max_size());
     if (len > max)
         throw SerialisationError("string is too long");
-    std::string res(len, 0);
-    source(res.data(), len);
+    /* Grow with the data actually received rather than trusting `len` for
+       the allocation, so a bogus length prefix costs the peer as many bytes
+       as it costs us. */
+    while (res.size() < len) {
+        std::string::size_type filled = res.size();
+        /* `len` fits into std::string::size_type. */
+        std::string::size_type want = std::min<uint64_t>(
+            len,
+            std::max<uint64_t>(
+                /* Technically might overflow in size_type, but we are likely to run into bad_alloc first. */
+                2 * static_cast<uint64_t>(filled),
+                64 * 1024));
+        assert(want > filled); /* No overflows expected. */
+        std::exception_ptr ex;
+        res.resize_and_overwrite(
+            want, [filled, &ex, &source](char * buf, std::string::size_type bufSize) -> std::string::size_type {
+                try {
+                    const auto n = bufSize - filled;
+                    return filled + source.read(buf + filled, n);
+                } catch (...) {
+                    ex = std::current_exception();
+                    return filled;
+                }
+            });
+        if (ex)
+            std::rethrow_exception(ex);
+    }
     readPadding(len, source);
     return res;
 }

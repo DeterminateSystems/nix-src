@@ -134,9 +134,7 @@ static std::pair<std::map<FlakeId, FlakeInput>, fetchers::Attrs> parseFlakeInput
 
 static void parseFlakeInputAttr(EvalState & state, const nix::Attr & attr, fetchers::Attrs & attrs)
 {
-// Allow selecting a subset of enum values
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch-enum"
+    NIX_INCOMPLETE_SWITCH_BEGIN
     switch (attr.value->type()) {
     case nString:
         attrs.emplace(state.symbols[attr.name], std::string(attr.value->string_view()));
@@ -168,7 +166,7 @@ static void parseFlakeInputAttr(EvalState & state, const nix::Attr & attr, fetch
                     showType(*attr.value))
                 .debugThrow();
     }
-#pragma GCC diagnostic pop
+    NIX_INCOMPLETE_SWITCH_END
 }
 
 static FlakeInput parseFlakeInput(
