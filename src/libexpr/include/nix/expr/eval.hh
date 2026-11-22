@@ -436,7 +436,7 @@ public:
     ReplExitStatus (*debugRepl)(ref<EvalState> es, const ValMap & extraEnv);
     bool debugStop;
     bool inDebugger = false;
-    int trylevel;
+    std::atomic<int> trylevel;
     std::list<DebugTrace> debugTraces;
     boost::unordered_flat_map<const Expr *, const std::shared_ptr<const StaticEnv>> exprEnvs;
 
