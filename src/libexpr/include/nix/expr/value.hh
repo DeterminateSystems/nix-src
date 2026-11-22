@@ -633,18 +633,23 @@ class alignas(16)
      * `p1` of a thunk is read speculatively (`force()`,
      * `isTrivial()`, `getInternalType()`) while another thread may be
      * finishing the value. Those reads and every store to `p1` are
-     * relaxed atomic accesses. The other reads stay plain: they follow
-     * an acquire load of `p0` that saw a finished value, and a
-     * finished value's `p1` is not written again.
+     * atomic accesses. The other reads stay plain: they follow an
+     * acquire load of `p0` that saw a finished value, and a finished
+     * value's `p1` is not written again.
+     *
+     * `finish()` stores `p1` with release, so a reader that loads the
+     * new `p1` with acquire also sees the pending `p0` that the
+     * forcing thread wrote before it. `isTrivial()` depends on this.
      */
-    [[gnu::always_inline]] void storeP1(PackedPointer v) noexcept
+    [[gnu::always_inline]] void storeP1(PackedPointer v, std::memory_order order = std::memory_order_relaxed) noexcept
     {
-        std::atomic_ref(p1).store(v, std::memory_order_relaxed);
+        std::atomic_ref(p1).store(v, order);
     }
 
-    [[gnu::always_inline]] PackedPointer loadP1Speculative() const noexcept
+    [[gnu::always_inline]] PackedPointer
+    loadP1Speculative(std::memory_order order = std::memory_order_relaxed) const noexcept
     {
-        return std::atomic_ref(const_cast<PackedPointer &>(p1)).load(std::memory_order_relaxed);
+        return std::atomic_ref(const_cast<PackedPointer &>(p1)).load(order);
     }
 
     static constexpr PackedPointer discriminatorMask = (PackedPointer(1) << discriminatorBits) - 1;
@@ -700,7 +705,7 @@ class alignas(16)
     void finish(PackedPointer p0_, PackedPointer p1_)
     {
         // Note: p1 *must* be updated before p0.
-        storeP1(p1_);
+        storeP1(p1_, std::memory_order_release);
         p0_ = p0.exchange(p0_, std::memory_order_release);
 
         auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);

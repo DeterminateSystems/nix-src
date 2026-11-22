@@ -218,7 +218,7 @@ bool ValueStorage<sizeof(void *)>::isTrivial() const
     auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
 
     if (pd == pdThunk) {
-        PackedPointer p1_ = loadP1Speculative();
+        PackedPointer p1_ = loadP1Speculative(std::memory_order_acquire);
 
         /* `p1` is only valid as a thunk payload if no other thread
            has started forcing the thunk in the meantime, since
