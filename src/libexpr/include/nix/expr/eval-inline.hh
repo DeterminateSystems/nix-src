@@ -126,7 +126,7 @@ void ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptr
         try {
             // The value we get here is only valid if we can set the
             // thunk to pending.
-            auto p1_ = p1;
+            PackedPointer p1_ = loadP1Speculative();
 
             // Atomically set the thunk to "pending".
             if (!p0.compare_exchange_strong(
