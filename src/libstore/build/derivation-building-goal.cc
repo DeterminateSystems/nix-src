@@ -161,6 +161,15 @@ Goal::Co DerivationBuildingGoal::gaveUpOnSubstitution(bool storeDerivation)
         copyClosure(worker.evalStore, worker.store, inputSrcs);
     }
 
+    /* Register the input sources as temporary roots before checking
+       their validity. Otherwise a concurrent garbage collector could
+       delete an input after we've seen it as valid but before the
+       builder uses it. Rooting a path keeps its closure alive, and the
+       outputs of `inputDrvs` are rooted by their own `DerivationGoal`s.
+       This matters for `BuildDerivation`, where the client sends a
+       `BasicDerivation` and may hold no roots for its inputs. */
+    worker.store.addTempRoots(drv->inputSrcs);
+
     for (auto & i : drv->inputSrcs) {
         if (worker.store.isValidPath(i))
             continue;
