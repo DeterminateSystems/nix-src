@@ -953,6 +953,11 @@ struct curlFileTransfer : public FileTransfer
                                            : fmt("HTTP error %d", httpStatus));
                 }
                 attemptAct->result(Logger::Metadata(fields));
+                /* An exception thrown by one of our callbacks fails
+                   the transfer (see below), so it fails this attempt
+                   as well. */
+                if (callbackException)
+                    attemptAct->fail(callbackException);
                 attemptAct.reset();
             }
 
