@@ -46,10 +46,13 @@ nix build -o "$TEST_ROOT/result" "hg+file://$flake2Dir" --no-use-registries --no
 
 [[ $(nix flake metadata --json "$flake2Dir" | jq -r .resolvedUrl) = "hg+file://$flake2Dir" ]]
 echo untracked > "$flake2Dir/untracked"
-storePath=$(nix flake metadata --json "$flake2Dir" | jq -r .path)
-[[ -e $storePath/flake.nix ]]
-[[ ! -e $storePath/untracked ]]
-[[ ! -e $storePath/.hg ]]
+# With lazy trees, the flake is not copied to the store, so there is no store path to inspect.
+if [[ $(nix config show lazy-trees) = false ]]; then
+    storePath=$(nix flake metadata --json "$flake2Dir" | jq -r .path)
+    [[ -e $storePath/flake.nix ]]
+    [[ ! -e $storePath/untracked ]]
+    [[ ! -e $storePath/.hg ]]
+fi
 
 mkdir -p "$flake2Dir/sub"
 writeSimpleFlake "$flake2Dir/sub"
