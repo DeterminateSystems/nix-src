@@ -99,7 +99,7 @@ Check the [contributing guide][contributing] if you want to get involved with de
 [manual]: https://manual.determinate.systems
 [nixpkgs]: https://github.com/NixOS/nixpkgs
 [nixos]: https://github.com/NixOS/nixpkgs/tree/master/nixos
-[nixos-install]: https://docs.determinate.systems/guides/advanced-installation#nixos
+[nixos-install]: https://docs.determinate.systems/guides/nixos-installation
 [packages]: https://zero-to-nix.com/concepts/packages
 [package-management]: https://zero-to-nix.com/concepts/package-management
 [private-flakes]: https://docs.determinate.systems/flakehub/private-flakes
