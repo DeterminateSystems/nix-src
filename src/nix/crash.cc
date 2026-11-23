@@ -66,7 +66,7 @@ struct CmdCrash : Command
         else if (type == "bad-optional-access") {
             printError("Dereferencing an empty optional...");
             std::optional<int> opt;
-            opt.value();
+            (void) opt.value();
         }
 
         else if (type == "panic") {
