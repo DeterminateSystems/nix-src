@@ -3401,12 +3401,42 @@ static void prim_removeAttrs(EvalState & state, const PosIdx pos, Value ** args,
     }
     std::sort(names.begin(), names.end());
 
+    auto & oldAttrs = *args[0]->attrs();
+
+    /* Count the attributes that will be removed, so that we can
+       allocate a result of exactly the right size. If the list of
+       names is much shorter than the set, look up each name in the
+       set, which is O(k log n). Otherwise, do a simultaneous scan of
+       both, which is O(n + k). Note that `names` can contain
+       duplicates. */
+    size_t nrRemoved = 0;
+    if (names.size() * 16 <= oldAttrs.size()) {
+        Symbol prev;
+        for (auto & name : names) {
+            if (name.name != prev && oldAttrs.get(name.name))
+                ++nrRemoved;
+            prev = name.name;
+        }
+    } else {
+        std::set_intersection(
+            oldAttrs.begin(),
+            oldAttrs.end(),
+            names.begin(),
+            names.end(),
+            boost::make_function_output_iterator([&]([[maybe_unused]] auto && _) { ++nrRemoved; }));
+    }
+
+    if (nrRemoved == 0) {
+        /* Nothing to remove, so the result is the original set. */
+        v = *args[0];
+        return;
+    }
+
     /* Copy all attributes not in that set.  Note that we don't need
        to sort v.attrs because it's a subset of an already sorted
        vector. */
-    auto attrs = state.buildBindings(args[0]->attrs()->size());
-    std::set_difference(
-        args[0]->attrs()->begin(), args[0]->attrs()->end(), names.begin(), names.end(), std::back_inserter(attrs));
+    auto attrs = state.buildBindings(oldAttrs.size() - nrRemoved);
+    std::set_difference(oldAttrs.begin(), oldAttrs.end(), names.begin(), names.end(), std::back_inserter(attrs));
     v.mkAttrs(attrs.alreadySorted());
 }
 
