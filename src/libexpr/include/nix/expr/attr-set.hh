@@ -568,13 +568,6 @@ public:
         return capacity_;
     }
 
-    void grow(BindingsBuilder newBindings)
-    {
-        for (auto & i : *bindings)
-            newBindings.push_back(i);
-        std::swap(*this, newBindings);
-    }
-
     friend struct ExprAttrs;
 };
 

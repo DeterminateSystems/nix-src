@@ -1,0 +1,1 @@
+{ allNullIsEmpty = true; allNullNames = [ ]; plain = { a = 1; b = 2; c = 3; z = 26; }; plainNames = [ "a" "b" "c" "z" ]; recursive = { a = "d"; b = 2; d = 2; de = 3; }; recursiveNames = [ "a" "b" "d" "de" ]; }

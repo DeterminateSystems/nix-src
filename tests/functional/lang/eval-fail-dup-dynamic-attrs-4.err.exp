@@ -1,0 +1,6 @@
+error: dynamic attribute 'c' already defined at /pwd/lang/eval-fail-dup-dynamic-attrs-4.nix:4:5
+       at /pwd/lang/eval-fail-dup-dynamic-attrs-4.nix:7:3:
+            6|   a = 1;
+            7|   ${"c" + ""} = 2;
+             |   ^
+            8| }
