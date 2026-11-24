@@ -1358,16 +1358,26 @@ Env * ExprAttrs::buildInheritFromEnv(EvalState & state, Env & up)
 
 void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
 {
-    auto bindings = state.buildBindings(attrs->size() + dynamicAttrs->size());
     auto dynamicEnv = &env;
     bool sort = false;
+
+    /* For a `rec` set: the environment that contains its attributes,
+       and the attributes of its `__overrides` attribute, if any. */
+    Env * recEnv = nullptr;
+    const Bindings * overridesAttrs = nullptr;
+
+    /* Note: we don't know how many attributes the set will have until
+       the names of the dynamic attributes have been evaluated (since
+       those that evaluate to `null` are skipped), so the `Bindings`
+       is only allocated after that. This matters because Nixpkgs uses
+       `${if cond then "name" else null} = ...` a lot. */
 
     if (recursive) {
         /* Create a new environment that contains the attributes in
            this `rec'. */
         Env & env2(state.mem.allocEnv(attrs->size()));
         env2.up = &env;
-        dynamicEnv = &env2;
+        dynamicEnv = recEnv = &env2;
         Env * inheritEnv = inheritFromExprs ? buildInheritFromEnv(state, env2) : nullptr;
 
         AttrDefs::iterator overrides = attrs->find(state.s.overrides);
@@ -1385,7 +1395,6 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
             } else
                 vAttr = i.second.e->maybeThunk(state, *i.second.chooseByKind(&env2, &env, inheritEnv));
             env2.values[displ++] = vAttr;
-            bindings.insert(i.first, vAttr, i.second.pos);
         }
 
         /* If the rec contains an attribute called `__overrides', then
@@ -1397,18 +1406,77 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
            been substituted into the bodies of the other attributes.
            Hence we need __overrides.) */
         if (hasOverrides) {
-            Value * vOverrides = (*bindings.bindings)[overrides->second.displ].value;
+            Value * vOverrides = env2.values[overrides->second.displ];
             state.forceAttrs(
                 *vOverrides,
                 [&]() { return vOverrides->determinePos(noPos); },
                 "while evaluating the `__overrides` attribute");
-            bindings.grow(state.buildBindings(bindings.capacity() + vOverrides->attrs()->size()));
-            for (auto & i : *vOverrides->attrs()) {
-                AttrDefs::iterator j = attrs->find(i.name);
-                if (j != attrs->end()) {
-                    (*bindings.bindings)[j->second.displ] = i;
+            overridesAttrs = vOverrides->attrs();
+            for (auto & i : *overridesAttrs)
+                if (auto j = attrs->find(i.name); j != attrs->end())
                     env2.values[j->second.displ] = i.value;
-                } else
+        }
+    }
+
+    /* Evaluate the names of the dynamic attributes. Dynamic attrs
+       apply *after* rec and __overrides. */
+    struct DynamicAttr
+    {
+        Symbol name;
+        const DynamicAttrDef * def;
+    };
+
+    boost::container::small_vector<DynamicAttr, 8> dynamics;
+
+    for (auto & i : *dynamicAttrs) {
+        Value nameVal;
+        i.nameExpr->eval(state, *dynamicEnv, nameVal);
+        state.forceValue(nameVal, i.pos);
+        if (nameVal.type() == nNull)
+            continue;
+        state.forceStringNoCtx(nameVal, i.pos, "while evaluating the name of a dynamic attribute");
+        auto nameSym = state.symbols.create(nameVal.string_view());
+
+        /* Check for duplicates here, rather than when inserting into
+           the `Bindings`, so that the error is thrown before the
+           names of later dynamic attributes are evaluated. */
+        auto prevPos = [&]() -> std::optional<PosIdx> {
+            if (overridesAttrs)
+                if (auto j = overridesAttrs->get(nameSym))
+                    return j->pos;
+            if (auto j = attrs->find(nameSym); j != attrs->end())
+                return j->second.pos;
+            for (auto & d : dynamics)
+                if (d.name == nameSym)
+                    return d.def->pos;
+            return std::nullopt;
+        }();
+        if (prevPos)
+            state
+                .error<EvalError>(
+                    "dynamic attribute '%1%' already defined at %2%", state.symbols[nameSym], state.positions[*prevPos])
+                .atPos(i.pos)
+                .withFrame(env, *this)
+                .debugThrow();
+
+        dynamics.push_back({nameSym, &i});
+    }
+
+    /* Now that we know the size of the set, build it. */
+    auto bindings =
+        state.buildBindings(attrs->size() + (overridesAttrs ? overridesAttrs->size() : 0) + dynamics.size());
+
+    if (recEnv) {
+        Displacement displ = 0;
+        for (auto & i : *attrs)
+            bindings.insert(i.first, recEnv->values[displ++], i.second.pos);
+
+        if (overridesAttrs) {
+            for (auto & i : *overridesAttrs) {
+                AttrDefs::iterator j = attrs->find(i.name);
+                if (j != attrs->end())
+                    (*bindings.bindings)[j->second.displ] = i;
+                else
                     bindings.push_back(i);
             }
             sort = true;
@@ -1422,29 +1490,9 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
                 i.first, i.second.e->maybeThunk(state, *i.second.chooseByKind(&env, &env, inheritEnv)), i.second.pos);
     }
 
-    /* Dynamic attrs apply *after* rec and __overrides. */
-    for (auto & i : *dynamicAttrs) {
-        Value nameVal;
-        i.nameExpr->eval(state, *dynamicEnv, nameVal);
-        state.forceValue(nameVal, i.pos);
-        if (nameVal.type() == nNull)
-            continue;
-        state.forceStringNoCtx(nameVal, i.pos, "while evaluating the name of a dynamic attribute");
-        auto nameSym = state.symbols.create(nameVal.string_view());
-        if (sort)
-            // FIXME: inefficient
-            bindings.bindings->sort();
-        if (auto j = bindings.bindings->get(nameSym))
-            state
-                .error<EvalError>(
-                    "dynamic attribute '%1%' already defined at %2%", state.symbols[nameSym], state.positions[j->pos])
-                .atPos(i.pos)
-                .withFrame(env, *this)
-                .debugThrow();
-
-        i.valueExpr->setName(nameSym);
-        /* Keep sorted order so find can catch duplicates */
-        bindings.insert(nameSym, i.valueExpr->maybeThunk(state, *dynamicEnv), i.pos);
+    for (auto & d : dynamics) {
+        d.def->valueExpr->setName(d.name);
+        bindings.insert(d.name, d.def->valueExpr->maybeThunk(state, *dynamicEnv), d.def->pos);
         sort = true;
     }
 
@@ -2182,6 +2230,101 @@ void ExprOpImpl::eval(EvalState & state, Env & env, Value & v)
         || state.evalBool(env, e2, pos, "in the right operand of the IMPL (->) operator"));
 }
 
+/**
+ * Return the number of attributes that occur in both `a` and `b`.
+ */
+static size_t countCommonAttrs(const Bindings & a, const Bindings & b)
+{
+    size_t count = 0;
+
+    auto & small = a.size() <= b.size() ? a : b;
+    auto & large = a.size() <= b.size() ? b : a;
+
+    /* If one set is much smaller than the other, look up each of its
+       attributes in the other set, which is O(|small| * log(|large|)).
+       Otherwise do a simultaneous scan of both sets, which is
+       O(|small| + |large|). */
+    if (small.size() * 16 <= large.size()) {
+        for (auto & attr : small)
+            if (large.get(attr.name))
+                ++count;
+    } else {
+        std::set_intersection(
+            a.begin(),
+            a.end(),
+            b.begin(),
+            b.end(),
+            boost::make_function_output_iterator([&]([[maybe_unused]] auto && _) { ++count; }));
+    }
+
+    return count;
+}
+
+/**
+ * Store in `v` the result of `v1 // v2` by merging the attributes of
+ * `v1` and `v2` into a new set. Both must be non-empty attribute
+ * sets. Returns the number of attributes copied.
+ *
+ * This is not part of `ExprOpUpdate::eval()` because that function is
+ * recursive (via the evaluation of its operands), so we don't want
+ * the iterators used here to be part of its stack frame.
+ */
+[[gnu::noinline]]
+static size_t mergeBindings(EvalState & state, Value & v1, Value & v2, Value & v)
+{
+    const Bindings & bindings1 = *v1.attrs();
+    const Bindings & bindings2 = *v2.attrs();
+
+    /* Count the attributes that occur in both sets, so that we can
+       allocate a result of exactly the right size. Since the sum of
+       the sizes can be a gross overestimate (e.g. when updating a
+       package set with an almost equal one), this is worth the extra
+       pass. */
+    auto nrCommon = countCommonAttrs(bindings1, bindings2);
+
+    if (nrCommon == bindings1.size()) {
+        /* Every attribute in the first set is overridden by the
+           second set, so the result is the second set. */
+        v = v2;
+        return 0;
+    }
+
+    auto attrs = state.buildBindings(bindings1.size() + bindings2.size() - nrCommon);
+
+    /* Merge the sets, preferring values from the second set.  Make
+       sure to keep the resulting vector in sorted order. */
+    auto i = bindings1.begin();
+    auto j = bindings2.begin();
+
+    while (i != bindings1.end() && j != bindings2.end()) {
+        if (i->name == j->name) {
+            attrs.insert(*j);
+            ++i;
+            ++j;
+        } else if (i->name < j->name) {
+            attrs.insert(*i);
+            ++i;
+        } else {
+            attrs.insert(*j);
+            ++j;
+        }
+    }
+
+    while (i != bindings1.end()) {
+        attrs.insert(*i);
+        ++i;
+    }
+
+    while (j != bindings2.end()) {
+        attrs.insert(*j);
+        ++j;
+    }
+
+    v.mkAttrs(attrs.alreadySorted());
+
+    return v.attrs()->size();
+}
+
 void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
@@ -2225,40 +2368,7 @@ void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
         return;
     }
 
-    auto attrs = state.buildBindings(bindings1.size() + bindings2.size());
-
-    /* Merge the sets, preferring values from the second set.  Make
-       sure to keep the resulting vector in sorted order. */
-    auto i = bindings1.begin();
-    auto j = bindings2.begin();
-
-    while (i != bindings1.end() && j != bindings2.end()) {
-        if (i->name == j->name) {
-            attrs.insert(*j);
-            ++i;
-            ++j;
-        } else if (i->name < j->name) {
-            attrs.insert(*i);
-            ++i;
-        } else {
-            attrs.insert(*j);
-            ++j;
-        }
-    }
-
-    while (i != bindings1.end()) {
-        attrs.insert(*i);
-        ++i;
-    }
-
-    while (j != bindings2.end()) {
-        attrs.insert(*j);
-        ++j;
-    }
-
-    v.mkAttrs(attrs.alreadySorted());
-
-    state.nrOpUpdateValuesCopied += v.attrs()->size();
+    state.nrOpUpdateValuesCopied += mergeBindings(state, v1, v2, v);
 }
 
 void ExprOpConcatLists::eval(EvalState & state, Env & env, Value & v)

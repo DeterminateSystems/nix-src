@@ -3401,12 +3401,42 @@ static void prim_removeAttrs(EvalState & state, const PosIdx pos, Value ** args,
     }
     std::sort(names.begin(), names.end());
 
+    auto & oldAttrs = *args[0]->attrs();
+
+    /* Count the attributes that will be removed, so that we can
+       allocate a result of exactly the right size. If the list of
+       names is much shorter than the set, look up each name in the
+       set, which is O(k log n). Otherwise, do a simultaneous scan of
+       both, which is O(n + k). Note that `names` can contain
+       duplicates. */
+    size_t nrRemoved = 0;
+    if (names.size() * 16 <= oldAttrs.size()) {
+        Symbol prev;
+        for (auto & name : names) {
+            if (name.name != prev && oldAttrs.get(name.name))
+                ++nrRemoved;
+            prev = name.name;
+        }
+    } else {
+        std::set_intersection(
+            oldAttrs.begin(),
+            oldAttrs.end(),
+            names.begin(),
+            names.end(),
+            boost::make_function_output_iterator([&]([[maybe_unused]] auto && _) { ++nrRemoved; }));
+    }
+
+    if (nrRemoved == 0) {
+        /* Nothing to remove, so the result is the original set. */
+        v = *args[0];
+        return;
+    }
+
     /* Copy all attributes not in that set.  Note that we don't need
        to sort v.attrs because it's a subset of an already sorted
        vector. */
-    auto attrs = state.buildBindings(args[0]->attrs()->size());
-    std::set_difference(
-        args[0]->attrs()->begin(), args[0]->attrs()->end(), names.begin(), names.end(), std::back_inserter(attrs));
+    auto attrs = state.buildBindings(oldAttrs.size() - nrRemoved);
+    std::set_difference(oldAttrs.begin(), oldAttrs.end(), names.begin(), names.end(), std::back_inserter(attrs));
     v.mkAttrs(attrs.alreadySorted());
 }
 
@@ -3517,15 +3547,27 @@ static RegisterPrimOp primop_listToAttrs({
     .impl = prim_listToAttrs,
 });
 
-static void prim_intersectAttrs(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+/**
+ * Store in `v` the attributes of `vRight` that also occur in `left`.
+ *
+ * This is not part of `prim_intersectAttrs()` so that `found` is not
+ * part of the stack frame of the latter while it's forcing its
+ * arguments.
+ */
+[[gnu::noinline]]
+static void intersectAttrs(EvalState & state, const Bindings & left, Value & vRight, Value & v)
 {
-    state.forceAttrs(*args[0], pos, "while evaluating the first argument passed to builtins.intersectAttrs");
-    state.forceAttrs(*args[1], pos, "while evaluating the second argument passed to builtins.intersectAttrs");
+    auto & right = *vRight.attrs();
 
-    auto & left = *args[0]->attrs();
-    auto & right = *args[1]->attrs();
+    /* We don't know the size of the result in advance, and most of
+       the time it's much smaller than the smallest of the two sets
+       (in Nixpkgs, it's usually empty). So we first collect the
+       result in a temporary vector, allowing us to allocate a
+       `Bindings` of exactly the right size.
 
-    auto attrs = state.buildBindings(std::min(left.size(), right.size()));
+       Note: the values in `found` are kept alive by `right`. */
+    boost::container::small_vector<Attr, 64> found;
+    found.reserve(std::min(left.size(), right.size()));
 
     // The current implementation has good asymptotic complexity and is reasonably
     // simple. Further optimization may be possible, but does not seem productive,
@@ -3569,17 +3611,35 @@ static void prim_intersectAttrs(EvalState & state, const PosIdx pos, Value ** ar
         for (auto & l : left) {
             auto r = right.get(l.name);
             if (r)
-                attrs.insert(*r);
+                found.push_back(*r);
         }
     } else {
         for (auto & r : right) {
             auto l = left.get(r.name);
             if (l)
-                attrs.insert(r);
+                found.push_back(r);
         }
     }
 
+    if (found.size() == right.size()) {
+        /* Every attribute in `right` also occurs in `left`, so the
+           result is `right`. */
+        v = vRight;
+        return;
+    }
+
+    auto attrs = state.buildBindings(found.size());
+    for (auto & attr : found)
+        attrs.insert(attr);
     v.mkAttrs(attrs.alreadySorted());
+}
+
+static void prim_intersectAttrs(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+{
+    state.forceAttrs(*args[0], pos, "while evaluating the first argument passed to builtins.intersectAttrs");
+    state.forceAttrs(*args[1], pos, "while evaluating the second argument passed to builtins.intersectAttrs");
+
+    intersectAttrs(state, *args[0]->attrs(), *args[1], v);
 }
 
 static RegisterPrimOp primop_intersectAttrs({
