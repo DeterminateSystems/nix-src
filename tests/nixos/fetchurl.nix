@@ -66,6 +66,14 @@ in
 
         security.pki.certificateFiles = [ "${goodCert}/cert.pem" ];
 
+        users.users.alice.isNormalUser = true;
+
+        environment.etc."alice-netrc" = {
+          text = "machine auth login alice password s3cr3t\n";
+          mode = "0600";
+          user = "alice";
+        };
+
         networking.hosts."127.0.0.1" = [
           "good"
           "bad"
@@ -96,6 +104,10 @@ in
 
     # Fetching from a server with a trusted cert should work via environment variable override.
     machine.succeed("NIX_SSL_CERT_FILE=/tmp/cafile.pem nix build --no-substitute --expr 'import <nix/fetchurl.nix> { url = \"https://bad/index.html\"; hash = \"sha256-rsBwZF/lPuOzdjBZN2E08FjMM3JHyXit0Xi2zN+wAZ8=\"; }'")
+
+    machine.fail("nix build --no-substitute --option netrc-file /dev/null --expr 'import <nix/fetchurl.nix> { name = \"no-netrc\"; url = \"http://auth/index.html\"; hash = \"sha256-67y3HalfTt2zfgMt7BwU5vkaGWcelFlR4jryIkA1dTo=\"; }'")
+
+    machine.succeed("nix build --no-substitute --option netrc-file /etc/alice-netrc --expr 'import <nix/fetchurl.nix> { name = \"netrc\"; url = \"http://auth/index.html\"; hash = \"sha256-67y3HalfTt2zfgMt7BwU5vkaGWcelFlR4jryIkA1dTo=\"; }'")
 
     # builtins.fetchurl should authenticate using userinfo from the URL.
     out = machine.succeed("nix eval --raw --impure --no-substitute --expr 'builtins.readFile (builtins.fetchurl { url = \"http://alice:s3cr3t@auth/index.html\"; sha256 = \"sha256-67y3HalfTt2zfgMt7BwU5vkaGWcelFlR4jryIkA1dTo=\"; })'")
