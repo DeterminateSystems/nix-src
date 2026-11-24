@@ -2230,6 +2230,101 @@ void ExprOpImpl::eval(EvalState & state, Env & env, Value & v)
         || state.evalBool(env, e2, pos, "in the right operand of the IMPL (->) operator"));
 }
 
+/**
+ * Return the number of attributes that occur in both `a` and `b`.
+ */
+static size_t countCommonAttrs(const Bindings & a, const Bindings & b)
+{
+    size_t count = 0;
+
+    auto & small = a.size() <= b.size() ? a : b;
+    auto & large = a.size() <= b.size() ? b : a;
+
+    /* If one set is much smaller than the other, look up each of its
+       attributes in the other set, which is O(|small| * log(|large|)).
+       Otherwise do a simultaneous scan of both sets, which is
+       O(|small| + |large|). */
+    if (small.size() * 16 <= large.size()) {
+        for (auto & attr : small)
+            if (large.get(attr.name))
+                ++count;
+    } else {
+        std::set_intersection(
+            a.begin(),
+            a.end(),
+            b.begin(),
+            b.end(),
+            boost::make_function_output_iterator([&]([[maybe_unused]] auto && _) { ++count; }));
+    }
+
+    return count;
+}
+
+/**
+ * Store in `v` the result of `v1 // v2` by merging the attributes of
+ * `v1` and `v2` into a new set. Both must be non-empty attribute
+ * sets. Returns the number of attributes copied.
+ *
+ * This is not part of `ExprOpUpdate::eval()` because that function is
+ * recursive (via the evaluation of its operands), so we don't want
+ * the iterators used here to be part of its stack frame.
+ */
+[[gnu::noinline]]
+static size_t mergeBindings(EvalState & state, Value & v1, Value & v2, Value & v)
+{
+    const Bindings & bindings1 = *v1.attrs();
+    const Bindings & bindings2 = *v2.attrs();
+
+    /* Count the attributes that occur in both sets, so that we can
+       allocate a result of exactly the right size. Since the sum of
+       the sizes can be a gross overestimate (e.g. when updating a
+       package set with an almost equal one), this is worth the extra
+       pass. */
+    auto nrCommon = countCommonAttrs(bindings1, bindings2);
+
+    if (nrCommon == bindings1.size()) {
+        /* Every attribute in the first set is overridden by the
+           second set, so the result is the second set. */
+        v = v2;
+        return 0;
+    }
+
+    auto attrs = state.buildBindings(bindings1.size() + bindings2.size() - nrCommon);
+
+    /* Merge the sets, preferring values from the second set.  Make
+       sure to keep the resulting vector in sorted order. */
+    auto i = bindings1.begin();
+    auto j = bindings2.begin();
+
+    while (i != bindings1.end() && j != bindings2.end()) {
+        if (i->name == j->name) {
+            attrs.insert(*j);
+            ++i;
+            ++j;
+        } else if (i->name < j->name) {
+            attrs.insert(*i);
+            ++i;
+        } else {
+            attrs.insert(*j);
+            ++j;
+        }
+    }
+
+    while (i != bindings1.end()) {
+        attrs.insert(*i);
+        ++i;
+    }
+
+    while (j != bindings2.end()) {
+        attrs.insert(*j);
+        ++j;
+    }
+
+    v.mkAttrs(attrs.alreadySorted());
+
+    return v.attrs()->size();
+}
+
 void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
@@ -2273,40 +2368,7 @@ void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
         return;
     }
 
-    auto attrs = state.buildBindings(bindings1.size() + bindings2.size());
-
-    /* Merge the sets, preferring values from the second set.  Make
-       sure to keep the resulting vector in sorted order. */
-    auto i = bindings1.begin();
-    auto j = bindings2.begin();
-
-    while (i != bindings1.end() && j != bindings2.end()) {
-        if (i->name == j->name) {
-            attrs.insert(*j);
-            ++i;
-            ++j;
-        } else if (i->name < j->name) {
-            attrs.insert(*i);
-            ++i;
-        } else {
-            attrs.insert(*j);
-            ++j;
-        }
-    }
-
-    while (i != bindings1.end()) {
-        attrs.insert(*i);
-        ++i;
-    }
-
-    while (j != bindings2.end()) {
-        attrs.insert(*j);
-        ++j;
-    }
-
-    v.mkAttrs(attrs.alreadySorted());
-
-    state.nrOpUpdateValuesCopied += v.attrs()->size();
+    state.nrOpUpdateValuesCopied += mergeBindings(state, v1, v2, v);
 }
 
 void ExprOpConcatLists::eval(EvalState & state, Env & env, Value & v)
