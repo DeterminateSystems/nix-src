@@ -43,10 +43,9 @@ Value::Value(BindingsBuilder & bindings)
 {
 }
 
-Value & Value::mkAttrs(BindingsBuilder & bindings)
+void Value::mkAttrs(BindingsBuilder & bindings)
 {
     mkAttrs(bindings.finish());
-    return *this;
 }
 
 } // namespace nix

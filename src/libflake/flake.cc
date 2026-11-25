@@ -1036,12 +1036,7 @@ void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & vRes)
         overrides.alloc(state.symbols.create(key->second), override);
     }
 
-    auto & vOverrides = state.allocValue()->mkAttrs(overrides);
-
-    auto vLocks = state.allocValue();
-    vLocks->mkString(lockFileStr, state.mem);
-
-    Value * args[] = {vLocks, &vOverrides};
+    Value * args[] = {state.allocValue(lockFileStr, state.mem), state.allocValue(overrides)};
     state.callFunction(**libFlakeState.vCallFlake, args, vRes, noPos);
 }
 
