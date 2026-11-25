@@ -42,7 +42,7 @@ inline void * EvalMemory::allocBytes(size_t count)
 }
 
 [[gnu::always_inline]]
-Value * EvalMemory::allocValue()
+void * EvalMemory::allocValueUninit()
 {
 #if NIX_USE_BOEHMGC
     /* Allocation cache for GC'd Value objects. Boehm GC is already a global resource, so thread_local is
@@ -52,8 +52,8 @@ Value * EvalMemory::allocValue()
 
     /* We use the boehm batch allocator to speed up allocations of Values (of which there are many).
        GC_malloc_many returns a linked list of objects of the given size, where the first word
-       of each object is also the pointer to the next object in the list. This also means that we
-       have to explicitly clear the first word of every object we take. */
+       of each object is also the pointer to the next object in the list. This also means that
+       the caller has to explicitly overwrite the first word of every object we return. */
     if (!*valueAllocCache) {
         *valueAllocCache = GC_malloc_many(sizeof(Value));
         if (!*valueAllocCache)
@@ -61,16 +61,52 @@ Value * EvalMemory::allocValue()
     }
 
     /* GC_NEXT is a convenience macro for accessing the first word of an object.
-       Take the first list item, advance the list to the next item, and clear the next pointer. */
+       Take the first list item and advance the list to the next item. */
     void * p = *valueAllocCache;
     *valueAllocCache = GC_NEXT(p);
-    GC_NEXT(p) = nullptr;
 #else
     void * p = allocBytes(sizeof(Value));
 #endif
 
     stats.nrValues++;
+    return p;
+}
+
+[[gnu::always_inline]]
+Value * EvalMemory::allocValue()
+{
+    void * p = allocValueUninit();
+#if NIX_USE_BOEHMGC
+    /* Clear the next pointer. */
+    GC_NEXT(p) = nullptr;
+#endif
     return (Value *) p;
+}
+
+template<typename... Args>
+    requires(sizeof...(Args) > 0)
+[[gnu::always_inline]]
+Value * EvalMemory::allocValue(Args &&... args)
+{
+    /* Note: the constructor overwrites both words of the value, so
+       there is no need to clear the next pointer. */
+    return new (allocValueUninit()) Value(std::forward<Args>(args)...);
+}
+
+template<typename... Args>
+    requires(sizeof...(Args) > 0) && std::constructible_from<Value, Args...>
+Value & BindingsBuilder::alloc(Symbol name, Args &&... args)
+{
+    auto value = mem.get().allocValue(std::forward<Args>(args)...);
+    push_back(Attr(name, value));
+    return *value;
+}
+
+template<typename... Args>
+    requires(sizeof...(Args) > 0) && std::constructible_from<Value, Args...>
+Value & BindingsBuilder::alloc(std::string_view name, Args &&... args)
+{
+    return alloc(symbols.get().create(name), std::forward<Args>(args)...);
 }
 
 [[gnu::always_inline]]

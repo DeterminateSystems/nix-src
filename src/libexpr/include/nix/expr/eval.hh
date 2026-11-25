@@ -345,7 +345,23 @@ public:
     template<typename T, std::size_t N = 0>
     inline void * allocBytes(size_t count);
 
+    /**
+     * Allocate an uninitialized value, to be initialized using one of
+     * the `Value::mk*()` methods. If the contents of the value are
+     * already known, prefer the overload below.
+     */
     inline Value * allocValue();
+
+    /**
+     * Allocate a value and initialize it by passing `args` to a
+     * constructor of `Value`, e.g. `allocValue(NixInt(123))`. This is
+     * cheaper than `allocValue()` followed by `mk*()`, since it
+     * doesn't require an atomic update.
+     */
+    template<typename... Args>
+        requires(sizeof...(Args) > 0)
+    inline Value * allocValue(Args &&... args);
+
     inline Env & allocEnv(size_t size);
 
     Bindings * allocBindings(size_t capacity);
@@ -373,6 +389,13 @@ public:
 
 private:
     Statistics stats;
+
+    /**
+     * Allocate memory for a `Value`. Unlike the memory returned by
+     * `allocBytes()`, it's not zeroed: the first word can contain
+     * garbage.
+     */
+    inline void * allocValueUninit();
 };
 
 class EvalState : public std::enable_shared_from_this<EvalState>
@@ -535,6 +558,17 @@ public:
     inline Value * allocValue()
     {
         return mem.allocValue();
+    }
+
+    /**
+     * Allocate a value and initialize it by passing `args` to a
+     * constructor of `Value`. See `EvalMemory::allocValue()`.
+     */
+    template<typename... Args>
+        requires(sizeof...(Args) > 0)
+    inline Value * allocValue(Args &&... args)
+    {
+        return mem.allocValue(std::forward<Args>(args)...);
     }
 
     LookupPath getLookupPath()
@@ -1149,6 +1183,7 @@ private:
     friend struct ExprInt;
     friend struct ExprFloat;
     friend struct ExprPath;
+    friend struct ExprLambda;
     friend struct ExprSelect;
     friend void prim_getAttr(EvalState & state, const PosIdx pos, Value ** args, Value & v);
 

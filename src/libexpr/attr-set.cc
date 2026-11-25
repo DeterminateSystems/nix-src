@@ -38,10 +38,14 @@ void Bindings::sort()
     std::sort(attrs, attrs + numAttrs);
 }
 
-Value & Value::mkAttrs(BindingsBuilder & bindings)
+Value::Value(BindingsBuilder & bindings)
+    : Value(bindings.finish())
+{
+}
+
+void Value::mkAttrs(BindingsBuilder & bindings)
 {
     mkAttrs(bindings.finish());
-    return *this;
 }
 
 } // namespace nix
