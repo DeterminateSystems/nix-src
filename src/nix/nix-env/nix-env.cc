@@ -170,7 +170,7 @@ static void getAllExprs(EvalState & state, const SourcePath & path, StringSet & 
             vArg->mkPath(path2, state.mem);
             if (seen.size() == maxAttrs)
                 throw Error("too many Nix expressions in directory '%1%'", path);
-            attrs.alloc(attrName, Value::FunctionApplicationThunk{.left = &state.getBuiltin("import"), .right = vArg});
+            attrs.alloc(attrName, Value::App{.left = &state.getBuiltin("import"), .right = vArg});
         } else if (st.type == SourceAccessor::tDirectory)
             /* `path2' is a directory (with no default.nix in it);
                recurse into it. */

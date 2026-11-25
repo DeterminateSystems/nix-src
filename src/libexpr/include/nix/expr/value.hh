@@ -425,23 +425,23 @@ struct ValueBase
     struct Null
     {};
 
-    struct ClosureThunk
+    struct Thunk
     {
         Env * env;
         Expr * expr;
     };
 
-    struct FunctionApplicationThunk
+    struct App
     {
         Value *left, *right;
     };
 
     /**
-     * Like FunctionApplicationThunk, but must be a distinct type in order to
+     * Like App, but must be a distinct type in order to
      * resolve overloads to `tPrimOpApp` instead of `tApp`.
      * This type helps with the efficient implementation of arity>=2 primop calls.
      */
-    struct PrimOpApplicationThunk
+    struct PrimOpApp
     {
         Value *left, *right;
     };
@@ -475,22 +475,22 @@ struct PayloadTypeToInternalType
  * overload resolution in setStorage. This ensures there's a bijection from
  * InternalType <-> C++ type.
  */
-#define NIX_VALUE_STORAGE_FOR_EACH_FIELD(MACRO)                     \
-    MACRO(NixInt, integer, tInt)                                    \
-    MACRO(bool, boolean, tBool)                                     \
-    MACRO(ValueBase::StringWithContext, string, tString)            \
-    MACRO(ValueBase::Path, path, tPath)                             \
-    MACRO(ValueBase::Null, null_, tNull)                            \
-    MACRO(Bindings *, attrs, tAttrs)                                \
-    MACRO(ValueBase::List, bigList, tListN)                         \
-    MACRO(ValueBase::SmallList, smallList, tListSmall)              \
-    MACRO(ValueBase::ClosureThunk, thunk, tThunk)                   \
-    MACRO(ValueBase::FunctionApplicationThunk, app, tApp)           \
-    MACRO(ValueBase::Lambda, lambda, tLambda)                       \
-    MACRO(PrimOp *, primOp, tPrimOp)                                \
-    MACRO(ValueBase::PrimOpApplicationThunk, primOpApp, tPrimOpApp) \
-    MACRO(ExternalValueBase *, external, tExternal)                 \
-    MACRO(ValueBase::Failed *, failed, tFailed)                     \
+#define NIX_VALUE_STORAGE_FOR_EACH_FIELD(MACRO)          \
+    MACRO(NixInt, integer, tInt)                         \
+    MACRO(bool, boolean, tBool)                          \
+    MACRO(ValueBase::StringWithContext, string, tString) \
+    MACRO(ValueBase::Path, path, tPath)                  \
+    MACRO(ValueBase::Null, null_, tNull)                 \
+    MACRO(Bindings *, attrs, tAttrs)                     \
+    MACRO(ValueBase::List, bigList, tListN)              \
+    MACRO(ValueBase::SmallList, smallList, tListSmall)   \
+    MACRO(ValueBase::Thunk, thunk, tThunk)               \
+    MACRO(ValueBase::App, app, tApp)                     \
+    MACRO(ValueBase::Lambda, lambda, tLambda)            \
+    MACRO(PrimOp *, primOp, tPrimOp)                     \
+    MACRO(ValueBase::PrimOpApp, primOpApp, tPrimOpApp)   \
+    MACRO(ExternalValueBase *, external, tExternal)      \
+    MACRO(ValueBase::Failed *, failed, tFailed)          \
     MACRO(NixFloat, fpoint, tFloat)
 
 #define NIX_VALUE_PAYLOAD_TYPE(T, FIELD_NAME, DISCRIMINATOR) \
@@ -819,10 +819,10 @@ protected:
     }
 
     NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(SmallList, encodePairOfPointers, [0], [1])
-    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(PrimOpApplicationThunk, encodePairOfPointers, .left, .right)
+    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(PrimOpApp, encodePairOfPointers, .left, .right)
     NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(Lambda, encodePairOfPointers, .env, .fun)
-    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(FunctionApplicationThunk, encodeThunk, .left, .right)
-    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(ClosureThunk, encodeThunk, .env, .expr)
+    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(App, encodeThunk, .left, .right)
+    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(Thunk, encodeThunk, .env, .expr)
 
 #undef NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS
 
@@ -948,7 +948,7 @@ protected:
     void setStorage(T payload) noexcept
     {
         auto w = encode(payload);
-        if constexpr (std::same_as<T, ClosureThunk> || std::same_as<T, FunctionApplicationThunk>) {
+        if constexpr (std::same_as<T, Thunk> || std::same_as<T, App>) {
             p1 = w.p1;
             // Note: awaited values can never become a thunk, so no need
             // to check for waiters.
@@ -1330,7 +1330,7 @@ public:
 
     /**
      * Create a value from a payload such as `NixInt`, `bool`, `Null`,
-     * `Bindings *`, `Lambda` or `ClosureThunk` (see
+     * `Bindings *`, `Lambda` or `Thunk` (see
      * `NIX_VALUE_STORAGE_FOR_EACH_FIELD` for the full list). The
      * argument must have exactly that type, e.g. `Value(NixInt(1))`
      * rather than `Value(1)`.
@@ -1541,12 +1541,12 @@ public:
 
     inline void mkThunk(Env * e, Expr * ex) noexcept
     {
-        setStorage(ClosureThunk{.env = e, .expr = ex});
+        setStorage(Thunk{.env = e, .expr = ex});
     }
 
     inline void mkApp(Value * l, Value * r) noexcept
     {
-        setStorage(FunctionApplicationThunk{.left = l, .right = r});
+        setStorage(App{.left = l, .right = r});
     }
 
     inline void mkLambda(Env * e, ExprLambda * f) noexcept
@@ -1558,7 +1558,7 @@ public:
 
     inline void mkPrimOpApp(Value * l, Value * r) noexcept
     {
-        setStorage(PrimOpApplicationThunk{.left = l, .right = r});
+        setStorage(PrimOpApp{.left = l, .right = r});
     }
 
     /**
@@ -1660,20 +1660,20 @@ public:
     }
 
     // FIXME: remove this since reading it is racy.
-    ClosureThunk thunk() const noexcept
+    Thunk thunk() const noexcept
     {
-        return getStorage<ClosureThunk>();
+        return getStorage<Thunk>();
     }
 
-    PrimOpApplicationThunk primOpApp() const noexcept
+    PrimOpApp primOpApp() const noexcept
     {
-        return getStorage<PrimOpApplicationThunk>();
+        return getStorage<PrimOpApp>();
     }
 
     // FIXME: remove this since reading it is racy.
-    FunctionApplicationThunk app() const noexcept
+    App app() const noexcept
     {
-        return getStorage<FunctionApplicationThunk>();
+        return getStorage<App>();
     }
 
     const char * pathStr() const noexcept

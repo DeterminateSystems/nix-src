@@ -135,9 +135,7 @@ void emitTreeAttrs(
         attrs.alloc("narHash", narHash->to_string(HashFormat::SRI, true), state.mem);
     else
         // Lazily compute the NAR hash for backward compatibility.
-        attrs.alloc(
-            "narHash",
-            Value::FunctionApplicationThunk{.left = **get(state.internalPrimOps, "narHash"), .right = &vStorePath});
+        attrs.alloc("narHash", Value::App{.left = **get(state.internalPrimOps, "narHash"), .right = &vStorePath});
 
     if (input.getType() == "git")
         attrs.alloc("submodules", fetchers::maybeGetBoolAttr(input.attrs, "submodules").value_or(false));

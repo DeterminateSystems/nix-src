@@ -1056,7 +1056,7 @@ static inline void mkThunk(Value & v, Env & env, Expr * expr)
 static inline Value * allocThunk(EvalState & state, Env & env, Expr * expr)
 {
     nrThunks++;
-    return state.allocValue(Value::ClosureThunk{.env = &env, .expr = expr});
+    return state.allocValue(Value::Thunk{.env = &env, .expr = expr});
 }
 
 void EvalState::mkThunk_(Value & v, Expr * expr)
@@ -1276,7 +1276,7 @@ void EvalState::evalFile(const SourcePath & path, Value & v, bool mustBeTrivial)
         *resolvedPath,
         RootValue(nullptr),
         [&](auto & i) {
-            vExpr = allocValue(Value::ClosureThunk{.env = &baseEnv, .expr = &expr});
+            vExpr = allocValue(Value::Thunk{.env = &baseEnv, .expr = &expr});
             *i.second = vExpr;
         },
         [&](auto & i) { vExpr = *i.second; });
