@@ -119,8 +119,10 @@ struct Expr
     /**
      * Create a thunk for the delayed computation of the given expression
      * in the given environment. But if the expression is a variable,
-     * then look it up right away. This significantly reduces the number
-     * of thunks allocated.
+     * then look it up right away, and if it is a literal or a lambda,
+     * return its value directly, since those are already in weak head
+     * normal form. This significantly reduces the number of thunks
+     * allocated.
      */
     virtual Value * maybeThunk(EvalState & state, Env & env);
     virtual void setName(Symbol name);
@@ -573,6 +575,7 @@ public:
         : ExprLambda(positions, alloc, pos, Symbol(), formals, body) {};
 
     void setName(Symbol name) override;
+    Value * maybeThunk(EvalState & state, Env & env) override;
     std::string showNamePos(const EvalState & state) const;
 
     PosIdx getPos() const override

@@ -1149,6 +1149,7 @@ private:
     friend struct ExprInt;
     friend struct ExprFloat;
     friend struct ExprPath;
+    friend struct ExprLambda;
     friend struct ExprSelect;
     friend void prim_getAttr(EvalState & state, const PosIdx pos, Value ** args, Value & v);
 

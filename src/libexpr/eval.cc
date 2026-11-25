@@ -1170,6 +1170,17 @@ Value * ExprPath::maybeThunk(EvalState & state, Env & env)
     return &v;
 }
 
+Value * ExprLambda::maybeThunk(EvalState & state, Env & env)
+{
+    /* A thunk for a lambda would hold the same environment and
+       expression as the lambda value that it evaluates to, so create
+       the latter right away. */
+    state.nrAvoided++;
+    Value * v = state.allocValue();
+    v->mkLambda(&env, this);
+    return v;
+}
+
 namespace {
 
 /**

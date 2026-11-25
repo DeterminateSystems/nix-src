@@ -56,7 +56,7 @@ expect_trace 'let a = builtins.all (let f = x: x; in f); in a [1]' "
 # functor
 expect_trace '{__functor = x: arg: arg;} 1' "
 «string»:1:1:functor 1
-«string»:1:1:functor;«string»:1:2 1
+«string»:1:1:functor;«string»:1:2:__functor 1
 "
 
 # failure inside a tryEval
