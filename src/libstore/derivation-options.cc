@@ -19,7 +19,7 @@ static std::optional<std::string>
 getStringAttr(const StringMap & env, const StructuredAttrs * parsed, const std::string & name)
 {
     if (parsed) {
-        if (auto * i = get(parsed->structuredAttrs, name))
+        if (auto * i = get(parsed->object(), name))
             try {
                 return getString(*i);
             } catch (Error & e) {
@@ -36,7 +36,7 @@ getStringAttr(const StringMap & env, const StructuredAttrs * parsed, const std::
 static bool getBoolAttr(const StringMap & env, const StructuredAttrs * parsed, const std::string & name, bool def)
 {
     if (parsed) {
-        if (auto * i = get(parsed->structuredAttrs, name))
+        if (auto * i = get(parsed->object(), name))
             try {
                 return getBoolean(*i);
             } catch (Error & e) {
@@ -54,7 +54,7 @@ static std::optional<StringSet>
 getStringSetAttr(const StringMap & env, const StructuredAttrs * parsed, const std::string & name)
 {
     if (parsed) {
-        if (auto * i = get(parsed->structuredAttrs, name))
+        if (auto * i = get(parsed->object(), name))
             try {
                 return getStringSet(*i);
             } catch (Error & e) {
@@ -184,7 +184,7 @@ DerivationOptions<SingleDerivedPath> derivationOptionsFromStructuredAttrs(
     };
 
     if (shouldWarn && parsed) {
-        auto & structuredAttrs = parsed->structuredAttrs;
+        auto & structuredAttrs = parsed->object();
 
         if (get(structuredAttrs, "allowedReferences")) {
             warn(
@@ -215,7 +215,7 @@ DerivationOptions<SingleDerivedPath> derivationOptionsFromStructuredAttrs(
     return {
         .outputChecks = [&]() -> OutputChecksVariant<SingleDerivedPath> {
             if (parsed) {
-                auto & structuredAttrs = parsed->structuredAttrs;
+                auto & structuredAttrs = parsed->object();
 
                 std::map<std::string, OutputChecks<SingleDerivedPath>, std::less<>> res;
                 if (auto * outputChecks = get(structuredAttrs, "outputChecks")) {
@@ -279,7 +279,7 @@ DerivationOptions<SingleDerivedPath> derivationOptionsFromStructuredAttrs(
                 std::map<std::string, bool, std::less<>> res;
 
                 if (parsed) {
-                    if (auto * udr = get(parsed->structuredAttrs, "unsafeDiscardReferences")) {
+                    if (auto * udr = get(parsed->object(), "unsafeDiscardReferences")) {
                         try {
                             for (auto & [outputName, output] : getObject(*udr))
                                 res.insert_or_assign(outputName, getBoolean(output));
@@ -312,7 +312,7 @@ DerivationOptions<SingleDerivedPath> derivationOptionsFromStructuredAttrs(
                 std::map<std::string, std::set<SingleDerivedPath>, std::less<>> ret;
 
                 if (parsed) {
-                    auto * e = get(parsed->structuredAttrs, "exportReferencesGraph");
+                    auto * e = get(parsed->object(), "exportReferencesGraph");
                     if (!e)
                         return ret;
                     if (!e->is_object()) {

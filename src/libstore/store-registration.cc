@@ -113,6 +113,10 @@ ref<StoreConfig> resolveStoreConfig(StoreReference && storeURI)
 
 std::list<ref<Store>> getDefaultSubstituters()
 {
+    /* Note: quickExit() doesn't destroy these stores, since other
+       threads (e.g. the curl worker thread) may still be using
+       them. Resources that must not outlive the process (like SSH
+       master processes) are cleaned up by atQuickExit() handlers. */
     static auto stores([]() {
         std::list<ref<Store>> stores;
 

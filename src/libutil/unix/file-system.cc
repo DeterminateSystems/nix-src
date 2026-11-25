@@ -20,6 +20,7 @@
 #include "nix/util/util.hh"
 
 #include "util-unix-config-private.hh"
+#include "unix/unix-modes.hh"
 
 namespace nix {
 
@@ -27,6 +28,14 @@ AutoCloseFD openDirectory(const std::filesystem::path & path, FinalSymlink final
 {
     return AutoCloseFD{open(
         path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | (finalSymlink == FinalSymlink::Follow ? 0 : O_NOFOLLOW))};
+}
+
+AutoCloseFD openDirectoryTraversable(const std::filesystem::path & path, FinalSymlink finalSymlink)
+{
+    return open(
+        path.c_str(),
+        unix::traversableDirAccessMode | O_DIRECTORY | O_CLOEXEC
+            | (finalSymlink == FinalSymlink::Follow ? 0 : O_NOFOLLOW));
 }
 
 AutoCloseFD openFileReadonly(const std::filesystem::path & path, FinalSymlink finalSymlink)
@@ -156,7 +165,8 @@ static void _deletePath(
     Descriptor parentfd,
     const std::filesystem::path & path,
     uint64_t & bytesFreed,
-    std::exception_ptr & ex MOUNTEDPATHS_PARAM)
+    std::exception_ptr & ex,
+    bool forceDontChmod MOUNTEDPATHS_PARAM)
 {
     checkInterrupt();
 #ifdef __FreeBSD__
@@ -199,9 +209,10 @@ static void _deletePath(
     }
 
     if (S_ISDIR(st.st_mode)) {
-        /* Make the directory accessible. */
         const auto PERM_MASK = S_IRUSR | S_IWUSR | S_IXUSR;
-        if ((st.st_mode & PERM_MASK) != PERM_MASK)
+        const bool needsPermissionChange = !forceDontChmod && ((st.st_mode & PERM_MASK) != PERM_MASK);
+        /* Make the directory accessible, but only if we really need to. */
+        if (needsPermissionChange)
             try {
                 unix::fchmodatTryNoFollow(parentfd, name, st.st_mode | PERM_MASK);
             } catch (SysError & e) {
@@ -224,7 +235,7 @@ static void _deletePath(
             std::string childName = dirent->d_name;
             if (childName == "." || childName == "..")
                 continue;
-            _deletePath(dirfd(dir.get()), path / childName, bytesFreed, ex MOUNTEDPATHS_ARG);
+            _deletePath(dirfd(dir.get()), path / childName, bytesFreed, ex, forceDontChmod MOUNTEDPATHS_ARG);
         }
         if (errno)
             throw SysError("reading directory %1%", PathFmt(path));
@@ -260,7 +271,20 @@ static void _deletePath(const std::filesystem::path & path, uint64_t & bytesFree
 
     std::exception_ptr ex;
 
-    _deletePath(dirfd.get(), path, bytesFreed, ex MOUNTEDPATHS_ARG);
+    /* Whether directories don't need to be made writable/readable/traversable
+       for them be emptied. In the future we can also skip that when we have
+       CAP_DAC_OVERRIDE on Linux. */
+    bool forceDontChmod = false;
+
+#ifdef __APPLE__
+    /* Root can traverse and recursively remove unreadable, non-executable and
+       non-writable directories on Darwin. App Management can deny changing a
+       launched app bundle's mode even when deleting the bundle is allowed. */
+    if (::geteuid() == 0)
+        forceDontChmod = true;
+#endif
+
+    _deletePath(dirfd.get(), path, bytesFreed, ex, forceDontChmod MOUNTEDPATHS_ARG);
 
     if (ex)
         std::rethrow_exception(ex);
@@ -274,7 +298,7 @@ void deletePath(const std::filesystem::path & path)
 
 void deletePath(const std::filesystem::path & path, uint64_t & bytesFreed)
 {
-    // Activity act(*logger, lvlDebug, "recursively deleting path '%1%'", path);
+    bytesFreed = 0;
 #ifdef __FreeBSD__
     std::set<std::filesystem::path> mountedPaths;
     struct statfs * mntbuf;
@@ -287,7 +311,6 @@ void deletePath(const std::filesystem::path & path, uint64_t & bytesFreed)
         mountedPaths.emplace(mntbuf[i].f_mntonname);
     }
 #endif
-    bytesFreed = 0;
     _deletePath(path, bytesFreed MOUNTEDPATHS_ARG);
 }
 
@@ -295,6 +318,12 @@ void chown(const std::filesystem::path & path, uid_t owner, gid_t group)
 {
     if (::chown(path.c_str(), owner, group) == -1)
         throw SysError("changing ownership of %s", PathFmt(path));
+}
+
+void renameFile(const std::filesystem::path & src, const std::filesystem::path & dst)
+{
+    if (::rename(src.c_str(), dst.c_str()) == -1)
+        throw SysError("renaming %1% to %2%", PathFmt(src), PathFmt(dst));
 }
 
 } // namespace nix

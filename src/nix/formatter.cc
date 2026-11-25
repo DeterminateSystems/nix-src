@@ -32,14 +32,9 @@ static auto rCmdFormatter = registerCommand<CmdFormatter>("formatter");
 /** Common implementation bits for the `nix formatter` subcommands. */
 struct MixFormatter : SourceExprCommand
 {
-    Strings getDefaultFlakeAttrPaths() override
+    StringSet getRoles() override
     {
-        return Strings{"formatter." + settings.thisSystem.get()};
-    }
-
-    Strings getDefaultFlakeAttrPathPrefixes() override
-    {
-        return Strings{};
+        return {"nix-fmt"};
     }
 };
 
@@ -64,11 +59,6 @@ struct CmdFormatterRun : MixFormatter, MixJSON
             ;
     }
 
-    Category category() override
-    {
-        return catSecondary;
-    }
-
     void run(ref<Store> store) override
     {
         auto evalState = getEvalState();
@@ -79,7 +69,9 @@ struct CmdFormatterRun : MixFormatter, MixJSON
         auto app = installable.toApp(*evalState).resolve(evalStore, store);
 
         auto maybeFlakeDir = installable_->flakeRef.input.getSourcePath();
-        assert(maybeFlakeDir.has_value());
+        if (!maybeFlakeDir)
+            throw Error(
+                "cannot run the formatter because flake '%s' does not have a local directory", installable_->flakeRef);
         auto flakeDir = maybeFlakeDir.value();
 
         Strings programArgs{app.program.string()};
@@ -124,11 +116,6 @@ struct CmdFormatterBuild : MixFormatter, MixOutLinkByDefault
         return
 #include "formatter-build.md"
             ;
-    }
-
-    Category category() override
-    {
-        return catSecondary;
     }
 
     void run(ref<Store> store) override

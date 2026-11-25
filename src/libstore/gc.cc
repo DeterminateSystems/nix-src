@@ -11,6 +11,7 @@
 #include "nix/util/serialise.hh"
 #include "nix/util/util.hh"
 #include "nix/util/file-system.hh"
+#include "nix/util/file-system-at.hh"
 #include "nix/store/posix-fs-canonicalise.hh"
 
 #include "store-config-private.hh"
@@ -18,11 +19,14 @@
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/unordered/unordered_flat_set.hpp>
 #include <boost/regex.hpp>
+#include <array>
 #include <queue>
+#include <random>
 #include <thread>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <utility>
 #include <variant>
 #if HAVE_STATVFS
 #  include <sys/statvfs.h>
@@ -51,37 +55,73 @@ void LocalStore::addIndirectRoot(const std::filesystem::path & path)
     makeSymlink(realRoot, path);
 }
 
+/**
+ * The number of low bits of a temporary roots file name that hold the
+ * PID. This is Linux's PID_MAX_LIMIT; other platforms have smaller
+ * maximum PIDs.
+ */
+static constexpr unsigned int tempRootsPidBits = 22;
+
 void LocalStore::createTempRootsFile()
 {
-    auto fdTempRoots(_fdTempRoots.lock());
+    auto tempRootsFile(_tempRootsFile.lock());
 
-    /* Create the temporary roots file for this process. */
-    if (*fdTempRoots)
+    /* Create the temporary roots file for this LocalStore. */
+    if (tempRootsFile->fd)
         return;
 
-    while (1) {
-        if (pathExists(fnTempRoots))
-            /* It *must* be stale, since there can be no two
-               processes with the same pid. */
-            tryUnlink(fnTempRoots);
+    /* The file is named `<n>`, where `n` is our PID if possible.
+       However, the file `<pid>` may already exist, because it's used
+       by another LocalStore instance in this process, by a process
+       with the same PID in another PID namespace, or because it's a
+       stale file left behind by a process that has exited. In that
+       case, we use `<pid> | (<r> << 22)`, where `r` is a random
+       number. We never delete existing files here, since only the
+       garbage collector can safely determine that they're stale.
 
-        *fdTempRoots = openLockFile(fnTempRoots, true);
+       Note: `n` must fit in an `int`, since older versions of Nix
+       parse it using `std::stoi()`. */
+    std::random_device rd;
+    std::uniform_int_distribution<unsigned int> dist(1, (1U << (sizeof(int) * 8 - 1 - tempRootsPidBits)) - 1);
+    auto pid = (unsigned int) getpid() & ((1U << tempRootsPidBits) - 1);
 
-        debug("acquiring write lock on %s", PathFmt(fnTempRoots));
-        lockFile(fdTempRoots->get(), ltWrite, true);
+    for (unsigned int attempt = 0;; ++attempt) {
+        if (attempt >= 1000)
+            throw Error("cannot create a temporary roots file in %s", PathFmt(tempRootsDir));
 
-        /* Check whether the garbage collector didn't get in our
-           way. */
-        if (getFileSize(fdTempRoots->get()) == 0)
-            break;
+        auto n = attempt == 0 ? pid : pid | (dist(rd) << tempRootsPidBits);
+        auto path = tempRootsDir / std::to_string(n);
 
-        /* The garbage collector deleted this file before we could get
-           a lock.  (It won't delete the file after we get a lock.)
-           Try again. */
+        AutoCloseFD fd = toDescriptor(open(
+            path.string().c_str(),
+#ifndef _WIN32
+            O_CLOEXEC |
+#endif
+                O_RDWR | O_CREAT | O_EXCL,
+            0600));
+        if (!fd) {
+            if (errno == EEXIST)
+                continue;
+            throw SysError("creating temporary roots file %s", PathFmt(path));
+        }
+
+        debug("acquiring write lock on %s", PathFmt(path));
+        lockFile(fd.get(), ltWrite, true);
+
+        /* Check whether the garbage collector didn't get in our way,
+           i.e. it deleted this file before we could get a lock. (It
+           won't delete the file after we get a lock.) If so, try
+           again. */
+        if (getFileSize(fd.get()) != 0)
+            continue;
+
+        tempRootsFile->path = std::move(path);
+        tempRootsFile->fd = std::move(fd);
+        return;
     }
 }
 
-void LocalStore::addTempRoot(const StorePath & path)
+void LocalStore::addTempRoots(const StorePathSet & paths, bool _skipIfSlow)
 {
     if (config->readOnly) {
         debug(
@@ -91,18 +131,25 @@ void LocalStore::addTempRoot(const StorePath & path)
 
     createTempRootsFile();
 
-    /* Open/create the global GC lock file. */
-    {
-        auto fdGCLock(_fdGCLock.lock());
-        if (!*fdGCLock)
-            *fdGCLock = openGCLock();
-    }
+    /* Open/create the global GC lock file. Note that we keep holding
+       `_fdGCLock` until we've written the temporary roots file. This
+       is because the shared lock acquired below belongs to the open
+       file description, which is shared by all threads. So if
+       multiple threads were in this function concurrently, the
+       first thread to release its lock would also release the lock
+       of the other threads. A garbage collector could then start and
+       read our temporary roots file before the other threads have
+       written their roots to it, causing those roots to be
+       ignored. */
+    auto fdGCLock(_fdGCLock.lock());
+    if (!*fdGCLock)
+        *fdGCLock = openGCLock();
 
 restart:
     /* Try to acquire a shared global GC lock (non-blocking). This
        only succeeds if the garbage collector is not currently
        running. */
-    FdLock gcLock(_fdGCLock.lock()->get(), ltRead, false, "");
+    FdLock gcLock(fdGCLock->get(), ltRead, false, "");
 
     if (!gcLock.acquired) {
         /* We couldn't get a shared global GC lock, so the garbage
@@ -130,12 +177,14 @@ restart:
         }
 
         try {
-            debug("sending GC root '%s'", printStorePath(path));
-            writeFull(fdRootsSocket->get(), printStorePath(path) + "\n", false);
-            char c;
-            readFull(fdRootsSocket->get(), &c, 1);
-            assert(c == '1');
-            debug("got ack for GC root '%s'", printStorePath(path));
+            for (auto & path : paths) {
+                debug("sending GC root '%s'", printStorePath(path));
+                writeFull(fdRootsSocket->get(), printStorePath(path) + "\n", false);
+                char c;
+                readFull(fdRootsSocket->get(), &c, 1);
+                assert(c == '1');
+                debug("got ack for GC root '%s'", printStorePath(path));
+            }
         } catch (SystemError & e) {
             /* The garbage collector may have exited, so we need to
                restart. */
@@ -152,15 +201,27 @@ restart:
         }
     }
 
-    /* Record the store path in the temporary roots file so it will be
+    /* Record the store paths in the temporary roots file so they will be
        seen by a future run of the garbage collector. */
-    auto s = printStorePath(path) + '\0';
-    writeFull(_fdTempRoots.lock()->get(), s);
+
+    std::string s;
+
+    for (auto & path : paths)
+        s += printStorePath(path) + '\0';
+
+    {
+        auto tempRootsFile(_tempRootsFile.lock());
+
+        /* This might not be atomic, but that's fine. Writes go in-order, and if
+           we partially write a store path, findTempRoots() will just ignore it,
+           and we'll send it the new temproots below if it's still running. */
+        writeFull(tempRootsFile->fd.get(), s);
+    }
 }
 
 static std::string censored = "{censored}";
 
-void LocalStore::findTempRoots(Roots & tempRoots, bool censor)
+void LocalStore::findTempRoots(Roots & tempRoots, bool censor, bool deleteStale)
 {
     /* Read the `temproots' directory for per-process temporary root
        files. */
@@ -190,17 +251,37 @@ void LocalStore::findTempRoots(Roots & tempRoots, bool censor)
         }
 
         /* Try to acquire a write lock without blocking.  This can
-           only succeed if the owning process has died.  In that case
-           we don't care about its temporary roots. */
+           only succeed if the owning process has died (or hasn't
+           acquired the lock yet, in which case the file is empty).
+           In that case we don't care about its temporary roots. */
         if (lockFile(fd.get(), ltWrite, false)) {
-            printInfo("removing stale temporary roots file %1%", PathFmt(path));
-            tryUnlink(path);
-            writeFull(fd.get(), "d");
+            if (deleteStale) {
+                /* Only delete the file if `path` still refers to it.
+                   Its owner may have deleted it after we opened it,
+                   in which case another process may have created a
+                   new file with the same name. Since we hold the lock
+                   and the GC lock, nobody else can delete or replace
+                   `path` if it does refer to our file. */
+                auto st = fstat(fd.get());
+                auto st2 = maybeLstat(path);
+                if (st2 && st.st_dev == st2->st_dev && st.st_ino == st2->st_ino) {
+                    printInfo("removing stale temporary roots file %1%", PathFmt(path));
+                    tryUnlink(path);
+                }
+                /* Tell createTempRootsFile() that it lost the race
+                   with us. */
+                writeFull(fd.get(), "d");
+            }
             continue;
         }
 
         /* Read the entire file. */
         auto contents = readFile(fd.get());
+
+        /* Extract the PID from the file name (see
+           createTempRootsFile()). */
+        auto n = string2Int<unsigned int>(name);
+        auto pid = n ? std::to_string(*n & ((1U << tempRootsPidBits) - 1)) : name;
 
         /* Extract the roots. */
         std::string::size_type pos = 0, end;
@@ -208,7 +289,7 @@ void LocalStore::findTempRoots(Roots & tempRoots, bool censor)
         while ((end = contents.find((char) 0, pos)) != std::string::npos) {
             auto root = std::string_view(contents).substr(pos, end - pos);
             debug("got temporary root '%s'", root);
-            tempRoots[parseStorePath(root)].emplace(censor ? censored : fmt("{temp:%s}", name));
+            tempRoots[parseStorePath(root)].emplace(censor ? censored : fmt("{nix-process:%s}", pid));
             pos = end + 1;
         }
     }
@@ -360,7 +441,8 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
     bool shouldDelete = options.action == GCOptions::gcDeleteDead || options.action == GCOptions::gcDeleteSpecific;
 
-    boost::unordered_flat_set<StorePath, std::hash<StorePath>> roots, dead, alive;
+    Roots roots;
+    boost::unordered_flat_set<StorePath, std::hash<StorePath>> dead, alive;
 
     /* Return early if nothing to delete */
     if (std::visit(
@@ -370,11 +452,22 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
             options.pathsToDelete))
         return;
 
+    /* The progress of the garbage collector is reported as
+       `resGCProgress` results on this activity. */
+    Activity act(
+        *logger,
+        lvlDebug,
+        "CollectGarbage",
+        std::to_array<std::pair<std::string_view, Logger::Field>>({
+            {"nix.gc.dry_run", (uint64_t) !shouldDelete},
+        }));
+    PushActivity pact(act.id);
+
     struct Shared
     {
         // The temp roots only store the hash part to make it easier to
         // ignore suffixes like '.lock', '.chroot' and '.check'.
-        boost::unordered_flat_set<std::string, StringViewHash, std::equal_to<>> tempRoots;
+        boost::unordered_flat_map<std::string, GcRootInfo> tempRoots;
 
         // Hash part of the store path currently being deleted, if
         // any.
@@ -392,7 +485,19 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
        here because then in auto-gc mode, another thread could
        downgrade our exclusive lock. */
     auto fdGCLock = openGCLock();
-    FdLock gcLock(fdGCLock.get(), ltWrite, true, "waiting for the big garbage collector lock...");
+    FdLock gcLock(fdGCLock.get(), ltWrite, true, "waiting for the big garbage collector lock");
+
+    /* Forget what we know about the validity of paths. In a
+       long-running process (e.g. one that does an auto-GC), the path
+       info cache may say that a path is invalid while another
+       process has registered it since. We would then ignore the roots
+       of that path and its referrers, and delete it. Paths that
+       become valid from here on are not a problem, since they're
+       registered as temporary roots first. (Entries for valid paths
+       cannot be stale in a harmful way: at worst they keep some
+       garbage alive. But there is no reason to trust them
+       either.) */
+    clearPathInfoCache();
 
     /* Synchronisation point to test ENOENT handling in
        addTempRoot(), see tests/gc-non-blocking.sh. */
@@ -450,7 +555,17 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
                 debug("GC roots server accepted new client");
 
-                /* Process the connection in a separate thread. */
+                /* Process the connection in a separate thread. Hold
+                   the `connections` lock while starting the thread
+                   and registering it, so that the thread's cleanup
+                   handler (which removes it from `connections`)
+                   can't run before it has been inserted. Otherwise
+                   a client that disconnects immediately would leave
+                   a stale entry, and a later client that gets the
+                   same fd number would cause a duplicate key insert,
+                   destroying a joinable std::thread and thus calling
+                   std::terminate(). */
+                auto conn(connections.lock());
                 auto fdClient_ = fdClient.get();
                 std::thread clientThread([&, fdClient = std::move(fdClient)]() {
                     Finally cleanup([&]() {
@@ -477,7 +592,8 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                                 debug("got new GC root '%s'", path);
                                 auto hashPart = storePath->hashPart();
                                 auto shared(_shared.lock());
-                                shared->tempRoots.emplace(hashPart);
+                                // FIXME: could get the PID from the socket.
+                                shared->tempRoots.insert_or_assign(std::string(hashPart), "{nix-process:unknown}");
                                 /* If this path is currently being
                                    deleted, then we have to wait until
                                    deletion is finished to ensure that
@@ -493,14 +609,15 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                             } else
                                 printError("received garbage instead of a root from client");
                             writeFull(fdClient.get(), "1", false);
-                        } catch (Error & e) {
+                        } catch (BaseError & e) {
                             debug("reading GC root from client: %s", e.msg());
                             break;
                         }
                     }
                 });
 
-                connections.lock()->insert({fdClient_, std::move(clientThread)});
+                auto [it, inserted] = conn->insert({fdClient_, std::move(clientThread)});
+                assert(inserted);
             }
         }
     });
@@ -514,43 +631,51 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
 #endif
 
-    /* Find the roots.  Since we've grabbed the GC lock, the set of
-       permanent roots cannot increase now. */
-    printInfo("finding garbage collector roots...");
-    Roots rootMap;
-    if (!options.ignoreLiveness)
-        findRootsNoTemp(rootMap, true);
+    {
+        Activity stageAct(*logger, lvlInfo, "FindGCRoots", {}, "finding garbage collector roots");
 
-    for (auto & i : rootMap)
-        roots.insert(i.first);
+        /* Find the roots.  Since we've grabbed the GC lock, the set of
+           permanent roots cannot increase now. */
+        if (!options.ignoreLiveness)
+            findRootsNoTemp(roots, options.censor);
 
-    /* Read the temporary roots created before we acquired the global
-       GC root. Any new roots will be sent to our socket. */
-    Roots tempRoots;
-    findTempRoots(tempRoots, true);
-    for (auto & root : tempRoots) {
-        _shared.lock()->tempRoots.emplace(root.first.hashPart());
-        roots.insert(root.first);
+        /* Read the temporary roots created before we acquired the
+           global GC root. Any new roots will be sent to our socket. */
+        Roots tempRoots;
+        findTempRoots(tempRoots, options.censor, true);
+        for (auto & root : tempRoots)
+            _shared.lock()->tempRoots.insert_or_assign(std::string(root.first.hashPart()), *root.second.begin());
     }
 
     /* Synchronisation point for testing, see tests/functional/gc-non-blocking.sh. */
     if (auto p = getEnv("_NIX_TEST_GC_SYNC_2"))
         readFile(*p);
 
+    /* Synchronisation point for testing, see
+       tests/functional/gc-mark-alive-unlocked.sh. Only the first
+       `markAlive()` call waits. */
+    auto markAliveSync = getEnv("_NIX_TEST_GC_SYNC_3");
+
     /* Helper function that deletes a path from the store and throws
        GCLimitReached if we've deleted enough garbage. */
     auto deleteFromStore = [&](std::string_view baseName, bool isKnownPath) {
         assert(!std::filesystem::path(baseName).is_absolute());
+
         /* Using `std::string` since this is the logical store dir. Hopefully that is the right choice. */
         std::string path = storeDir + "/" + std::string(baseName);
         auto realPath = config->realStoreDir.get() / std::string(baseName);
 
         /* There may be temp directories in the store that are still in use
            by another process. We need to be sure that we can acquire an
-           exclusive lock before deleting them. */
+           exclusive lock before deleting them. Note that we must keep
+           holding the lock until we've deleted the directory,
+           otherwise createTempDirInStore() in another process could
+           acquire the lock and start using the directory while we're
+           deleting it. */
+        AutoCloseFD tmpDirFd;
         if (baseName.find("tmp-", 0) == 0) {
             /* TODO Reconsider whether Follow is the right choice, here */
-            auto tmpDirFd = openDirectory(realPath, FinalSymlink::Follow);
+            tmpDirFd = openDirectory(realPath, FinalSymlink::Follow);
             if (!tmpDirFd || !lockFile(tmpDirFd.get(), ltWrite, false)) {
                 debug("skipping locked tempdir %s", PathFmt(realPath));
                 return;
@@ -561,7 +686,15 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
         results.paths.insert(path);
 
-        uint64_t bytesFreed;
+        /* If this path has a leftover `.unpacked` marker (from an
+           interrupted `addMultipleToStore()`), delete the marker
+           *before* the path itself. Deleting a directory is not atomic,
+           so if we were interrupted partway through, a marker left next
+           to a partially-deleted path would make `addMultipleToStore()`
+           reuse that corrupt path. */
+        deletePath(unpackedMarkerFor(realPath));
+
+        uint64_t bytesFreed = 0;
         deleteStorePath(realPath, bytesFreed, isKnownPath);
 
         results.bytesFreed += bytesFreed;
@@ -569,6 +702,23 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         if (results.bytesFreed > options.maxFreed) {
             printInfo("deleted more than %d bytes; stopping", options.maxFreed);
             throw GCLimitReached();
+        }
+    };
+
+    /* Helper function that reports the number of paths found to be
+       alive, the number of paths deleted (or found to be dead in a
+       dry run), and the number of bytes freed so far, if any of them
+       have changed since the last report. */
+    std::array<uint64_t, 3> lastProgress{0, 0, 0};
+    auto reportProgress = [&]() {
+        std::array<uint64_t, 3> progress{
+            (uint64_t) alive.size(),
+            (uint64_t) (shouldDelete ? results.paths.size() : dead.size()),
+            results.bytesFreed,
+        };
+        if (progress != lastProgress) {
+            act.result(resGCProgress, progress[0], progress[1], progress[2]);
+            lastProgress = progress;
         }
     };
 
@@ -582,21 +732,31 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         StorePathSet visited;
         std::queue<StorePath> todo;
 
-        /* Wake up any GC client waiting for deletion of the paths in
-           'visited' to finish. */
-        Finally releasePending([&]() {
-            auto shared(_shared.lock());
-            shared->pending.reset();
-            wakeup.notify_all();
-        });
-
         auto enqueue = [&](const StorePath & path) {
             if (visited.insert(path).second)
                 todo.push(path);
         };
 
+        /* Mark `p` and its closure as alive. To avoid traversing
+           shared dependencies once for every root, this doesn't
+           descend into paths that are already alive. So don't add a
+           path to `alive` before its closure has been marked.
+
+           `alive` can still contain paths whose closure isn't
+           marked: a root that isn't valid has no edges to follow, and
+           if it becomes valid while we're running, we may not notice
+           because lookups of invalid paths are cached. For the same
+           reason, the traversal below can throw `InvalidPath` if the
+           closure refers to a path that became valid in the
+           meantime. This doesn't cause paths that are still
+           referenced to be deleted: a path is only deleted if the
+           referrers walk doesn't reach a live path, and
+           `invalidatePathChecked()` refuses to invalidate a path that
+           has valid referrers. */
         auto markAlive = [&](const StorePath & p) {
             alive.insert(p);
+            if (auto sync = std::exchange(markAliveSync, std::nullopt))
+                readFile(*sync);
             try {
                 StorePathSet closure;
                 bool includeOutputs = false;
@@ -610,9 +770,10 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                         [](const GCOptions::SpecificPaths &) {},
                     },
                     options.pathsToDelete);
-                computeFSClosure(
-                    p,
+                computePartialFSClosure(
+                    {p},
                     closure,
+                    [&](const StorePath & q) { return alive.contains(q); },
                     /* flipDirection */ false,
                     includeOutputs,
                     includeDerivers);
@@ -640,39 +801,52 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
             if (dead.contains(*path))
                 continue;
 
+            if (auto pathsToDelete = std::get_if<GCOptions::SpecificPaths>(&options.pathsToDelete)) {
+                if (!pathsToDelete->deleteReferrers && !pathsToDelete->paths.contains(*path)) {
+                    if (options.action != GCOptions::gcDeleteDead)
+                        throw Error(
+                            "Cannot delete path '%s' because it's referenced by path '%s'.",
+                            printStorePath(start),
+                            printStorePath(*path));
+                    debug(
+                        "cannot delete '%s' because '%s' is not in the specified paths to delete",
+                        printStorePath(start),
+                        printStorePath(*path));
+                    return;
+                }
+            }
             /* If this is a root, bail out. */
-            if (roots.contains(*path)) {
+            if (auto i = roots.find(*path); i != roots.end()) {
+                if (options.action == GCOptions::gcDeleteSpecific)
+                    throw Error(
+                        "Cannot delete path '%s' because it's referenced by the GC root '%s'.",
+                        printStorePath(start),
+                        *i->second.begin());
                 debug("cannot delete '%s' because it's a root", printStorePath(*path));
+                markAlive(*path);
                 alive.insert(start);
-                return markAlive(*path);
+                return;
             }
 
-            if (std::visit(
-                    overloaded{
-                        [&](const GCOptions::SpecificPaths & pathsToDelete) {
-                            if (!pathsToDelete.deleteReferrers && !pathsToDelete.paths.contains(*path)) {
-                                debug(
-                                    "cannot delete '%s' because '%s' is not in the specified paths to delete",
-                                    printStorePath(start),
-                                    printStorePath(*path));
-                                return true;
-                            }
-                            return false;
-                        },
-                        [](const GCOptions::WholeStore & _) { return false; },
-                    },
-                    options.pathsToDelete))
-                return;
-
-            {
-                auto hashPart = path->hashPart();
-                auto shared(_shared.lock());
-                if (shared->tempRoots.contains(hashPart)) {
-                    debug("cannot delete '%s' because it's a temporary root", printStorePath(*path));
-                    alive.insert(start);
-                    return markAlive(*path);
+            static bool inTest = getEnv("_NIX_IN_TEST").has_value();
+            if (!(inTest && options.ignoreLiveness)) {
+                bool isTempRoot;
+                {
+                    auto shared(_shared.lock());
+                    auto i = shared->tempRoots.find(std::string(path->hashPart()));
+                    isTempRoot = i != shared->tempRoots.end();
+                    if (isTempRoot && options.action == GCOptions::gcDeleteSpecific)
+                        throw Error(
+                            "Cannot delete path '%s' because it's in use by '%s'.", printStorePath(start), i->second);
                 }
-                shared->pending = hashPart;
+                /* Don't hold the lock while computing the closure:
+                   that would block every client registering a
+                   temporary root. */
+                if (isTempRoot) {
+                    markAlive(*path);
+                    alive.insert(start);
+                    return;
+                }
             }
 
             if (isValidPath(*path)) {
@@ -712,7 +886,20 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                     options.pathsToDelete);
             }
         }
+
+        /* Synchronisation points between the BFS and the deletion of
+           the paths it found, see tests/functional/gc-new-root-during-deletion.sh. */
+        if (auto p = getEnv("_NIX_TEST_GC_SYNC_4"))
+            readFile(*p);
+        if (auto p = getEnv("_NIX_TEST_GC_SYNC_5"))
+            readFile(*p);
+
         for (auto & path : topoSortPaths(visited)) {
+            /* Skip paths that became alive after the BFS because
+               they're in the closure of a path that became a
+               temporary root (see below). */
+            if (alive.contains(path))
+                continue;
             if (!dead.insert(path).second)
                 continue;
             if (shouldDelete) {
@@ -720,22 +907,29 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                    to synchronise with addTempRoot. Between the BFS
                    and this deletion loop, new temproots may have been
                    added via the GC socket by a concurrent process
-                   (e.g. an evaluator calling addTempRoot). The BFS
-                   only checks tempRoots when it first visits a path,
-                   but the "pending" mechanism only blocks the socket
-                   handler for the single path currently being visited,
-                   not for paths already queued for deletion. */
+                   (e.g. an evaluator calling addTempRoot), since the
+                   BFS only checks tempRoots when it first visits a
+                   path. Setting `pending` makes the socket handler
+                   wait until we've deleted this path. */
+                bool isTempRoot;
                 {
                     auto hashPart = std::string(path.hashPart());
                     auto shared(_shared.lock());
-                    if (shared->tempRoots.contains(hashPart)) {
-                        debug(
-                            "not deleting '%s' because it became a temporary root after initial scan",
-                            printStorePath(path));
-                        markAlive(path);
-                        continue;
-                    }
-                    shared->pending = hashPart;
+                    isTempRoot = shared->tempRoots.contains(hashPart);
+                    if (!isTempRoot)
+                        shared->pending = hashPart;
+                }
+                /* Don't hold the lock while marking. A dependency of
+                   this path that becomes a temporary root in the
+                   meantime is fine, since we check it again when we
+                   get to it. */
+                if (isTempRoot) {
+                    debug(
+                        "not deleting '%s' because it became a temporary root after initial scan",
+                        printStorePath(path));
+                    dead.erase(path);
+                    markAlive(path);
+                    continue;
                 }
                 Finally resetPending([&]() {
                     auto shared(_shared.lock());
@@ -750,8 +944,13 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
                     // If we end up here, it's likely a new occurrence
                     // of https://github.com/NixOS/nix/issues/11923
                     printError("BUG: %s", e.what());
+                    /* The path is still valid, so it and its closure
+                       are alive. */
+                    dead.erase(path);
+                    markAlive(path);
                 }
             }
+            reportProgress();
         }
     };
 
@@ -760,45 +959,51 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         std::visit(
             overloaded{
                 [&](const GCOptions::SpecificPaths & pathsToDelete) {
+                    std::string_view stage;
                     switch (options.action) {
                     case GCOptions::gcDeleteDead:
-                        printInfo("deleting garbage within specified paths...");
+                        stage = "deleting garbage within specified paths";
                         break;
                     case GCOptions::gcDeleteSpecific:
-                        printInfo("deleting specified paths...");
+                        stage = "deleting specified paths";
                         break;
                     case GCOptions::gcReturnDead:
                     case GCOptions::gcReturnLive:
-                        printInfo("determining live/dead paths...");
+                        stage = "determining live/dead paths";
                     }
+
+                    Activity stageAct(*logger, lvlInfo, shouldDelete ? "DeleteGarbage" : "FindGarbage", {}, stage);
 
                     for (auto & i : pathsToDelete.paths) {
                         maybeDeleteReferrersClosure(i);
-
+                        reportProgress();
+                        /* The path may not have been deleted if it
+                           became alive during deletion, e.g. because it
+                           became a temporary root. */
                         if (options.action == GCOptions::gcDeleteSpecific && !dead.contains(i))
                             throw Error(
-                                "Cannot delete path '%1%' since it is still alive. "
-                                "To find out why, use: "
-                                "nix-store --query --roots and nix-store --query --referrers",
+                                "Cannot delete path '%s' because it's in use by another process or path.",
                                 printStorePath(i));
-                        else if (!dead.contains(i))
-                            debug("cannot delete '%s' because it's still alive", printStorePath(i));
+                        assert(options.action == GCOptions::gcDeleteDead || dead.count(i));
                     }
                 },
                 [&](const GCOptions::WholeStore & _) {
                     if (options.maxFreed == 0)
                         return;
 
+                    std::string_view stage;
                     switch (options.action) {
                     case GCOptions::gcDeleteDead:
-                        printInfo("deleting garbage...");
+                        stage = "deleting garbage";
                         break;
                     case GCOptions::gcDeleteSpecific:
                         throw Error("Cannot delete the entire store");
                     case GCOptions::gcReturnDead:
                     case GCOptions::gcReturnLive:
-                        printInfo("determining live/dead paths...");
+                        stage = "determining live/dead paths";
                     }
+
+                    Activity stageAct(*logger, lvlInfo, shouldDelete ? "DeleteGarbage" : "FindGarbage", {}, stage);
 
                     AutoCloseDir dir(opendir(config->realStoreDir.get().string().c_str()));
                     if (!dir)
@@ -817,14 +1022,20 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
 
                         if (auto storePath = maybeParseStorePath(storeDir + "/" + name))
                             maybeDeleteReferrersClosure(*storePath);
-                        else
+                        else if (shouldDelete)
                             deleteFromStore(name, false);
+
+                        reportProgress();
                     }
                 },
             },
             options.pathsToDelete);
     } catch (GCLimitReached & e) {
     }
+
+    /* Report the final counts, since the deletion that reached the
+       limit didn't get reported. */
+    reportProgress();
 
     if (options.action == GCOptions::gcReturnLive) {
         for (auto & i : alive)
@@ -844,7 +1055,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
        might see a link count of 1 just before optimisePath() increases
        the link count. */
     if (options.action == GCOptions::gcDeleteDead || options.action == GCOptions::gcDeleteSpecific) {
-        printInfo("deleting unused links...");
+        Activity stageAct(*logger, lvlInfo, "DeleteUnusedLinks", {}, "deleting unused links");
 
         AutoCloseDir dir(opendir(linksDir.string().c_str()));
         if (!dir)
@@ -962,7 +1173,8 @@ void LocalStore::autoGC(bool sync)
                 GCOptions options;
                 options.maxFreed = gcSettings.maxFree - avail;
 
-                printInfo("running auto-GC to free %d bytes", options.maxFreed);
+                Activity act(*logger, lvlInfo, "AutoGC", {}, fmt("running auto-GC to free %d bytes", options.maxFreed));
+                PushActivity pact(act.id);
 
                 GCResults results;
 

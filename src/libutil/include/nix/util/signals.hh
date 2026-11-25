@@ -51,8 +51,45 @@ struct InterruptCallback
 };
 
 /**
+ * Portable identifiers for the signal events that callbacks can be
+ * registered for via `createSignalCallback()`.
+ */
+enum class SignalType {
+    /**
+     * SIGINT/SIGTERM/SIGHUP, or a programmatic `triggerInterrupt()`.
+     */
+    Int,
+    /**
+     * SIGTSTP, called just before the process stops itself.
+     */
+    Stop,
+    /**
+     * SIGCONT, i.e. the process was resumed after being stopped.
+     */
+    Cont,
+    /**
+     * SIGWINCH, i.e. the terminal size changed.
+     */
+    Winch,
+};
+
+/**
+ * Register a function that gets called from the signal handler thread
+ * (in a non-signal context) when the given signal type is received.
+ *
+ * Destroying the returned object deregisters the callback, and waits
+ * until no other thread is running a signal callback. So the callback
+ * can safely refer to objects that are destroyed after deregistration,
+ * but callbacks must not wait for a thread that is deregistering a
+ * callback (e.g. by acquiring a lock that that thread holds).
+ *
+ * @note Does nothing on Windows
+ */
+std::unique_ptr<InterruptCallback> createSignalCallback(SignalType type, fun<void()> callback);
+
+/**
  * Register a function that gets called on SIGINT (in a non-signal
- * context).
+ * context). See createSignalCallback().
  *
  * @note Does nothing on Windows
  */

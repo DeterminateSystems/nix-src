@@ -10,9 +10,6 @@ lockFileStr:
 # unlocked trees.
 overrides:
 
-# This is `prim_fetchFinalTree`.
-fetchTreeFinal:
-
 let
   inherit (builtins) mapAttrs;
 
@@ -45,14 +42,24 @@ let
       parentNode = allNodes.${getInputByPath lockFile.root node.parent};
 
       sourceInfo =
-        if hasOverride then
+        if node.buildTime or false then
+          derivation {
+            name = "source";
+            builder = "builtin:fetch-tree";
+            system = "builtin";
+            __structuredAttrs = true;
+            input = node.locked;
+            outputHashMode = "recursive";
+            outputHash = node.locked.narHash;
+          }
+        else if hasOverride then
           overrides.${key}.sourceInfo
         else if isRelative then
           parentNode.sourceInfo
         else
           # FIXME: remove obsolete node.info.
           # Note: lock file entries are always final.
-          fetchTreeFinal (node.info or { } // removeAttrs node.locked [ "dir" ]);
+          builtins.fetchTree (node.info or { } // removeAttrs node.locked [ "dir" ]);
 
       subdir = overrides.${key}.dir or node.locked.dir or "";
 
@@ -93,6 +100,7 @@ let
       result =
         if node.flake or true then
           assert builtins.isFunction flake.outputs;
+          assert !(node.buildTime or false);
           result
         else
           sourceInfo // { inherit sourceInfo outPath; };

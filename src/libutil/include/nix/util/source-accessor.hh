@@ -10,6 +10,7 @@
 namespace nix {
 
 struct Sink;
+struct Provenance;
 
 /**
  * Note there is a decent chance this type soon goes away because the problem is solved another way.
@@ -196,6 +197,14 @@ public:
 
     void setPathDisplay(std::string displayPrefix, std::string displaySuffix = "");
 
+    /**
+     * @brief Render a human-readable representation of the accessor + path beneath it.
+     *
+     * @warning The output from this function is not considered stable and
+     * is primarily useful for error messages. In libexpr, we still have a single
+     * filesystem root (modulo builtin <nix/...> filesystem root). Prefer to render
+     * paths there directly from CanonPath when paths reside in the global root filesystem.
+     */
     virtual std::string showPath(const CanonPath & path);
 
     /**
@@ -243,6 +252,13 @@ public:
         return std::nullopt;
     }
 
+    std::shared_ptr<const Provenance> provenance;
+
+    /**
+     * Return the provenance of the specified path, or `nullptr` if not available.
+     */
+    virtual std::shared_ptr<const Provenance> getProvenance(const CanonPath & path);
+
     /**
      * Drop any cached state that could go stale across external filesystem
      * mutation (e.g. cached directory fds).
@@ -288,12 +304,18 @@ public:
 ref<SourceAccessor> getFSSourceAccessor();
 
 /**
- * Construct an accessor for the filesystem rooted at `root`. Note
- * that it is not possible to escape `root` by appending `..` path
- * elements, and that absolute symlinks are resolved relative to
- * `root`.
+ * @brief Construct an accessor for the filesystem rooted at @p root.
  *
- * Symlinks in parents of `root` are resolved. Final symlink is not.
+ * Note that it is not possible to escape @p root by appending `..` path
+ * elements, and that absolute symlinks are resolved relative to
+ * @p root.
+ *
+ * Symlinks in parents of `root` are always resolved.
+ *
+ * @param root Path to file/tree to open.
+ * @param finalSymlink Whether the final symlink path component is resolved
+ *        or opened itself. Note that regular POSIX semantics of trailing `/`
+ *        applies regardless of this parameter.
  */
 ref<SourceAccessor> makeFSSourceAccessor(
     std::filesystem::path root, bool trackLastModified = false, FinalSymlink finalSymlink = FinalSymlink::DontFollow);
@@ -302,7 +324,8 @@ ref<SourceAccessor> makeFSSourceAccessor(
  * Construct an accessor that presents a "union" view of a vector of
  * underlying accessors. Earlier accessors take precedence over later.
  */
-ref<SourceAccessor> makeUnionSourceAccessor(std::vector<ref<SourceAccessor>> && accessors);
+ref<SourceAccessor>
+makeUnionSourceAccessor(std::vector<ref<SourceAccessor>> && accessors, std::shared_ptr<SourceAccessor> displayAccessor);
 
 /**
  * Make a wrapper source accessor that caches positive lookup results.

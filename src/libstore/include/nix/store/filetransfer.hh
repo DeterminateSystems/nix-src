@@ -86,6 +86,10 @@ public:
           The timeout (in seconds) for receiving data from servers
           during download. Nix cancels idle downloads after this
           timeout's duration.
+
+          This also limits how long a transfer waits for a connection
+          to become available if no other transfer sends or receives
+          any data in the meantime.
         )"};
 
     Setting<uint32_t> tries{
@@ -439,14 +443,14 @@ public:
      * exception.
      */
     virtual ItemHandle
-    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) = 0;
+    enqueueFileTransfer(const FileTransferRequest & request, Callback<FileTransferResult> callback) noexcept = 0;
 
     /**
      * Unpause a transfer that has been previously paused by a dataCallback.
      */
     virtual void unpauseTransfer(ItemHandle handle) = 0;
 
-    std::future<FileTransferResult> enqueueFileTransfer(const FileTransferRequest & request);
+    std::future<FileTransferResult> enqueueFileTransfer(const FileTransferRequest & request) noexcept;
 
     /**
      * Synchronously download a file.

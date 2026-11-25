@@ -169,7 +169,7 @@ public:
     /**
      * Build result.
      */
-    BuildResult buildResult;
+    BuildResult buildResult{BuildError(BuildResult::Failure::Cancelled, "")};
 
     /**
      * Suspend our goal and wait until we get `work`-ed again.

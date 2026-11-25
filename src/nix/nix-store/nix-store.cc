@@ -1,3 +1,4 @@
+#include "nix/util/finally.hh"
 #include "nix/util/archive.hh"
 #include "nix/store/derivations.hh"
 #include "nix/store/outputs-query.hh"
@@ -773,7 +774,7 @@ static void opExport(Strings opFlags, Strings opArgs)
         paths.insert(store->followLinksToStorePath(i));
 
     FdSink sink(getStandardOutput());
-    exportPaths(*store, paths, sink);
+    exportPaths(*store, paths, sink, 1);
     sink.flush();
 }
 
@@ -954,8 +955,7 @@ static void opServe(Strings opFlags, Strings opArgs)
             bool substitute = readInt(in);
             auto paths = ServeProto::Serialise<StorePathSet>::read(*store, rconn);
             if (lock && writeAllowed)
-                for (auto & path : paths)
-                    store->addTempRoot(path);
+                store->addTempRoots(paths);
 
             if (substitute && writeAllowed) {
                 store->substitutePaths(paths);
@@ -1102,10 +1102,10 @@ static void opGenerateBinaryCacheKey(Strings opFlags, Strings opArgs)
     std::string secretKeyFile = *i++;
     std::string publicKeyFile = *i++;
 
-    auto secretKey = SecretKey::generate(keyName);
+    auto secretKey = SecretKey::generate(keyName, KeyType::Ed25519);
 
-    writeFile(publicKeyFile, secretKey.toPublicKey().to_string(), 0666, FsSync::Yes);
-    writeFile(secretKeyFile, secretKey.to_string(), 0600, FsSync::Yes);
+    writeFile(publicKeyFile, secretKey->toPublicKey()->to_string(), 0666, FsSync::Yes);
+    writeFile(secretKeyFile, secretKey->to_string(), 0600, FsSync::Yes);
 }
 
 static void opVersion(Strings opFlags, Strings opArgs)
@@ -1232,6 +1232,12 @@ static int main_nix_store(int argc, char ** argv)
             showManPage("nix-store" + opName);
         if (!op)
             throw UsageError("no operation specified");
+
+        /* Release the store before returning, rather than leaving it
+           to the static destructors (which don't run on exit), so
+           that e.g. the SQLite database is closed cleanly and the
+           temporary GC roots are removed. */
+        Finally releaseStore([]() { store = nullptr; });
 
         if (op != opDump && op != opRestore) /* !!! hack */
             store = openStore();

@@ -1,0 +1,232 @@
+"$schema": "http://json-schema.org/draft-04/schema"
+"$id": "https://nix.dev/manual/nix/latest/protocols/json/schema/provenance-v1.json"
+title: Provenance
+description: |
+  > **Warning**
+  >
+  > This JSON format is currently
+  > [**experimental**](@docroot@/development/experimental-features.md#xp-feature-provenance)
+  > and subject to change.
+
+  Provenance describes where a store object came from, such as the derivation that built it, the flake output that produced that derivation, or the source tree that it was fetched from.
+  It appears in the `provenance` field of [store object info](@docroot@/protocols/json/store-object-info.md), as shown by e.g. [`nix path-info --json`](@docroot@/command-ref/new-cli/nix3-path-info.md).
+
+  A provenance record is a JSON object with a `type` field that determines what other fields are present.
+  Most types have a `next` field that contains the provenance of the thing from which this one was derived (or `null` if that isn't known).
+  Thus, provenance forms a chain, going from the store object itself back to its ultimate origin.
+  For example, a store object substituted from a binary cache might have `copied` provenance, whose `next` is `build` provenance, whose `next` is `derivation` provenance, and so on.
+
+  Future versions of Nix may add new provenance types, and new fields to existing types.
+  Consumers should therefore accept provenance records with a `type` that they don't recognise, and ignore fields that they don't recognise.
+  Nix itself preserves records of unknown types unchanged.
+oneOf:
+  - "$ref": "#/$defs/build"
+  - "$ref": "#/$defs/copied"
+  - "$ref": "#/$defs/derivation"
+  - "$ref": "#/$defs/flake"
+  - "$ref": "#/$defs/subpath"
+  - "$ref": "#/$defs/tree"
+  - "$ref": "#/$defs/fetchurl"
+  - "$ref": "#/$defs/unknown"
+"$defs":
+  next:
+    title: Next
+    description: |
+      The provenance of the thing from which this was derived, or `null` if it isn't known.
+    oneOf:
+      - type: "null"
+      - "$ref": "#"
+
+  build:
+    title: Build
+    description: |
+      The store object is an output of a derivation that was built locally or on a remote builder.
+    type: object
+    required:
+      - type
+      - drv
+      - output
+      - system
+    properties:
+      type:
+        type: string
+        enum: [build]
+      drv:
+        title: Derivation
+        description: |
+          The [store derivation](@docroot@/store/derivation/index.md#store-derivation) that was built.
+        "$ref": "./store-path-v1.yaml"
+      output:
+        type: string
+        title: Output Name
+        description: |
+          The name of the derivation output that corresponds to this store object, e.g. `out`.
+      buildHost:
+        title: Build Host
+        description: |
+          The hostname of the machine on which the derivation was built, or `null` if not known.
+        oneOf:
+          - type: string
+          - type: "null"
+      system:
+        type: string
+        title: System
+        description: |
+          The [system type](@docroot@/development/building.md#platforms) of the derivation, e.g. `x86_64-linux`.
+      tags:
+        type: object
+        title: Tags
+        description: |
+          User-defined key/value pairs from the [`build-provenance-tags`](@docroot@/command-ref/conf-file.md#conf-build-provenance-tags) setting on the build host, e.g. a CI job URL.
+        patternProperties:
+          "^[A-Za-z_][A-Za-z0-9_+\\-]*$":
+            type: string
+        additionalProperties: false
+      next:
+        "$ref": "#/$defs/next"
+        description: |
+          The provenance of the derivation, typically of type `derivation`.
+
+  copied:
+    title: Copied
+    description: |
+      The store object was copied from another store, typically substituted from a binary cache.
+    type: object
+    required:
+      - type
+      - from
+    properties:
+      type:
+        type: string
+        enum: [copied]
+      from:
+        type: string
+        title: From
+        description: |
+          The URL of the [store](@docroot@/store/types/index.md) from which the store object was copied.
+      next:
+        "$ref": "#/$defs/next"
+        description: |
+          The provenance of the store object in the store from which it was copied.
+
+  derivation:
+    title: Derivation
+    description: |
+      The store object is a [store derivation](@docroot@/store/derivation/index.md#store-derivation) that was instantiated by [`builtins.derivationWithMeta`](@docroot@/language/derivation-metadata.md).
+    type: object
+    required:
+      - type
+      - meta
+    properties:
+      type:
+        type: string
+        enum: [derivation]
+      meta:
+        title: Metadata
+        description: |
+          The value of the `__meta` attribute passed to `derivationWithMeta`, converted to JSON.
+      next:
+        "$ref": "#/$defs/next"
+        description: |
+          The provenance of the Nix expression that instantiated the derivation, typically of type `flake`.
+
+  flake:
+    title: Flake
+    description: |
+      The thing was produced by evaluating a flake output.
+    type: object
+    required:
+      - type
+      - flakeOutput
+    properties:
+      type:
+        type: string
+        enum: [flake]
+      flakeOutput:
+        type: string
+        title: Flake Output
+        description: |
+          The attribute path of the flake output that was evaluated, e.g. `packages.x86_64-linux.default`.
+      pure:
+        type: boolean
+        title: Pure
+        description: |
+          Whether the flake output was evaluated in [pure evaluation mode](@docroot@/command-ref/conf-file.md#conf-pure-eval).
+          Defaults to `true` if absent.
+      next:
+        "$ref": "#/$defs/next"
+        description: |
+          The provenance of the flake's `flake.nix` file, typically of type `subpath`.
+
+  subpath:
+    title: Subpath
+    description: |
+      The thing is a file or directory inside another source tree.
+    type: object
+    required:
+      - type
+      - subpath
+    properties:
+      type:
+        type: string
+        enum: [subpath]
+      subpath:
+        type: string
+        title: Subpath
+        description: |
+          The absolute path of the file or directory within the source tree, e.g. `/flake.nix`.
+      next:
+        "$ref": "#/$defs/next"
+        description: |
+          The provenance of the source tree, typically of type `tree`.
+
+  tree:
+    title: Tree
+    description: |
+      The thing is a source tree fetched by a [fetcher](@docroot@/language/builtins.md#builtins-fetchTree), e.g. a flake input.
+    type: object
+    required:
+      - type
+      - attrs
+    properties:
+      type:
+        type: string
+        enum: [tree]
+      attrs:
+        type: object
+        title: Attributes
+        description: |
+          The attributes of the locked input, as accepted by [`builtins.fetchTree`](@docroot@/language/builtins.md#builtins-fetchTree), except `narHash`.
+        additionalProperties:
+          type: [string, integer, boolean]
+
+  fetchurl:
+    title: Fetchurl
+    description: |
+      The store object was downloaded from a URL, e.g. by [`builtins.fetchurl`](@docroot@/language/builtins.md#builtins-fetchurl).
+    type: object
+    required:
+      - type
+      - url
+    properties:
+      type:
+        type: string
+        enum: [fetchurl]
+      url:
+        type: string
+        title: URL
+        description: |
+          The URL from which the store object was downloaded, with any credentials removed.
+
+  unknown:
+    title: Unknown
+    description: |
+      A provenance type not known to this version of Nix.
+    type: object
+    required:
+      - type
+    properties:
+      type:
+        type: string
+        not:
+          enum: [build, copied, derivation, flake, subpath, tree, fetchurl]

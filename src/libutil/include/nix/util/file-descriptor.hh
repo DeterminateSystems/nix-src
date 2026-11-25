@@ -115,11 +115,13 @@ size_t readOffset(Descriptor fd, off_t offset, std::span<std::byte> buffer);
 /**
  * Read \ref nbytes starting at \ref offset from a seekable file into a sink.
  *
- * @throws SystemError if fd is not seekable or any operation fails
+ * @param tryCoW Used as a hint to use optimised file copying like copy_file_range.
+ *
+ * @throws SystemError if @p fd is not seekable or any operation fails
  * @throws Interrupted if the operation was interrupted
  * @throws EndOfFile if an EOF was reached before reading \ref nbytes
  */
-void copyFdRange(Descriptor fd, off_t offset, size_t nbytes, Sink & sink);
+void copyFdRange(Descriptor fd, off_t offset, size_t nbytes, Sink & sink, bool tryCoW = false);
 
 /**
  * Wrappers around read()/write() that read/write exactly the
@@ -282,8 +284,11 @@ public:
      * Asynchronously flush to disk without blocking, if available on
      * the platform. This is just a performance optimization, and
      * fsync must be run later even if this is called.
+     *
+     * @param offset Start of the byte range to flush.
+     * @param nbytes Length of the range; 0 means up to the end of the file.
      */
-    void startFsync() const;
+    void startFsync(off_t offset = 0, off_t nbytes = 0) const;
 };
 
 /**

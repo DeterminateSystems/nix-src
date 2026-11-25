@@ -362,4 +362,40 @@ TEST_F(TryResolveTest, exportReferencesGraphPlaceholderSubpath_structuredAttrs)
     exportRefGraphSubpathTest("export-ref-subpath-sa", drv, &*drv.structuredAttrs);
 }
 
+/* `StructuredAttrs::unparse()` must produce exactly the same output as
+   `nlohmann::json::dump()`, since it determines derivation hashes. */
+TEST(StructuredAttrs, unparseMatchesDump)
+{
+    auto check = [](const nlohmann::json::object_t & obj) {
+        StructuredAttrs attrs{obj};
+        auto [name, value] = attrs.unparse();
+        EXPECT_EQ(name, StructuredAttrs::envVarName);
+        EXPECT_EQ(value, nlohmann::json(obj).dump());
+    };
+
+    check({});
+    check({{"a", 1}});
+    check({
+        {"string", "hello"},
+        {"escapes", "quote \" backslash \\ newline \n tab \t control \x01 unicode é ☃"},
+        {"key with \"quotes\" and \\ and \n", true},
+        {"é", nullptr},
+        {"int", -12345},
+        {"uint", 18446744073709551615ULL},
+        {"float", 1.5},
+        {"array", nlohmann::json::array({1, "two", nlohmann::json::array(), nlohmann::json::object()})},
+        {"object", nlohmann::json::object({{"nested", nlohmann::json::object({{"x", false}})}, {"", ""}})},
+    });
+}
+
+TEST(StructuredAttrs, mustBeObject)
+{
+    EXPECT_EQ(StructuredAttrs{}.unparse().second, "{}");
+    EXPECT_EQ(StructuredAttrs::parse(R"({"a":1,"b":[2]})").object().size(), 2);
+    EXPECT_THROW(StructuredAttrs::parse("[1]"), Error);
+    EXPECT_THROW(StructuredAttrs::parse("null"), Error);
+    EXPECT_THROW(StructuredAttrs::parse(R"("foo")"), Error);
+    EXPECT_THROW(StructuredAttrs::fromJSON(nlohmann::json::array()), Error);
+}
+
 } // namespace nix

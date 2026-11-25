@@ -1,4 +1,5 @@
 #include "nix/util/compression.hh"
+#include "nix/util/error.hh"
 #include <gtest/gtest.h>
 #include <zstd.h>
 
@@ -29,8 +30,9 @@ TEST_P(CompressionDecompressionTest, roundtrip)
 TEST_P(CompressionDecompressionTest, empty)
 {
     auto compressed = compress(GetParam(), "");
-    if (GetParam() != CompressionAlgo::none)
+    if (GetParam() != CompressionAlgo::none) {
         ASSERT_FALSE(compressed.empty());
+    }
     auto o = decompress(GetParam(), compressed);
     ASSERT_EQ(o, "");
 }
@@ -44,17 +46,107 @@ TEST_P(CompressionDecompressionTest, invalidDecompression)
         decompress(GetParam(), "this is a string that does not qualify as valid compressed data"), CompressionError);
 }
 
+/* Completely empty input is treated as an empty stream rather than a
+   truncated one, for every algorithm. */
+TEST_P(CompressionDecompressionTest, emptyInputDecompressesToEmpty)
+{
+    ASSERT_EQ(decompress(GetParam(), ""), "");
+
+    StringSink output;
+    auto sink = makeDecompressionSink(GetParam(), output);
+    sink->finish();
+    ASSERT_EQ(output.s, "");
+}
+
+TEST_P(CompressionDecompressionTest, truncatedInputIsRejected)
+{
+    if (GetParam() == CompressionAlgo::none)
+        GTEST_SKIP();
+
+    auto compressed = compress(GetParam(), "hello world");
+    for (size_t size : {size_t{1}, compressed.size() / 2, compressed.size() - 1}) {
+        SCOPED_TRACE(size);
+        auto truncated = std::string_view(compressed).substr(0, size);
+        ASSERT_THROW(decompress(GetParam(), truncated), Error);
+
+        StringSink output;
+        auto sink = makeDecompressionSink(GetParam(), output);
+        ASSERT_THROW(
+            {
+                for (size_t i = 0; i < truncated.size(); ++i)
+                    (*sink)(truncated.substr(i, 1));
+                sink->finish();
+            },
+            Error);
+    }
+}
+
+TEST(decompress, brotliWaitsForInputUntilFinish)
+{
+    const std::string input = "hello world";
+    auto compressed = compress(CompressionAlgo::brotli, input);
+    for (size_t size = 1; size <= compressed.size(); ++size) {
+        SCOPED_TRACE(size);
+        StringSink output;
+        auto sink = makeDecompressionSink(CompressionAlgo::brotli, output);
+        auto buffered = dynamic_cast<BufferedSink *>(sink.get());
+        ASSERT_NE(buffered, nullptr);
+        for (size_t i = 0; i < size; ++i) {
+            ASSERT_NO_THROW({
+                (*sink)(std::string_view(compressed).substr(i, 1));
+                // Deliver each byte to the decoder instead of buffering it until finish().
+                buffered->flush();
+            });
+        }
+        if (size < compressed.size()) {
+            ASSERT_THROW(sink->finish(), CompressionError);
+        } else {
+            ASSERT_NO_THROW(sink->finish());
+            ASSERT_EQ(output.s, input);
+        }
+    }
+}
+
 TEST_P(CompressionDecompressionTest, roundtripsWithSourceAndSink)
 {
     StringSink strSink;
-    auto decompressionSink = makeDecompressionSink(CompressionAlgo::bzip2, strSink);
-    auto sink = makeCompressionSink(CompressionAlgo::bzip2, *decompressionSink);
+    auto decompressionSink = makeDecompressionSink(GetParam(), strSink);
+    auto sink = makeCompressionSink(GetParam(), *decompressionSink);
 
     (*sink)(dummyInput);
     sink->finish();
     decompressionSink->finish();
 
     ASSERT_EQ(strSink.s.c_str(), dummyInput);
+}
+
+TEST_P(CompressionDecompressionTest, failingSink)
+{
+    /* Like a full disk: every write fails, including the ones made while the compression sink is being destroyed. */
+    struct FailingSink : Sink
+    {
+        void operator()(std::string_view data) override
+        {
+            throw SysError(ENOSPC, "write of %d bytes", data.size());
+        }
+    };
+
+    /* Make the input incompressible enough to produce output before finish(). */
+    std::string input(1024 * 1024, 0);
+    uint32_t x = 1;
+    for (auto & c : input) {
+        x = x * 1664525 + 1013904223;
+        c = x >> 24;
+    }
+
+    FailingSink failingSink;
+    ASSERT_THROW(
+        {
+            auto sink = makeCompressionSink(GetParam(), failingSink);
+            (*sink)(input);
+            sink->finish();
+        },
+        SysError);
 }
 
 INSTANTIATE_TEST_SUITE_P(

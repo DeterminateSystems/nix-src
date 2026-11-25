@@ -12,7 +12,7 @@ namespace nix {
 
 std::filesystem::path getCacheDir()
 {
-    auto dir = getEnvOs(OS_STR("NIX_CACHE_HOME"));
+    auto dir = getEnvOsAbsPath(OS_STR("NIX_CACHE_HOME"));
     if (dir)
         return *dir;
 #ifndef _WIN32
@@ -24,7 +24,7 @@ std::filesystem::path getCacheDir()
 
 std::filesystem::path getConfigDir()
 {
-    auto dir = getEnvOs(OS_STR("NIX_CONFIG_HOME"));
+    auto dir = getEnvOsAbsPath(OS_STR("NIX_CONFIG_HOME"));
     if (dir)
         return *dir;
 #ifndef _WIN32
@@ -50,7 +50,7 @@ std::vector<std::filesystem::path> getConfigDirs()
 
 std::filesystem::path getDataDir()
 {
-    auto dir = getEnvOs(OS_STR("NIX_DATA_HOME"));
+    auto dir = getEnvOsAbsPath(OS_STR("NIX_DATA_HOME"));
     if (dir)
         return *dir;
 #ifndef _WIN32
@@ -62,7 +62,7 @@ std::filesystem::path getDataDir()
 
 std::filesystem::path getStateDir()
 {
-    auto dir = getEnvOs(OS_STR("NIX_STATE_HOME"));
+    auto dir = getEnvOsAbsPath(OS_STR("NIX_STATE_HOME"));
     if (dir)
         return *dir;
 #ifndef _WIN32

@@ -11,22 +11,22 @@ private:
 
 public:
     std::vector<ref<SourceAccessor>> accessors;
+    std::shared_ptr<SourceAccessor> displayAccessor;
 
-    UnionSourceAccessor(std::vector<ref<SourceAccessor>> _accessors)
+    UnionSourceAccessor(std::vector<ref<SourceAccessor>> _accessors, std::shared_ptr<SourceAccessor> _displayAccessor)
         : accessors(std::move(_accessors))
+        , displayAccessor(std::move(_displayAccessor))
     {
         displayPrefix.clear();
     }
 
     void readFile(const CanonPath & path, Sink & sink, fun<void(uint64_t)> sizeCallback) override
     {
-        for (auto & accessor : accessors) {
-            auto st = accessor->maybeLstat(path);
-            if (st) {
+        for (const auto & [last, accessor] : markLast(accessors))
+            if (last || accessor->maybeLstat(path)) {
                 accessor->readFile(path, sink, sizeCallback);
                 return;
             }
-        }
         throw FileNotFound("path '%s' does not exist", showPath(path));
     }
 
@@ -60,16 +60,16 @@ public:
 
     std::string readLink(const CanonPath & path) override
     {
-        for (auto & accessor : accessors) {
-            auto st = accessor->maybeLstat(path);
-            if (st)
+        for (const auto & [last, accessor] : markLast(accessors))
+            if (last || accessor->maybeLstat(path))
                 return accessor->readLink(path);
-        }
         throw FileNotFound("path '%s' does not exist", showPath(path));
     }
 
     std::string showPath(const CanonPath & path) override
     {
+        if (displayAccessor)
+            return displayAccessor->showPath(path);
         for (auto & accessor : accessors)
             return accessor->showPath(path);
         return SourceAccessor::showPath(path);
@@ -102,13 +102,24 @@ public:
         }
         return {path, std::nullopt};
     }
+
+    std::shared_ptr<const Provenance> getProvenance(const CanonPath & path) override
+    {
+        for (auto & accessor : accessors) {
+            auto prov = accessor->getProvenance(path);
+            if (prov)
+                return prov;
+        }
+        return nullptr;
+    }
 };
 
 } // namespace
 
-ref<SourceAccessor> makeUnionSourceAccessor(std::vector<ref<SourceAccessor>> && accessors)
+ref<SourceAccessor>
+makeUnionSourceAccessor(std::vector<ref<SourceAccessor>> && accessors, std::shared_ptr<SourceAccessor> displayAccessor)
 {
-    return make_ref<UnionSourceAccessor>(std::move(accessors));
+    return make_ref<UnionSourceAccessor>(std::move(accessors), displayAccessor);
 }
 
 } // namespace nix
