@@ -38,6 +38,11 @@ void Bindings::sort()
     std::sort(attrs, attrs + numAttrs);
 }
 
+Value::Value(BindingsBuilder & bindings)
+    : Value(bindings.finish())
+{
+}
+
 Value & Value::mkAttrs(BindingsBuilder & bindings)
 {
     mkAttrs(bindings.finish());

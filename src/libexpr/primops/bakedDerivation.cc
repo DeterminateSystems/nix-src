@@ -105,13 +105,13 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
     /* Return an attribute set of the same shape as `derivationStrict`: the derivation path and one string per
        output. The output strings carry string context, so that they can be used as inputs of other derivations. */
     auto result = state.buildBindings(1 + drv.outputs.size());
-    result.alloc(state.s.drvPath)
-        .mkString(
-            state.store->printStorePath(drvPath),
-            {
-                NixStringContextElem::DrvDeep{.drvPath = drvPath},
-            },
-            state.mem);
+    result.alloc(
+        state.s.drvPath,
+        state.store->printStorePath(drvPath),
+        NixStringContext{
+            NixStringContextElem::DrvDeep{.drvPath = drvPath},
+        },
+        state.mem);
     for (auto & [outName, outPath] : outputs)
         state.mkOutputString(
             result.alloc(outName),

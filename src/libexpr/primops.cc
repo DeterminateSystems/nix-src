@@ -224,21 +224,21 @@ void derivationToValue(
     auto path2 = path.path.abs();
     Derivation drv = state.store->readDerivation(storePath);
     auto attrs = state.buildBindings(3 + drv.outputs.size());
-    attrs.alloc(state.s.drvPath)
-        .mkString(
-            path2,
-            {
-                NixStringContextElem::DrvDeep{.drvPath = storePath},
-            },
-            state.mem);
-    attrs.alloc(state.s.name).mkString(drv.env["name"], state.mem);
+    attrs.alloc(
+        state.s.drvPath,
+        path2,
+        NixStringContext{
+            NixStringContextElem::DrvDeep{.drvPath = storePath},
+        },
+        state.mem);
+    attrs.alloc(state.s.name, drv.env["name"], state.mem);
 
     auto list = state.buildList(drv.outputs.size());
     for (const auto & [i, o] : enumerate(drv.outputs)) {
         mkOutputString(state, attrs, storePath, o);
         list[i] = state.allocValue(o.first, state.mem);
     }
-    attrs.alloc(state.s.outputs).mkList(list);
+    attrs.alloc(state.s.outputs, list);
 
     auto w = state.allocValue(attrs.finish());
 
@@ -1942,13 +1942,13 @@ static void derivationStrictInternal(
     }
 
     auto result = state.buildBindings(1 + drv.outputs.size());
-    result.alloc(state.s.drvPath)
-        .mkString(
-            drvPathS,
-            {
-                NixStringContextElem::DrvDeep{.drvPath = drvPath},
-            },
-            state.mem);
+    result.alloc(
+        state.s.drvPath,
+        drvPathS,
+        NixStringContext{
+            NixStringContextElem::DrvDeep{.drvPath = drvPath},
+        },
+        state.mem);
     for (auto & i : drv.outputs)
         mkOutputString(state, result, drvPath, i);
 
@@ -2541,15 +2541,13 @@ static void prim_readDir(EvalState & state, const PosIdx pos, Value ** args, Val
 
     for (auto & [name, type] : entries) {
         if (!type) {
-            auto & attr = attrs.alloc(name);
             // Some filesystems or operating systems may not be able to return
             // detailed node info quickly in this case we produce a thunk to
             // query the file type lazily.
-            auto epath = state.allocValue();
-            epath->mkPath(path / name, state.mem);
+            auto epath = state.allocValue(path / name, state.mem);
             if (!readFileType)
                 readFileType = &state.getBuiltin("readFileType");
-            attr.mkApp(readFileType, epath);
+            attrs.alloc(name, Value::FunctionApplicationThunk{.left = readFileType, .right = epath});
         } else {
             // This branch of the conditional is much more likely.
             // Here we just stringize the directory entry type.
@@ -3688,7 +3686,7 @@ static void prim_mapAttrs(EvalState & state, const PosIdx pos, Value ** args, Va
     for (auto & i : *args[1]->attrs()) {
         Value * vName = Value::toPtr(state.symbols[i.name]);
         Value * vFun2 = state.allocValue(Value::FunctionApplicationThunk{.left = args[0], .right = vName});
-        attrs.alloc(i.name).mkApp(vFun2, i.value);
+        attrs.alloc(i.name, Value::FunctionApplicationThunk{.left = vFun2, .right = i.value});
     }
 
     v.mkAttrs(attrs.alreadySorted());
@@ -4425,13 +4423,13 @@ static void prim_partition(EvalState & state, const PosIdx pos, Value ** args, V
     auto rlist = state.buildList(rsize);
     if (rsize)
         memcpy(rlist.elems, right.data(), sizeof(Value *) * rsize);
-    attrs.alloc(state.s.right).mkList(rlist);
+    attrs.alloc(state.s.right, rlist);
 
     auto wsize = wrong.size();
     auto wlist = state.buildList(wsize);
     if (wsize)
         memcpy(wlist.elems, wrong.data(), sizeof(Value *) * wsize);
-    attrs.alloc(state.s.wrong).mkList(wlist);
+    attrs.alloc(state.s.wrong, wlist);
 
     v.mkAttrs(attrs);
 }
@@ -4483,7 +4481,7 @@ static void prim_groupBy(EvalState & state, const PosIdx pos, Value ** args, Val
 
     auto attrs2 = state.buildBindings(sortByName(items));
 
-    forEachByName(state, items, [&](Symbol sym, ListBuilder & list) { attrs2.alloc(sym).mkList(list); });
+    forEachByName(state, items, [&](Symbol sym, ListBuilder & list) { attrs2.alloc(sym, list); });
 
     v.mkAttrs(attrs2.alreadySorted());
 }
@@ -5148,8 +5146,8 @@ static void prim_parseDrvName(EvalState & state, const PosIdx pos, Value ** args
         state.forceStringNoCtx(*args[0], pos, "while evaluating the first argument passed to builtins.parseDrvName");
     DrvName parsed(name);
     auto attrs = state.buildBindings(2);
-    attrs.alloc(state.s.name).mkString(parsed.name, state.mem);
-    attrs.alloc("version").mkString(parsed.version, state.mem);
+    attrs.alloc(state.s.name, parsed.name, state.mem);
+    attrs.alloc("version", parsed.version, state.mem);
     v.mkAttrs(attrs);
 }
 
@@ -5467,8 +5465,8 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
     auto list = buildList(lookupPath.elements.size());
     for (const auto & [n, i] : enumerate(lookupPath.elements)) {
         auto attrs = buildBindings(2);
-        attrs.alloc("path").mkString(i.path.s, mem);
-        attrs.alloc("prefix").mkString(i.prefix.s, mem);
+        attrs.alloc("path", i.path.s, mem);
+        attrs.alloc("prefix", i.prefix.s, mem);
         list[n] = allocValue(attrs.finish());
     }
     v.mkList(list);

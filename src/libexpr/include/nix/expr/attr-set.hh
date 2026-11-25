@@ -546,9 +546,28 @@ public:
         bindings->numLayers = base.numLayers + 1;
     }
 
+    /**
+     * Add an attribute with an uninitialized value, to be initialized
+     * using one of the `Value::mk*()` methods. If the contents of the
+     * value are already known, prefer the overloads below.
+     */
     Value & alloc(Symbol name, PosIdx pos = noPos);
 
     Value & alloc(std::string_view name, PosIdx pos = noPos);
+
+    /**
+     * Add an attribute whose value is initialized by passing `args`
+     * to a constructor of `Value`, e.g. `attrs.alloc(name,
+     * NixInt(123))` or `attrs.alloc(name, "foo", state.mem)`. See
+     * `EvalMemory::allocValue()`.
+     */
+    template<typename... Args>
+        requires(sizeof...(Args) > 0) && std::constructible_from<Value, Args...>
+    inline Value & alloc(Symbol name, Args &&... args);
+
+    template<typename... Args>
+        requires(sizeof...(Args) > 0) && std::constructible_from<Value, Args...>
+    inline Value & alloc(std::string_view name, Args &&... args);
 
     Bindings * finish()
     {

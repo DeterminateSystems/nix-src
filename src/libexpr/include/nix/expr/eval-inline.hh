@@ -93,6 +93,22 @@ Value * EvalMemory::allocValue(Args &&... args)
     return new (allocValueUninit()) Value(std::forward<Args>(args)...);
 }
 
+template<typename... Args>
+    requires(sizeof...(Args) > 0) && std::constructible_from<Value, Args...>
+Value & BindingsBuilder::alloc(Symbol name, Args &&... args)
+{
+    auto value = mem.get().allocValue(std::forward<Args>(args)...);
+    push_back(Attr(name, value));
+    return *value;
+}
+
+template<typename... Args>
+    requires(sizeof...(Args) > 0) && std::constructible_from<Value, Args...>
+Value & BindingsBuilder::alloc(std::string_view name, Args &&... args)
+{
+    return alloc(symbols.get().create(name), std::forward<Args>(args)...);
+}
+
 [[gnu::always_inline]]
 Env & EvalMemory::allocEnv(size_t size)
 {

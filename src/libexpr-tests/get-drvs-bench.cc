@@ -1,6 +1,7 @@
 #include <benchmark/benchmark.h>
 
 #include "nix/expr/get-drvs.hh"
+#include "nix/expr/eval-inline.hh"
 #include "nix/expr/eval-settings.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/store/store-open.hh"
@@ -37,8 +38,7 @@ struct GetDerivationsEnv
         for (size_t i = 0; i < attrCount; ++i) {
             auto name = fmt("pkg%|1$06d|", i);
             auto sym = state.symbols.create(name);
-            auto & v = attrs.alloc(sym);
-            v.mkInt(i);
+            attrs.alloc(sym, NixInt(i));
         }
 
         attrsValue.mkAttrs(attrs.finish());

@@ -1031,9 +1031,9 @@ void callFlake(EvalState & state, const LockedFlake & lockedFlake, Value & vRes)
         auto key = keyMap.find(node);
         assert(key != keyMap.end());
 
-        override.alloc(libFlakeState.sDir).mkString(CanonPath(subdir).rel(), state.mem);
+        override.alloc(libFlakeState.sDir, CanonPath(subdir).rel(), state.mem);
 
-        overrides.alloc(state.symbols.create(key->second)).mkAttrs(override);
+        overrides.alloc(state.symbols.create(key->second), override);
     }
 
     auto & vOverrides = state.allocValue()->mkAttrs(overrides);

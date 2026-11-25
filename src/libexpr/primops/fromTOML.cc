@@ -137,12 +137,12 @@ static void prim_fromTOML(EvalState & state, const PosIdx pos, Value ** args, Va
                 normalizeDatetimeFormat(t);
 #endif
                 auto attrs = state.buildBindings(2);
-                attrs.alloc("_type").mkStringNoCopy("timestamp"_sds);
+                attrs.alloc("_type", "timestamp"_sds);
                 std::ostringstream s;
                 s << t;
                 auto str = s.view();
                 forceNoNullByte(str);
-                attrs.alloc("value").mkString(str, state.mem);
+                attrs.alloc("value", str, state.mem);
                 v.mkAttrs(attrs);
             } else {
                 throw std::runtime_error("Dates and times are not supported");

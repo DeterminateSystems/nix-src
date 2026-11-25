@@ -1350,9 +1350,34 @@ public:
     }
 
     /**
+     * Create an attribute set value. Like `mkAttrs()`, this calls
+     * `bindings.finish()`.
+     */
+    explicit Value(BindingsBuilder & bindings);
+
+    /**
      * Create a string value without context. Like `mkString()`.
      */
     Value(std::string_view s, EvalMemory & mem);
+
+    /**
+     * Create a string value with context. Like `mkString()`.
+     */
+    Value(std::string_view s, const NixStringContext & context, EvalMemory & mem);
+
+    /**
+     * Create a string value that refers to `s`. Like
+     * `mkStringNoCopy()`.
+     */
+    explicit Value(const StringData & s, const StringWithContext::Context * context = nullptr) noexcept
+        : Value(StringWithContext{.str = &s, .context = context})
+    {
+    }
+
+    /**
+     * Create a path value. Like `mkPath()`.
+     */
+    Value(const SourcePath & path, EvalMemory & mem);
 
     /**
      * Never modify the backing `Value` object!

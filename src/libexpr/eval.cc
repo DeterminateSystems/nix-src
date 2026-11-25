@@ -957,7 +957,17 @@ void Value::mkString(std::string_view s, EvalMemory & mem)
 }
 
 Value::Value(std::string_view s, EvalMemory & mem)
-    : Value(StringWithContext{.str = &StringData::make(mem, s), .context = nullptr})
+    : Value(StringData::make(mem, s))
+{
+}
+
+Value::Value(std::string_view s, const NixStringContext & context, EvalMemory & mem)
+    : Value(StringData::make(mem, s), Value::StringWithContext::Context::fromBuilder(context, mem))
+{
+}
+
+Value::Value(const SourcePath & path, EvalMemory & mem)
+    : Value(Path{.accessor = &*path.accessor, .path = &StringData::make(mem, path.path.abs())})
 {
 }
 
@@ -1062,10 +1072,13 @@ void EvalState::mkPos(Value & v, PosIdx p)
         auto storePath = store->maybeToStorePath(path->path);
         if (path->accessor == rootFS && storePath)
             // FIXME: only do this for virtual store paths?
-            attrs.alloc(s.file).mkString(
-                path->path.abs(), {NixStringContextElem::Path{.storePath = std::move(storePath->first)}}, mem);
+            attrs.alloc(
+                s.file,
+                path->path.abs(),
+                NixStringContext{NixStringContextElem::Path{.storePath = std::move(storePath->first)}},
+                mem);
         else
-            attrs.alloc(s.file).mkString(path->path.abs(), mem);
+            attrs.alloc(s.file, path->path.abs(), mem);
         makePositionThunks(*this, p, attrs.alloc(s.line), attrs.alloc(s.column));
         v.mkAttrs(attrs);
     } else

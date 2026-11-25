@@ -61,22 +61,22 @@ bool createUserEnv(
 
         auto attrs = state.buildBindings(7 + outputs.size());
 
-        attrs.alloc(state.s.type).mkStringNoCopy("derivation"_sds);
-        attrs.alloc(state.s.name).mkString(i.queryName(), state.mem);
+        attrs.alloc(state.s.type, "derivation"_sds);
+        attrs.alloc(state.s.name, i.queryName(), state.mem);
         auto system = i.querySystem();
         if (!system.empty())
-            attrs.alloc(state.s.system).mkString(system, state.mem);
-        attrs.alloc(state.s.outPath).mkString(state.store->printStorePath(i.queryOutPath()), state.mem);
+            attrs.alloc(state.s.system, system, state.mem);
+        attrs.alloc(state.s.outPath, state.store->printStorePath(i.queryOutPath()), state.mem);
         if (drvPath)
-            attrs.alloc(state.s.drvPath).mkString(state.store->printStorePath(*drvPath), state.mem);
+            attrs.alloc(state.s.drvPath, state.store->printStorePath(*drvPath), state.mem);
 
         // Copy each output meant for installation.
         auto outputsList = state.buildList(outputs.size());
         for (const auto & [m, j] : enumerate(outputs)) {
             (outputsList[m] = state.allocValue())->mkString(j.first, state.mem);
             auto outputAttrs = state.buildBindings(2);
-            outputAttrs.alloc(state.s.outPath).mkString(state.store->printStorePath(*j.second), state.mem);
-            attrs.alloc(j.first).mkAttrs(outputAttrs);
+            outputAttrs.alloc(state.s.outPath, state.store->printStorePath(*j.second), state.mem);
+            attrs.alloc(j.first, outputAttrs);
 
             /* This is only necessary when installing store paths, e.g.,
                `nix-env -i /nix/store/abcd...-foo'. */
@@ -84,7 +84,7 @@ bool createUserEnv(
 
             references.insert(*j.second);
         }
-        attrs.alloc(state.s.outputs).mkList(outputsList);
+        attrs.alloc(state.s.outputs, outputsList);
 
         // Copy the meta attributes.
         auto meta = state.buildBindings(metaNames.size());
@@ -95,7 +95,7 @@ bool createUserEnv(
             meta.insert(state.symbols.create(j), v);
         }
 
-        attrs.alloc(state.s.meta).mkAttrs(meta);
+        attrs.alloc(state.s.meta, meta);
 
         (list[n] = state.allocValue())->mkAttrs(attrs);
 
