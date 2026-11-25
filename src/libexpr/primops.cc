@@ -240,12 +240,10 @@ void derivationToValue(
     }
     attrs.alloc(state.s.outputs, list);
 
-    auto w = state.allocValue(attrs.finish());
-
     auto vImportedDrvToDerivation = state.allocValue();
     state.evalFile(state.importedDrvToDerivation, *vImportedDrvToDerivation); // has caching
 
-    v.mkApp(vImportedDrvToDerivation, w);
+    v.mkApp(vImportedDrvToDerivation, state.allocValue(attrs.finish()));
     state.forceAttrs(v, pos, "while calling imported-drv-to-derivation.nix.gen.hh");
 }
 
@@ -3683,11 +3681,12 @@ static void prim_mapAttrs(EvalState & state, const PosIdx pos, Value ** args, Va
 
     auto attrs = state.buildBindings(args[1]->attrs()->size());
 
-    for (auto & i : *args[1]->attrs()) {
-        Value * vName = Value::toPtr(state.symbols[i.name]);
-        Value * vFun2 = state.allocValue(Value::App{.left = args[0], .right = vName});
-        attrs.alloc(i.name, Value::App{.left = vFun2, .right = i.value});
-    }
+    for (auto & i : *args[1]->attrs())
+        attrs.alloc(
+            i.name,
+            Value::App{
+                .left = state.allocValue(Value::App{.left = args[0], .right = Value::toPtr(state.symbols[i.name])}),
+                .right = i.value});
 
     v.mkAttrs(attrs.alreadySorted());
 }
@@ -3836,10 +3835,12 @@ static void prim_zipAttrsWith(EvalState & state, const PosIdx pos, Value ** args
 
     forEachByName(state, attrsSeen, [&](Symbol sym, ListBuilder & list) {
         auto name = Value::toPtr(state.symbols[sym]);
-        auto call1 = state.allocValue(Value::App{.left = args[0], .right = name});
-        auto arg = state.allocValue(list);
-        auto call2 = state.allocValue(Value::App{.left = call1, .right = arg});
-        attrs.insert(sym, call2);
+        attrs.insert(
+            sym,
+            state.allocValue(
+                Value::App{
+                    .left = state.allocValue(Value::App{.left = args[0], .right = name}),
+                    .right = state.allocValue(list)}));
     });
 
     v.mkAttrs(attrs.alreadySorted());
@@ -4258,10 +4259,8 @@ static void prim_genList(EvalState & state, const PosIdx pos, Value ** args, Val
     state.forceFunction(*args[0], noPos, "while evaluating the first argument passed to builtins.genList");
 
     auto list = state.buildList(len);
-    for (const auto & [n, v] : enumerate(list)) {
-        auto arg = state.allocValue(NixInt(n));
-        v = state.allocValue(Value::App{.left = args[0], .right = arg});
-    }
+    for (const auto & [n, v] : enumerate(list))
+        v = state.allocValue(Value::App{.left = args[0], .right = state.allocValue(NixInt(n))});
     v.mkList(list);
 }
 

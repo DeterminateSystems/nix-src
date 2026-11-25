@@ -308,11 +308,8 @@ static void showHelp(std::vector<std::string> subcommand, NixArgs & toplevel)
 #include "generate-store-info.nix.gen.hh"
     );
 
-    auto vDump = state.allocValue();
-    vDump->mkString(toplevel.dumpCli(), state.mem);
-
     auto vRes = state.allocValue();
-    Value * args[]{&state.getBuiltin("false"), vDump};
+    Value * args[]{&state.getBuiltin("false"), state.allocValue(toplevel.dumpCli(), state.mem)};
     state.callFunction(*vGenerateManpage, args, *vRes, noPos);
 
     auto attr = vRes->attrs()->get(state.symbols.create(mdName + ".md"));
