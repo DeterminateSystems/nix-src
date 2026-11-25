@@ -78,7 +78,11 @@ let
   ]
   # Meson only sets this with libstdc++, which Darwin does not use.
   ++ lib.optional (!isDarwin) "-D_GLIBCXX_USE_TBB_PAR_BACKEND=0"
-  # Unused for Mach-O, where clang warns about it on every unit.
+  # As in packaging/components.nix: GCC doesn't inline or otherwise optimize
+  # across functions that could be interposed (e.g. by `LD_PRELOAD`), which in
+  # position-independent code is every exported function. See also
+  # `libraryLinkFlags`. Unused for Mach-O, where clang warns about it on every
+  # unit.
   ++ lib.optional (!isDarwin) "-fno-semantic-interposition"
   ++ optimizationFlags
   ++ debugFlags
@@ -90,6 +94,12 @@ let
   ]
   # macOS has no librt; its functions are in libSystem.
   ++ lib.optional (!isDarwin) "-lrt";
+
+  # The link-time counterpart of `-fno-semantic-interposition`, as in
+  # packaging/components.nix: bind a shared library's references to its own
+  # functions at link time, so that calls between its translation units don't
+  # go through the PLT. ELF only.
+  libraryLinkFlags = lib.optional (!isDarwin) "-Wl,-Bsymbolic-functions";
 
   # A stand-in for a configuration header (like Meson's `configure_file()`
   # output). It is empty: the macros are passed to the compiler as `-D`
@@ -236,9 +246,9 @@ let
         libName
         exeName
         binSymlinks
-        linkFlags
         postInstall
         ;
+      linkFlags = component.linkFlags ++ lib.optionals (component.type == "library") libraryLinkFlags;
       linkPkgConfig = lib.concatMap (d: d.pkgconfig or [ ]) deps;
       linkLibs =
         map (d: "-l${d.libName}") component.allDeps
