@@ -299,11 +299,27 @@ struct NixWasmInstance
         return id;
     }
 
+    /**
+     * Allocate an uninitialized value, to be initialized using one of
+     * the `Value::mk*()` methods. If the contents of the value are
+     * already known, prefer the overload below.
+     */
     std::pair<ValueId, Value &> allocValue()
     {
         auto v = state.allocValue();
         auto id = addValue(v);
         return {id, *v};
+    }
+
+    /**
+     * Allocate a value and initialize it by passing `args` to a
+     * constructor of `Value`. See `EvalMemory::allocValue()`.
+     */
+    template<typename... Args>
+        requires(sizeof...(Args) > 0)
+    ValueId allocValue(Args &&... args)
+    {
+        return addValue(state.allocValue(std::forward<Args>(args)...));
     }
 
     Value & getValue(ValueId id)
@@ -400,9 +416,7 @@ struct NixWasmInstance
 
     ValueId make_int(int64_t n)
     {
-        auto [valueId, value] = allocValue();
-        value.mkInt(n);
-        return valueId;
+        return allocValue(NixInt(n));
     }
 
     int64_t get_int(ValueId valueId)
@@ -412,9 +426,7 @@ struct NixWasmInstance
 
     ValueId make_float(double x)
     {
-        auto [valueId, value] = allocValue();
-        value.mkFloat(x);
-        return valueId;
+        return allocValue(NixFloat(x));
     }
 
     double get_float(ValueId valueId)
@@ -424,9 +436,7 @@ struct NixWasmInstance
 
     ValueId make_string(uint32_t ptr, uint32_t len)
     {
-        auto [valueId, value] = allocValue();
-        value.mkString(span2string(guestSpan(ptr, len)), state.mem);
-        return valueId;
+        return allocValue(span2string(guestSpan(ptr, len)), state.mem);
     }
 
     uint32_t copy_string(ValueId valueId, uint32_t ptr, uint32_t maxLen)
@@ -447,9 +457,7 @@ struct NixWasmInstance
             throw Error("make_path expects a path value");
         auto base = baseValue.path();
 
-        auto [valueId, value] = allocValue();
-        value.mkPath({base.accessor, CanonPath(span2string(guestSpan(ptr, len)), base.path)}, state.mem);
-        return valueId;
+        return allocValue(SourcePath{base.accessor, CanonPath(span2string(guestSpan(ptr, len)), base.path)}, state.mem);
     }
 
     uint32_t copy_path(ValueId valueId, uint32_t ptr, uint32_t maxLen)
@@ -486,14 +494,11 @@ struct NixWasmInstance
     {
         auto vs = guestSpan<ValueId>(ptr, len);
 
-        auto [valueId, value] = allocValue();
-
         auto list = state.buildList(len);
         for (const auto & [n, v] : enumerate(list))
             v = &getValue(vs[n]); // FIXME: endianness
-        value.mkList(list);
 
-        return valueId;
+        return allocValue(list);
     }
 
     uint32_t copy_list(ValueId valueId, uint32_t ptr, uint32_t maxLen)
@@ -523,15 +528,13 @@ struct NixWasmInstance
 
         auto attrs = guestSpan<Attr>(ptr, len);
 
-        auto [valueId, value] = allocValue();
         auto builder = state.buildBindings(len);
         for (auto & attr : attrs)
             builder.insert(
                 state.symbols.create(span2string(guestSpan(attr.attrNamePtr, attr.attrNameLen))),
                 &getValue(attr.value));
-        value.mkAttrs(builder);
 
-        return valueId;
+        return allocValue(builder);
     }
 
     /**
@@ -677,9 +680,7 @@ struct NixWasmInstance
 
         while (!args.empty()) {
             auto arg = &getValue(args[0]);
-            auto tmp = state.allocValue();
-            tmp->mkApp(res, arg);
-            res = tmp;
+            res = state.allocValue(Value::App{.left = res, .right = arg});
             args = args.subspan(1);
         }
 
