@@ -168,7 +168,7 @@ void prim_split(EvalState & state, const PosIdx pos, Value ** args, Value & v)
                     v2 = mkString(state, match[si + 1]);
             }
 
-            (list[idx++] = state.allocValue())->mkList(list2);
+            list[idx++] = state.allocValue(list2);
 
             // Add a string for non-matched suffix characters.
             if (idx == 2 * len)

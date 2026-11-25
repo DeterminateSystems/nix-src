@@ -507,6 +507,15 @@ NIX_VALUE_STORAGE_FOR_EACH_FIELD(NIX_VALUE_PAYLOAD_TYPE)
 template<typename T>
 inline constexpr InternalType payloadTypeToInternalType = PayloadTypeToInternalType<T>::value;
 
+/**
+ * A type that can be stored in a value, e.g. `NixInt` or
+ * `ValueBase::Lambda`. This only matches the exact types listed in
+ * `NIX_VALUE_STORAGE_FOR_EACH_FIELD`, not types that are convertible
+ * to them.
+ */
+template<typename T>
+concept ValuePayload = requires { PayloadTypeToInternalType<T>::value; };
+
 } // namespace detail
 
 /**
@@ -556,6 +565,17 @@ protected:
 #undef NIX_VALUE_STORAGE_SET_IMPL
 #undef NIX_VALUE_STORAGE_GET_IMPL
 #undef NIX_VALUE_STORAGE_FOR_EACH_FIELD
+
+    ValueStorage() = default;
+
+    /**
+     * Initialize a value from a payload, e.g. `NixInt` or `Lambda`.
+     */
+    template<detail::ValuePayload T>
+    explicit ValueStorage(T payload) noexcept
+    {
+        setStorage(payload);
+    }
 
     /** Get internal type currently occupying the storage. */
     InternalType getInternalType() const noexcept
@@ -697,48 +717,58 @@ class alignas(16)
             unreachable();
     }
 
+    /**
+     * The representation of a value, i.e. the contents of `p0` and
+     * `p1`. The `encode*()` functions below compute this for a
+     * payload without writing it anywhere, so that it can be used
+     * both to update an existing value (see `setStorage()`) and to
+     * initialize a new one (see the constructors).
+     */
+    struct Words
+    {
+        PackedPointer p0, p1;
+    };
+
     template<InternalType type>
-    void setSingleDWordPayload(PackedPointer untaggedVal) noexcept
+    static Words encodeSingleDWord(PackedPointer untaggedVal) noexcept
     {
         /* There's plenty of free upper bits in the first byte, which
            is used only for the discriminator. */
-        finish(static_cast<uint8_t>(type), untaggedVal);
+        return {static_cast<uint8_t>(type), untaggedVal};
     }
 
     template<PrimaryDiscriminator discriminator, typename T, typename U>
-    void setUntaggablePayload(T * firstPtrField, U untaggableField) noexcept
+    static Words encodeUntaggable(T * firstPtrField, U untaggableField) noexcept
     {
         static_assert(discriminator >= pdListN && discriminator <= pdPath);
         auto firstFieldPayload = std::bit_cast<PackedPointer>(firstPtrField);
         assertAligned(firstFieldPayload);
-        finish(static_cast<int>(discriminator) | firstFieldPayload, std::bit_cast<PackedPointer>(untaggableField));
+        return {static_cast<int>(discriminator) | firstFieldPayload, std::bit_cast<PackedPointer>(untaggableField)};
     }
 
     template<InternalType type, typename T, typename U>
-    void setPairOfPointersPayload(T * firstPtrField, U * secondPtrField) noexcept
+    static Words encodePairOfPointers(T * firstPtrField, U * secondPtrField) noexcept
     {
         static_assert(type >= tListSmall && type <= tLambda);
         auto firstFieldPayload = std::bit_cast<PackedPointer>(firstPtrField);
         assertAligned(firstFieldPayload);
         auto secondFieldPayload = std::bit_cast<PackedPointer>(secondPtrField);
         assertAligned(secondFieldPayload);
-        finish(
+        return {
             static_cast<int>(pdPairOfPointers) | firstFieldPayload,
-            ((type - tListSmall) >> discriminatorBits) | secondFieldPayload);
+            ((type - tListSmall) >> discriminatorBits) | secondFieldPayload};
     }
 
     template<InternalType type, typename T, typename U>
-    void setThunkPayload(T * firstPtrField, U * secondPtrField) noexcept
+    static Words encodeThunk(T * firstPtrField, U * secondPtrField) noexcept
     {
         static_assert(type >= tThunk && type <= tApp);
-        auto secondFieldPayload = std::bit_cast<PackedPointer>(secondPtrField);
-        assertAligned(secondFieldPayload);
-        p1 = ((type - tThunk) >> discriminatorBits) | secondFieldPayload;
         auto firstFieldPayload = std::bit_cast<PackedPointer>(firstPtrField);
         assertAligned(firstFieldPayload);
-        // Note: awaited values can never become a thunk, so no need
-        // to check for waiters.
-        p0.store(static_cast<int>(pdThunk) | firstFieldPayload, std::memory_order_release);
+        auto secondFieldPayload = std::bit_cast<PackedPointer>(secondPtrField);
+        assertAligned(secondFieldPayload);
+        return {
+            static_cast<int>(pdThunk) | firstFieldPayload, ((type - tThunk) >> discriminatorBits) | secondFieldPayload};
     }
 
     template<typename T, typename U>
@@ -776,23 +806,23 @@ protected:
         }
     }
 
-#define NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(TYPE, SET, MEMBER_A, MEMBER_B)         \
-                                                                                  \
-    void getStorage(TYPE & val) const noexcept                                    \
-    {                                                                             \
-        getPairOfPointersPayload(val MEMBER_A, val MEMBER_B);                     \
-    }                                                                             \
-                                                                                  \
-    void setStorage(TYPE val) noexcept                                            \
-    {                                                                             \
-        SET<detail::payloadTypeToInternalType<TYPE>>(val MEMBER_A, val MEMBER_B); \
+#define NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(TYPE, ENCODE, MEMBER_A, MEMBER_B)                \
+                                                                                            \
+    void getStorage(TYPE & val) const noexcept                                              \
+    {                                                                                       \
+        getPairOfPointersPayload(val MEMBER_A, val MEMBER_B);                               \
+    }                                                                                       \
+                                                                                            \
+    static Words encode(TYPE val) noexcept                                                  \
+    {                                                                                       \
+        return ENCODE<detail::payloadTypeToInternalType<TYPE>>(val MEMBER_A, val MEMBER_B); \
     }
 
-    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(SmallList, setPairOfPointersPayload, [0], [1])
-    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(PrimOpApplicationThunk, setPairOfPointersPayload, .left, .right)
-    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(Lambda, setPairOfPointersPayload, .env, .fun)
-    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(FunctionApplicationThunk, setThunkPayload, .left, .right)
-    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(ClosureThunk, setThunkPayload, .env, .expr)
+    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(SmallList, encodePairOfPointers, [0], [1])
+    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(PrimOpApplicationThunk, encodePairOfPointers, .left, .right)
+    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(Lambda, encodePairOfPointers, .env, .fun)
+    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(FunctionApplicationThunk, encodeThunk, .left, .right)
+    NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(ClosureThunk, encodeThunk, .env, .expr)
 
 #undef NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS
 
@@ -853,66 +883,128 @@ protected:
         failed = std::bit_cast<Failed *>(p1);
     }
 
-    void setStorage(NixInt integer) noexcept
+    static Words encode(NixInt integer) noexcept
     {
-        setSingleDWordPayload<tInt>(integer.value);
+        return encodeSingleDWord<tInt>(integer.value);
     }
 
-    void setStorage(bool boolean) noexcept
+    static Words encode(bool boolean) noexcept
     {
-        setSingleDWordPayload<tBool>(boolean);
+        return encodeSingleDWord<tBool>(boolean);
     }
 
-    void setStorage(Null path) noexcept
+    static Words encode(Null null) noexcept
     {
-        setSingleDWordPayload<tNull>(0);
+        return encodeSingleDWord<tNull>(0);
     }
 
-    void setStorage(NixFloat fpoint) noexcept
+    static Words encode(NixFloat fpoint) noexcept
     {
-        setSingleDWordPayload<tFloat>(std::bit_cast<PackedPointer>(fpoint));
+        return encodeSingleDWord<tFloat>(std::bit_cast<PackedPointer>(fpoint));
     }
 
-    void setStorage(ExternalValueBase * external) noexcept
+    static Words encode(ExternalValueBase * external) noexcept
     {
-        setSingleDWordPayload<tExternal>(std::bit_cast<PackedPointer>(external));
+        return encodeSingleDWord<tExternal>(std::bit_cast<PackedPointer>(external));
     }
 
-    void setStorage(PrimOp * primOp) noexcept
+    static Words encode(PrimOp * primOp) noexcept
     {
-        setSingleDWordPayload<tPrimOp>(std::bit_cast<PackedPointer>(primOp));
+        return encodeSingleDWord<tPrimOp>(std::bit_cast<PackedPointer>(primOp));
     }
 
-    void setStorage(Bindings * bindings) noexcept
+    static Words encode(Bindings * bindings) noexcept
     {
-        setSingleDWordPayload<tAttrs>(std::bit_cast<PackedPointer>(bindings));
+        return encodeSingleDWord<tAttrs>(std::bit_cast<PackedPointer>(bindings));
     }
 
-    void setStorage(List list) noexcept
+    static Words encode(List list) noexcept
     {
-        setUntaggablePayload<pdListN>(list.elems, list.size);
+        return encodeUntaggable<pdListN>(list.elems, list.size);
     }
 
-    void setStorage(StringWithContext string) noexcept
+    static Words encode(StringWithContext string) noexcept
     {
-        setUntaggablePayload<pdString>(string.context, string.str);
+        return encodeUntaggable<pdString>(string.context, string.str);
     }
 
-    void setStorage(Path path) noexcept
+    static Words encode(Path path) noexcept
     {
-        setUntaggablePayload<pdPath>(path.accessor, path.path);
+        return encodeUntaggable<pdPath>(path.accessor, path.path);
     }
 
-    void setStorage(Failed * failed) noexcept
+    static Words encode(Failed * failed) noexcept
     {
-        setSingleDWordPayload<tFailed>(std::bit_cast<PackedPointer>(failed));
+        return encodeSingleDWord<tFailed>(std::bit_cast<PackedPointer>(failed));
+    }
+
+    /**
+     * Update this value. Since it may be a pending or awaited thunk
+     * that other threads are looking at, this uses an atomic
+     * operation. To initialize a new value, use a constructor
+     * instead.
+     */
+    template<detail::ValuePayload T>
+    void setStorage(T payload) noexcept
+    {
+        auto w = encode(payload);
+        if constexpr (std::same_as<T, ClosureThunk> || std::same_as<T, FunctionApplicationThunk>) {
+            p1 = w.p1;
+            // Note: awaited values can never become a thunk, so no need
+            // to check for waiters.
+            p0.store(w.p0, std::memory_order_release);
+        } else
+            finish(w.p0, w.p1);
+    }
+
+    /**
+     * Get the representation of a value for the purpose of copying
+     * it. It's not allowed to be a thunk to avoid accidental work
+     * duplication.
+     */
+    Words getFinished() const
+    {
+        auto p0_ = p0.load(std::memory_order_acquire);
+        auto p1_ = p1; // must be loaded after p0
+        auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
+        if (pd == pdThunk || pd == pdPending || pd == pdAwaited)
+            unreachable();
+        return {p0_, p1_};
+    }
+
+    /* Note: the constructors below don't use atomic operations to
+       initialize the value, unlike `setStorage()` and `operator =`.
+       This is safe because an object under construction is not
+       visible to other threads. It only becomes visible when a
+       pointer to it is published, e.g. by storing it in an
+       environment, attribute set or list that is reachable from a
+       value that is then updated using `finish()`, whose *release*
+       store also makes the contents of this value visible. */
+
+    explicit ValueStorage(Words w) noexcept
+        : p0(w.p0)
+        , p1(w.p1)
+    {
     }
 
     ValueStorage() {}
 
-    ValueStorage(const ValueStorage & v)
+    /**
+     * Initialize a value from a payload, e.g. `NixInt` or `Lambda`.
+     */
+    template<detail::ValuePayload T>
+    explicit ValueStorage(T payload) noexcept
+        : ValueStorage(encode(payload))
     {
-        *this = v;
+    }
+
+    /**
+     * Initialize a value as a copy of `v`, which is not allowed to
+     * be a thunk.
+     */
+    ValueStorage(const ValueStorage & v)
+        : ValueStorage(v.getFinished())
+    {
     }
 
     /**
@@ -921,12 +1013,8 @@ protected:
      */
     ValueStorage & operator=(const ValueStorage & v)
     {
-        auto p0_ = v.p0.load(std::memory_order_acquire);
-        auto p1_ = v.p1; // must be loaded after p0
-        auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
-        if (pd == pdThunk || pd == pdPending || pd == pdAwaited)
-            unreachable();
-        finish(p0_, p1_);
+        auto w = v.getFinished();
+        finish(w.p0, w.p1);
         return *this;
     }
 
@@ -1213,7 +1301,58 @@ private:
         return out;
     }
 
+    static Value fromListBuilder(const ListBuilder & builder) noexcept
+    {
+        switch (builder.size) {
+        case 0:
+            return Value(List{.size = 0, .elems = nullptr});
+        case 1:
+            return Value(SmallList{builder.inlineElems[0], nullptr});
+        case 2:
+            return Value(SmallList{builder.inlineElems[0], builder.inlineElems[1]});
+        default:
+            return Value(List{.size = builder.size, .elems = builder.elems});
+        }
+    }
+
 public:
+
+    /* Constructors. Unlike the `mk*()` methods, which update a value
+       that may be a thunk that other threads are waiting for, these
+       initialize a new value and therefore don't need any atomic
+       operations. They're typically used via `allocValue()`,
+       e.g. `state.allocValue(NixInt(123))`. */
+
+    /**
+     * Create an uninitialized value.
+     */
+    Value() = default;
+
+    /**
+     * Create a value from a payload such as `NixInt`, `bool`, `Null`,
+     * `Bindings *`, `Lambda` or `ClosureThunk` (see
+     * `NIX_VALUE_STORAGE_FOR_EACH_FIELD` for the full list). The
+     * argument must have exactly that type, e.g. `Value(NixInt(1))`
+     * rather than `Value(1)`.
+     */
+    template<detail::ValuePayload T>
+    explicit Value(T payload) noexcept
+        : ValueStorage(payload)
+    {
+    }
+
+    /**
+     * Create a list value. Like `mkList()`.
+     */
+    explicit Value(const ListBuilder & builder) noexcept
+        : Value(fromListBuilder(builder))
+    {
+    }
+
+    /**
+     * Create a string value without context. Like `mkString()`.
+     */
+    Value(std::string_view s, EvalMemory & mem);
 
     /**
      * Never modify the backing `Value` object!

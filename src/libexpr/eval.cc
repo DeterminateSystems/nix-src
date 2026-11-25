@@ -956,6 +956,11 @@ void Value::mkString(std::string_view s, EvalMemory & mem)
     mkStringNoCopy(StringData::make(mem, s));
 }
 
+Value::Value(std::string_view s, EvalMemory & mem)
+    : Value(StringWithContext{.str = &StringData::make(mem, s), .context = nullptr})
+{
+}
+
 Value::StringWithContext::Context *
 Value::StringWithContext::Context::fromBuilder(const NixStringContext & context, EvalMemory & mem)
 {
@@ -1033,6 +1038,15 @@ static inline void mkThunk(Value & v, Env & env, Expr * expr)
 {
     v.mkThunk(&env, expr);
     nrThunks++;
+}
+
+/**
+ * Allocate a thunk for `expr` in `env`.
+ */
+static inline Value * allocThunk(EvalState & state, Env & env, Expr * expr)
+{
+    nrThunks++;
+    return state.allocValue(Value::ClosureThunk{.env = &env, .expr = expr});
 }
 
 void EvalState::mkThunk_(Value & v, Expr * expr)
@@ -1129,9 +1143,7 @@ void EvalState::mkSingleDerivedPathString(const SingleDerivedPath & p, Value & v
 
 Value * Expr::maybeThunk(EvalState & state, Env & env)
 {
-    Value * v = state.allocValue();
-    mkThunk(*v, env, this);
-    return v;
+    return allocThunk(state, env, this);
 }
 
 Value * ExprVar::maybeThunk(EvalState & state, Env & env)
@@ -1176,9 +1188,7 @@ Value * ExprLambda::maybeThunk(EvalState & state, Env & env)
        expression as the lambda value that it evaluates to, so create
        the latter right away. */
     state.nrAvoided++;
-    Value * v = state.allocValue();
-    v->mkLambda(&env, this);
-    return v;
+    return state.allocValue(Value::Lambda{.env = &env, .fun = this});
 }
 
 namespace {
@@ -1253,8 +1263,7 @@ void EvalState::evalFile(const SourcePath & path, Value & v, bool mustBeTrivial)
         *resolvedPath,
         RootValue(nullptr),
         [&](auto & i) {
-            vExpr = allocValue();
-            vExpr->mkThunk(&baseEnv, &expr);
+            vExpr = allocValue(Value::ClosureThunk{.env = &baseEnv, .expr = &expr});
             *i.second = vExpr;
         },
         [&](auto & i) { vExpr = *i.second; });
@@ -1391,8 +1400,7 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
         for (auto & i : *attrs) {
             Value * vAttr;
             if (hasOverrides && i.second.kind != AttrDef::Kind::Inherited) {
-                vAttr = state.allocValue();
-                mkThunk(*vAttr, *i.second.chooseByKind(&env2, &env, inheritEnv), i.second.e);
+                vAttr = allocThunk(state, *i.second.chooseByKind(&env2, &env, inheritEnv), i.second.e);
             } else
                 vAttr = i.second.e->maybeThunk(state, *i.second.chooseByKind(&env2, &env, inheritEnv));
             env2.values[displ++] = vAttr;
@@ -1798,8 +1806,7 @@ static void addLambdaCallTrace(EvalState & state, Error & e, ExprLambda & lambda
 static void makeAppChain(EvalState & state, Value & vCur, std::span<Value *> args, Value & vRes)
 {
     for (auto arg : args) {
-        auto fun2 = state.allocValue();
-        *fun2 = vCur;
+        auto fun2 = state.allocValue(vCur);
         vCur.reset();
         vCur.mkPrimOpApp(fun2, arg);
     }
@@ -1850,8 +1857,7 @@ static void callFunctor(EvalState & state, Value & vCur, const Attr & functor, V
     /* 'vCur' may be allocated on the stack of the calling function, but
        for functors we may keep a reference, so heap-allocate a copy and
        use that instead. */
-    Value * args2[] = {state.allocValue(), arg};
-    *args2[0] = vCur;
+    Value * args2[] = {state.allocValue(vCur), arg};
     vCur.reset();
     try {
         state.callFunction(*functor.value, args2, vCur, functor.pos);
@@ -2105,7 +2111,7 @@ https://nix.dev/manual/nix/stable/language/syntax.html#functions.)",
         }
     }
 
-    [[gnu::musttail]] return callFunction(fun, allocValue()->mkAttrs(attrs), res, pos);
+    [[gnu::musttail]] return callFunction(fun, *allocValue(attrs.finish()), res, pos);
 }
 
 void ExprWith::eval(EvalState & state, Env & env, Value & v)

@@ -2,28 +2,12 @@
 
 namespace nix {
 
-Value Value::vEmptyList = []() {
-    Value res;
-    res.setStorage(List{.size = 0, .elems = nullptr});
-    return res;
-}();
+Value Value::vEmptyList{List{.size = 0, .elems = nullptr}};
 
-Value Value::vNull = []() {
-    Value res;
-    res.mkNull();
-    return res;
-}();
+Value Value::vNull{Null{}};
 
-Value Value::vTrue = []() {
-    Value res;
-    res.mkBool(true);
-    return res;
-}();
+Value Value::vTrue{true};
 
-Value Value::vFalse = []() {
-    Value res;
-    res.mkBool(false);
-    return res;
-}();
+Value Value::vFalse{false};
 
 } // namespace nix

@@ -236,12 +236,11 @@ void derivationToValue(
     auto list = state.buildList(drv.outputs.size());
     for (const auto & [i, o] : enumerate(drv.outputs)) {
         mkOutputString(state, attrs, storePath, o);
-        (list[i] = state.allocValue())->mkString(o.first, state.mem);
+        list[i] = state.allocValue(o.first, state.mem);
     }
     attrs.alloc(state.s.outputs).mkList(list);
 
-    auto w = state.allocValue();
-    w->mkAttrs(attrs);
+    auto w = state.allocValue(attrs.finish());
 
     auto vImportedDrvToDerivation = state.allocValue();
     state.evalFile(state.importedDrvToDerivation, *vImportedDrvToDerivation); // has caching
@@ -3334,8 +3333,7 @@ static struct LazyPosAccessors
 
     void operator()(EvalState & state, const PosIdx pos, Value & line, Value & column)
     {
-        Value * posV = state.allocValue();
-        posV->mkInt(pos.id);
+        Value * posV = state.allocValue(NixInt(pos.id));
         line.mkApp(&lineOfPos, posV);
         column.mkApp(&columnOfPos, posV);
     }
@@ -3689,8 +3687,7 @@ static void prim_mapAttrs(EvalState & state, const PosIdx pos, Value ** args, Va
 
     for (auto & i : *args[1]->attrs()) {
         Value * vName = Value::toPtr(state.symbols[i.name]);
-        Value * vFun2 = state.allocValue();
-        vFun2->mkApp(args[0], vName);
+        Value * vFun2 = state.allocValue(Value::FunctionApplicationThunk{.left = args[0], .right = vName});
         attrs.alloc(i.name).mkApp(vFun2, i.value);
     }
 
@@ -3841,12 +3838,9 @@ static void prim_zipAttrsWith(EvalState & state, const PosIdx pos, Value ** args
 
     forEachByName(state, attrsSeen, [&](Symbol sym, ListBuilder & list) {
         auto name = Value::toPtr(state.symbols[sym]);
-        auto call1 = state.allocValue();
-        call1->mkApp(args[0], name);
-        auto call2 = state.allocValue();
-        auto arg = state.allocValue();
-        arg->mkList(list);
-        call2->mkApp(call1, arg);
+        auto call1 = state.allocValue(Value::FunctionApplicationThunk{.left = args[0], .right = name});
+        auto arg = state.allocValue(list);
+        auto call2 = state.allocValue(Value::FunctionApplicationThunk{.left = call1, .right = arg});
         attrs.insert(sym, call2);
     });
 
@@ -4000,7 +3994,7 @@ static void prim_map(EvalState & state, const PosIdx pos, Value ** args, Value &
 
     auto list = state.buildList(args[1]->listSize());
     for (const auto & [n, v] : enumerate(list))
-        (v = state.allocValue())->mkApp(args[0], args[1]->listView()[n]);
+        v = state.allocValue(Value::FunctionApplicationThunk{.left = args[0], .right = args[1]->listView()[n]});
     v.mkList(list);
 }
 
@@ -4267,9 +4261,8 @@ static void prim_genList(EvalState & state, const PosIdx pos, Value ** args, Val
 
     auto list = state.buildList(len);
     for (const auto & [n, v] : enumerate(list)) {
-        auto arg = state.allocValue();
-        arg->mkInt(n);
-        (v = state.allocValue())->mkApp(args[0], arg);
+        auto arg = state.allocValue(NixInt(n));
+        v = state.allocValue(Value::FunctionApplicationThunk{.left = args[0], .right = arg});
     }
     v.mkList(list);
 }
@@ -5211,7 +5204,7 @@ static void prim_splitVersion(EvalState & state, const PosIdx pos, Value ** args
     }
     auto list = state.buildList(components.size());
     for (const auto & [n, component] : enumerate(components))
-        (list[n] = state.allocValue())->mkString(std::move(component), state.mem);
+        list[n] = state.allocValue(component, state.mem);
     v.mkList(list);
 }
 
@@ -5476,7 +5469,7 @@ void EvalState::createBaseEnv(const EvalSettings & evalSettings)
         auto attrs = buildBindings(2);
         attrs.alloc("path").mkString(i.path.s, mem);
         attrs.alloc("prefix").mkString(i.prefix.s, mem);
-        (list[n] = allocValue())->mkAttrs(attrs);
+        list[n] = allocValue(attrs.finish());
     }
     v.mkList(list);
     addConstant(
