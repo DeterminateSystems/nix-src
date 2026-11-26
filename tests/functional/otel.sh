@@ -112,11 +112,11 @@ nix build --no-link --substitute "$drvPath^*"
 [[ $(attr Build nix.drv.path) = "$drvPath" ]]
 [[ $(attr Build nix.drv.name) = foo ]]
 [[ $(attr Build nix.drv.version) = 1.2 ]]
-[[ $(attr Build nix.build.status) = Built ]]
+[[ -z $(attr Build error.type) ]]
 [[ $(span Build .status.code) = null ]]
 # Not being able to substitute the path is the normal prelude to
 # building it, not an error.
-[[ $(attr SubstitutionGoal nix.build.status) = NoSubstituters ]]
+[[ -z $(attr SubstitutionGoal error.type) ]]
 [[ $(span SubstitutionGoal .status.code) = null ]]
 
 # A failed build marks its `Build` span as failed, with the build's
@@ -126,9 +126,27 @@ nix build --no-link --substitute "$drvPath^*"
 drvPath=$(nix-instantiate --expr 'with import ./config.nix; mkDerivation { name = "bar-1.2"; buildCommand = "echo something went wrong >&2; exit 1"; }')
 clearUploads
 expect 1 nix build --no-link "$drvPath^*"
-[[ $(attr Build nix.build.status) = PermanentFailure ]]
+[[ $(attr Build error.type) = PermanentFailure ]]
 [[ $(span Build .status.code) = 2 ]]
 span Build .status.message | grepQuiet "builder failed with exit code 1"
+
+# A failed substitution marks its `Substitute` span as failed, with
+# the kind of error and the error message (rather than a generic
+# message). Here the NAR in the binary cache is corrupted, causing a
+# hash mismatch.
+# shellcheck disable=SC2016 # `$out` is for the Nix builder, not the shell.
+outPath=$(nix-build --no-out-link --expr 'with import ./config.nix; mkDerivation { name = "baz"; buildCommand = "echo foo > $out"; }')
+clearBinaryCache
+nix copy --to "file://$cacheDir" "$outPath"
+nix-store --delete "$outPath"
+nar=$cacheDir/$(nix path-info --json --store "file://$cacheDir" "$outPath" | jq -r .[].url)
+xz -cd < "$nar" | sed 's/foo/Foo/' | xz -c > "$nar.new"
+mv "$nar.new" "$nar"
+clearUploads
+expect 1 nix build --no-link --substitute --substituters "file://$cacheDir" --no-require-sigs "$outPath"
+[[ $(span Substitute .status.code) = 2 ]]
+span Substitute .status.message | grepQuiet "hash mismatch importing path"
+[[ $(attr Substitute error.type) = nix::HashMismatchError ]]
 
 # A daemon reached via `ssh-ng://` (here without real SSH, since the
 # host is `localhost`) exports its own spans, in the client's trace.

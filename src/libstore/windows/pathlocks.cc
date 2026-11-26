@@ -132,7 +132,7 @@ bool PathLocks::lockPaths(const std::set<std::filesystem::path> & paths, const s
                 if (wait) {
                     std::optional<Activity> act;
                     if (waitMsg != "")
-                        act.emplace(*logger, lvlInfo, "WaitingForLock", Logger::ActivityMetadata{}, waitMsg);
+                        act.emplace(*logger, lvlInfo, "WaitingForLock", Logger::Metadata{}, waitMsg);
                     lockFile(fd.get(), ltWrite, true);
                 } else {
                     unlock();
@@ -160,7 +160,7 @@ FdLock::FdLock(Descriptor desc, LockType lockType, bool wait, std::string_view w
         if (!lockFile(desc, lockType, false)) {
             std::optional<Activity> act;
             if (!waitMsg.empty())
-                act.emplace(*logger, lvlInfo, "WaitingForLock", Logger::ActivityMetadata{}, waitMsg);
+                act.emplace(*logger, lvlInfo, "WaitingForLock", Logger::Metadata{}, waitMsg);
             acquired = lockFile(desc, lockType, true);
         }
     } else

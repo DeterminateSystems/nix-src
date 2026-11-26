@@ -31,6 +31,12 @@ MakeError(Unsupported, Error);
 MakeError(SubstituteGone, Error);
 MakeError(SubstituterDisabled, Error);
 
+/**
+ * The contents of a store path being imported (e.g. substituted)
+ * don't match the NAR hash or content address it's supposed to have.
+ */
+MakeError(HashMismatchError, Error);
+
 MakeError(InvalidStoreReference, Error);
 
 struct UnkeyedRealisation;

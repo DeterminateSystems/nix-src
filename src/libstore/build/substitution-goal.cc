@@ -37,7 +37,7 @@ Goal::Done PathSubstitutionGoal::doneFailure(ExitCode result, BuildResult::Failu
 {
     auto res = Goal::doneFailure(result, std::move(failure));
 
-    logger->result(act, resBuildResult, nlohmann::json(KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath})));
+    logBuildResult(act, KeyedBuildResult(buildResult, DerivedPath::Opaque{storePath}));
 
     return res;
 }
@@ -276,8 +276,15 @@ Goal::Co PathSubstitutionGoal::tryToRun(
                 parentAct);
             PushActivity pact(act.id);
 
-            promise.set_value(
-                copyStorePath(*sub, *workerStore, subPath, repair, sub->config.isTrusted ? NoCheckSigs : CheckSigs));
+            try {
+                promise.set_value(copyStorePath(
+                    *sub, *workerStore, subPath, repair, sub->config.isTrusted ? NoCheckSigs : CheckSigs));
+            } catch (...) {
+                /* Record why the substitution failed, since `act`
+                   can't tell once it's destroyed by the rethrow. */
+                act.fail(std::current_exception());
+                throw;
+            }
         } catch (...) {
             promise.set_exception(std::current_exception());
         }
@@ -348,8 +355,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
 
     auto success = BuildResult::Success{.status = BuildResult::Success::Substituted, .provenance = provenance};
 
-    logger->result(
-        parentAct, resBuildResult, nlohmann::json(KeyedBuildResult({success}, DerivedPath::Opaque{storePath})));
+    logBuildResult(parentAct, KeyedBuildResult({success}, DerivedPath::Opaque{storePath}));
 
     co_return doneSuccess(std::move(success));
 }

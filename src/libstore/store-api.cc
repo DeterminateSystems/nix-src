@@ -43,6 +43,8 @@ void SubstituteGone::anchor() {}
 
 void SubstituterDisabled::anchor() {}
 
+void HashMismatchError::anchor() {}
+
 void InvalidStoreReference::anchor() {}
 
 void StoreConfigBase::anchor() {}

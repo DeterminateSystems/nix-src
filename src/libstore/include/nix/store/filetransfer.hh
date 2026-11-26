@@ -502,8 +502,17 @@ public:
     /// intentionally optional
     std::optional<std::string> response;
 
+    /**
+     * The kind of failure, if known: the HTTP status code (e.g.
+     * `503`), `timeout`, or the curl error message. Cf.
+     * `errorType()`.
+     */
+    std::optional<std::string> kind;
+
     template<typename... Args>
     FileTransferError(FileTransfer::Error error, std::optional<std::string> response, const Args &... args);
+
+    std::string errorType() const override;
 };
 
 } // namespace nix

@@ -187,6 +187,14 @@ public:
         return err;
     }
 
+    /**
+     * A short, low-cardinality description of the kind of this
+     * error, for telemetry (cf. the OpenTelemetry `error.type`
+     * attribute). Defaults to the fully qualified name of the error
+     * class, e.g. `nix::SubstituteGone`.
+     */
+    virtual std::string errorType() const;
+
     void withExitStatus(unsigned int status)
     {
         err.status = status;

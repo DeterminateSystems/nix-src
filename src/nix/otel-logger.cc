@@ -374,6 +374,42 @@ class OpenTelemetryLogger : public Logger
         return span;
     }
 
+    /**
+     * Activities whose span has been given an error status by a
+     * result, so that `stopActivity()` doesn't replace it with a
+     * generic one.
+     */
+    boost::concurrent_flat_set<ActivityId> failedActs;
+
+    /**
+     * Mark the span of activity `act` as failed with the given
+     * message.
+     */
+    void setError(ActivityId act, opentelemetry::trace::Span & span, std::string_view msg)
+    {
+        span.SetStatus(opentelemetry::trace::StatusCode::kError, filterANSIEscapes(msg, true));
+        failedActs.insert(act);
+    }
+
+    /**
+     * Record activity metadata or result fields as span attributes.
+     * JSON-valued fields are skipped, since attributes can't hold
+     * objects; they need to be handled specifically. `error.message`
+     * is skipped as well, since it becomes the description of the
+     * span's error status.
+     */
+    static void setAttributes(opentelemetry::trace::Span & span, Metadata fields)
+    {
+        for (auto & [key, value] : fields) {
+            if (key == "error.message")
+                continue;
+            if (auto str = std::get_if<std::string>(&value.raw))
+                span.SetAttribute(key, *str);
+            else if (auto n = std::get_if<uint64_t>(&value.raw))
+                span.SetAttribute(key, (int64_t) *n);
+        }
+    }
+
 public:
     OpenTelemetryLogger(
         std::string_view serviceName,
@@ -498,7 +534,7 @@ public:
         ActivityId act,
         Verbosity lvl,
         std::string_view name,
-        ActivityMetadata metadata,
+        Metadata metadata,
         std::string_view s,
         ActivityId parent) noexcept override
     {
@@ -559,12 +595,7 @@ public:
             if (!s.empty())
                 span->SetAttribute("nix.activity.text", filterANSIEscapes(s, true));
 
-            for (auto & [key, value] : metadata) {
-                if (auto str = std::get_if<std::string>(&value.raw))
-                    span->SetAttribute(key, *str);
-                else if (auto n = std::get_if<uint64_t>(&value.raw))
-                    span->SetAttribute(key, (int64_t) *n);
-            }
+            setAttributes(*span, metadata);
 
             spans->emplace(act, std::move(span));
         } catch (...) {
@@ -585,46 +616,47 @@ public:
                    is in flight, i.e. the `Activity` is being destroyed
                    by stack unwinding, assume that the activity
                    failed. */
-                if (std::uncaught_exceptions())
+                if (std::uncaught_exceptions() && !failedActs.contains(act))
                     span->SetStatus(opentelemetry::trace::StatusCode::kError, "activity terminated by an exception");
                 span->End();
             }
+            failedActs.erase(act);
         } catch (...) {
         }
     }
 
-    void result(ActivityId act, ResultType type, const nlohmann::json & json) noexcept override
+    void result(ActivityId act, Metadata fields) noexcept override
     {
         try {
             if (isRemoteLogSource())
                 return;
-            if (type == resHttpStatus) {
-                auto spans(spans_.lock());
-                if (auto i = spans->find(act); i != spans->end()) {
-                    if (auto status = json.find("httpStatus"); status != json.end() && status->is_number())
-                        i->second->SetAttribute("http.response.status_code", status->get<int64_t>());
-                    if (auto bodySize = json.find("bodySize"); bodySize != json.end() && bodySize->is_number())
-                        i->second->SetAttribute("http.response.body.size", bodySize->get<int64_t>());
-                }
-            } else if (type == resBuildResult) {
-                /* A failed build or substitution doesn't throw, so
-                   `stopActivity()` can't tell; the result tells us. */
-                auto spans(spans_.lock());
-                if (auto i = spans->find(act); i != spans->end()) {
-                    auto status = json.value("status", "");
-                    if (!status.empty())
-                        i->second->SetAttribute("nix.build.status", status);
-                    /* Note: a substitution goal "failing" because there
-                       is no substituter for the path is the normal
-                       prelude to building it, so don't call that an
-                       error. */
-                    if (!json.value("success", true) && status != "NoSubstituters") {
-                        // FIXME: privacy (the message can include the build log tail)
-                        auto msg = json.value("errorMsg", "build failed");
-                        i->second->SetStatus(opentelemetry::trace::StatusCode::kError, filterANSIEscapes(msg, true));
-                    }
+            auto spans(spans_.lock());
+            auto i = spans->find(act);
+            if (i == spans->end())
+                return;
+            auto & span = *i->second;
+
+            setAttributes(span, fields);
+
+            std::optional<std::string_view> errorType, errorMessage;
+
+            for (auto & [key, value] : fields) {
+                if (auto str = std::get_if<std::string>(&value.raw)) {
+                    if (key == "error.type")
+                        errorType = *str;
+                    else if (key == "error.message")
+                        errorMessage = *str;
                 }
             }
+
+            /* An `error.type` field (cf. `Activity::fail()` and
+               `logBuildResult()`) means that the activity failed.
+               This matters in particular for activities that fail
+               without throwing (such as builds), since
+               `stopActivity()` can't tell in that case. */
+            if (errorType)
+                // FIXME: privacy (the message can include URLs, store paths and the build log tail)
+                setError(act, span, errorMessage && !errorMessage->empty() ? *errorMessage : *errorType);
         } catch (...) {
         }
     }
