@@ -1,4 +1,5 @@
 #include "nix/cmd/command.hh"
+#include "nix/util/system-error.hh"
 #include "nix/main/common-args.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-api.hh"
@@ -15,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iostream>
 #include <sstream>
 
 #ifndef _WIN32
@@ -151,7 +153,7 @@ static void visitProcessTree(
             rootProcesses.insert(&process);
     }
 
-    [&](this auto const & recurse, const Processes & processes, std::string_view prefix) -> void {
+    [&](this const auto & recurse, const Processes & processes, std::string_view prefix) -> void {
         for (const auto & [n, process] : enumerate(processes)) {
             bool last = n + 1 == processes.size();
             visit(*process, fmt("%s%s", prefix, last ? treeLast : treeConn));
@@ -237,7 +239,8 @@ struct CmdPs : MixJSON, StoreCommand
             }
         }
 
-        auto width = isTTY() && isatty(STDOUT_FILENO) ? getWindowWidth() : std::numeric_limits<unsigned int>::max();
+        auto width = isOutputARealTerminal(StandardOutputStream::Stdout) ? getWindowWidth()
+                                                                         : std::numeric_limits<unsigned int>::max();
 
         printTable(std::cout, table, width);
     }

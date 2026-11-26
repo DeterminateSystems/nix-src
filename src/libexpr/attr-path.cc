@@ -69,7 +69,7 @@ std::vector<SymbolStr> AttrPath::resolve(EvalState & state) const
 }
 
 std::pair<Value *, PosIdx>
-findAlongAttrPath(EvalState & state, const std::string & attrPath, Bindings & autoArgs, Value & vIn)
+findAlongAttrPath(EvalState & state, const std::string & attrPath, const Bindings & autoArgs, Value & vIn)
 {
     Strings tokens = parseAttrPath(attrPath);
 

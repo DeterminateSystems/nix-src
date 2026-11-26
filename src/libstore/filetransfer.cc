@@ -6,7 +6,9 @@
 #include "nix/util/callback.hh"
 #include "nix/util/processes.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/logging.hh"
 #include "nix/util/util.hh"
+#include "nix/util/socket.hh"
 
 #include "nix/store/s3-url.hh"
 #include <optional>
@@ -122,15 +124,33 @@ void FileTransferSettings::anchor() {}
 
 FileTransferSettings::FileTransferSettings()
 {
-    std::optional<AbsolutePath> sslOverride =
-        getEnvOs(OS_STR("NIX_SSL_CERT_FILE"))
-            .or_else([] { return getEnvOs(OS_STR("SSL_CERT_FILE")); })
-            .and_then([](OsString s) -> std::optional<OsString> {
-                return s.empty() ? std::nullopt : std::optional{std::move(s)};
-            })
-            .transform([](OsString s) { return AbsolutePath{std::filesystem::path{std::move(s)}}; });
-    if (sslOverride)
-        caFile = *sslOverride;
+    /* This runs during static initialization, where an escaping exception
+       cannot be reported: on Unix it reaches `std::terminate` before `main`,
+       and on Windows the loader absorbs it and the process dies having printed
+       nothing at all (see #16356). `AbsolutePath` rejects a non-absolute value
+       by throwing, and the value comes from the environment, so it can be
+       invalid. Warn and carry on rather than dying undiagnosably. */
+    try {
+        std::optional<AbsolutePath> sslOverride =
+            getEnvOs(OS_STR("NIX_SSL_CERT_FILE"))
+                .or_else([] { return getEnvOs(OS_STR("SSL_CERT_FILE")); })
+                .and_then([](OsString s) -> std::optional<OsString> {
+                    return s.empty() ? std::nullopt : std::optional{std::move(s)};
+                })
+                .transform([](OsString s) { return AbsolutePath{std::filesystem::path{std::move(s)}}; });
+        if (sslOverride)
+            caFile = *sslOverride;
+    } catch (Error & e) {
+        e.addTrace(
+            {},
+            "while applying the 'NIX_SSL_CERT_FILE' or 'SSL_CERT_FILE' environment variable; "
+            "ignoring it for now, but this may become an error again in the future");
+        logWarning(e.info());
+    } catch (...) {
+        /* Nothing at all may escape a static initializer, so this is a
+           backstop for anything that is not an `Error`. */
+        ignoreExceptionExceptInterrupt();
+    }
 }
 
 FileTransferSettings fileTransferSettings;
@@ -428,7 +448,7 @@ struct curlFileTransfer : public FileTransfer
             failEx(std::make_exception_ptr(std::forward<T>(e)));
         }
 
-        void failInterruptedOrCancelled()
+        void failInterruptedOrCancelled() noexcept
         {
             HintFmt fmt("%s of '%s' was interrupted", Uncolored(request.noun()), request.displayUri());
 
@@ -526,17 +546,6 @@ struct curlFileTransfer : public FileTransfer
 
                     if (name == "etag") {
                         result.etag = trim(line.substr(i + 1));
-                        /* Hack to work around a GitHub bug: it sends
-                           ETags, but ignores If-None-Match. So if we get
-                           the expected ETag on a 200 response, then shut
-                           down the connection because we already have the
-                           data. */
-                        long httpStatus = 0;
-                        curl_easy_getinfo(req, CURLINFO_RESPONSE_CODE, &httpStatus);
-                        if (result.etag == request.expectedETag && httpStatus == HttpStatus::Ok) {
-                            debug("shutting down on 200 HTTP response with expected ETag");
-                            return 0;
-                        }
                     }
 
                     else if (name == "content-encoding") {
@@ -566,7 +575,7 @@ struct curlFileTransfer : public FileTransfer
                             time_t now = time(nullptr);
                             retryAfterMs = saturateMs(std::chrono::seconds{date > now ? date - now : 0});
                         } else {
-                            debug("ignoring unparseable Retry-After header: '%s'", value);
+                            debug("ignoring unparsable Retry-After header: '%s'", value);
                         }
                     }
                 }
@@ -596,7 +605,7 @@ struct curlFileTransfer : public FileTransfer
                     lvlTalkative,
                     actFileTransfer,
                     fmt("%s '%s'", request.verb(/*continuous=*/true), request.displayUri()),
-                    Logger::Fields{request.displayUri()},
+                    std::to_array<Logger::Field>({request.displayUri()}),
                     request.parentAct);
                 // Reset the start time to when we actually started the download.
                 startTime = std::chrono::steady_clock::now();
@@ -656,14 +665,20 @@ struct curlFileTransfer : public FileTransfer
             return ((TransferItem *) userp)->readCallback(buffer, size, nitems);
         }
 
-#if !defined(_WIN32)
-        static int cloexec_callback(void *, curl_socket_t curlfd, curlsocktype purpose)
-        {
-            unix::closeOnExec(curlfd);
+        int cloexecCallback(curl_socket_t curlfd, curlsocktype purpose) noexcept
+        try {
+            closeOnExec(fromSocket(curlfd));
             vomit("cloexec set for fd %i", curlfd);
             return CURL_SOCKOPT_OK;
+        } catch (...) {
+            callbackException = std::current_exception();
+            return CURL_SOCKOPT_ERROR;
         }
-#endif
+
+        static int cloexecCallbackWrapper(void * clientp, curl_socket_t curlfd, curlsocktype purpose) noexcept
+        {
+            return ((TransferItem *) clientp)->cloexecCallback(curlfd, purpose);
+        }
 
         size_t seekCallback(curl_off_t offset, int origin) noexcept
         try {
@@ -831,9 +846,8 @@ struct curlFileTransfer : public FileTransfer
                 curl_easy_setopt(req, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
 #endif
 
-#if !defined(_WIN32)
-            curl_easy_setopt(req, CURLOPT_SOCKOPTFUNCTION, cloexec_callback);
-#endif
+            curl_easy_setopt(req, CURLOPT_SOCKOPTFUNCTION, cloexecCallbackWrapper);
+            curl_easy_setopt(req, CURLOPT_SOCKOPTDATA, this);
             curl_easy_setopt(req, CURLOPT_CONNECTTIMEOUT, fileTransfer.settings.connectTimeout.get());
 
             /* Enable TCP keepalive to detect dead connections and server closures.
@@ -900,6 +914,97 @@ struct curlFileTransfer : public FileTransfer
             result.bodySize = 0;
         }
 
+        /**
+         * Classify a failed transfer, which decides whether it is worth retrying.
+         */
+        static Error classifyError(CURLcode code, long httpStatus, std::string_view responseBody)
+        {
+            NIX_INCOMPLETE_SWITCH_BEGIN
+            switch (code) {
+            case CURLE_FILE_COULDNT_READ_FILE:
+                // The file is definitely not there
+                return NotFound;
+            // Don't bother retrying on certain cURL errors
+            case CURLE_FAILED_INIT:
+            case CURLE_URL_MALFORMAT:
+            case CURLE_NOT_BUILT_IN:
+            case CURLE_REMOTE_ACCESS_DENIED:
+            case CURLE_FUNCTION_NOT_FOUND:
+            case CURLE_ABORTED_BY_CALLBACK:
+            case CURLE_BAD_FUNCTION_ARGUMENT:
+            case CURLE_INTERFACE_FAILED:
+            case CURLE_UNKNOWN_OPTION:
+            case CURLE_SSL_CACERT_BADFILE:
+            case CURLE_TOO_MANY_REDIRECTS:
+            case CURLE_WRITE_ERROR:
+            case CURLE_UNSUPPORTED_PROTOCOL:
+            case CURLE_BAD_CONTENT_ENCODING:
+            case CURLE_OPERATION_TIMEDOUT:
+                return Misc;
+            default: // Shut up warnings
+                break;
+            }
+            NIX_INCOMPLETE_SWITCH_END
+
+            // S3 returns certain retryable errors as HTTP 400/500/503 with XML error codes.
+            // These take precedence over the generic HTTP status handling below.
+            // Only parse the response body on status codes where S3 XML errors can appear.
+            static constexpr std::array<std::string_view, 12> s3RetryableErrors{{
+                "IncompleteBody",       // HTTP 400 - network issue
+                "InternalError",        // HTTP 500 - S3 internal failure
+                "InternalFailure",      // HTTP 500 - alias for InternalError
+                "InternalServerError",  // HTTP 500 - alias for InternalError
+                "RequestExpired",       // HTTP 400 - clock skew / slow upload
+                "RequestTimeout",       // HTTP 400 - stale connection reuse
+                "RequestTimeTooSkewed", // HTTP 403 - clock drift
+                "RequestThrottled",     // HTTP 400 - throttling variant
+                "SlowDown",             // HTTP 503 - throttling
+                "ServiceUnavailable",   // HTTP 503 - temporary unavailability
+                "Throttling",           // HTTP 400 - throttling variant
+                "ThrottledException",   // HTTP 400 - throttling variant
+            }};
+            // S3 error responses have the form <Error><Code>...</Code>...</Error>.
+            // Require the <Error> root to avoid matching unrelated XML with a <Code> element.
+            static std::regex s3ErrorCodeRegex("<Error>[^]*<Code>([^<]+)</Code>");
+            std::match_results<std::string_view::const_iterator> s3Match;
+            bool isS3XmlStatus = httpStatus == 400 || httpStatus == 403 || httpStatus == 500 || httpStatus == 503;
+            auto s3ErrorCode =
+                (isS3XmlStatus
+                 && std::regex_search(responseBody.begin(), responseBody.end(), s3Match, s3ErrorCodeRegex))
+                    ? s3Match[1].str()
+                    : "";
+
+            if (std::find(s3RetryableErrors.begin(), s3RetryableErrors.end(), s3ErrorCode) != s3RetryableErrors.end()) {
+                debug("S3 error '%s', will retry", s3ErrorCode);
+                return Transient;
+            }
+
+            switch (httpStatus) {
+            case std::to_underlying(HttpStatus::Unauthorized):
+            case std::to_underlying(HttpStatus::ProxyAuthRequired):
+                return Unauthorized;
+            case std::to_underlying(HttpStatus::Forbidden):
+                // Note: the only reason we treat this differently from 401/407 is S3 returns 403 if a file
+                // doesn't exist and the bucket is unlistable.
+                return Forbidden;
+            case std::to_underlying(HttpStatus::NotFound):
+            case std::to_underlying(HttpStatus::Gone):
+                // The file is definitely not there
+                return NotFound;
+            case std::to_underlying(HttpStatus::RequestTimeout): // server timed out waiting for us
+            case std::to_underlying(HttpStatus::TooManyRequests):
+                return Transient;
+            case std::to_underlying(HttpStatus::NotImplemented):
+            case std::to_underlying(HttpStatus::HttpVersionNotSupported):
+            case std::to_underlying(HttpStatus::NetworkAuthRequired): // captive portal
+                return Misc;
+            default:
+                // Other 4xx are client errors and probably not worth retrying. Everything else, most 5xx
+                // (server) errors included, is transient, since we only stop retrying when it looks hopeless.
+                return httpStatus >= 400 && httpStatus < 500 ? Misc : Transient;
+            }
+        }
+
         void finish(CURLcode code)
         {
             auto finishTime = std::chrono::steady_clock::now();
@@ -936,13 +1041,6 @@ struct curlFileTransfer : public FileTransfer
 
             else if (code == CURLE_OK && successfulStatuses.count(httpStatus)) {
                 result.cached = (httpStatus == HttpStatus::NotModified);
-
-                // In 2021, GitHub responds to If-None-Match with 304,
-                // but omits ETag. We just use the If-None-Match etag
-                // since 304 implies they are the same.
-                if (httpStatus == HttpStatus::NotModified && result.etag == "")
-                    result.etag = request.expectedETag;
-
                 curl_off_t dlSize = 0;
                 curl_easy_getinfo(req, CURLINFO_SIZE_DOWNLOAD_T, &dlSize);
                 act().progress(dlSize, dlSize);
@@ -951,94 +1049,7 @@ struct curlFileTransfer : public FileTransfer
             }
 
             else {
-                // We treat most errors as transient, but won't retry when hopeless
-                Error err = Transient;
-
-                // S3 returns certain retryable errors as HTTP 400/500/503 with XML error codes.
-                // These take precedence over the generic HTTP status handling below.
-                // Only parse the response body on status codes where S3 XML errors can appear.
-                static constexpr std::array<std::string_view, 12> s3RetryableErrors{{
-                    "IncompleteBody",       // HTTP 400 - network issue
-                    "InternalError",        // HTTP 500 - S3 internal failure
-                    "InternalFailure",      // HTTP 500 - alias for InternalError
-                    "InternalServerError",  // HTTP 500 - alias for InternalError
-                    "RequestExpired",       // HTTP 400 - clock skew / slow upload
-                    "RequestTimeout",       // HTTP 400 - stale connection reuse
-                    "RequestTimeTooSkewed", // HTTP 403 - clock drift
-                    "RequestThrottled",     // HTTP 400 - throttling variant
-                    "SlowDown",             // HTTP 503 - throttling
-                    "ServiceUnavailable",   // HTTP 503 - temporary unavailability
-                    "Throttling",           // HTTP 400 - throttling variant
-                    "ThrottledException",   // HTTP 400 - throttling variant
-                }};
-                // S3 error responses have the form <Error><Code>...</Code>...</Error>.
-                // Require the <Error> root to avoid matching unrelated XML with a <Code> element.
-                static std::regex s3ErrorCodeRegex("<Error>[^]*<Code>([^<]+)</Code>");
-                std::smatch s3Match;
-                bool isS3XmlStatus = httpStatus == 400 || httpStatus == 403 || httpStatus == 500 || httpStatus == 503;
-                auto s3ErrorCode =
-                    (isS3XmlStatus && errorSink && std::regex_search(errorSink->s, s3Match, s3ErrorCodeRegex))
-                        ? s3Match[1].str()
-                        : "";
-
-                if (std::find(s3RetryableErrors.begin(), s3RetryableErrors.end(), s3ErrorCode)
-                    != s3RetryableErrors.end()) {
-                    debug("S3 error '%s', will retry", s3ErrorCode);
-                } else if (
-                    httpStatus == HttpStatus::NotFound || httpStatus == HttpStatus::Gone
-                    || code == CURLE_FILE_COULDNT_READ_FILE) {
-                    // The file is definitely not there
-                    err = NotFound;
-                } else if (httpStatus == HttpStatus::Unauthorized || httpStatus == HttpStatus::ProxyAuthRequired) {
-                    err = Unauthorized;
-                } else if (httpStatus == HttpStatus::Forbidden) {
-                    // Don't retry on authentication/authorization failures.
-                    // Note: the only reason we treat this differently from 401/407 is S3 returns 403 if a file doesn't
-                    // exist and the bucket is unlistable.
-                    err = Forbidden;
-                } else if (
-                    httpStatus >= 400 && httpStatus < 500 && httpStatus != HttpStatus::RequestTimeout
-                    && httpStatus != HttpStatus::TooManyRequests) {
-                    // Most 4xx errors are client errors and are probably not worth retrying:
-                    //   * 408 means the server timed out waiting for us, so we try again
-                    err = Misc;
-                } else if (
-                    httpStatus == HttpStatus::NotImplemented || httpStatus == HttpStatus::HttpVersionNotSupported
-                    || httpStatus == HttpStatus::NetworkAuthRequired) {
-                    // Let's treat most 5xx (server) errors as transient, except for a handful:
-                    //   * 501 not implemented
-                    //   * 505 http version not supported
-                    //   * 511 we're behind a captive portal
-                    err = Misc;
-                } else {
-// Don't bother retrying on certain cURL errors either
-
-// Allow selecting a subset of enum values
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch-enum"
-                    switch (code) {
-                    case CURLE_FAILED_INIT:
-                    case CURLE_URL_MALFORMAT:
-                    case CURLE_NOT_BUILT_IN:
-                    case CURLE_REMOTE_ACCESS_DENIED:
-                    case CURLE_FILE_COULDNT_READ_FILE:
-                    case CURLE_FUNCTION_NOT_FOUND:
-                    case CURLE_ABORTED_BY_CALLBACK:
-                    case CURLE_BAD_FUNCTION_ARGUMENT:
-                    case CURLE_INTERFACE_FAILED:
-                    case CURLE_UNKNOWN_OPTION:
-                    case CURLE_SSL_CACERT_BADFILE:
-                    case CURLE_TOO_MANY_REDIRECTS:
-                    case CURLE_WRITE_ERROR:
-                    case CURLE_UNSUPPORTED_PROTOCOL:
-                    case CURLE_BAD_CONTENT_ENCODING:
-                        err = Misc;
-                        break;
-                    default: // Shut up warnings
-                        break;
-                    }
-#pragma GCC diagnostic pop
-                }
+                auto err = classifyError(code, httpStatus, errorSink ? std::string_view(errorSink->s) : "");
 
                 std::optional<std::string> response;
                 if (errorSink)
@@ -1094,7 +1105,7 @@ struct curlFileTransfer : public FileTransfer
                         waitingForConnectionSince = attemptStartTime;
                     if (canRequeueAfterWaiting(finishTime)) {
                         debug(
-                            "%s of '%s' timed out waiting for a connection, requeueing",
+                            "%s of '%s' timed out waiting for a connection, requeuing",
                             Uncolored(request.noun()),
                             request.displayUri());
                         requeue(std::move(exc));
@@ -1785,20 +1796,16 @@ void FileTransfer::download(
 void FileTransferError::anchor() {}
 
 template<typename... Args>
-FileTransferError::FileTransferError(
-    FileTransfer::Error error, std::optional<std::string> response, const Args &... args)
-    : CloneableError(args...)
+FileTransferError::FileTransferError(FileTransfer::Error error, std::optional<std::string> response, Args &&... args)
+    : CloneableError(HintFmt(std::forward<Args>(args)...))
     , error(error)
     , response(response)
 {
-    const auto hf = HintFmt(args...);
     // FIXME: Due to https://github.com/NixOS/nix/issues/3841 we don't know how
     // to print different messages for different verbosity levels. For now
     // we add some heuristics for detecting when we want to show the response.
     if (response && (response->size() < 1024 || response->find("<html>") != std::string::npos))
-        err.msg = HintFmt("%1%\n\nresponse body:\n\n%2%", Uncolored(hf.str()), chomp(*response));
-    else
-        err.msg = hf;
+        err.msg = HintFmt("%1%\n\nresponse body:\n\n%2%", Uncolored(err.msg.str()), chomp(*response));
 }
 
 } // namespace nix

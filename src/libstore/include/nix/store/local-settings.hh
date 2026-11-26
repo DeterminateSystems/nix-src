@@ -359,13 +359,6 @@ public:
         )"};
 #endif
 
-    Setting<bool> impersonateLinux26{
-        this,
-        false,
-        "impersonate-linux-26",
-        "Whether to impersonate a Linux 2.6 machine on newer kernels.",
-        {"build-impersonate-linux-26"}};
-
     Setting<SandboxMode> sandboxMode{
         this,
 #if defined(__linux__) || defined(__FreeBSD__)
@@ -758,7 +751,7 @@ public:
      * Finds the first external derivation builder that supports this
      * derivation, or else returns a null pointer.
      */
-    const ExternalBuilder * findExternalDerivationBuilderIfSupported(const Derivation & drv);
+    const ExternalBuilder * findExternalDerivationBuilderIfSupported(const BasicDerivation & drv);
 };
 
 template<>

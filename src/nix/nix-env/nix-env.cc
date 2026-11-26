@@ -12,6 +12,7 @@
 #include "nix/store/path-with-outputs.hh"
 #include "nix/main/shared.hh"
 #include "nix/store/store-open.hh"
+#include "nix/store/build.hh"
 #include "nix/store/local-fs-store.hh"
 #include "user-env.hh"
 #include "nix/expr/value-to-json.hh"
@@ -76,7 +77,7 @@ struct InstallSourceInfo
     std::shared_ptr<SourcePath> nixExprPath; /* for srcNixExprDrvs, srcNixExprs */
     std::filesystem::path profile;           /* for srcProfile */
     std::string systemFilter;                /* for srcNixExprDrvs */
-    Bindings * autoArgs;
+    const Bindings * autoArgs;
 };
 
 struct Globals
@@ -207,7 +208,7 @@ static void loadDerivations(
     EvalState & state,
     const SourcePath & nixExprPath,
     std::string systemFilter,
-    Bindings & autoArgs,
+    const Bindings & autoArgs,
     const std::string & pathPrefix,
     PackageInfos & elems)
 {
@@ -342,6 +343,14 @@ std::vector<Match> pickNewestOnly(EvalState & state, std::vector<Match> matches)
 }
 
 } // end namespace
+
+static DrvNames drvNamesFromArgs(const Strings & opArgs)
+{
+    DrvNames result;
+    for (auto & i : opArgs)
+        result.emplace_back(i);
+    return result;
+}
 
 static PackageInfos
 filterBySelector(EvalState & state, const PackageInfos & allElems, const Strings & args, bool newestOnly)
@@ -799,7 +808,7 @@ static void opSet(Globals & globals, Strings opFlags, Strings opArgs)
     printMissing(globals.state->store, paths);
     if (globals.dryRun)
         return;
-    globals.state->store->buildPaths(paths, globals.state->repair ? bmRepair : bmNormal);
+    globals.state->store->getBuilder()->buildPaths(paths, globals.state->repair ? bmRepair : bmNormal);
 
     debug("switching to new user environment");
     auto generation = createGeneration(*store2, globals.profile, drv.queryOutPath());
@@ -1086,7 +1095,7 @@ static void opQuery(Globals & globals, Strings opFlags, Strings opArgs)
         return;
     }
 
-    bool tty = isTTY();
+    bool tty = shouldANSI(StandardOutputStream::Stdout);
     RunPager pager;
 
     Table table;
@@ -1339,9 +1348,6 @@ static void opListGenerations(Globals & globals, Strings opFlags, Strings opArgs
         throw UsageError("unknown flag '%1%'", opFlags.front());
     if (opArgs.size() != 0)
         throw UsageError("no arguments expected");
-
-    PathLocks lock;
-    lockProfile(lock, globals.profile);
 
     auto [gens, curGen] = findGenerations(globals.profile);
 

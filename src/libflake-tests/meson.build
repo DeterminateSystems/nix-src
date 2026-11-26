@@ -29,6 +29,12 @@ subdir('nix-meson-build-support/windows-version')
 
 rapidcheck = dependency('rapidcheck')
 deps_private += rapidcheck
+# See ../libutil-test-support/meson.build
+deps_private_no_pkgconfig += cxx.find_library(
+  'rapidcheck',
+  dirs : [ rapidcheck.get_variable('libdir') ],
+  static : get_option('default_library') == 'static',
+)
 
 gtest = dependency('gtest', main : true)
 deps_private += gtest
@@ -47,10 +53,9 @@ include_dirs = [ include_directories('.') ]
 this_exe = executable(
   meson.project_name(),
   sources,
-  dependencies : deps_private_subproject + deps_private + deps_other,
+  dependencies : deps_private_subproject + deps_private + deps_private_no_pkgconfig,
   include_directories : include_dirs,
-  # TODO: -lrapidcheck, see ../libutil-support/build.meson
-  link_args : linker_export_flags + [ '-lrapidcheck' ],
+  link_args : linker_export_flags,
   # get main from gtest
   install : true,
 )

@@ -8,6 +8,7 @@
 #include "nix/util/strings.hh"
 #include "nix/util/unix-domain-socket.hh"
 #include "nix/util/util.hh"
+#include "nix/util/system-error.hh"
 
 #include <ranges>
 
@@ -53,6 +54,13 @@ PeerInfo getPeerInfo(Descriptor remote)
         peer.uid = cred.cr_uid;
         peer.gid = cred.cr_gid;
     }
+
+#  if defined(LOCAL_PEERPID)
+    pid_t pid;
+    socklen_t pidLen = sizeof(pid);
+    if (getsockopt(remote, SOL_LOCAL, LOCAL_PEERPID, &pid, &pidLen) == 0)
+        peer.pid = pid;
+#  endif
 
 #endif
 

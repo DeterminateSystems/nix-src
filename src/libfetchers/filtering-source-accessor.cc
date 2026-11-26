@@ -8,6 +8,12 @@
 
 namespace nix {
 
+void FilteringSourceAccessor::anchor() {}
+
+void AllowListSourceAccessor::anchor() {}
+
+void CachingFilteringSourceAccessor::anchor() {}
+
 std::optional<std::filesystem::path> FilteringSourceAccessor::getPhysicalPath(const CanonPath & path)
 {
     checkAccess(path);
@@ -79,7 +85,8 @@ void FilteringSourceAccessor::checkAccess(const CanonPath & path)
 struct AllowListSourceAccessorImpl : AllowListSourceAccessor
 {
 private:
-    void anchor() override {};
+    void anchor() override;
+
 public:
     struct Prefixes
     {
@@ -179,6 +186,8 @@ public:
         allowedPrefixes.lock()->add(prefix);
     }
 };
+
+void AllowListSourceAccessorImpl::anchor() {}
 
 ref<AllowListSourceAccessor> AllowListSourceAccessor::create(
     ref<SourceAccessor> next,

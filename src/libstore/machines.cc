@@ -1,6 +1,8 @@
 #include "nix/util/base-n.hh"
 #include "nix/store/machines.hh"
 #include "nix/store/store-open.hh"
+#include "nix/util/system-error.hh"
+#include "nix/util/logging.hh"
 
 #include <algorithm>
 
@@ -117,8 +119,8 @@ static std::vector<std::string> expandBuilderLines(const std::string & builders)
                     continue;
                 }
 
-                const auto entrys = expandBuilderLines(text);
-                result.insert(end(result), begin(entrys), end(entrys));
+                const auto entries = expandBuilderLines(text);
+                result.insert(end(result), begin(entries), end(entries));
             } else {
                 result.emplace_back(entry);
             }

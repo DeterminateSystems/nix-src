@@ -18,7 +18,7 @@ json printValueAsJSON(
     if (strict && state.executor->enabled && !Executor::amWorkerThread)
         state.forceValueDeepParallel(v, pos);
 
-    auto recurse = [&](this const auto & recurse, json & res, Value & v, PosIdx pos) -> void {
+    auto recurse = [&](this const auto & recurse, json & res, Value & v, PosIdx pos, bool copyToStore) -> void {
         checkInterrupt();
 
         auto _level = state.addCallDepth(pos);
@@ -54,27 +54,30 @@ json printValueAsJSON(
             break;
 
         case nAttrs: {
-            auto maybeString = state.tryAttrsToString(pos, v, context, false, false);
-            if (maybeString) {
-                res = *maybeString;
-                break;
-            }
-            if (auto i = v.attrs()->get(state.s.outPath))
-                return recurse(res, *i->value, i->pos);
-            else {
-                res = json::object();
-                for (auto & a : v.attrs()->lexicographicOrder(state.symbols)) {
-                    json & j = res.emplace(state.symbols[a->name], json()).first.value();
-                    try {
-                        recurse(j, *a->value, a->pos);
-                    } catch (Error & e) {
-                        e.addTrace(
-                            state.positions[a->pos],
-                            HintFmt("while evaluating attribute '%1%'", state.symbols[a->name]));
-                        throw;
+            state.peelToStringOutPath(
+                pos, v, /*checkToStringReturn=*/true, [&](Value * peeled, bool cameThroughToString) -> void {
+                    if (peeled->type() != nAttrs) {
+                        // Historical quirk preserved here for reproducibility:
+                        // In some coercions, Nix would coerce paths to a raw string
+                        // if they came from a __toString result.
+                        return recurse(res, *peeled, pos, copyToStore && !cameThroughToString);
                     }
-                }
-            }
+                    // Peelable attrs handled. Returned attrs are not peelable.
+                    // Quirk: builtins.toJSON { outPath.foo = true; } == "{\"foo\":true}"
+                    // All that remains is to return a JSON object.
+                    res = json::object();
+                    for (auto & a : peeled->attrs()->lexicographicOrder(state.symbols)) {
+                        json & j = res.emplace(state.symbols[a->name], json()).first.value();
+                        try {
+                            recurse(j, *a->value, a->pos, copyToStore);
+                        } catch (Error & e) {
+                            e.addTrace(
+                                state.positions[a->pos],
+                                HintFmt("while evaluating attribute '%1%'", state.symbols[a->name]));
+                            throw;
+                        }
+                    }
+                });
             break;
         }
 
@@ -83,7 +86,7 @@ json printValueAsJSON(
             for (const auto & [i, elem] : enumerate(v.listView())) {
                 try {
                     res.push_back(json());
-                    recurse(res.back(), *elem, pos);
+                    recurse(res.back(), *elem, pos, copyToStore);
                 } catch (Error & e) {
                     e.addTrace(state.positions[pos], HintFmt("while evaluating list element at index %1%", i));
                     throw;
@@ -110,7 +113,7 @@ json printValueAsJSON(
 
     json res;
 
-    recurse(res, v, pos);
+    recurse(res, v, pos, copyToStore);
 
     return res;
 }

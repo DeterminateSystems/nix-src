@@ -1,9 +1,12 @@
 #include "nix/util/signals.hh"
 #include "nix/util/util.hh"
 #include "nix/util/error.hh"
+#include "nix/util/system-error.hh"
 #include "nix/util/fun.hh"
 #include "nix/util/sync.hh"
 #include "nix/util/terminal.hh"
+
+#include "unix/signals-private.hh"
 
 #include <mutex>
 #include <thread>
@@ -141,10 +144,10 @@ void unix::triggerInterrupt()
     triggerSignalCallbacks(SignalType::Int);
 }
 
-static sigset_t savedSignalMask;
-static bool savedSignalMaskIsSet = false;
+sigset_t unix::savedSignalMask;
+bool unix::savedSignalMaskIsSet = false;
 
-static std::optional<struct sigaction> savedSigxfszAction;
+std::optional<struct sigaction> unix::savedSigxfszAction;
 
 void unix::saveSignalMask()
 {

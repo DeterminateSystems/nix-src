@@ -120,6 +120,8 @@ using BuildResultStatus = std::variant<BuildResultSuccessStatus, BuildResultFail
 
 template<>
 DECLARE_COMMON_SERIALISER(BuildResultStatus);
+template<>
+DECLARE_COMMON_SERIALISER(Verbosity);
 
 #undef COMMA_
 

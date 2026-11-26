@@ -22,8 +22,9 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
 
     accessor->addFile(
         CanonPath("flake.nix"),
-#include "builtin-flake-schemas/flake.nix.gen.hh"
-    );
+        {
+#embed "builtin-flake-schemas/flake.nix"
+        });
 
     auto [storePath, narHash] = state.store->computeStorePath("source", {accessor});
 
@@ -33,7 +34,6 @@ static LockedFlake getBuiltinDefaultSchemasFlake(EvalState & state)
 
     // Construct a dummy flakeref.
     auto flakeRef = parseFlakeRef(
-        fetchSettings,
         fmt("tarball+https://builtin-flake-schemas?narHash=%s", narHash.to_string(HashFormat::SRI, true)));
 
     auto flake = readFlake(state, flakeRef, flakeRef, flakeRef, state.storePath(storePath), {});
@@ -49,9 +49,9 @@ ref<EvalCache> call(
 {
     auto fingerprint = lockedFlake->getFingerprint(*state.store, state.fetchSettings);
 
-    std::string callFlakeSchemasNix =
-#include "call-flake-schemas.nix.gen.hh"
-        ;
+    std::string callFlakeSchemasNix = {
+#embed "call-flake-schemas.nix"
+    };
 
     auto lockedDefaultSchemasFlake = defaultSchemasFlake
                                          ? flake::lockFlake(flakeSettings, state, *defaultSchemasFlake, {})
@@ -498,7 +498,7 @@ nlohmann::json getFlakeInventory(
                         auto outputs = nlohmann::json::object();
                         auto drvPath = drv->forceDerivation();
                         auto drv = evalStore.derivationFromPath(drvPath);
-                        for (auto & i : drv.outputsAndOptPaths(*state.store)) {
+                        for (auto & i : outputsAndOptPaths(drv, *state.store)) {
                             if (auto outPath = i.second.second)
                                 outputs.emplace(i.first, state.store->printStorePath(*outPath));
                             else
@@ -627,7 +627,7 @@ std::optional<FlakeRef> MixFlakeSchemas::getDefaultFlakeSchemas()
     if (!defaultFlakeSchemas)
         return std::nullopt;
     else
-        return parseFlakeRef(fetchSettings, *defaultFlakeSchemas, absPath(getCommandBaseDir()));
+        return parseFlakeRef(*defaultFlakeSchemas, absPath(getCommandBaseDir()));
 }
 
 } // namespace nix

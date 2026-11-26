@@ -100,6 +100,16 @@ GTEST_BRIEF=1 GTEST_FILTER='ErrorTraceTest.*' meson test nix-expr-tests -v
 
 for short but comprensive output.
 
+### Unit tests requiring root
+
+In `nix-util-tests`, suites beginning with `Root` require root and are excluded by default.
+To run them on macOS:
+
+```bash
+nix build .#nix-util-tests
+sudo ./result/bin/nix-util-tests --gtest_filter='Root*'
+```
+
 ### Debugging tests
 
 For debugging, it is useful to combine the third option above with Meson's [`--gdb`](https://mesonbuild.com/Unit-tests.html#other-test-options) flag:
@@ -302,6 +312,93 @@ These tests include everything that needs to interact with external services or 
 Because these tests are expensive and require more than what the standard github-actions setup provides, most of them only run on the master branch (on <https://hydra.nixos.org/jobset/nix/master>).
 
 You can run them manually with `nix build .#hydraJobs.tests.{testName}` or `nix-build -A hydraJobs.tests.{testName}`.
+
+## Fuzzing
+
+The project uses [`libFuzzer`](https://llvm.org/docs/LibFuzzer.html) and LLVM coverage instrumentation to fuzz sensitive pieces of code.
+The harnesses reside in corresponding `-tests` subprojects (e.g. `src/libutil-tests/fuzz`).
+The `fuzzers` option builds the harnesses independently of `unit-tests`; set `unit-tests=false` for a fuzzer-only build.
+The `fuzzing-engine` option accepts one compiler-driver argument for linking an external fuzzing engine.
+If `fuzzing-engine` is empty, Meson requires Clang and `fuzzer-no-link` in `b_sanitize`.
+The compiler driver then links the harnesses with libFuzzer and libstdc++.
+
+```shell
+nix develop .#native-clangStdenv
+appendToVar mesonFlags "-Dunit-tests=false"
+appendToVar mesonFlags "-Dfuzzers=true"
+appendToVar mesonFlags "-Db_sanitize=address,undefined,fuzzer-no-link"
+# Clang sanitizer/shared-library workaround: https://github.com/mesonbuild/meson/issues/764
+appendToVar mesonFlags "-Db_lundef=false"
+appendToVar mesonFlags "-Dlibexpr:gc=disabled" # Because Boehm doesn't play well with ASan
+configurePhase
+buildPhase
+```
+
+To use an external fuzzing engine, set `fuzzing-engine`:
+
+```shell
+mesonFlagsArray+=(
+  "-Dunit-tests=false"
+  "-Dfuzzers=true"
+  "-Dfuzzing-engine=$LIB_FUZZING_ENGINE"
+)
+```
+
+Nix passes this value as one compiler-driver argument.
+The caller must also choose a compatible compiler and C++ runtime and provide any required instrumentation and sanitizer flags.
+
+If you want to collect coverage metrics you also need to specify the following compiler flags before running the `configurePhase`:
+
+```shell
+export CXXFLAGS="-fprofile-instr-generate -fcoverage-mapping"
+export CCFLAGS="-fprofile-instr-generate -fcoverage-mapping"
+```
+
+For now, the testbenches are mostly rudimentary and are supposed to catch memory safety bugs, but fuzzing is also crucial for validating invariants.
+Contributions improving harnesses and corpus/dictionaries are welcome.
+
+To run the harness (e.g. for NAR deserialisation) you can execute the following:
+
+```shell
+export LLVM_PROFILE_FILE="default.%p.profraw"
+mkdir /tmp/parse-dump
+build/src/libutil-tests/fuzz/harnesses/fuzz-parse-dump -runs=1000000 -max_len=65536 -dict=./src/libutil-tests/fuzz/data/nars.dict /tmp/parse-dump ./src/libutil-tests/fuzz/data/nars
+```
+
+Note that to achieve better results, tuning `libFuzzer` parameters or improvements to the initial corpus and dictionaries is likely required. For further information consult the [libFuzzer manual](https://llvm.org/docs/LibFuzzer.html).
+
+If you want to inspect the coverage, wait for the harness to run to completion (interrupting it won't produce a non-empty `.profraw` file) and assemble the final coverage report:
+
+```
+llvm-profdata merge -sparse *.profraw -o default.profdata
+llvm-cov show build/src/libutil/libnixutil.so -instr-profile=default.profdata -format=html -output-dir cov-html
+xdg-open cov-html/index.html
+```
+
+If you have found a memory safety issue using fuzzing, consider reporting it [privately](https://github.com/NixOS/nix/security/) if you deem the issue to be security relevant.
+
+### Checks that defeat fuzzing
+
+Fuzzing is crucial for validating invariants, but a few invariants are ones a fuzzer can never satisfy.
+A check that a field equals a cryptographic hash of other fields is the usual case: passing it requires a hash preimage, so the code below the check becomes *unreachable* to the fuzzer rather than merely hard to reach.
+This is different from a check that is only awkward to satisfy --- sorted keys, balanced delimiters, no redundant escapes --- which a coverage-guided fuzzer will learn to get past on its own.
+Only the former should be gated.
+
+Such checks are compiled out under `FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION`, e.g.:
+
+```c++
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    if (path != computedPath)
+        throw FormatError(...);
+#endif
+```
+
+The macro name is a convention from [OSS-Fuzz](https://google.github.io/oss-fuzz/) and libFuzzer.
+`nix-meson-build-support/common/meson.build` defines it for every subproject when `fuzzer-no-link` is in `b_sanitize`, which is exactly when a fuzzer-instrumented build is being made.
+Builds using an external `fuzzing-engine` are expected to pass it themselves, as OSS-Fuzz does.
+
+Anything gated this way is no longer exercised by the fuzzer, so it must be covered by a unit test instead.
+For an example of both halves, see the fixed-output derivation path check in `parseOutput` (`src/libstore/derivation/aterm.cc`) and its test `CAFixedPathMismatch`.
 
 ## Installer tests
 

@@ -6,12 +6,23 @@
 
 #include <functional>
 
-namespace nix::daemon {
+namespace nix {
 
-enum RecursiveFlag : bool { NotRecursive = false, Recursive = true };
+struct Builder;
+
+namespace daemon {
+
+enum struct RecursiveFlag {
+    NotRecursive = 0,
+    Recursive = 1,
+    RecursiveSubmitted = 2,
+};
 
 /**
  * Serve a client on the given file descriptors.
+ *
+ * @param builder The builder used for build operations. If null, the
+ * store's own builder is used.
  *
  * @param setupTelemetry Called once after the handshake and logger
  * setup, with the W3C `traceparent` string received from the client
@@ -25,6 +36,9 @@ void processConnection(
     FdSink && to,
     TrustedFlag trusted,
     RecursiveFlag recursive,
+    std::shared_ptr<Builder> builder = nullptr,
     std::function<void(std::string_view traceparent)> setupTelemetry = {});
 
-} // namespace nix::daemon
+} // namespace daemon
+
+} // namespace nix

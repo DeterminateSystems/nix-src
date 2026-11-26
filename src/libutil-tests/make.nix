@@ -11,7 +11,7 @@
 
 let
   inherit (pkgs) lib;
-  inherit (nixMake.hostPlatform) isLinux;
+  inherit (nixMake.hostPlatform) isLinux isDarwin;
 
   tests = nixMake.mkComponent {
     name = "determinate-nix-util-tests";
@@ -28,7 +28,13 @@ let
 
     # libnixutil only interposes __cxa_throw on Linux (see
     # src/libutil/make.nix).
-    excludeSources = lib.optional (!isLinux) "cxa-throw.cc";
+    # The fuzzing harnesses are separate executables.
+    # Meson only builds darwin/ on macOS.
+    excludeSources = [
+      "fuzz"
+    ]
+    ++ lib.optional (!isLinux) "cxa-throw.cc"
+    ++ lib.optional (!isDarwin) "darwin";
 
     includeDirs = [ "" ];
 
@@ -66,8 +72,7 @@ tests
     };
   }
   # Run the same tests with newer syscalls disabled via seccomp, to
-  # exercise fallback paths (iterative openat for openat2, /proc/self/fd
-  # for fchmodat2). Linux only, as in Meson.
+  # exercise fallback paths. Linux only, as in Meson.
   // lib.optionalAttrs isLinux {
     run-without-new-syscalls = nixMake.runTest {
       name = "${tests.name}-run-without-new-syscalls";
@@ -77,6 +82,10 @@ tests
         "openat2"
         "--syscall"
         "fchmodat2"
+        "--syscall"
+        "close_range"
+        "--syscall"
+        "copy_file_range"
         "--"
         exe
       ];

@@ -2,12 +2,17 @@
 #include "nix/util/util.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/processes.hh"
+#include "nix/util/system-error.hh"
+
+#include "linux-namespaces-private.hh"
 
 #include <mutex>
-#include <sys/resource.h>
 
+#include <sys/resource.h>
 #include <sys/mount.h>
 #include <sys/statvfs.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace nix {
 
@@ -89,9 +94,9 @@ bool mountAndPidNamespacesSupported()
 
 //////////////////////////////////////////////////////////////////////
 
-static AutoCloseFD fdSavedMountNamespace;
-static AutoCloseFD fdSavedRoot;
-static bool havePrivateMountNs = false;
+AutoCloseFD fdSavedMountNamespace;
+AutoCloseFD fdSavedRoot;
+bool havePrivateMountNs = false;
 
 /* Save the current mount namespace so restoreMountNamespace() can return
    to it later. Ignored if called more than once. */
@@ -161,25 +166,12 @@ void remountReadOnlyWritable(const std::filesystem::path & path)
         throw SysError("remounting %s writable", PathFmt(path));
 }
 
-/* This code runs in a (possibly) vfork-ed child, so technically everything you see below is beyond
-   broken because vfork()-ed child:
-
-   * Must not trample parent's memory in any way shape or form. That includes (but not limited to)
-     * Throwing any exceptions (because that would unwind into the parent stack frame and do who knows what).
-     * Modify any state - obviously that includes global state.
-     * Not allocate any memory, since that can also lead to a deadlock if some thread in the (now stopped) parent
-       holds a lock while we are running. That's because *all* of the parent tasks are suspended for the duration
-       of the vfork.
-
-   As it stands now, this code should be considered incredibly fragile and slated for a complete rework.
-   */
 void restoreMountNamespace()
 {
     if (!havePrivateMountNs)
         return;
 
     try {
-        /* FIXME: Allocation in a possibly vforked child. */
         auto savedCwd = std::filesystem::current_path();
 
         if (setns(fdSavedMountNamespace.get(), CLONE_NEWNS) == -1)
@@ -194,10 +186,9 @@ void restoreMountNamespace()
 
         if (chdir(savedCwd.c_str()) == -1)
             throw SysError("restoring cwd");
-
-        /* Do not reset havePrivateMountNs! This code can run in a vfork-ed child and we absolutely
-           must not trample any of the parent's state. */
     } catch (Error & e) {
+        /* TODO: Why are we swallowing errors? This can trivially lead to bugs like
+           https://github.com/NixOS/nix/issues/16246. Can we stop doing this?? */
         debug(e.msg());
     }
 }

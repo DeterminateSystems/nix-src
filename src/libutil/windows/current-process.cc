@@ -1,5 +1,6 @@
 #include "nix/util/current-process.hh"
 #include "nix/util/error.hh"
+#include "nix/util/system-error.hh"
 #include <cmath>
 
 #define WIN32_LEAN_AND_MEAN
@@ -9,13 +10,15 @@ namespace nix {
 
 std::chrono::microseconds getCpuUserTime()
 {
+    using namespace nix::windows;
+
     FILETIME creationTime;
     FILETIME exitTime;
     FILETIME kernelTime;
     FILETIME userTime;
 
     if (!GetProcessTimes(GetCurrentProcess(), &creationTime, &exitTime, &kernelTime, &userTime)) {
-        throw windows::WinError("failed to get CPU time");
+        throw WinError("failed to get CPU time");
     }
 
     ULARGE_INTEGER uLargeInt;

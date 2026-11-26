@@ -3,17 +3,13 @@
 
 #include "nix/util/types.hh"
 #include "nix/util/error.hh"
-#include "nix/util/logging.hh"
 #include "nix/util/strings.hh"
 
-#include <filesystem>
-#include <functional>
-#include <map>
 #include <set>
-#include <sstream>
 #include <bit>
 #include <optional>
 #include <ranges>
+#include <concepts>
 
 namespace nix {
 
@@ -61,12 +57,6 @@ Strings quoteStrings(const C & c, char quote = '\'')
     return res;
 }
 
-inline Strings quoteFSPaths(const std::set<std::filesystem::path> & paths, char quote = '\'')
-{
-    return paths | std::views::transform([&](const auto & p) { return quoteString(p.string(), quote); })
-           | std::ranges::to<Strings>();
-}
-
 /**
  * Remove trailing whitespace from a string.
  *
@@ -94,8 +84,24 @@ std::string rewriteStrings(
 /**
  * Parse a string into an integer.
  */
-template<class N>
+template<std::integral N>
 std::optional<N> string2Int(const std::string_view s);
+
+/* Guess what these overloads would do? If you gussed "8" parses as uint8_t(56) then
+   congratulations. Needless to say, these overloads are deleted and are gigantic footguns. */
+
+#define NIX_DELETE_STRING2INT_OVERLOAD(T) \
+    template<>                            \
+    std::optional<T> string2Int(const std::string_view s) = delete;
+
+NIX_DELETE_STRING2INT_OVERLOAD(char)
+NIX_DELETE_STRING2INT_OVERLOAD(signed char)
+NIX_DELETE_STRING2INT_OVERLOAD(unsigned char)
+NIX_DELETE_STRING2INT_OVERLOAD(wchar_t)
+NIX_DELETE_STRING2INT_OVERLOAD(char16_t)
+NIX_DELETE_STRING2INT_OVERLOAD(char32_t)
+
+#undef NIX_DELETE_STRING2INT_OVERLOAD
 
 /**
  * Like string2Int(), but support an optional suffix 'K', 'M', 'G' or
@@ -179,29 +185,14 @@ std::optional<N> string2Float(const std::string_view s);
  * Convert a little-endian integer to host order.
  */
 template<typename T>
+    requires std::is_unsigned_v<T> && (sizeof(T) > 1)
 T readLittleEndian(const unsigned char * p)
 {
     T x = 0;
-    /* Byte types such as char/unsigned char/std::byte are a bit special because
-       they are allowed to alias anything else. Thus a raw loop iterating
-       over the bytes here would be quite inefficient and iterate byte-by-byte
-       (the compiler cannot optimise anything because the pointer might alias
-       something). Use a memcpy + byteswap here as needed. */
     std::memcpy(&x, p, sizeof(T));
     /* Don't need to do anything if we are not on a big endian machine. */
-    if constexpr (std::endian::native != std::endian::little) {
-        if constexpr (std::is_same_v<T, uint64_t>) {
-            x = __builtin_bswap64(x);
-        } else if constexpr (std::is_same_v<T, uint32_t>) {
-            x = __builtin_bswap32(x);
-        } else if constexpr (std::is_same_v<T, uint16_t>) {
-            x = __builtin_bswap16(x);
-        } else {
-            /* Signed types don't make their way here. Though it would be fine
-               since C++20 mandates 2's complement representation. */
-            static_assert(false);
-        }
-    }
+    if constexpr (std::endian::native != std::endian::little)
+        x = std::byteswap(x);
     return x;
 }
 
@@ -212,6 +203,18 @@ template<typename T>
 void writeLittleEndian(unsigned char * p, T x)
 {
     if constexpr (std::endian::native != std::endian::little)
+        x = std::byteswap(x);
+    std::memcpy(p, &x, sizeof(T));
+}
+
+/**
+ * Write the integer in big endian order to the output.
+ */
+template<typename T>
+    requires std::is_unsigned_v<T> && (sizeof(T) > 1)
+void writeBigEndian(unsigned char * p, T x)
+{
+    if constexpr (std::endian::native != std::endian::big)
         x = std::byteswap(x);
     std::memcpy(p, &x, sizeof(T));
 }
@@ -291,7 +294,7 @@ std::pair<std::string_view, std::string_view> getLine(std::string_view s);
 
 /**
  * Get a pointer to the contents of a `std::optional` if it is set, or a
- * null pointer otherise.
+ * null pointer otherwise.
  *
  * Const version.
  */
@@ -400,16 +403,6 @@ std::optional<typename T::value_type> pop(T & c)
     return v;
 }
 
-/**
- * Append items to a container. TODO: remove this once we can use
- * C++23's `append_range()`.
- */
-template<class C, typename T>
-void append(C & c, std::initializer_list<T> l)
-{
-    c.insert(c.end(), l.begin(), l.end());
-}
-
 template<typename T>
 class Callback;
 
@@ -504,5 +497,11 @@ inline std::string operator+(std::string_view s1, const char * s2)
     s.append(s2, s2Size);
     return s;
 }
+
+/**
+ * Allow selecting a subset of enum values.
+ */
+#define NIX_INCOMPLETE_SWITCH_BEGIN _Pragma("GCC diagnostic push") _Pragma("GCC diagnostic ignored \"-Wswitch-enum\"")
+#define NIX_INCOMPLETE_SWITCH_END _Pragma("GCC diagnostic pop")
 
 } // namespace nix

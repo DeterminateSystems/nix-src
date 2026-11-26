@@ -1,4 +1,5 @@
 #include "nix/fetchers/tarball-cache.hh"
+#include "nix/util/system-error.hh"
 #include "nix/fetchers/cache.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/store/sqlite.hh"
@@ -412,7 +413,7 @@ struct TarballCacheImpl : TarballCache, std::enable_shared_from_this<TarballCach
 
     ref<SourceAccessor> getAccessor(const Hash & treeHash, std::string displayPrefix) override;
 
-    ref<GitFileSystemObjectSink> getFileSystemObjectSink() override;
+    ref<merkle::TarAdapter> getFileSystemObjectSink() override;
 
     Hash treeHashToNarHash(const Settings & settings, const Hash & treeHash) override
     {
@@ -574,7 +575,7 @@ ref<SourceAccessor> TarballCacheImpl::getAccessor(const Hash & treeHash, std::st
     return accessor;
 }
 
-struct TarballCacheSink : GitFileSystemObjectSink
+struct TarballCacheSink : merkle::TarAdapter
 {
     ref<TarballCacheImpl> cache;
 
@@ -839,16 +840,15 @@ struct TarballCacheSink : GitFileSystemObjectSink
             enqueue(std::move(work));
     }
 
-    void createRegularFile(const CanonPath & path, fun<void(CreateRegularFileSink &)> func) override
+    void createRegularFile(const CanonPath & path, bool isExecutable, fun<void(Sink &)> func) override
     {
         checkInterrupt();
 
         /* The contents are buffered in memory up to `chunkSize` bytes. Beyond that, they're spilled to a temporary
            file, which is processed after the whole file has been received. */
-        struct CRF : CreateRegularFileSink
+        struct CRF : Sink
         {
             std::string contents;
-            bool executable = false;
 
             AutoCloseFD tempFd;
             uint64_t size = 0;
@@ -872,24 +872,13 @@ struct TarballCacheSink : GitFileSystemObjectSink
 
                 writeFull(tempFd.get(), data);
             }
-
-            void isExecutable() override
-            {
-                executable = true;
-            }
-
-            void preallocateContents(uint64_t size) override
-            {
-                if (size <= chunkSize)
-                    contents.reserve(size);
-            }
         };
 
         auto crf = std::make_shared<CRF>();
 
         func(*crf);
 
-        auto mode = crf->executable ? git::Mode::Executable : git::Mode::Regular;
+        auto mode = isExecutable ? git::Mode::Executable : git::Mode::Regular;
         auto id = nextId++;
 
         if (!crf->tempFd) {
@@ -954,7 +943,7 @@ struct TarballCacheSink : GitFileSystemObjectSink
         return *dir.oid;
     }
 
-    Hash flush() override
+    merkle::TreeEntry flush() override
     {
         workers.process();
 
@@ -1039,11 +1028,11 @@ struct TarballCacheSink : GitFileSystemObjectSink
             });
         }
 
-        return rootOid;
+        return merkle::TreeEntry{.mode = merkle::Mode::Directory, .hash = rootOid};
     }
 };
 
-ref<GitFileSystemObjectSink> TarballCacheImpl::getFileSystemObjectSink()
+ref<merkle::TarAdapter> TarballCacheImpl::getFileSystemObjectSink()
 {
     return make_ref<TarballCacheSink>(ref<TarballCacheImpl>(shared_from_this()));
 }

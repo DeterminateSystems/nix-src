@@ -1,4 +1,5 @@
 #include "nix/util/error.hh"
+#include "nix/util/system-error.hh"
 
 #include <error.h>
 #define WIN32_LEAN_AND_MEAN
@@ -8,7 +9,7 @@ namespace nix::windows {
 
 void windows::WinError::anchor() {}
 
-std::string WinError::renderError(DWORD lastError)
+std::string WinErrorFields::renderError(DWORD lastError)
 {
     LPSTR errorText = NULL;
 

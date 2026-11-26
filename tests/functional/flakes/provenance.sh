@@ -104,11 +104,15 @@ EOF
 ) ]]
 
 [[ "$(nix provenance show "$builder")" = $(cat <<EOF
-[1m$builder[0m
-← from file [1m/simple.builder.sh[0m
-← from tree [1mgit+file://$flake1Dir?ref=refs/heads/master&rev=$rev[0m
+$builder
+← from file /simple.builder.sh
+← from tree git+file://$flake1Dir?ref=refs/heads/master&rev=$rev
 EOF
 ) ]]
+
+# The output is only styled when writing to a terminal, or when forced.
+(( $(nix provenance show "$builder" | grep -c $'\x1b') == 0 ))
+(( $(CLICOLOR_FORCE=1 nix provenance show "$builder" | grep -c $'\x1b') > 0 ))
 
 # Verify the provenance of all store paths.
 nix provenance verify --all
@@ -191,11 +195,11 @@ unset _NIX_FORCE_HTTP
 
 # Test `nix provenance show`.
 [[ "$(nix provenance show "$outPath")" = "$(cat <<EOF
-[1m$outPath[0m
-← copied from [1mfile://$binaryCache[0m
-← built from derivation [1m$drvPath[0m (output [1mout[0m) on [1mtest-host[0m for [1m$system[0m
-  tag [1mbranch[0m: main
-  tag [1mpr[0m: 1234
+$outPath
+← copied from file://$binaryCache
+← built from derivation $drvPath (output out) on test-host for $system
+  tag branch: main
+  tag pr: 1234
 ← with derivation metadata
   {
     "license": [
@@ -210,7 +214,7 @@ unset _NIX_FORCE_HTTP
       }
     ]
   }
-← instantiated from flake output [1mgit+file://$flake1Dir?ref=refs/heads/master&rev=$rev#packages.$system.default[0m
+← instantiated from flake output git+file://$flake1Dir?ref=refs/heads/master&rev=$rev#packages.$system.default
 EOF
 )" ]]
 
@@ -266,10 +270,10 @@ nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.defa
 [[ $(nix path-info --json --json-format 1 "$builder" | jq ".\"$builder\".provenance") != null ]]
 
 [[ "$(nix provenance show "$outPath")" = "$(cat <<EOF
-[1m$outPath[0m
-← built from derivation [1m$drvPath[0m (output [1mout[0m) on [1mtest-host[0m for [1m$system[0m
-  tag [1mbranch[0m: main
-  tag [1mpr[0m: 1234
+$outPath
+← built from derivation $drvPath (output out) on test-host for $system
+  tag branch: main
+  tag pr: 1234
 ← with derivation metadata
   {
     "license": [
@@ -284,14 +288,14 @@ nix build --impure --print-out-paths --no-link "$flake1Dir#packages.$system.defa
       }
     ]
   }
-← [31;1mimpurely[0m instantiated from [31;1munlocked[0m flake output [1mgit+file://$flake1Dir#packages.$system.default[0m
+← impurely instantiated from unlocked flake output git+file://$flake1Dir#packages.$system.default
 EOF
 )" ]]
 
 [[ "$(nix provenance show "$builder")" = $(cat <<EOF
-[1m$builder[0m
-← from file [1m/simple.builder.sh[0m
-← from [31;1munlocked[0m tree [1mgit+file://$flake1Dir[0m
+$builder
+← from file /simple.builder.sh
+← from unlocked tree git+file://$flake1Dir
 EOF
 ) ]]
 
@@ -355,8 +359,8 @@ echo hello > "$TEST_ROOT/hello.txt"
 path="$(nix store prefetch-file --json "file://$TEST_ROOT/hello.txt" | jq -r .storePath)"
 
 [[ "$(nix provenance show "$path")" = $(cat <<EOF
-[1m$path[0m
-← fetched from URL [1mfile://$TEST_ROOT/hello.txt[0m
+$path
+← fetched from URL file://$TEST_ROOT/hello.txt
 EOF
 ) ]]
 

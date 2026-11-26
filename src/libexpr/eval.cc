@@ -30,7 +30,9 @@
 #include "nix/store/async-path-writer.hh"
 #include "nix/expr/parallel-eval.hh"
 
+NIX_INCOMPLETE_SWITCH_BEGIN
 #include "parser-tab.hh"
+NIX_INCOMPLETE_SWITCH_END
 
 #include <algorithm>
 #include <cstddef>
@@ -94,7 +96,8 @@ static const char * makeImmutableString(std::string_view s)
 
 StringData & StringData::alloc(EvalMemory & mem, size_t size)
 {
-    void * t = mem.allocBytes<char, sizeof(StringData) + 1>(size);
+    /* String contents never contain pointers, so the GC need not scan them. */
+    void * t = mem.allocBytesAtomic<char, sizeof(StringData) + 1>(size);
     auto res = new (t) StringData(size);
     return *res;
 }
@@ -114,6 +117,13 @@ std::ostream & operator<<(std::ostream & os, const ValueType t)
 {
     os << showType(t);
     return os;
+}
+
+std::ostream & operator<<(std::ostream & os, WhileTryingToUse w)
+{
+    /* Reset color first: `HintFmt` wraps arguments in `Magenta` by
+       default, but this word is sentence structure, not a value. */
+    return os << ANSI_NORMAL << (w.v.isWHNF() ? "using" : "evaluating");
 }
 
 std::string printValue(EvalState & state, Value & v)
@@ -167,9 +177,7 @@ std::string_view showType(ValueType type, bool withArticle)
 
 std::string showType(const Value & v)
 {
-// Allow selecting a subset of enum values
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch-enum"
+    NIX_INCOMPLETE_SWITCH_BEGIN
     switch (v.getInternalType()) {
     case tString:
         return v.context() ? "a string with context" : "a string";
@@ -186,14 +194,12 @@ std::string showType(const Value & v)
     default:
         return std::string(showType(v.type()));
     }
-#pragma GCC diagnostic pop
+    NIX_INCOMPLETE_SWITCH_END
 }
 
 PosIdx Value::determinePos(const PosIdx pos) const
 {
-// Allow selecting a subset of enum values
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch-enum"
+    NIX_INCOMPLETE_SWITCH_BEGIN
     switch (getInternalType()) {
     case tAttrs:
         return attrs()->pos;
@@ -207,7 +213,7 @@ PosIdx Value::determinePos(const PosIdx pos) const
     default:
         return pos;
     }
-#pragma GCC diagnostic pop
+    NIX_INCOMPLETE_SWITCH_END
 }
 
 template<>
@@ -251,7 +257,7 @@ static Symbol getName(const AttrName & name, EvalState & state, Env & env)
         Value nameValue;
         name.expr->eval(state, env, nameValue);
         state.forceStringNoCtx(nameValue, name.expr->getPos(), "while evaluating an attribute name");
-        return state.symbols.create(nameValue.string_view());
+        return state.symbols.create(nameValue);
     }
 }
 
@@ -343,12 +349,14 @@ EvalState::EvalState(
     , internalFS(make_ref<MemorySourceAccessor>())
     , derivationInternal{internalFS->addFile(
           CanonPath("derivation-internal.nix"),
-#include "primops/derivation.nix.gen.hh"
-          )}
+          {
+#embed "primops/derivation.nix"
+          })}
     , importedDrvToDerivation{internalFS->addFile(
           CanonPath("imported-drv-to-derivation.nix"),
-#include "imported-drv-to-derivation.nix.gen.hh"
-          )}
+          {
+#embed "imported-drv-to-derivation.nix"
+          })}
     , store(store)
     , buildStore(buildStore ? buildStore : store)
     , inputCache(fetchers::InputCache::create())
@@ -373,7 +381,12 @@ EvalState::EvalState(
     , attrSelects(make_ref<decltype(attrSelects)::element_type>())
     , executor{make_ref<Executor>(settings)}
 {
-#ifndef _WIN32
+    /* On darwin, we increase the primary thread's stack size via a linker option.
+       Note that this helps us in using posix_spawn for spawning processes since we don't have
+       to do non-standard housekeeping in the child to restore the rlimit.
+       Ideally we'd just run evaluation on a separate thread whose stack size we control fully. */
+
+#if !(defined(__APPLE__) || defined(_WIN32))
     static std::once_flag stackSizeBumped;
     std::call_once(stackSizeBumped, []() {
         // Increase the default stack size for the evaluator and for
@@ -413,8 +426,9 @@ EvalState::EvalState(
 
     corepkgsFS->addFile(
         CanonPath("fetchurl.nix"),
-#include "fetchurl.nix.gen.hh"
-    );
+        {
+#embed "fetchurl.nix"
+        });
 
     createBaseEnv(settings);
 
@@ -710,14 +724,13 @@ std::optional<EvalState::Doc> EvalState::getDoc(Value & v)
     if (isFunctor(v)) {
         try {
             Value & functor = *v.attrs()->get(s.functor)->value;
-            Value * vp[] = {&v};
             Value partiallyApplied;
             // The first parameter is not user-provided, and may be
             // handled by code that is opaque to the user, like lib.const = x: y: y;
             // So preferably we show docs that are relevant to the
             // "partially applied" function returned by e.g. `const`.
             // We apply the first argument:
-            callFunction(functor, vp, partiallyApplied, noPos);
+            callFunction(functor, std::to_array({&v}), partiallyApplied, noPos);
             auto _level = addCallDepth(noPos);
             return getDoc(partiallyApplied);
         } catch (Error & e) {
@@ -1290,8 +1303,9 @@ static void addEvalTrace(EvalState & state, Error & e, PosIdx pos, std::string_v
     e.addTrace(state.positions[pos], errorCtx);
 }
 
-inline bool EvalState::evalBool(Env & env, Expr * e, const PosIdx pos, std::string_view errorCtx)
+inline bool EvalState::evalBool(Env & env, Expr * e, std::string_view errorCtx)
 {
+    PosIdx pos = e->getPos();
     try {
         Value v;
         e->eval(*this, env, v);
@@ -1304,8 +1318,9 @@ inline bool EvalState::evalBool(Env & env, Expr * e, const PosIdx pos, std::stri
     }
 }
 
-inline void EvalState::evalAttrs(Env & env, Expr * e, Value & v, const PosIdx pos, std::string_view errorCtx)
+inline void EvalState::evalAttrs(Env & env, Expr * e, Value & v, std::string_view errorCtx)
 {
+    PosIdx pos = e->getPos();
     try {
         e->eval(*this, env, v);
         if (v.type() != nAttrs)
@@ -1315,6 +1330,16 @@ inline void EvalState::evalAttrs(Env & env, Expr * e, Value & v, const PosIdx po
                 .debugThrow();
     } catch (Error & e) {
         e.addTrace(positions[pos], errorCtx);
+        throw;
+    }
+}
+
+void Expr::eval(EvalState & state, Env & env, Value & v, std::string_view errorCtx)
+{
+    try {
+        eval(state, env, v);
+    } catch (Error & e) {
+        addEvalTrace(state, e, getPos(), errorCtx);
         throw;
     }
 }
@@ -1430,7 +1455,7 @@ void ExprAttrs::eval(EvalState & state, Env & env, Value & v)
         if (nameVal.type() == nNull)
             continue;
         state.forceStringNoCtx(nameVal, i.pos, "while evaluating the name of a dynamic attribute");
-        auto nameSym = state.symbols.create(nameVal.string_view());
+        auto nameSym = state.symbols.create(nameVal);
         if (sort)
             // FIXME: inefficient
             bindings.bindings->sort();
@@ -1559,7 +1584,6 @@ static void throwAttrMissing(EvalState & state, Env & env, ExprSelect & expr, Va
         allAttrNames.insert(std::string(state.symbols[attr.name]));
     auto suggestions = Suggestions::bestMatches(allAttrNames, state.symbols[name]);
     state.error<EvalError>("attribute '%1%' missing", state.symbols[name])
-        .atPos(expr.pos)
         .withSuggestions(suggestions)
         .withFrame(env, expr)
         .debugThrow();
@@ -1574,17 +1598,30 @@ static bool isDerivationInternalPos(EvalState & state, PosIdx pos)
 }
 
 [[noreturn, gnu::noinline, gnu::cold]]
-static void rethrowWithAttrTrace(EvalState & state, Env & env, ExprSelect & expr, std::exception_ptr error, PosIdx pos)
+static void rethrowWithAttrTrace(
+    EvalState & state,
+    Env & env,
+    ExprSelect & expr,
+    std::exception_ptr error,
+    PosIdx attrPos,
+    std::span<const AttrName> resolvedAttrPath)
 {
-    /* Show the attribute path outside of the catch handler: it
+    /* Show the attribute paths outside of the catch handler: it
        evaluates dynamic attribute names, which may force thunks and
        thereby suspend the current fiber, which is not allowed while an
        exception is being handled. */
+    std::optional<std::string> successPath;
+    if (attrPos && !isDerivationInternalPos(state, attrPos))
+        successPath = showAttrSelectionPath(state, env, resolvedAttrPath);
     auto attrPath = showAttrSelectionPath(state, env, expr.getAttrPath());
     try {
         std::rethrow_exception(error);
     } catch (Error & e) {
-        state.addErrorTrace(e, pos, "while evaluating the attribute '%1%'", attrPath);
+        // Traces are printed in reverse, so we add context before the main item.
+        if (successPath)
+            state.addErrorTrace(e, attrPos, "from the definition of '%1%'", *successPath);
+        // Add main item: the selection site itself (`a.b`), ie the actual access
+        state.addErrorTrace(e, expr.getPos(), "while evaluating the attribute '%1%'", attrPath);
         throw;
     }
 }
@@ -1598,10 +1635,13 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
     auto _level = state.addCallDepth(pos);
 
     Value vTmp;
-    PosIdx pos2;
+    // current or last *definition site* (the attr, not the select)
+    PosIdx attrPos;
+    const AttrName * unresolvedOrEnd = attrPathStart;
+    // cursor, result if successful
     Value * vAttrs = &vTmp;
 
-    e->eval(state, env, vTmp);
+    e->eval(state, env, vTmp, "while selecting an attribute");
 
     std::exception_ptr error;
 
@@ -1624,23 +1664,21 @@ void ExprSelect::eval(EvalState & state, Env & env, Value & v)
                     throwAttrMissing(state, env, *this, *vAttrs, name);
             }
             vAttrs = j->value;
-            pos2 = j->pos;
+            attrPos = j->pos;
+            unresolvedOrEnd = &i + 1;
             if (state.countCalls)
-                state.incrAttrSelect(pos2);
+                state.incrAttrSelect(attrPos);
         }
 
-        state.forceValue(*vAttrs, pos2 ? pos2 : this->pos);
+        state.forceValue(*vAttrs, attrPos ? attrPos : this->pos);
 
     } catch (Error &) {
-        if (!pos2)
-            throw;
-        if (isDerivationInternalPos(state, pos2))
-            throw;
         error = std::current_exception();
     }
 
     if (error)
-        rethrowWithAttrTrace(state, env, *this, error, pos2);
+        rethrowWithAttrTrace(
+            state, env, *this, error, attrPos, std::span<const AttrName>(attrPathStart, unresolvedOrEnd));
 
     v = *vAttrs;
 }
@@ -1666,7 +1704,7 @@ void ExprOpHasAttr::eval(EvalState & state, Env & env, Value & v)
     Value vTmp;
     Value * vAttrs = &vTmp;
 
-    e->eval(state, env, vTmp);
+    e->eval(state, env, vTmp, "in the argument of '?'");
 
     for (auto & i : attrPath) {
         state.forceValue(*vAttrs, getPos());
@@ -1784,7 +1822,7 @@ static void addLambdaCallTrace(EvalState & state, Error & e, ExprLambda & lambda
  * Store in `vRes` the tPrimOpApp chain that applies `vCur` to `args`.
  */
 [[gnu::noinline]]
-static void makeAppChain(EvalState & state, Value & vCur, std::span<Value *> args, Value & vRes)
+static void makeAppChain(EvalState & state, Value & vCur, std::span<Value * const> args, Value & vRes)
 {
     for (auto arg : args) {
         auto fun2 = state.allocValue();
@@ -1806,7 +1844,7 @@ static void callPrimOpApp(
     const PrimOp & fn,
     size_t argsDone,
     size_t argsLeft,
-    std::span<Value *> args,
+    std::span<Value * const> args,
     PosIdx pos)
 {
     Value * vArgs[maxPrimOpArity];
@@ -1823,9 +1861,8 @@ static void callPrimOpApp(
         // 2. Create a fake env (arg1, arg2, etc.) and a fake expr (arg1: arg2: etc: builtins.name arg1 arg2
         // etc)
         //    so the debugger allows to inspect the wrong parameters passed to the builtin.
-        auto pos2 = vCur.determinePos(noPos);
         vCur.reset();
-        fn.impl(state, pos2, vArgs, vCur);
+        fn.impl(state, CallSite{pos}, vArgs, vCur);
     } catch (Error & e) {
         if (fn.addTrace)
             state.addErrorTrace(e, pos, "while calling the '%1%' builtin", fn.name);
@@ -1850,7 +1887,7 @@ static void callFunctor(EvalState & state, Value & vCur, const Attr & functor, V
     }
 }
 
-void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes, const PosIdx pos)
+void EvalState::callFunction(Value & fun, std::span<Value * const> args, Value & vRes, const PosIdx pos)
 {
     auto _level = addCallDepth(pos);
 
@@ -1953,9 +1990,8 @@ void EvalState::callFunction(Value & fun, std::span<Value *> args, Value & vRes,
                     incrPrimOpCall(fn->name);
 
                 try {
-                    auto pos = vCur.determinePos(noPos);
                     vCur.reset();
-                    fn->impl(*this, pos, args.data(), vCur);
+                    fn->impl(*this, CallSite{pos}, args.data(), vCur);
                 } catch (Error & e) {
                     if (fn->addTrace)
                         addErrorTrace(e, pos, "while calling the '%1%' builtin", fn->name);
@@ -2109,13 +2145,13 @@ void ExprWith::eval(EvalState & state, Env & env, Value & v)
 void ExprIf::eval(EvalState & state, Env & env, Value & v)
 {
     // We cheat in the parser, and pass the position of the condition as the position of the if itself.
-    [[gnu::musttail]] return (state.evalBool(env, cond, pos, "while evaluating a branch condition") ? then : else_)
+    [[gnu::musttail]] return (state.evalBool(env, cond, "while evaluating a branch condition") ? then : else_)
         ->eval(state, env, v);
 }
 
 void ExprAssert::eval(EvalState & state, Env & env, Value & v)
 {
-    if (!state.evalBool(env, cond, pos, "in the condition of the assert statement")) {
+    if (!state.evalBool(env, cond, "in the condition of the assert statement")) {
         std::ostringstream out;
         cond->show(state.symbols, out);
         auto exprStr = out.view();
@@ -2140,53 +2176,53 @@ void ExprAssert::eval(EvalState & state, Env & env, Value & v)
 
 void ExprOpNot::eval(EvalState & state, Env & env, Value & v)
 {
-    v.mkBool(!state.evalBool(env, e, getPos(), "in the argument of the not operator")); // XXX: FIXME: !
+    v.mkBool(!state.evalBool(env, e, "in the argument of '!'"));
 }
 
 void ExprOpEq::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1;
-    e1->eval(state, env, v1);
+    e1->eval(state, env, v1, "in the left operand of '=='");
     Value v2;
-    e2->eval(state, env, v2);
+    e2->eval(state, env, v2, "in the right operand of '=='");
     v.mkBool(state.eqValues(v1, v2, pos, "while testing two values for equality"));
 }
 
 void ExprOpNEq::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1;
-    e1->eval(state, env, v1);
+    e1->eval(state, env, v1, "in the left operand of '!='");
     Value v2;
-    e2->eval(state, env, v2);
+    e2->eval(state, env, v2, "in the right operand of '!='");
     v.mkBool(!state.eqValues(v1, v2, pos, "while testing two values for inequality"));
 }
 
 void ExprOpAnd::eval(EvalState & state, Env & env, Value & v)
 {
     v.mkBool(
-        state.evalBool(env, e1, pos, "in the left operand of the AND (&&) operator")
-        && state.evalBool(env, e2, pos, "in the right operand of the AND (&&) operator"));
+        state.evalBool(env, e1, "in the left operand of '&&'")
+        && state.evalBool(env, e2, "in the right operand of '&&'"));
 }
 
 void ExprOpOr::eval(EvalState & state, Env & env, Value & v)
 {
     v.mkBool(
-        state.evalBool(env, e1, pos, "in the left operand of the OR (||) operator")
-        || state.evalBool(env, e2, pos, "in the right operand of the OR (||) operator"));
+        state.evalBool(env, e1, "in the left operand of '||'")
+        || state.evalBool(env, e2, "in the right operand of '||'"));
 }
 
 void ExprOpImpl::eval(EvalState & state, Env & env, Value & v)
 {
     v.mkBool(
-        !state.evalBool(env, e1, pos, "in the left operand of the IMPL (->) operator")
-        || state.evalBool(env, e2, pos, "in the right operand of the IMPL (->) operator"));
+        !state.evalBool(env, e1, "in the left operand of '->'")
+        || state.evalBool(env, e2, "in the right operand of '->'"));
 }
 
 void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1, v2;
-    state.evalAttrs(env, e1, v1, pos, "in the left operand of the update (//) operator");
-    state.evalAttrs(env, e2, v2, pos, "in the right operand of the update (//) operator");
+    state.evalAttrs(env, e1, v1, "in the left operand of '//'");
+    state.evalAttrs(env, e2, v2, "in the right operand of '//'");
 
     state.nrOpUpdates++;
 
@@ -2264,9 +2300,9 @@ void ExprOpUpdate::eval(EvalState & state, Env & env, Value & v)
 void ExprOpConcatLists::eval(EvalState & state, Env & env, Value & v)
 {
     Value v1;
-    e1->eval(state, env, v1);
+    e1->eval(state, env, v1, "in the left operand of '++'");
     Value v2;
-    e2->eval(state, env, v2);
+    e2->eval(state, env, v2, "in the right operand of '++'");
     Value * lists[2] = {&v1, &v2};
     state.concatLists(v, lists, pos, "while evaluating one of the elements to concatenate");
 }
@@ -2320,7 +2356,7 @@ void ExprConcatStrings::eval(EvalState & state, Env & env, Value & v)
 
     for (auto & [i_pos, i] : es) {
         Value & vTmp = *vTmpP++;
-        i->eval(state, env, vTmp);
+        i->eval(state, env, vTmp, "in an operand of '+'");
 
         /* If the first element is a path, then the result will also
            be a path, we don't copy anything (yet - that's done later,
@@ -2408,10 +2444,18 @@ void ExprPos::eval(EvalState & state, Env & env, Value & v)
     state.mkPos(v, pos);
 }
 
-void EvalState::fixupBlackHolePos(InfiniteRecursionError & e, PosIdx pos)
+void EvalState::fixupBlackHolePos(InfiniteRecursionError & e, const Value & v, PosIdx pos)
 {
     if (!e.hasPos())
         e.atPos(positions[pos]);
+
+    /* Mark where evaluation enters the infinite recursion, so the
+       trace distinguishes the cycle from the code leading up to it.
+       This is called for every thunk that the error propagates
+       through, but only the thunk that was found to be a blackhole
+       matches `e.v`, so the entry is added once. */
+    if (e.v == &v)
+        e.addTrace(nullptr, HintFmt(ANSI_WARNING "entering the infinite recursion" ANSI_NORMAL), TracePrint::Always);
 }
 
 void EvalState::forceValueDeep(Value & v)
@@ -2611,26 +2655,6 @@ bool EvalState::isDerivation(Value & v)
     return i->value->string_view().compare("derivation") == 0;
 }
 
-std::optional<std::string>
-EvalState::tryAttrsToString(const PosIdx pos, Value & v, NixStringContext & context, bool coerceMore, bool copyToStore)
-{
-    auto i = v.attrs()->get(s.toString);
-    if (i) {
-        Value v1;
-        callFunction(*i->value, v, v1, pos);
-        return coerceToString(
-                   pos,
-                   v1,
-                   context,
-                   "while evaluating the result of the `__toString` attribute",
-                   coerceMore,
-                   copyToStore)
-            .toOwned();
-    }
-
-    return {};
-}
-
 /* The functions below are the less common paths of
    EvalState::coerceToString(). They are kept out of line because their
    locals would otherwise be part of its stack frame on every call. In
@@ -2756,13 +2780,26 @@ BackedStringView EvalState::coerceToString(
     }
 
     if (v.type() == nAttrs) {
-        auto maybeString = tryAttrsToString(pos, v, context, coerceMore, copyToStore);
-        if (maybeString)
-            return std::move(*maybeString);
-        auto i = v.attrs()->get(s.outPath);
-        if (!i)
-            throwCannotCoerce(*this, v, pos, errorCtx);
-        return coerceToString(pos, *i->value, context, errorCtx, coerceMore, copyToStore, canonicalizePath);
+        return peelToStringOutPath(
+            pos,
+            v,
+            /*checkToStringReturn=*/false, // Historical quirk
+            [&](Value * peeled, bool) -> BackedStringView {
+                if (peeled->type() == nAttrs)
+                    throwCannotCoerce(*this, *peeled, pos, errorCtx);
+                /* `canonicalizePath=false` is `ExprConcat`'s hack for
+                   preserving the trailing slash on source-parsed path
+                   literals like the `/foo/` in `/foo/${x}`. Any attrset
+                   in that slot is a computed value with no
+                   source-fidelity intent — the peeled path came from
+                   user code, not from the interpolation syntax. Force
+                   canonicalisation on the peel result regardless of
+                   which peel path (`__toString` or `outPath`) got us
+                   here. */
+                return coerceToString(
+                           pos, *peeled, context, errorCtx, coerceMore, copyToStore, /*canonicalizePath=*/true)
+                    .toOwned();
+            });
     }
 
     if (v.type() == nExternal)
@@ -2811,34 +2848,21 @@ StorePath EvalState::copyPathToStore(NixStringContext & context, const SourcePat
 
 SourcePath EvalState::coerceToPath(const PosIdx pos, Value & v, NixStringContext & context, std::string_view errorCtx)
 {
-    try {
-        forceValue(v, pos);
-    } catch (Error & e) {
-        e.addTrace(positions[pos], errorCtx);
-        throw;
-    }
-
-    /* Handle path values directly, without coercing to a string. */
-    if (v.type() == nPath)
-        return v.path();
-
-    /* Similarly, handle __toString where the result may be a path
-       value. */
-    if (v.type() == nAttrs) {
-        auto i = v.attrs()->get(s.toString);
-        if (i) {
-            Value v1;
-            callFunction(*i->value, v, v1, pos);
-            return coerceToPath(pos, v1, context, errorCtx);
-        }
-    }
-
-    /* Any other value should be coercible to a string, interpreted
-       relative to the root filesystem. */
-    auto path = coerceToString(pos, v, context, errorCtx, false, false, true).toOwned();
-    if (path == "" || path[0] != '/')
-        error<EvalError>("string '%1%' doesn't represent an absolute path", path).withTrace(pos, errorCtx).debugThrow();
-    return rootPath(CanonPath(path));
+    return peelToStringOutPath(
+        pos,
+        v,
+        /*checkToStringReturn=*/false, // Historical quirk
+        [&](Value * peeled, bool) -> SourcePath {
+            Value & effective = *peeled;
+            if (effective.type() == nPath)
+                return effective.path();
+            auto path = coerceToString(pos, effective, context, errorCtx, false, false, true).toOwned();
+            if (path == "" || path[0] != '/')
+                error<EvalError>("string '%1%' doesn't represent an absolute path", path)
+                    .withTrace(pos, errorCtx)
+                    .debugThrow();
+            return rootPath(CanonPath(path));
+        });
 }
 
 StorePath
@@ -3374,7 +3398,7 @@ void EvalState::printStatistics()
         {
             auto & list = topObj["attributes"];
             list = json::array();
-            attrSelects->visit_all([&](auto & i) {
+            attrSelects->cvisit_all([&](auto & i) {
                 json obj = json::object();
                 if (auto pos = positions[i.first]) {
                     if (auto path = std::get_if<SourcePath>(&pos.origin))
@@ -3686,17 +3710,14 @@ std::ostream & operator<<(std::ostream & str, const ExternalValueBase & v)
     return v.print(str);
 }
 
-void forceNoNullByte(std::string_view s, std::function<Pos()> pos)
+void throwNullByteError(std::string_view s, const PosTable * positions, PosIdx pos)
 {
-    if (s.find('\0') != s.npos) {
-        using namespace std::string_view_literals;
-        auto str = replaceStrings(std::string(s), "\0"sv, "␀"sv);
-        Error error("input string '%s' cannot be represented as Nix string because it contains null bytes", str);
-        if (pos) {
-            error.atPos(pos());
-        }
-        throw std::move(error);
-    }
+    using namespace std::string_view_literals;
+    auto str = replaceStrings(std::string(s), "\0"sv, "␀"sv);
+    Error error("input string '%s' cannot be represented as Nix string because it contains null bytes", str);
+    if (positions)
+        error.atPos((*positions)[pos]);
+    throw std::move(error);
 }
 
 void EvalState::waitForPath(const StorePath & path)

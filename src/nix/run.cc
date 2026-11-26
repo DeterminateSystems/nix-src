@@ -1,4 +1,5 @@
 #include "nix/util/current-process.hh"
+#include "nix/util/environment-variables.hh"
 #include "run.hh"
 #include "nix/cmd/command-installable-value.hh"
 #include "nix/main/shared.hh"
@@ -10,6 +11,7 @@
 #include "nix/expr/eval.hh"
 #include "nix/util/util.hh"
 #include "nix/store/globals.hh"
+#include "nix/util/system-error.hh"
 
 #include <filesystem>
 
@@ -18,22 +20,9 @@
 #  include "nix/store/personality.hh"
 #endif
 
-extern char ** environ __attribute__((weak));
-
 namespace nix {
 
 std::string chrootHelperName = "__run_in_chroot";
-
-/* Convert `env` to a list of strings suitable for `execve`'s `envp` argument. */
-Strings toEnvp(StringMap env)
-{
-    Strings envStrs;
-    for (auto & i : env) {
-        envStrs.push_back(i.first + "=" + i.second);
-    }
-
-    return envStrs;
-}
 
 void execProgramInStore(
     ref<Store> store,
@@ -47,16 +36,8 @@ void execProgramInStore(
     logger->stop();
     logger->flush();
 
-    char ** envp;
-    Strings envStrs;
-    std::vector<char *> envCharPtrs;
-    if (env.has_value()) {
-        envStrs = toEnvp(env.value());
-        envCharPtrs = stringsToCharPtrs(envStrs);
-        envp = envCharPtrs.data();
-    } else {
-        envp = environ;
-    }
+    if (env)
+        replaceEnv(*env);
 
     restoreProcessContext();
 
@@ -85,7 +66,8 @@ void execProgramInStore(
         for (auto & arg : args)
             helperArgs.push_back(arg);
 
-        execve(getSelfExe().value_or("nix").string().c_str(), stringsToCharPtrs(helperArgs).data(), envp);
+        /* TODO: Gate this behind __linux__ and just exec /proc/self/exe. */
+        execv(getSelfExe().value_or("nix").string().c_str(), stringsToCharPtrs(helperArgs).data());
 
         throw SysError("could not execute chroot helper");
     }
@@ -94,16 +76,14 @@ void execProgramInStore(
     if (system)
         linux::setPersonality({
             .system = *system,
-            .impersonateLinux26 = settings.getLocalSettings().impersonateLinux26,
+            .disableASLR = false,
         });
 #endif
 
-    if (useLookupPath == UseLookupPath::Use) {
-        // We have to set `environ` by hand because there is no `execvpe` on macOS.
-        environ = envp;
-        execvp(program.c_str(), stringsToCharPtrs(args).data());
-    } else
-        execve(program.c_str(), stringsToCharPtrs(args).data(), envp);
+    if (useLookupPath == UseLookupPath::Use)
+        execvp(requireCString(program), stringsToCharPtrs(args).data());
+    else
+        execv(requireCString(program), stringsToCharPtrs(args).data());
 
     throw SysError("unable to execute '%s'", program);
 }
@@ -236,11 +216,11 @@ void chrootHelper(int argc, char ** argv)
     if (system != "")
         linux::setPersonality({
             .system = system,
-            .impersonateLinux26 = settings.getLocalSettings().impersonateLinux26,
+            .disableASLR = false,
         });
 #  endif
 
-    execvp(cmd.c_str(), stringsToCharPtrs(args).data());
+    execvp(requireCString(cmd), stringsToCharPtrs(args).data());
 
     throw SysError("unable to exec '%s'", cmd);
 

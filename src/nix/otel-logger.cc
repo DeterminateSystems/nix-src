@@ -213,6 +213,7 @@ std::string_view activityName(ActivityType type)
         ACTIVITY_NAME(PostBuildHook)
         ACTIVITY_NAME(BuildWaiting)
         ACTIVITY_NAME(FetchTree)
+        ACTIVITY_NAME(FetchToStore)
 #  undef ACTIVITY_NAME
     case actStringly:
         /* Only reached via a Logger that flattens string-named
@@ -223,10 +224,10 @@ std::string_view activityName(ActivityType type)
 }
 
 /* Defensive field accessors, like the progress bar's. */
-std::string_view getS(const Logger::Fields & fields, size_t n)
+std::string_view getS(std::span<const Logger::Field> fields, size_t n)
 {
     if (n < fields.size()) {
-        if (auto p = std::get_if<std::string>(&fields[n].raw))
+        if (auto p = std::get_if<std::string>(&fields[n]))
             return *p;
     }
     return {};
@@ -432,7 +433,7 @@ public:
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
-        const Fields & fields,
+        std::span<const Field> fields,
         ActivityId parent) noexcept override
     {
         try {
@@ -522,7 +523,7 @@ public:
                 if (key != "traceparent")
                     continue;
                 std::optional<opentelemetry::trace::SpanContext> spanContext;
-                if (auto str = std::get_if<std::string>(&value.raw))
+                if (auto str = std::get_if<std::string>(&value))
                     spanContext = parseTraceparent(*str);
                 auto spans(spans_.lock());
                 if (!spanContext) {
@@ -542,7 +543,7 @@ public:
             auto spanName = name;
             for (auto & [key, value] : metadata)
                 if (key == "http.request.method")
-                    if (auto method = std::get_if<std::string>(&value.raw)) {
+                    if (auto method = std::get_if<std::string>(&value)) {
                         options.kind = opentelemetry::trace::SpanKind::kClient;
                         spanName = *method;
                     }
@@ -560,9 +561,9 @@ public:
                 span->SetAttribute("nix.activity.text", filterANSIEscapes(s, true));
 
             for (auto & [key, value] : metadata) {
-                if (auto str = std::get_if<std::string>(&value.raw))
+                if (auto str = std::get_if<std::string>(&value))
                     span->SetAttribute(key, *str);
-                else if (auto n = std::get_if<uint64_t>(&value.raw))
+                else if (auto n = std::get_if<uint64_t>(&value))
                     span->SetAttribute(key, (int64_t) *n);
             }
 

@@ -1,7 +1,6 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/signals.hh"
-#include "nix/util/finally.hh"
-#include "nix/util/serialise.hh"
+#include "nix/util/system-error.hh"
 
 #include "../file-descriptor-private.hh"
 
@@ -18,15 +17,19 @@ namespace nix {
 
 std::make_unsigned_t<off_t> getFileSize(Descriptor fd)
 {
+    using namespace nix::windows;
+
     LARGE_INTEGER li;
     if (!GetFileSizeEx(fd, &li)) {
-        throw windows::WinError([&] { return HintFmt("getting size of file %s", PathFmt(descriptorToPath(fd))); });
+        throw WinError([&] { return HintFmt("getting size of file %s", PathFmt(descriptorToPath(fd))); });
     }
     return li.QuadPart;
 }
 
 size_t read(Descriptor fd, std::span<std::byte> buffer)
 {
+    using namespace nix::windows;
+
     checkInterrupt(); // For consistency with unix, and its EINTR loop
     DWORD n;
     if (!ReadFile(fd, buffer.data(), static_cast<DWORD>(buffer.size()), &n, NULL)) {
@@ -34,14 +37,15 @@ size_t read(Descriptor fd, std::span<std::byte> buffer)
         if (lastError == ERROR_BROKEN_PIPE)
             n = 0; // Treat as EOF
         else
-            throw windows::WinError(
-                lastError, "reading %1% bytes from %2%", buffer.size(), PathFmt(descriptorToPath(fd)));
+            throw WinError(lastError, "reading %1% bytes from %2%", buffer.size(), PathFmt(descriptorToPath(fd)));
     }
     return static_cast<size_t>(n);
 }
 
 size_t readOffset(Descriptor fd, off_t offset, std::span<std::byte> buffer)
 {
+    using namespace nix::windows;
+
     checkInterrupt(); // For consistency with unix, and its EINTR loop
     OVERLAPPED ov = {};
     ov.Offset = static_cast<DWORD>(offset);
@@ -50,15 +54,14 @@ size_t readOffset(Descriptor fd, off_t offset, std::span<std::byte> buffer)
     // TODO: Don't do this on each call maybe?
     if (::GetFileType(fd) != FILE_TYPE_DISK)
         // Not the most accurate error code, but it will do.
-        throw windows::WinError(
-            DWORD(ERROR_SEEK_ON_DEVICE), "reading at offset %1% from a non-seekable handle", offset);
+        throw WinError(DWORD(ERROR_SEEK_ON_DEVICE), "reading at offset %1% from a non-seekable handle", offset);
     DWORD n;
     if (!ReadFile(fd, buffer.data(), static_cast<DWORD>(buffer.size()), &n, &ov)) {
         auto err = ::GetLastError();
         // We report EOF as 0 return code, not an actual error.
         if (err == ERROR_HANDLE_EOF)
             return 0;
-        throw windows::WinError(
+        throw WinError(
             err, "reading %1% bytes at offset %2% from %3%", buffer.size(), offset, PathFmt(descriptorToPath(fd)));
     }
     return static_cast<size_t>(n);
@@ -66,11 +69,13 @@ size_t readOffset(Descriptor fd, off_t offset, std::span<std::byte> buffer)
 
 size_t write(Descriptor fd, std::span<const std::byte> buffer, bool allowInterrupts)
 {
+    using namespace nix::windows;
+
     if (allowInterrupts)
         checkInterrupt(); // For consistency with unix
     DWORD n;
     if (!WriteFile(fd, buffer.data(), static_cast<DWORD>(buffer.size()), &n, NULL)) {
-        throw windows::WinError(
+        throw WinError(
             [&] { return HintFmt("writing %1% bytes to %2%", buffer.size(), PathFmt(descriptorToPath(fd))); });
     }
     return static_cast<size_t>(n);
@@ -78,17 +83,39 @@ size_t write(Descriptor fd, std::span<const std::byte> buffer, bool allowInterru
 
 AutoCloseFD dupDescriptor(Descriptor fd)
 {
+    using namespace nix::windows;
+
     HANDLE newHandle;
     if (!DuplicateHandle(GetCurrentProcess(), fd, GetCurrentProcess(), &newHandle, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
-        throw windows::WinError("duplicating handle");
+        throw WinError("duplicating handle");
     }
     return AutoCloseFD{newHandle};
+}
+
+AutoCloseFD openNullFD()
+{
+    using namespace nix::windows;
+
+    AutoCloseFD fd = ::CreateFileW(
+        OS_STR("NUL"),
+        GENERIC_READ | GENERIC_WRITE,
+        // We don't care who reads / writes / deletes this file since it's NUL anyways
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        /*lpSecurityAttributes=*/nullptr,
+        OPEN_EXISTING,
+        0,
+        /*hTemplateFile=*/nullptr);
+    if (!fd)
+        throw WinError("opening 'NUL'");
+    return fd;
 }
 
 //////////////////////////////////////////////////////////////////////
 
 void Pipe::create()
 {
+    using namespace nix::windows;
+
     SECURITY_ATTRIBUTES saAttr = {0};
     saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
     saAttr.lpSecurityDescriptor = NULL;
@@ -96,7 +123,7 @@ void Pipe::create()
 
     HANDLE hReadPipe, hWritePipe;
     if (!CreatePipe(&hReadPipe, &hWritePipe, &saAttr, 0))
-        throw windows::WinError("CreatePipe");
+        throw WinError("CreatePipe");
 
     readSide = hReadPipe;
     writeSide = hWritePipe;
@@ -104,7 +131,7 @@ void Pipe::create()
 
 //////////////////////////////////////////////////////////////////////
 
-off_t lseek(HANDLE h, off_t offset, int whence)
+Result<off_t, NativeError> seek(Descriptor fd, off_t offset, int whence)
 {
     DWORD method;
     switch (whence) {
@@ -118,28 +145,47 @@ off_t lseek(HANDLE h, off_t offset, int whence)
         method = FILE_END;
         break;
     default:
-        throw Error("lseek: invalid whence %d", whence);
+        throw Error("seek: invalid whence %d", whence);
     }
 
     LARGE_INTEGER li;
     li.QuadPart = offset;
     LARGE_INTEGER newPos;
 
-    if (!SetFilePointerEx(h, li, &newPos, method)) {
-        /* Convert to a POSIX error, since caller code works with this as if it were
-           a POSIX lseek. */
-        errno = std::error_code(GetLastError(), std::system_category()).default_error_condition().value();
-        return -1;
-    }
+    if (!SetFilePointerEx(fd, li, &newPos, method))
+        return outcome::failure(GetLastError());
 
-    return newPos.QuadPart;
+    return outcome::success(static_cast<off_t>(newPos.QuadPart));
 }
 
 void syncDescriptor(Descriptor fd)
 {
+    using namespace nix::windows;
+
     if (!::FlushFileBuffers(fd)) {
-        throw windows::WinError([&] { return HintFmt("flushing file %s", PathFmt(descriptorToPath(fd))); });
+        throw WinError([&] { return HintFmt("flushing file %s", PathFmt(descriptorToPath(fd))); });
     }
+}
+
+void windows::setHandleInheritability(Descriptor fd, bool inherit)
+{
+    using namespace nix::windows;
+
+    if (!::SetHandleInformation(fd, HANDLE_FLAG_INHERIT, inherit ? HANDLE_FLAG_INHERIT : 0))
+        throw WinError("changing handle inheritability");
+}
+
+void closeOnExec(Descriptor fd)
+{
+    using namespace nix::windows;
+
+    /* Windows has no `exec`, so there is nothing to close on. The nearest
+       equivalent is handle inheritance, which a child only receives when
+       the handle is marked inheritable and the parent passes
+       `bInheritHandles`. Clearing the flag is therefore usually a no-op,
+       but doing it keeps the guarantee the Unix version makes: after this
+       returns, the descriptor is not handed to a child. */
+    setHandleInheritability(fd, false);
 }
 
 bool tryCopyFdRangeFast(Descriptor from, Descriptor to, off_t offset, size_t nbytes, size_t & written)

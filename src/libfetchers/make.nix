@@ -21,8 +21,14 @@ nixMake.mkComponent {
     "include"
   ];
 
-  files = nixMake.commonSupportFiles // {
-    "builtin-flake-registry.json.gen.hh" = nixMake.mkStringHeader ./builtin-flake-registry.json;
+  files = nixMake.commonSupportFiles;
+
+  configHeaders = {
+    "fetchers-config-private.hh" = {
+      # The defaults of the Meson options `git-program` and `hg-program`.
+      GIT_PROGRAM = "git";
+      HG_PROGRAM = "hg";
+    };
   };
 
   linkFlags = nixMake.wrapAssertFailFlags;

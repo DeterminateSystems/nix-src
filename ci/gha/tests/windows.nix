@@ -26,5 +26,9 @@ in
 {
   unitTests = {
     "nix-util-tests" = fixOutput packages."nix-util-tests-x86_64-w64-mingw32".passthru.tests.run;
+    "nix-store-tests" = fixOutput packages."nix-store-tests-x86_64-w64-mingw32".passthru.tests.run;
   };
+
+  # `unitTests` doesn't link everything, e.g. libmain.
+  crossBuild = packages."nix-everything-x86_64-w64-mingw32";
 }

@@ -1,6 +1,7 @@
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval-inline.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/derivation/masked.hh"
 #include "nix/store/derived-path.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/globals.hh"
@@ -9,9 +10,9 @@
 
 namespace nix {
 
-static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_bakedDerivation(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
-    state.forceAttrs(*args[0], pos, "while evaluating the argument passed to builtins.bakedDerivation");
+    state.forceAttrs(*args[0], noPos, "while evaluating the argument passed to builtins.bakedDerivation");
 
     std::optional<std::string> name;
 
@@ -78,12 +79,12 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
 
     if (!name)
         state.error<EvalError>("attribute 'name' is missing in call to 'builtins.bakedDerivation'")
-            .atPos(pos)
+            .atPos(noPos)
             .debugThrow();
 
     if (outputs.empty())
         state.error<EvalError>("attribute 'outputs' is missing or empty in call to 'builtins.bakedDerivation'")
-            .atPos(pos)
+            .atPos(noPos)
             .debugThrow();
 
     Derivation drv;
@@ -100,7 +101,7 @@ static void prim_bakedDerivation(EvalState & state, const PosIdx pos, Value ** a
 
     /* As in `derivationStrict`, cache the derivation hash so that derivations depending on this one don't need to
        read it back from the store. */
-    drvHashes.insert_or_assign(drvPath, hashDerivationModulo(*state.store, drv, false));
+    derivation::masked::hashes.insert_or_assign(drvPath, derivation::masked::hashInput(*state.store, drv));
 
     /* Return an attribute set of the same shape as `derivationStrict`: the derivation path and one string per
        output. The output strings carry string context, so that they can be used as inputs of other derivations. */

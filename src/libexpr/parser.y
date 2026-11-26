@@ -14,10 +14,6 @@
 
 %code requires {
 
-// bison adds a bunch of switch statements with default:
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch-enum"
-
 #ifndef BISON_HEADER
 #define BISON_HEADER
 
@@ -77,12 +73,6 @@ Expr * parseExprFromBuf(
     const ref<SourceAccessor> rootFS);
 
 /**
- * Puts the lexer in REPL bindings mode before the first token. This causes
- * the parser to accept REPL bindings (attribute definitions).
- */
-void setReplBindingsMode(yyscan_t scanner);
-
-/**
  * Parse REPL bindings from a buffer.
  * Returns ExprAttrs with bindings to add to scope.
  */
@@ -120,20 +110,8 @@ YY_DECL;
 using namespace nix;
 
 #define CUR_POS state->at(yylhs.location)
-
-void parser::BisonParser::error(const location_type &loc_, const std::string &error)
-{
-    auto loc = loc_;
-    if (std::string_view(error).starts_with("syntax error, unexpected end of file")) {
-        loc.beginOffset = loc.endOffset;
-    }
-    throw ParseError({
-        .msg = HintFmt(error),
-        .pos = state->positions[state->at(loc)]
-    });
-}
-
 #define SET_DOC_POS(lambda, pos) setDocPosition(state->lexerState, lambda, state->at(pos))
+
 static void setDocPosition(const LexerState & lexerState, ExprLambda * lambda, PosIdx start) {
     auto it = lexerState.positionToDocComment.find(start);
     if (it != lexerState.positionToDocComment.end()) {
@@ -149,6 +127,7 @@ static Expr * makeCall(Exprs & exprs, PosIdx pos, Expr * fn, Expr * arg) {
     return exprs.add<ExprCall>(pos, fn, {arg});
 }
 
+NIX_INCOMPLETE_SWITCH_BEGIN
 
 %}
 
@@ -297,8 +276,8 @@ expr_pipe_into
 expr_op
   : '!' expr_op %prec NOT { $$ = state->exprs.add<ExprOpNot>($2); }
   | '-' expr_op %prec NEGATE { $$ = state->exprs.add<ExprCall>(CUR_POS, state->exprs.add<ExprVar>(state->s.sub), {state->exprs.add<ExprInt>(0), $2}); }
-  | expr_op EQ expr_op { $$ = state->exprs.add<ExprOpEq>($1, $3); }
-  | expr_op NEQ expr_op { $$ = state->exprs.add<ExprOpNEq>($1, $3); }
+  | expr_op EQ expr_op { $$ = state->exprs.add<ExprOpEq>(state->at(@2), $1, $3); }
+  | expr_op NEQ expr_op { $$ = state->exprs.add<ExprOpNEq>(state->at(@2), $1, $3); }
   | expr_op '<' expr_op { $$ = state->exprs.add<ExprCall>(state->at(@2), state->exprs.add<ExprVar>(state->s.lessThan), {$1, $3}); }
   | expr_op LEQ expr_op { $$ = state->exprs.add<ExprOpNot>(state->exprs.add<ExprCall>(state->at(@2), state->exprs.add<ExprVar>(state->s.lessThan), {$3, $1})); }
   | expr_op '>' expr_op { $$ = state->exprs.add<ExprCall>(state->at(@2), state->exprs.add<ExprVar>(state->s.lessThan), {$3, $1}); }
@@ -384,7 +363,7 @@ expr_simple
   /* Let expressions `let {..., body = ...}' are just desugared
      into `(rec {..., body = ...}).body'. */
   | LET '{' binds '}'
-    { $3->recursive = true; $3->pos = CUR_POS; $$ = state->exprs.add<ExprSelect>(state->exprs.alloc, noPos, $3, state->s.body); }
+    { $3->recursive = true; $3->pos = CUR_POS; $$ = state->exprs.add<ExprSelect>(state->exprs.alloc, CUR_POS, $3, state->s.body); }
   | REC '{' binds '}'
     { $3->recursive = true; $3->pos = CUR_POS; $$ = $3; }
   | '{' binds1 '}'
@@ -595,6 +574,7 @@ formal
 
 #include "nix/expr/eval.hh"
 
+#include "lexer-helpers.hh"
 
 namespace nix {
 
@@ -670,7 +650,7 @@ ExprAttrs * parseReplBindingsFromBuf(
     Finally _destroy([&] { yylex_destroy(scanner); });
 
     yy_scan_buffer(text, length, scanner);
-    setReplBindingsMode(scanner);
+    lexer::internal::setReplBindingsMode(scanner);
     Parser parser(scanner, &state);
     parser.parse();
 
@@ -682,6 +662,6 @@ ExprAttrs * parseReplBindingsFromBuf(
     return bindings;
 }
 
-
 }
-#pragma GCC diagnostic pop // end ignored "-Wswitch-enum"
+
+NIX_INCOMPLETE_SWITCH_END

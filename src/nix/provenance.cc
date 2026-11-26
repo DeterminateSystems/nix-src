@@ -1,5 +1,6 @@
 #include "nix/cmd/command.hh"
 #include "nix/store/store-api.hh"
+#include "nix/store/build.hh"
 #include "nix/store/store-open.hh"
 #include "nix/expr/provenance.hh"
 #include "nix/store/provenance.hh"
@@ -68,12 +69,12 @@ struct CmdProvenanceShow : StorePathsCommand
     {
         while (provenance) {
             if (auto copied = std::dynamic_pointer_cast<const CopiedProvenance>(provenance)) {
-                logger->cout("← copied from " ANSI_BOLD "%s" ANSI_NORMAL, copied->from);
+                logger->coutStyled("← copied from " ANSI_BOLD "%s" ANSI_NORMAL, copied->from);
                 provenance = copied->next;
             }
 
             else if (auto build = std::dynamic_pointer_cast<const BuildProvenance>(provenance)) {
-                logger->cout(
+                logger->coutStyled(
                     "← built from derivation " ANSI_BOLD "%s" ANSI_NORMAL " (output " ANSI_BOLD "%s" ANSI_NORMAL
                     ") on " ANSI_BOLD "%s" ANSI_NORMAL " for " ANSI_BOLD "%s" ANSI_NORMAL,
                     store.printStorePath(build->drvPath),
@@ -81,7 +82,7 @@ struct CmdProvenanceShow : StorePathsCommand
                     build->buildHost.value_or("unknown host").c_str(),
                     build->system);
                 for (auto & [tagName, tagValue] : build->tags)
-                    logger->cout(
+                    logger->coutStyled(
                         "  tag " ANSI_BOLD "%s" ANSI_NORMAL ": %s", tagName, filterANSIEscapes(tagValue, true));
                 provenance = build->next;
             }
@@ -96,9 +97,9 @@ struct CmdProvenanceShow : StorePathsCommand
                 }
                 if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(next)) {
                     FlakeRef flakeRef(
-                        fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs)),
+                        fetchers::Input::fromAttrs(fetchers::jsonToAttrs(*tree->attrs)),
                         std::string(flakePath.parent().value_or(CanonPath::root).rel()));
-                    logger->cout(
+                    logger->coutStyled(
                         "← %sinstantiated from %sflake output " ANSI_BOLD "%s#%s" ANSI_NORMAL,
                         flake->pure ? "" : ANSI_RED "impurely" ANSI_NORMAL " ",
                         flakeRef.input.isLocked(fetchSettings) ? "" : ANSI_RED "unlocked" ANSI_NORMAL " ",
@@ -106,14 +107,15 @@ struct CmdProvenanceShow : StorePathsCommand
                         flake->flakeOutput);
                     break;
                 } else {
-                    logger->cout("← instantiated from flake output " ANSI_BOLD "%s" ANSI_NORMAL, flake->flakeOutput);
+                    logger->coutStyled(
+                        "← instantiated from flake output " ANSI_BOLD "%s" ANSI_NORMAL, flake->flakeOutput);
                     provenance = flake->next;
                 }
             }
 
             else if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(provenance)) {
-                auto input = fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs));
-                logger->cout(
+                auto input = fetchers::Input::fromAttrs(fetchers::jsonToAttrs(*tree->attrs));
+                logger->coutStyled(
                     "← from %stree " ANSI_BOLD "%s" ANSI_NORMAL,
                     input.isLocked(fetchSettings) ? "" : ANSI_RED "unlocked" ANSI_NORMAL " ",
                     input.to_string());
@@ -121,21 +123,21 @@ struct CmdProvenanceShow : StorePathsCommand
             }
 
             else if (auto subpath = std::dynamic_pointer_cast<const SubpathProvenance>(provenance)) {
-                logger->cout("← from file " ANSI_BOLD "%s" ANSI_NORMAL, subpath->subpath.abs());
+                logger->coutStyled("← from file " ANSI_BOLD "%s" ANSI_NORMAL, subpath->subpath.abs());
                 provenance = subpath->next;
             }
 
             else if (auto drv = std::dynamic_pointer_cast<const DerivationProvenance>(provenance)) {
-                logger->cout("← with derivation metadata");
+                logger->coutStyled("← with derivation metadata");
                 std::istringstream stream((*drv->meta).dump(2));
                 for (std::string line; std::getline(stream, line);) {
-                    logger->cout("  %s", line);
+                    logger->coutStyled("  %s", line);
                 }
                 provenance = drv->next;
             }
 
             else if (auto fetchurl = std::dynamic_pointer_cast<const FetchurlProvenance>(provenance)) {
-                logger->cout("← fetched from URL " ANSI_BOLD "%s" ANSI_NORMAL, fetchurl->url);
+                logger->coutStyled("← fetched from URL " ANSI_BOLD "%s" ANSI_NORMAL, fetchurl->url);
                 break;
             }
 
@@ -144,9 +146,10 @@ struct CmdProvenanceShow : StorePathsCommand
                 auto json = provenance->to_json();
                 auto typeIt = json.find("type");
                 if (typeIt != json.end() && typeIt->is_string())
-                    logger->cout("← " ANSI_RED "unknown provenance type '%s'" ANSI_NORMAL, typeIt->get<std::string>());
+                    logger->coutStyled(
+                        "← " ANSI_RED "unknown provenance type '%s'" ANSI_NORMAL, typeIt->get<std::string>());
                 else
-                    logger->cout("← " ANSI_RED "unknown provenance type" ANSI_NORMAL);
+                    logger->coutStyled("← " ANSI_RED "unknown provenance type" ANSI_NORMAL);
                 break;
             }
         }
@@ -159,14 +162,14 @@ struct CmdProvenanceShow : StorePathsCommand
         for (auto & storePath : storePaths) {
             auto info = store->queryPathInfo(storePath);
             if (!first)
-                logger->cout("");
+                logger->coutStyled("");
             first = false;
-            logger->cout(ANSI_BOLD "%s" ANSI_NORMAL, store->printStorePath(info->path));
+            logger->coutStyled(ANSI_BOLD "%s" ANSI_NORMAL, store->printStorePath(info->path));
 
             if (info->provenance)
                 displayProvenance(*store, storePath, info->provenance);
             else
-                logger->cout(ANSI_RED "  (no provenance information available)" ANSI_NORMAL);
+                logger->coutStyled(ANSI_RED "  (no provenance information available)" ANSI_NORMAL);
         }
     }
 };
@@ -257,9 +260,14 @@ struct TrackingStore : public Store
         return next->queryPathFromHashPart(hashPart);
     }
 
-    void registerDrvOutput(const Realisation & output) override
+    void registerDrvOutputUnchecked(const Realisation & output) override
     {
-        next->registerDrvOutput(output);
+        next->registerDrvOutput(output, NoCheckSigs);
+    }
+
+    void registerDrvOutput(const Realisation & output, CheckSigsFlag checkSigs) override
+    {
+        next->registerDrvOutput(output, checkSigs);
     }
 
     ref<SourceAccessor> getFSAccessor(bool requireValidPath) override
@@ -309,14 +317,14 @@ struct CmdProvenanceVerify : StorePathsCommand
     {
         auto computedPath = fetchToStore2(fetchSettings, store, sourcePath, FetchMode::Copy, expectedPath.name()).first;
         if (computedPath != expectedPath) {
-            logger->cout(
+            logger->coutStyled(
                 "❌ " ANSI_RED "store path mismatch for source '%s': expected '%s' but got '%s'" ANSI_NORMAL,
                 sourcePath.to_string(),
                 store.printStorePath(expectedPath),
                 store.printStorePath(computedPath));
             return false;
         } else {
-            logger->cout("✅ verified store path for source '%s'", sourcePath.to_string());
+            logger->coutStyled("✅ verified store path for source '%s'", sourcePath.to_string());
             return true;
         }
     }
@@ -331,7 +339,7 @@ struct CmdProvenanceVerify : StorePathsCommand
     {
         if (auto copied = std::dynamic_pointer_cast<const CopiedProvenance>(provenance)) {
             if (!path) {
-                logger->cout("❌ " ANSI_RED "cannot verify copied provenance without a store path" ANSI_NORMAL);
+                logger->coutStyled("❌ " ANSI_RED "cannot verify copied provenance without a store path" ANSI_NORMAL);
                 return {false, std::monostate{}};
             }
             bool success = true;
@@ -339,14 +347,14 @@ struct CmdProvenanceVerify : StorePathsCommand
             auto localInfo = store.queryPathInfo(*path);
             auto fromInfo = fromStore->queryPathInfo(*path);
             if (localInfo->narHash != fromInfo->narHash) {
-                logger->cout(
+                logger->coutStyled(
                     "❌ " ANSI_RED "NAR hash mismatch in origin store '%s': should be '%s' but is '%s'" ANSI_NORMAL,
                     copied->from,
                     localInfo->narHash.to_string(HashFormat::SRI, true),
                     fromInfo->narHash.to_string(HashFormat::SRI, true));
                 success = false;
             } else
-                logger->cout("✅ verified NAR hash in origin store '%s'", copied->from);
+                logger->coutStyled("✅ verified NAR hash in origin store '%s'", copied->from);
             auto [nextSuccess, result] = verify(store, path, copied->next);
             return {success && nextSuccess, std::move(result)};
         }
@@ -358,19 +366,19 @@ struct CmdProvenanceVerify : StorePathsCommand
             auto outputMap = store.queryPartialDerivationOutputMap(build->drvPath);
             auto it = outputMap.find(build->output);
             if (it == outputMap.end()) {
-                logger->cout(
+                logger->coutStyled(
                     "❌ " ANSI_RED "derivation '%s' does not have expected output '%s'" ANSI_NORMAL,
                     store.printStorePath(build->drvPath),
                     build->output);
                 return {false, std::monostate{}};
             } else if (!it->second) {
                 // Note: this is not an error, should we even print a message?
-                logger->cout(
+                logger->coutStyled(
                     "❓ output '%s' of derivation '%s' is not statically known",
                     build->output,
                     store.printStorePath(build->drvPath));
             } else if (*it->second != path) {
-                logger->cout(
+                logger->coutStyled(
                     "❌ " ANSI_RED "output '%s' of derivation '%s' is '%s', expected '%s'" ANSI_NORMAL,
                     build->output,
                     store.printStorePath(build->drvPath),
@@ -382,19 +390,20 @@ struct CmdProvenanceVerify : StorePathsCommand
             // Do a check rebuild to verify that the derivation
             // produces the same output.
             if (noRebuild) {
-                logger->cout(
+                logger->coutStyled(
                     "⏭️ skipped rebuild of derivation '%s^%s'", store.printStorePath(build->drvPath), build->output);
             } else {
                 try {
-                    store.buildPaths(
+                    store.getBuilder()->buildPaths(
                         {DerivedPath::Built{
                             .drvPath = make_ref<const SingleDerivedPath>(SingleDerivedPath::Opaque{build->drvPath}),
                             .outputs = OutputsSpec::Names{build->output},
                         }},
                         bmCheck);
-                    logger->cout("✅ rebuilt derivation '%s^%s'", store.printStorePath(build->drvPath), build->output);
+                    logger->coutStyled(
+                        "✅ rebuilt derivation '%s^%s'", store.printStorePath(build->drvPath), build->output);
                 } catch (Error & e) {
-                    logger->cout(
+                    logger->coutStyled(
                         "❌ " ANSI_RED "rebuild of derivation '%s^%s' failed: %s" ANSI_NORMAL,
                         store.printStorePath(build->drvPath),
                         build->output,
@@ -423,7 +432,7 @@ struct CmdProvenanceVerify : StorePathsCommand
             };
 
             if (res->second.path.baseName() != "flake.nix") {
-                logger->cout(
+                logger->coutStyled(
                     "❌ " ANSI_RED "expected flake source to be a 'flake.nix' file, but got '%s'" ANSI_NORMAL,
                     res->second.path.abs());
                 return {false, std::monostate{}};
@@ -457,37 +466,38 @@ struct CmdProvenanceVerify : StorePathsCommand
 
             evalState->waitForAllPaths();
 
-            logger->cout("✅ evaluated '%s#%s'", installable.flakeRef.to_string(true), flake->flakeOutput);
+            logger->coutStyled("✅ evaluated '%s#%s'", installable.flakeRef.to_string(true), flake->flakeOutput);
 
             if (path) {
                 if (!trackingStore->instantiatedPaths.contains(*path)) {
-                    logger->cout(
+                    logger->coutStyled(
                         "❌ " ANSI_RED "evaluation did not re-instantiate path '%s'" ANSI_NORMAL,
                         store.printStorePath(*path));
                     return {false, std::monostate{}};
                 }
 
-                logger->cout("✅ re-instantiated path '%s'", store.printStorePath(*path));
+                logger->coutStyled("✅ re-instantiated path '%s'", store.printStorePath(*path));
             }
 
             return {success, std::monostate{}};
         }
 
         else if (auto tree = std::dynamic_pointer_cast<const TreeProvenance>(provenance)) {
-            auto input = fetchers::Input::fromAttrs(fetchSettings, fetchers::jsonToAttrs(*tree->attrs));
+            auto input = fetchers::Input::fromAttrs(fetchers::jsonToAttrs(*tree->attrs));
             try {
                 auto [accessor, final] = input.getAccessor(fetchSettings, store);
                 if (!input.isLocked(fetchSettings))
-                    logger->cout("❓ fetched tree '%s', but it's unlocked", input.to_string());
+                    logger->coutStyled("❓ fetched tree '%s', but it's unlocked", input.to_string());
                 else
                     // FIXME: check NAR hash?
-                    logger->cout("✅ fetched tree '%s'", input.to_string());
+                    logger->coutStyled("✅ fetched tree '%s'", input.to_string());
 
                 bool success = !path || verifySourcePath(store, *path, SourcePath(accessor, CanonPath::root));
 
                 return {success, std::make_pair(std::move(final), accessor)};
             } catch (Error & e) {
-                logger->cout("❌ " ANSI_RED "failed to fetch tree '%s': %s" ANSI_NORMAL, input.to_string(), e.what());
+                logger->coutStyled(
+                    "❌ " ANSI_RED "failed to fetch tree '%s': %s" ANSI_NORMAL, input.to_string(), e.what());
                 return {false, std::monostate{}};
             }
         }
@@ -516,7 +526,7 @@ struct CmdProvenanceVerify : StorePathsCommand
             auto info = store.queryPathInfo(*path);
 
             if (!info->ca) {
-                logger->cout(
+                logger->coutStyled(
                     "❌ " ANSI_RED "cannot verify URL '%s' without a content address for path '%s'" ANSI_NORMAL,
                     fetchurl->url,
                     store.printStorePath(*path));
@@ -524,7 +534,7 @@ struct CmdProvenanceVerify : StorePathsCommand
             }
 
             if (info->ca->method != ContentAddressMethod::Raw::Flat) {
-                logger->cout(
+                logger->coutStyled(
                     "❌ " ANSI_RED
                     "cannot verify URL '%s' with unsupported content address method for path '%s'" ANSI_NORMAL,
                     fetchurl->url,
@@ -539,7 +549,7 @@ struct CmdProvenanceVerify : StorePathsCommand
             auto hash = hashSink.finish().hash;
 
             if (hash != info->ca->hash) {
-                logger->cout(
+                logger->coutStyled(
                     "❌ " ANSI_RED "hash mismatch for URL '%s': expected '%s' but got '%s'" ANSI_NORMAL,
                     fetchurl->url,
                     info->ca->hash.to_string(HashFormat::SRI, true),
@@ -547,17 +557,17 @@ struct CmdProvenanceVerify : StorePathsCommand
                 return {false, std::monostate{}};
             }
 
-            logger->cout("✅ verified hash of URL '%s'", fetchurl->url);
+            logger->coutStyled("✅ verified hash of URL '%s'", fetchurl->url);
             return {true, std::monostate{}};
         }
 
         else if (!provenance) {
-            logger->cout("❓ " ANSI_RED "missing further provenance" ANSI_NORMAL);
+            logger->coutStyled("❓ " ANSI_RED "missing further provenance" ANSI_NORMAL);
             return {false, std::monostate{}};
         }
 
         else {
-            logger->cout("❓ " ANSI_RED "unknown provenance type" ANSI_NORMAL);
+            logger->coutStyled("❓ " ANSI_RED "unknown provenance type" ANSI_NORMAL);
             return {false, std::monostate{}};
         }
     }
@@ -570,14 +580,14 @@ struct CmdProvenanceVerify : StorePathsCommand
         for (auto & storePath : storePaths) {
             auto info = store->queryPathInfo(storePath);
             if (!first)
-                logger->cout("");
+                logger->coutStyled("");
             first = false;
-            logger->cout(ANSI_BOLD "%s" ANSI_NORMAL, store->printStorePath(info->path));
+            logger->coutStyled(ANSI_BOLD "%s" ANSI_NORMAL, store->printStorePath(info->path));
 
             if (info->provenance)
                 success &= verify(*store, storePath, info->provenance).first;
             else {
-                logger->cout(ANSI_RED "  (no provenance information available)" ANSI_NORMAL);
+                logger->coutStyled(ANSI_RED "  (no provenance information available)" ANSI_NORMAL);
                 success = false;
             }
         }

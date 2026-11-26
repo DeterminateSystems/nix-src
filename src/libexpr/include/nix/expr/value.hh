@@ -20,6 +20,7 @@
 #include "nix/util/source-path.hh"
 #include "nix/expr/print-options.hh"
 #include "nix/util/checked-arithmetic.hh"
+#include "nix/util/pos-idx.hh"
 
 #include <boost/unordered/unordered_flat_map_fwd.hpp>
 #include <nlohmann/json_fwd.hpp>
@@ -123,8 +124,8 @@ struct ExprLambda;
 struct PrimOp;
 class Symbol;
 class SymbolStr;
-class PosIdx;
 struct Pos;
+class PosTable;
 class StorePath;
 class EvalState;
 class EvalMemory;
@@ -363,7 +364,7 @@ struct ValueBase
          * to represent a flattening of the recursive sum type that is a
          * context element.
          *
-         * @See NixStringContext for an more easily understood type,
+         * @see NixStringContext for an more easily understood type,
          * that of the "builder" for this data structure.
          */
         struct Context
@@ -481,7 +482,7 @@ struct PayloadTypeToInternalType
     MACRO(ValueBase::StringWithContext, string, tString)            \
     MACRO(ValueBase::Path, path, tPath)                             \
     MACRO(ValueBase::Null, null_, tNull)                            \
-    MACRO(Bindings *, attrs, tAttrs)                                \
+    MACRO(const Bindings *, attrs, tAttrs)                          \
     MACRO(ValueBase::List, bigList, tListN)                         \
     MACRO(ValueBase::SmallList, smallList, tListSmall)              \
     MACRO(ValueBase::ClosureThunk, thunk, tThunk)                   \
@@ -825,7 +826,7 @@ protected:
         primOp = std::bit_cast<PrimOp *>(p1);
     }
 
-    void getStorage(Bindings *& attrs) const noexcept
+    void getStorage(const Bindings *& attrs) const noexcept
     {
         attrs = std::bit_cast<Bindings *>(p1);
     }
@@ -883,7 +884,7 @@ protected:
         setSingleDWordPayload<tPrimOp>(std::bit_cast<PackedPointer>(primOp));
     }
 
-    void setStorage(Bindings * bindings) noexcept
+    void setStorage(const Bindings * bindings) noexcept
     {
         setSingleDWordPayload<tAttrs>(std::bit_cast<PackedPointer>(bindings));
     }
@@ -1312,6 +1313,40 @@ public:
         return !isa<tUninitialized>();
     }
 
+    /**
+     * Whether the value has been evaluated to WHNF, i.e. non-deep successful
+     * evaluation result, or successful "root of a value".
+     * See https://nix.dev/manual/nix/latest/language/evaluation.html?highlight=whnf#values
+     */
+    inline bool isWHNF() const noexcept
+    {
+        switch (getInternalType()) {
+        case tUninitialized:
+            panic("attempt to use uninitialized Value");
+        case tFailed:
+        case tApp:
+        case tThunk:
+        case tPending:
+        case tAwaited:
+            return false;
+        case tInt:
+        case tBool:
+        case tNull:
+        case tFloat:
+        case tExternal:
+        case tPrimOp:
+        case tAttrs:
+        case tListSmall:
+        case tPrimOpApp: // primop-app is known to be a function, which is WHNF
+        case tLambda:
+        case tListN:
+        case tString:
+        case tPath:
+            return true;
+        }
+        unreachable();
+    }
+
     inline void mkInt(NixInt::Inner n) noexcept
     {
         mkInt(NixInt{n});
@@ -1350,7 +1385,7 @@ public:
         setStorage(Null{});
     }
 
-    inline void mkAttrs(Bindings * a) noexcept
+    inline void mkAttrs(const Bindings * a) noexcept
     {
         setStorage(a);
     }
@@ -1467,7 +1502,7 @@ public:
 
     const Bindings * attrs() const noexcept
     {
-        return getStorage<Bindings *>();
+        return getStorage<const Bindings *>();
     }
 
     const PrimOp * primOp() const noexcept
@@ -1535,5 +1570,21 @@ public:
 
 typedef std::vector<Value *, traceable_allocator<Value *>> ValueVector;
 
-void forceNoNullByte(std::string_view s, std::function<Pos()> = nullptr);
+/**
+ * Throws the error for a string that contains null bytes. If @p positions is
+ * given, the error points at @p pos.
+ */
+[[noreturn, gnu::cold, gnu::noinline]] void
+throwNullByteError(std::string_view s, const PosTable * positions = nullptr, PosIdx pos = noPos);
+
+/**
+ * Throws if @p s contains a null byte, which is not supported by the whole codebase yet.
+ * If @p positions is given, the error points at @p pos. The position is only
+ * resolved if the check fails.
+ */
+inline void forceNoNullByte(std::string_view s, const PosTable * positions = nullptr, PosIdx pos = noPos)
+{
+    if (s.find('\0') != s.npos) [[unlikely]]
+        throwNullByteError(s, positions, pos);
+}
 } // namespace nix

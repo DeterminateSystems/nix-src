@@ -23,7 +23,7 @@ namespace nix {
 
 namespace {
 
-void logFatal(std::string const & s)
+void logFatal(const std::string & s)
 {
     writeToStderr(s + "\n");
     // std::string for guaranteed null termination
@@ -38,7 +38,7 @@ void onTerminate()
 {
     /* The progress bar may have hidden the cursor, and it won't get a
        chance to unhide it, so do that here. */
-    if (isTTY())
+    if (shouldANSI())
         writeToStderr("\e[?25h");
 
     logFatal(

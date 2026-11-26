@@ -61,7 +61,7 @@ public:
         Verbosity lvl,
         ActivityType type,
         const std::string & s,
-        const Fields & fields,
+        std::span<const Field> fields,
         ActivityId parent) noexcept override
     {
         for (auto & logger : loggers)
@@ -86,7 +86,7 @@ public:
             logger->stopActivity(act);
     }
 
-    void result(ActivityId act, ResultType type, const Fields & fields) noexcept override
+    void result(ActivityId act, ResultType type, std::span<const Field> fields) noexcept override
     {
         for (auto & logger : loggers)
             logger->result(act, type, fields);

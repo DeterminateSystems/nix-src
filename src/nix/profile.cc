@@ -1,3 +1,4 @@
+#include "nix/util/json-utils.hh"
 #include "nix/cmd/command.hh"
 #include "nix/cmd/installable-flake.hh"
 #include "nix/main/common-args.hh"
@@ -156,8 +157,8 @@ struct ProfileManifest
                 }
                 if (e.value(sUrl, "") != "") {
                     element.source = ProfileElementSource{
-                        parseFlakeRef(fetchSettings, e[sOriginalUrl]),
-                        parseFlakeRef(fetchSettings, e[sUrl]),
+                        parseFlakeRef(getString(e[sOriginalUrl])),
+                        parseFlakeRef(getString(e[sUrl])),
                         e["attrPath"],
                         e["outputs"].get<ExtendedOutputsSpec>()};
                 }
@@ -854,7 +855,7 @@ struct CmdProfileList : virtual EvalCommand, virtual StoreCommand, MixDefaultPro
                 auto & [name, element] = e;
                 if (i)
                     logger->cout("");
-                logger->cout(
+                logger->coutStyled(
                     "Name:               " ANSI_BOLD "%s" ANSI_NORMAL "%s",
                     name,
                     element.active ? "" : " " ANSI_RED "(inactive)" ANSI_NORMAL);
@@ -949,7 +950,7 @@ struct CmdProfileHistory : virtual StoreCommand, EvalCommand, MixDefaultProfile
                 logger->cout("");
             first = false;
 
-            logger->cout(
+            logger->coutStyled(
                 "Version %s%d" ANSI_NORMAL " (%s)%s:",
                 gen.number == curGen ? ANSI_GREEN : ANSI_BOLD,
                 gen.number,

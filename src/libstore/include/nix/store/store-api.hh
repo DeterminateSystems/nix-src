@@ -1,6 +1,7 @@
 #pragma once
 ///@file
 
+#include "nix/store/outputs-spec.hh"
 #include "nix/store/path.hh"
 #include "nix/store/derived-path.hh"
 #include "nix/util/hash.hh"
@@ -13,6 +14,7 @@
 #include "nix/util/repair-flag.hh"
 #include "nix/store/store-dir-config.hh"
 #include "nix/store/store-reference.hh"
+#include "nix/store/substituter.hh"
 #include "nix/util/source-path.hh"
 #include "nix/util/async.hh"
 #include "nix/util/fun.hh"
@@ -28,8 +30,6 @@ namespace nix {
 
 MakeError(InvalidPath, Error);
 MakeError(Unsupported, Error);
-MakeError(SubstituteGone, Error);
-MakeError(SubstituterDisabled, Error);
 
 MakeError(InvalidStoreReference, Error);
 
@@ -38,8 +38,14 @@ struct Realisation;
 struct RealisedPath;
 struct DrvOutput;
 
-struct BasicDerivation;
+namespace derivation {
+template<typename Inputs, typename Out>
 struct Derivation;
+struct Output;
+} // namespace derivation
+
+using BasicDerivation = derivation::Derivation<StorePathSet, derivation::Output>;
+using Derivation = derivation::Derivation<std::set<SingleDerivedPath>, derivation::Output>;
 
 struct SourceAccessor;
 struct NarInfoDiskCache;
@@ -52,14 +58,14 @@ typedef std::map<std::string, StorePath> OutputPathMap;
 
 enum CheckSigsFlag : bool { NoCheckSigs = false, CheckSigs = true };
 
-enum SubstituteFlag : bool { NoSubstitute = false, Substitute = true };
-
 enum BuildMode : uint8_t { bmNormal, bmRepair, bmCheck };
 
 enum TrustedFlag : bool { NotTrusted = false, Trusted = true };
 
 struct BuildResult;
 struct KeyedBuildResult;
+
+struct Builder;
 
 typedef std::map<StorePath, std::optional<ContentAddress>> StorePathCAMap;
 
@@ -166,7 +172,7 @@ public:
     /**
      * A setting for the Nix store directory. Automatically canonicalises the
      * path and rejects the empty string. Stored as `std::string` because
-     * store directory are valid file paths on *some* OS, but not neccessarily the OS of this build of Nix.
+     * store directory are valid file paths on *some* OS, but not necessarily the OS of this build of Nix.
      *
      * (For example, consider `SSHStore` from Linux to Windows, or vice versa, the foreign path will not be a valid
      * `std::filesystem::path`.)
@@ -197,7 +203,7 @@ public:
     StoreDirSetting storeDir_;
 
     /**
-     * @pathType see FilePathType
+     * @param pathType see FilePathType
      */
     StoreConfigBase(const StoreReference::Params & params, FilePathType pathType);
 };
@@ -378,6 +384,8 @@ public:
     }
 };
 
+struct Activity;
+
 /**
  * A Store (client)
  *
@@ -442,9 +450,9 @@ protected:
 
     void invalidatePathInfoCacheFor(const StorePath & path);
 
-    // Note: this is a `ref` to avoid false sharing with immutable
+    // Note: this is a `shared_ptr` to avoid false sharing with immutable
     // bits of `Store`.
-    ref<SharedSync<LRUCache<StorePath, PathInfoCacheValue>>> pathInfoCache;
+    std::shared_ptr<SharedSync<LRUCache<StorePath, PathInfoCacheValue>>> pathInfoCache;
 
     std::shared_ptr<NarInfoDiskCache> diskCache;
 
@@ -458,6 +466,15 @@ public:
     virtual void init() {};
 
     virtual ~Store() {}
+
+    /**
+     * Get a `Builder` for this store.
+     *
+     * @param evalStore If provided and different from this store,
+     * derivation files will be copied from the eval store to this
+     * store before building.
+     */
+    virtual ref<Builder> getBuilder(std::shared_ptr<Store> evalStore = nullptr);
 
     /**
      * Follow symlinks until we end up with a path in the Nix store.
@@ -487,6 +504,8 @@ public:
      * If requested, substitute missing paths. This
      * implements nix-copy-closure's --use-substitutes
      * flag.
+     *
+     * @todo suspicious to have a Store method that uses `getBuilder`.
      */
     void substitutePaths(const StorePathSet & paths);
 
@@ -757,93 +776,23 @@ public:
      * as this information is already present in the drv file, but necessary for
      * floating-ca derivations and their dependencies as there's no way to
      * retrieve this information otherwise.
+     *
+     * The method that does not perform signature checks is internal only, users should
+     * explicitly set the `checkSigs` argument to `NoCheckSigs`.
      */
-    virtual void registerDrvOutput(const Realisation & output) = 0;
+protected:
+    virtual void registerDrvOutputUnchecked(const Realisation & output) = 0;
 
+public:
     virtual void registerDrvOutput(const Realisation & output, CheckSigsFlag checkSigs)
     {
-        return registerDrvOutput(output);
+        return registerDrvOutputUnchecked(output);
     }
 
     /**
      * Write a NAR dump of a store path.
      */
     virtual void narFromPath(const StorePath & path, Sink & sink);
-
-    /**
-     * For each path, if it's a derivation, build it.  Building a
-     * derivation means ensuring that the output paths are valid.  If
-     * they are already valid, this is a no-op.  Otherwise, validity
-     * can be reached in two ways.  First, if the output paths is
-     * substitutable, then build the path that way.  Second, the
-     * output paths can be created by running the builder, after
-     * recursively building any sub-derivations. For inputs that are
-     * not derivations, substitute them.
-     */
-    virtual void buildPaths(
-        const std::vector<DerivedPath> & paths,
-        BuildMode buildMode = bmNormal,
-        std::shared_ptr<Store> evalStore = nullptr);
-
-    /**
-     * Like buildPaths(), but return a vector of \ref BuildResult
-     * BuildResults corresponding to each element in paths. Note that in
-     * case of a build/substitution error, this function won't throw an
-     * exception, but return a BuildResult containing an error message.
-     */
-    virtual std::vector<KeyedBuildResult> buildPathsWithResults(
-        const std::vector<DerivedPath> & paths,
-        BuildMode buildMode = bmNormal,
-        std::shared_ptr<Store> evalStore = nullptr);
-
-    /**
-     * Build a single non-materialized derivation (i.e. not from an
-     * on-disk .drv file).
-     *
-     * @param drvPath This is used to deduplicate worker goals so it is
-     * imperative that is correct. That said, it doesn't literally need
-     * to be store path that would be calculated from writing this
-     * derivation to the store: it is OK if it instead is that of a
-     * Derivation which would resolve to this (by taking the outputs of
-     * it's input derivations and adding them as input sources) such
-     * that the build time referenceable-paths are the same.
-     *
-     * In the input-addressed case, we usually *do* use an "original"
-     * unresolved derivations's path, as that is what will be used in the
-     * buildPaths case. Also, the input-addressed output paths are verified
-     * only by that contents of that specific unresolved derivation, so it is
-     * nice to keep that information around so if the original derivation is
-     * ever obtained later, it can be verified whether the trusted user in fact
-     * used the proper output path.
-     *
-     * In the content-addressed case, we want to always use the resolved
-     * drv path calculated from the provided derivation. This serves two
-     * purposes:
-     *
-     *   - It keeps the operation trustless, by ruling out a maliciously
-     *     invalid drv path corresponding to a non-resolution-equivalent
-     *     derivation.
-     *
-     *   - For the floating case in particular, it ensures that the derivation
-     *     to output mapping respects the resolution equivalence relation, so
-     *     one cannot choose different resolution-equivalent derivations to
-     *     subvert dependency coherence (i.e. the property that one doesn't end
-     *     up with multiple different versions of dependencies without
-     *     explicitly choosing to allow it).
-     */
-    virtual BuildResult
-    buildDerivation(const StorePath & drvPath, const BasicDerivation & drv, BuildMode buildMode = bmNormal);
-
-    /**
-     * Ensure that a path is valid.  If it is not currently valid, it
-     * may be made valid by running a substitute (if defined for the
-     * path).
-     *
-     * The path is registered as a temporary GC root first, whether or
-     * not it was already valid, so that a concurrent garbage collection
-     * cannot delete it while the caller is still using it.
-     */
-    virtual void ensurePath(const StorePath & path);
 
     /**
      * Add a store path as a temporary root of the garbage collector.
@@ -890,7 +839,7 @@ public:
      * ```
      *
      */
-    void addTempRoot(const StorePath & path)
+    virtual void addTempRoot(const StorePath & path)
     {
         addTempRoots({path});
     }
@@ -898,11 +847,11 @@ public:
     /**
      * Add multiple store paths as temporary roots of the garbage collector.
      * The roots disappears as soon as we exit.
+     *
+     * @warning If you need to add just one path, prefer to use addTempRoot.
+     * addTempRoots is implemented on best-effort basis and might be a no-op.
      */
-    virtual void addTempRoots(const StorePathSet & paths, bool skipIfSlow = false)
-    {
-        debug("not creating temporary roots, store doesn't support GC");
-    }
+    virtual void addTempRoots(const StorePathSet & paths, bool skipIfSlow = false);
 
     /**
      * @return a string representing information about the path that
@@ -961,12 +910,6 @@ public:
     }
 
     /**
-     * Repair the contents of the given path by redownloading it using
-     * a substituter (if available).
-     */
-    virtual void repairPath(const StorePath & path);
-
-    /**
      * Add signatures to the specified store path. The signatures are
      * not verified.
      */
@@ -988,6 +931,8 @@ public:
     /**
      * Read a derivation, after ensuring its existence through
      * ensurePath().
+     *
+     * @todo suspicious to have a Store method that uses `getBuilder`.
      */
     Derivation derivationFromPath(const StorePath & drvPath);
 
@@ -1071,25 +1016,6 @@ public:
      */
     virtual StorePaths topoSortPaths(const StorePathSet & paths);
 
-    struct Stats
-    {
-        std::atomic<uint64_t> narInfoRead{0};
-        std::atomic<uint64_t> narInfoReadAverted{0};
-        std::atomic<uint64_t> narInfoMissing{0};
-        std::atomic<uint64_t> narInfoWrite{0};
-        std::atomic<uint64_t> pathInfoCacheSize{0};
-        std::atomic<uint64_t> narRead{0};
-        std::atomic<uint64_t> narReadBytes{0};
-        std::atomic<uint64_t> narReadCompressedBytes{0};
-        std::atomic<uint64_t> narWrite{0};
-        std::atomic<uint64_t> narWriteAverted{0};
-        std::atomic<uint64_t> narWriteBytes{0};
-        std::atomic<uint64_t> narWriteCompressedBytes{0};
-        std::atomic<uint64_t> narWriteCompressionTimeMs{0};
-    };
-
-    const Stats & getStats();
-
     /**
      * Computes the full closure of of a set of store-paths for e.g.
      * derivations that need this information for `exportReferencesGraph`.
@@ -1109,7 +1035,8 @@ public:
      */
     void clearPathInfoCache()
     {
-        pathInfoCache->lock()->clear();
+        if (pathInfoCache)
+            pathInfoCache->lock()->clear();
     }
 
     /**
@@ -1157,8 +1084,6 @@ public:
     }
 
 protected:
-
-    Stats stats;
 
     /**
      * Helper for methods that are not unsupported: this is used for
@@ -1246,7 +1171,7 @@ OutputPathMap resolveDerivedPath(Store &, const DerivedPath::Built &, Store * ev
 std::optional<ValidPathInfo>
 decodeValidPathInfo(const Store & store, std::istream & str, std::optional<HashResult> hashGiven = std::nullopt);
 
-const ContentAddress * getDerivationCA(const BasicDerivation & drv);
+const ContentAddress * getDerivationCA(const Derivation & drv);
 
 template<>
 struct json_avoids_null<TrustedFlag> : std::true_type

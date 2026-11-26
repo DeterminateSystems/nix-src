@@ -27,15 +27,25 @@ InstallableAttrPath::InstallableAttrPath(
 {
 }
 
-std::pair<Value *, PosIdx> InstallableAttrPath::toValue(EvalState & state)
+std::pair<Value *, PosIdx> InstallableAttrPath::toValue(EvalState & state, AutoCall autoCall)
 {
-    auto [vRes, pos] = findAlongAttrPath(state, attrPath, *cmd.getAutoArgs(state), **v);
+    auto & autoArgs = *cmd.getAutoArgs(state);
+    auto [vRes, pos] = findAlongAttrPath(state, attrPath, autoArgs, **v);
+
+    if (autoCall == AutoCall::Yes) {
+        state.forceValue(*vRes, pos);
+        auto * vAuto = state.allocValue();
+        state.autoCallFunction(autoArgs, *vRes, *vAuto);
+        state.forceValue(*vAuto, pos);
+        return {vAuto, pos};
+    }
+
     return {vRes, pos};
 }
 
 DerivedPathsWithInfo InstallableAttrPath::toDerivedPaths()
 {
-    auto [v, pos] = toValue(*state);
+    auto [v, pos] = toValue(*state, AutoCall::No);
     state->forceValue(*v, pos);
 
     if (std::optional derivedPathWithInfo =
@@ -43,7 +53,7 @@ DerivedPathsWithInfo InstallableAttrPath::toDerivedPaths()
         return {*derivedPathWithInfo};
     }
 
-    Bindings & autoArgs = *cmd.getAutoArgs(*state);
+    const Bindings & autoArgs = *cmd.getAutoArgs(*state);
 
     PackageInfos packageInfos;
     getDerivations(*state, *v, "", autoArgs, packageInfos, false);

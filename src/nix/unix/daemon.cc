@@ -21,6 +21,8 @@
 #include "otel-logger.hh"
 #include "nix/util/socket.hh"
 #include "nix/util/users.hh"
+#include "nix/util/current-process.hh"
+#include "nix/util/system-error.hh"
 
 #include <algorithm>
 #include <climits>
@@ -36,6 +38,9 @@
 #include <errno.h>
 #include <fcntl.h>
 
+#if defined(__APPLE__)
+#  include <membership.h>
+#endif
 #ifdef __linux__
 #  include "nix/util/cgroup.hh"
 #endif
@@ -137,7 +142,8 @@ static ssize_t splice(int fd_in, void * off_in, int fd_out, void * off_out, size
 }
 #endif
 
-static unix::SelfPipe sigChldPipe;
+// The signal handler can run during static destruction; keep the pipe alive.
+static unix::SelfPipe & sigChldPipe = *new unix::SelfPipe;
 
 static void sigChldHandler(int sigNo)
 {
@@ -168,12 +174,30 @@ static void setSigChldAction(bool autoReap)
  * @return Is the given user a member of this group?
  *
  * @param user User specified by username.
+ * @param peer Information about the peer.
  *
  * @param group Group the user might be a member of.
  */
-static bool matchUser(std::string_view user, const GroupEntry & gr)
+static bool matchUser(std::string_view user, [[maybe_unused]] const unix::PeerInfo & peer, const GroupEntry & gr)
 {
-    return std::ranges::find(gr.members, user) != gr.members.end();
+    if (std::ranges::find(gr.members, user) != gr.members.end())
+        return true;
+
+#if defined(__APPLE__)
+    if (peer.uid) {
+        /* This is just a typedef to an array, so don't be confused when you see it passed seemingly by-value.
+           The C-style array decays into a pointer. */
+        uuid_t userUUID, groupUUID;
+        if (!::mbr_uid_to_uuid(*peer.uid, userUUID) && !::mbr_gid_to_uuid(gr.gid, groupUUID)) {
+            int ismember = 0;
+            if (!::mbr_check_membership(userUUID, groupUUID, &ismember)) {
+                return !!ismember;
+            }
+        }
+    }
+#endif
+
+    return false;
 }
 
 /**
@@ -190,8 +214,11 @@ static bool matchUser(std::string_view user, const GroupEntry & gr)
  *
  * Otherwise: No.
  */
-static bool
-matchUser(const std::optional<std::string> & user, const std::optional<std::string> & group, const Strings & users)
+static bool matchUser(
+    const std::optional<std::string> & user,
+    const std::optional<std::string> & group,
+    const Strings & users,
+    const unix::PeerInfo & peer)
 {
     if (find(users.begin(), users.end(), "*") != users.end())
         return true;
@@ -206,7 +233,7 @@ matchUser(const std::optional<std::string> & user, const std::optional<std::stri
             auto gr = getGroupByName(i.substr(1));
             if (!gr)
                 continue;
-            if (user && matchUser(*user, *gr))
+            if (user && matchUser(*user, peer, *gr))
                 return true;
         }
 
@@ -241,10 +268,11 @@ static std::pair<TrustedFlag, std::optional<std::string>> authPeer(const unix::P
     const Strings & trustedUsers = authorizationSettings.trustedUsers;
     const Strings & allowedUsers = authorizationSettings.allowedUsers;
 
-    if (matchUser(user, group, trustedUsers))
+    if (matchUser(user, group, trustedUsers, peer))
         trusted = Trusted;
 
-    if ((!trusted && !matchUser(user, group, allowedUsers)) || group == settings.getLocalSettings().buildUsersGroup)
+    if ((!trusted && !matchUser(user, group, allowedUsers, peer))
+        || group == settings.getLocalSettings().buildUsersGroup)
         throw Error("user '%1%' is not allowed to connect to the Nix daemon", user.value_or("<unknown>"));
 
     return {trusted, std::move(user)};
@@ -264,6 +292,7 @@ static void daemonLoop(
     std::optional<TrustedFlag> forceTrustClientOpt,
     std::filesystem::path socketPath)
 {
+    using namespace nix::unix;
     using namespace nix::daemon;
 
     if (chdir("/") == -1)
@@ -331,7 +360,7 @@ static void daemonLoop(
     static constexpr unsigned crashLimit = 64;
 
     try {
-        unix::serveUnixSocket(
+        serveUnixSocket(
             {
                 .socketPath = std::move(socketPath),
                 .socketMode = 0666,
@@ -359,21 +388,21 @@ static void daemonLoop(
                             }
 
                             if (crashCount >= crashLimit)
-                                throw unix::AbortServeSocket("too many daemon worker crashes (%1%)", crashLimit);
+                                throw AbortServeSocket("too many daemon worker crashes (%1%)", crashLimit);
                         }
                     },
             },
             [&](AutoCloseFD remote, std::function<void()> closeListeners) {
-                unix::closeOnExec(remote.get());
+                closeOnExec(remote.get());
 
-                unix::PeerInfo peer;
+                PeerInfo peer;
                 TrustedFlag trusted;
                 std::optional<std::string> userName;
 
                 if (forceTrustClientOpt)
                     trusted = *forceTrustClientOpt;
                 else {
-                    peer = unix::getPeerInfo(remote.get());
+                    peer = getPeerInfo(remote.get());
                     try {
                         auto [_trusted, _userName] = authPeer(peer);
                         trusted = _trusted;
@@ -395,7 +424,6 @@ static void daemonLoop(
                 ProcessOptions options;
                 options.errorPrefix = "unexpected Nix daemon error: ";
                 options.dieWithParent = false;
-                options.allowVfork = false;
                 startProcess(
                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
                         setInterrupted(false);
@@ -426,6 +454,7 @@ static void daemonLoop(
                                 FdSink(remote.get()),
                                 trusted,
                                 RecursiveFlag::NotRecursive,
+                                nullptr,
                                 setupConnectionTelemetry);
                         } catch (...) {
                             error = std::current_exception();
@@ -512,7 +541,8 @@ static void processStdioConnection(ref<Store> store, TrustedFlag trustClient)
         FdSource(STDIN_FILENO),
         FdSink(STDOUT_FILENO),
         trustClient,
-        daemon::NotRecursive,
+        daemon::RecursiveFlag::NotRecursive,
+        nullptr,
         setupConnectionTelemetry);
 }
 
@@ -557,6 +587,13 @@ static void runDaemon(
     std::visit(
         overloaded{
             [&](StdIO) {
+#ifdef __linux__
+                if (auto rootCgroup = getEnv("_NIX_DAEMON_ROOT_CGROUP")) {
+                    linux::setRootCgroup(CanonPath(*rootCgroup));
+                    unsetEnv("_NIX_DAEMON_ROOT_CGROUP");
+                }
+#endif
+
                 auto store = storeConfig->openStore();
                 store->init();
 
@@ -565,7 +602,7 @@ static void runDaemon(
                 // If --force-untrusted is passed, we cannot forward the connection and
                 // must process it ourselves (before delegating to the next store) to
                 // force untrusting the client.
-                processOps |= !forceTrustClientOpt || *forceTrustClientOpt != NotTrusted;
+                processOps |= forceTrustClientOpt == NotTrusted;
 
                 if (!processOps && (remoteStore = store.dynamic_pointer_cast<RemoteStore>()))
                     forwardStdioConnection(*remoteStore);
@@ -613,16 +650,12 @@ static int main_nix_daemon(int argc, char ** argv)
             else if (*arg == "--stdio")
                 stdio = true;
             else if (*arg == "--force-trusted") {
-                experimentalFeatureSettings.require(Xp::DaemonTrustOverride);
                 isTrustedOpt = Trusted;
             } else if (*arg == "--force-untrusted") {
-                experimentalFeatureSettings.require(Xp::DaemonTrustOverride);
                 isTrustedOpt = NotTrusted;
             } else if (*arg == "--default-trust") {
-                experimentalFeatureSettings.require(Xp::DaemonTrustOverride);
                 isTrustedOpt = std::nullopt;
             } else if (*arg == "--process-ops") {
-                experimentalFeatureSettings.require(Xp::MountedSSHStore);
                 processOps = true;
             } else
                 return false;
@@ -660,7 +693,6 @@ struct CmdDaemon : StoreConfigCommand
             .longName = "force-trusted",
             .description = "Force the daemon to trust connecting clients.",
             .handler = {[&]() { isTrustedOpt = Trusted; }},
-            .experimentalFeature = Xp::DaemonTrustOverride,
         });
 
         addFlag({
@@ -670,14 +702,12 @@ struct CmdDaemon : StoreConfigCommand
               The connection is processed by the receiving daemon before forwarding commands.
             )",
             .handler = {[&]() { isTrustedOpt = NotTrusted; }},
-            .experimentalFeature = Xp::DaemonTrustOverride,
         });
 
         addFlag({
             .longName = "default-trust",
             .description = "Use Nix's default trust.",
             .handler = {[&]() { isTrustedOpt = std::nullopt; }},
-            .experimentalFeature = Xp::DaemonTrustOverride,
         });
 
         addFlag({
@@ -688,7 +718,7 @@ struct CmdDaemon : StoreConfigCommand
               Incompatible with `--stdio`.
             )",
             .labels = {"path"},
-            .handler = {[&](std::filesystem::path s) { socketPath = std::move(s); }},
+            .handler = &socketPath,
         });
 
         addFlag({
@@ -699,7 +729,6 @@ struct CmdDaemon : StoreConfigCommand
               This is useful for the `mounted-ssh://` store where some actions need to be performed on the remote end but as connected user, and not as the user of the underlying daemon on the remote end.
             )",
             .handler = {[&]() { processOps = true; }},
-            .experimentalFeature = Xp::MountedSSHStore,
         });
     }
 

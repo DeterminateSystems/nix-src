@@ -1,5 +1,6 @@
 #include "nix/store/outputs-query.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/derivation/resolution.hh"
 #include "nix/store/realisation.hh"
 #include "nix/util/util.hh"
 
@@ -88,12 +89,13 @@ static std::pair<Derivation, StorePath> resolveDerivation(
     auto & evalStore = evalStore_ ? *evalStore_ : store;
 
     Derivation drv = evalStore.readInvalidDerivation(drvPath);
-    if (drv.shouldResolve()) {
+    if (shouldResolve(drv)) {
         /* Without a custom queryRealisation, we could just use
-           drv.tryResolve(store, &evalStore). But we need to use the
+           tryResolve(drv, store, &evalStore). But we need to use the
            callback variant to ensure all realisation queries go
            through queryRealisation. */
-        auto resolvedDrv = drv.tryResolve(
+        auto resolvedDrv = tryResolve(
+            drv,
             store,
             [&](ref<const SingleDerivedPath> depDrvPath,
                 const std::string & depOutputName) -> std::optional<StorePath> {
@@ -105,7 +107,7 @@ static std::pair<Derivation, StorePath> resolveDerivation(
                     store, *concreteDrvPath, depOutputName, evalStore_, queryRealisation, cache, resCache);
             });
         if (resolvedDrv)
-            drv = Derivation{*resolvedDrv};
+            drv = unresolve(*resolvedDrv);
     }
 
     auto resolvedDrvPath = computeStorePath(store, drv);
@@ -117,7 +119,7 @@ static std::pair<Derivation, StorePath> resolveDerivation(
 void queryPartialDerivationOutputMapCA(
     Store & store,
     const StorePath & drvPath,
-    const BasicDerivation & drv,
+    const Derivation & drv,
     std::map<std::string, std::optional<StorePath>> & outputs,
     QueryRealisationFun queryRealisation,
     RealisationCache & resCache)
@@ -185,7 +187,7 @@ static std::optional<StorePath> deepQueryPartialDerivationOutputImpl(
 void queryPartialDerivationOutputMapCA(
     Store & store,
     const StorePath & drvPath,
-    const BasicDerivation & drv,
+    const Derivation & drv,
     std::map<std::string, std::optional<StorePath>> & outputs,
     QueryRealisationFun queryRealisation)
 {

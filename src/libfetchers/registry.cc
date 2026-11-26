@@ -44,8 +44,8 @@ Registry::read(const Settings & settings, std::string_view whence, std::string_v
                 auto exact = i.find("exact");
                 registry->entries.push_back(
                     Entry{
-                        .from = Input::fromAttrs(settings, jsonToAttrs(i["from"])),
-                        .to = Input::fromAttrs(settings, std::move(toAttrs)),
+                        .from = Input::fromAttrs(jsonToAttrs(i["from"])),
+                        .to = Input::fromAttrs(std::move(toAttrs)),
                         .extraAttrs = extraAttrs,
                         .exact = exact != i.end() && exact.value()});
             }
@@ -173,8 +173,9 @@ static std::shared_ptr<Registry> getGlobalRegistry(const Settings & settings, St
             return Registry::read(
                 settings,
                 "builtin flake registry",
-#include "builtin-flake-registry.json.gen.hh"
-                ,
+                std::string{
+#embed "builtin-flake-registry.json"
+                },
                 Registry::Global);
         }
     }();

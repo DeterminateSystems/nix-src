@@ -13,6 +13,7 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/file-system-at.hh"
 #include "nix/store/posix-fs-canonicalise.hh"
+#include "nix/util/system-error.hh"
 
 #include "store-config-private.hh"
 
@@ -675,11 +676,12 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
         AutoCloseFD tmpDirFd;
         if (baseName.find("tmp-", 0) == 0) {
             /* TODO Reconsider whether Follow is the right choice, here */
-            tmpDirFd = openDirectory(realPath, FinalSymlink::Follow);
-            if (!tmpDirFd || !lockFile(tmpDirFd.get(), ltWrite, false)) {
+            auto fd = openDirectory(realPath, FinalSymlink::Follow);
+            if (!fd || !lockFile(fd.value().get(), ltWrite, false)) {
                 debug("skipping locked tempdir %s", PathFmt(realPath));
                 return;
             }
+            tmpDirFd = std::move(fd).value();
         }
 
         printInfo("deleting '%1%'", path);
@@ -1150,7 +1152,7 @@ void LocalStore::autoGC(bool sync)
             return;
 
         /* Note: since gcRunning is false here, any previous GC thread has exited / is exiting so the join() should be
-         * almost instantenous. */
+         * almost instantaneous. */
         if (state->gcThread.joinable())
             state->gcThread.join();
 

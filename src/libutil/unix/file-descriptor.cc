@@ -2,6 +2,7 @@
 #include "nix/util/file-system-at.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/util.hh"
+#include "nix/util/system-error.hh"
 
 #ifdef __APPLE__
 #  include <libproc.h> /* For closeExtraFDs. */
@@ -11,6 +12,7 @@
 #include <unistd.h>
 
 #include <span>
+#include <algorithm>
 #include <atomic>
 #include <vector>
 
@@ -64,10 +66,18 @@ size_t write(Descriptor fd, std::span<const std::byte> buffer, bool allowInterru
 
 AutoCloseFD dupDescriptor(Descriptor fd)
 {
-    int newFd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
-    if (newFd == -1)
+    AutoCloseFD newFd = ::fcntl(fd, F_DUPFD_CLOEXEC, 0);
+    if (!newFd)
         throw SysError("duplicating file descriptor");
-    return AutoCloseFD{newFd};
+    return newFd;
+}
+
+AutoCloseFD openNullFD()
+{
+    AutoCloseFD fd = ::open("/dev/null", O_RDWR | O_CLOEXEC);
+    if (!fd)
+        throw SysError("opening '/dev/null'");
+    return fd;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -81,14 +91,20 @@ void Pipe::create(bool nonBlocking)
 #else
     if (pipe(fds) != 0)
         throw SysError("creating pipe");
+#endif
+    readSide = fds[0];
+    writeSide = fds[1];
+#if !HAVE_PIPE2
+    /* Assign the members *before* trying to make them non-blocking and
+       close-on-exec since technically that can fail and we should still clean
+       up those descriptors on destruction. Mostly pedantic exception safety, I
+       can't envision a case this would fail on a freshly created pipe. */
     for (auto fd : fds) {
-        unix::closeOnExec(fd);
+        closeOnExec(fd);
         if (nonBlocking && ::fcntl(fd, F_SETFL, O_NONBLOCK) == -1)
             throw SysError("making pipe non-blocking");
     }
 #endif
-    readSide = fds[0];
-    writeSide = fds[1];
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -106,14 +122,21 @@ static int unix_close_range(unsigned int first, unsigned int last, int flags)
 
 void unix::closeExtraFDs()
 {
-    constexpr int MAX_KEPT_FD = 2;
-    static_assert(std::max({STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) == MAX_KEPT_FD);
+    closeExtraFDs(/*keepExtra=*/{});
+}
+
+void unix::closeExtraFDs(std::span<const Descriptor> keepExtra)
+{
+    /* Just some sanity compile-time checks. */
+    static constexpr Descriptor maxKeptStdio = 2;
+    static_assert(std::max({STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) == maxKeptStdio);
 
     /* The logic here is a bit convoluted and platform-dependent.
      * Keep in mind that this function is free to assume that it's the only thread running
      * in the process (it's usually called right after fork()-ing).
      *
-     * - We always keep stdio file descriptors, and close the [MAX_KEPT_FD + 1, ...) range.
+     * - First, figure out the lower bound of the [maxKept + 1, ...) range we can close in
+     *   one go. We always keep stdio file descriptors.
      *
      * - Attempt platform-specific ways to close the above:
      *   On Linux (>= 5.9) and FreeBSD, we try close_range syscall.
@@ -123,11 +146,30 @@ void unix::closeExtraFDs()
      * - If none of the above works, do the silliest possible thing and attempt
      *   closing all FDs below _SC_OPEN_MAX. Keep in mind that it's huge for the
      *   daemon process, so we really should use something more optimised.
+     *
+     * - Then go through the [3, maxKept] range and close all the holes.
      */
 
+    auto maxKeptIt = std::max_element(keepExtra.begin(), keepExtra.end());
+    Descriptor maxKept = STDERR_FILENO;
+
+    if (maxKeptIt != keepExtra.end())
+        maxKept = std::max(maxKept, *maxKeptIt);
+
+    auto finish = [&] -> void {
+        /* We closed everything in one go already. */
+        if (keepExtra.empty())
+            return;
+
+        /* Otherwise, clean up remaining holes. */
+        for (Descriptor fd = maxKeptStdio + 1; fd < maxKept; ++fd)
+            if (!std::ranges::contains(keepExtra, fd))
+                ::close(fd); /* ignore result */
+    };
+
 #if defined(__linux__) || defined(__FreeBSD__)
-    if (unix_close_range(MAX_KEPT_FD + 1, ~0U, 0) == 0)
-        return;
+    if (unix_close_range(maxKept + 1, ~0U, 0) == 0)
+        return finish();
 #endif
 
     /* Platform-specific ways of listing open FDs. */
@@ -142,7 +184,7 @@ void unix::closeExtraFDs()
             auto fd = string2Int<int>(s.path().filename().native());
             if (!fd)
                 continue;
-            if (*fd > MAX_KEPT_FD)
+            if (*fd > maxKept)
                 openFds.push_back(*fd);
         }
         for (auto fd : openFds)
@@ -164,28 +206,38 @@ void unix::closeExtraFDs()
             throw SysError("listing open file descriptors");
         fds.resize(bufSize / sizeof(::proc_fdinfo));
         for (const auto & fdinfo : fds)
-            if (fdinfo.proc_fd > MAX_KEPT_FD)
+            if (fdinfo.proc_fd > maxKept)
                 ::close(fdinfo.proc_fd); /* ignore result */
 #  endif
-        return;
+        return finish();
     } catch (const SystemError & e) {
         /* Try the last resort fallback. */
     }
 #endif
 
-    int maxFD = 0;
+    Descriptor maxFD = 0;
 #if HAVE_SYSCONF
     maxFD = sysconf(_SC_OPEN_MAX);
 #endif
-    for (int fd = MAX_KEPT_FD + 1; fd < maxFD; ++fd)
-        close(fd); /* ignore result */
+    for (Descriptor fd = maxKept + 1; fd < maxFD; ++fd)
+        ::close(fd); /* ignore result */
+
+    finish();
 }
 
-void unix::closeOnExec(int fd)
+void closeOnExec(Descriptor fd)
 {
     int prev;
     if ((prev = fcntl(fd, F_GETFD, 0)) == -1 || fcntl(fd, F_SETFD, prev | FD_CLOEXEC) == -1)
         throw SysError("setting close-on-exec flag");
+}
+
+Result<off_t, NativeError> seek(Descriptor fd, off_t offset, int whence)
+{
+    off_t res = ::lseek(fd, offset, whence);
+    if (res == -1)
+        return outcome::failure(errno);
+    return outcome::success(res);
 }
 
 void syncDescriptor(Descriptor fd)

@@ -12,6 +12,7 @@
 #include "nix/util/base-n.hh"
 #include "nix/util/base-nix-32.hh"
 #include "nix/util/json-utils.hh"
+#include "nix/util/logging.hh"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -519,17 +520,15 @@ std::string_view printHashAlgo(HashAlgorithm ha)
 
 namespace nlohmann {
 
-using namespace nix;
-
-Hash adl_serializer<Hash>::from_json(const json & json, const ExperimentalFeatureSettings & xpSettings)
+nix::Hash adl_serializer<nix::Hash>::from_json(const json & json, const nix::ExperimentalFeatureSettings & xpSettings)
 {
-    auto & s = getString(json);
-    return Hash::parseSRI(s, xpSettings);
+    auto & s = nix::getString(json);
+    return nix::Hash::parseSRI(s, xpSettings);
 }
 
-void adl_serializer<Hash>::to_json(json & json, const Hash & hash)
+void adl_serializer<nix::Hash>::to_json(json & json, const nix::Hash & hash)
 {
-    json = hash.to_string(HashFormat::SRI, true);
+    json = hash.to_string(nix::HashFormat::SRI, true);
 }
 
 } // namespace nlohmann

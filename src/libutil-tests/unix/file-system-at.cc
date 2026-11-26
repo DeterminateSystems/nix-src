@@ -6,6 +6,8 @@
 #include "nix/util/fs-sink.hh"
 #include "nix/util/processes.hh"
 #include "nix/util/tests/gmock-matchers.hh"
+#include "nix/util/tests/result.hh"
+#include "nix/util/system-error.hh"
 
 #ifdef __linux__
 #  include "nix/util/linux-namespaces.hh"
@@ -29,7 +31,7 @@ TEST(fchmodatTryNoFollow, works)
     {
         RestoreSink sink(/*startFsync=*/false);
         sink.dstPath = tmpDir;
-        sink.dirFd = openDirectory(tmpDir, FinalSymlink::Follow);
+        sink.dirFd = testing::valueOrFail(openDirectory(tmpDir, FinalSymlink::Follow));
         sink.createRegularFile(CanonPath("file"), [](CreateRegularFileSink & crf) {});
         sink.createDirectory(CanonPath("dir"));
         sink.createSymlink(CanonPath("filelink"), "file");
@@ -39,8 +41,7 @@ TEST(fchmodatTryNoFollow, works)
     ASSERT_NO_THROW(chmod(tmpDir / "file", 0644));
     ASSERT_NO_THROW(chmod(tmpDir / "dir", 0755));
 
-    auto dirFd = openDirectory(tmpDir, FinalSymlink::Follow);
-    ASSERT_TRUE(dirFd);
+    auto dirFd = testing::valueOrFail(openDirectory(tmpDir, FinalSymlink::Follow));
 
     using nix::testing::ThrowsSysError;
 
@@ -87,13 +88,15 @@ TEST(fchmodatTryNoFollow, works)
 
     /* Check fchmodatTryNoFollow works on regular files and directories. */
 
-    EXPECT_NO_THROW(fchmodatTryNoFollow(dirFd.get(), CanonPath("file"), 0600));
+    EXPECT_NO_THROW(fchmodatTryNoFollow(dirFd.get(), OsFilename::fromPathAsserting("file"), 0600));
     ASSERT_EQ(stat(tmpDir / "file").st_mode & 0777, 0600);
 
-    EXPECT_NO_THROW(fchmodatTryNoFollow(dirFd.get(), CanonPath("dir"), 0700));
+    EXPECT_NO_THROW(fchmodatTryNoFollow(dirFd.get(), OsFilename::fromPathAsserting("dir"), 0700));
     ASSERT_EQ(stat(tmpDir / "dir").st_mode & 0777, 0700);
 
-    EXPECT_THAT([&] { fchmodatTryNoFollow(dirFd.get(), CanonPath("nonexistent"), 0600); }, ThrowsSysError(ENOENT));
+    EXPECT_THAT(
+        [&] { fchmodatTryNoFollow(dirFd.get(), OsFilename::fromPathAsserting("nonexistent"), 0600); },
+        ThrowsSysError(ENOENT));
 }
 
 #ifdef __linux__
@@ -111,7 +114,7 @@ TEST(fchmodatTryNoFollow, fallbackWithoutProc)
     {
         RestoreSink sink(/*startFsync=*/false);
         sink.dstPath = tmpDir;
-        sink.dirFd = openDirectory(tmpDir, FinalSymlink::Follow);
+        sink.dirFd = testing::valueOrFail(openDirectory(tmpDir, FinalSymlink::Follow));
         sink.createRegularFile(CanonPath("file"), [](CreateRegularFileSink & crf) {});
         sink.createSymlink(CanonPath("link"), "file");
     }
@@ -129,18 +132,19 @@ TEST(fchmodatTryNoFollow, fallbackWithoutProc)
             if (mount("tmpfs", "/proc", "tmpfs", 0, 0) == -1)
                 _exit(2);
 
-            auto dirFd = openDirectory(tmpDir, FinalSymlink::Follow);
-            if (!dirFd)
+            auto dirFdOrError = openDirectory(tmpDir, FinalSymlink::Follow);
+            if (!dirFdOrError)
                 _exit(3);
+            auto dirFd = std::move(dirFdOrError).value();
 
             try {
-                fchmodatTryNoFollow(dirFd.get(), CanonPath("file"), 0600);
+                fchmodatTryNoFollow(dirFd.get(), OsFilename::fromPathAsserting("file"), 0600);
             } catch (SysError & e) {
                 _exit(4);
             }
 
             try {
-                fchmodatTryNoFollow(dirFd.get(), CanonPath("link"), 0777);
+                fchmodatTryNoFollow(dirFd.get(), OsFilename::fromPathAsserting("link"), 0777);
             } catch (SysError & e) {
                 if (e.errNo == EOPNOTSUPP)
                     _exit(0); /* Success. */

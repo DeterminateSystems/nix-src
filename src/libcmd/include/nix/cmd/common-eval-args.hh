@@ -49,7 +49,7 @@ struct MixEvalArgs : virtual Args, virtual MixRepair
 
     MixEvalArgs();
 
-    Bindings * getAutoArgs(EvalState & state);
+    const Bindings * getAutoArgs(EvalState & state);
 
     LookupPath lookupPath;
 

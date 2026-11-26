@@ -67,7 +67,8 @@ in
     pkgconfig = [ "libcrypto" ];
   }
   {
-    prefix = "sodium.h";
+    # `sodium.h` and `sodium/*.h`.
+    prefix = "sodium";
     pkg = deps.libsodium;
     pkgconfig = [ "libsodium" ];
   }
@@ -226,6 +227,12 @@ in
     prefix = "git2";
     pkg = deps.libgit2;
     pkgconfig = [ "libgit2" ];
+  }
+  {
+    # Used by the libfetchers unit tests to build Git objects.
+    prefix = "zlib.h";
+    pkg = deps.zlib;
+    pkgconfig = [ "zlib" ];
   }
   {
     prefix = "wasmtime";

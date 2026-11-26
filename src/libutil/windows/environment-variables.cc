@@ -1,9 +1,15 @@
 #include "nix/util/environment-variables.hh"
+#include "nix/util/system-error.hh"
 
 #include <processenv.h>
+#include <winerror.h>
 
 namespace nix {
 
+/* The primitive on Windows, with `getEnv` delegating here rather than the other
+   way round. `getenv` would read the CRT's copy of the environment, snapshotted
+   at process start, which `setEnv` does not update, so it cannot see anything
+   this process has set. */
 std::optional<OsString> getEnvOs(const OsString & key)
 {
     // Determine the required buffer size for the environment variable value
@@ -19,11 +25,10 @@ std::optional<OsString> getEnvOs(const OsString & key)
 
     // Retrieve the environment variable value
     DWORD resultSize = GetEnvironmentVariableW(key.c_str(), &value[0], bufferSize);
-    if (resultSize == 0) {
-        return std::nullopt;
-    }
 
-    // Resize the string to remove the extra null characters
+    /* Resize to remove the extra null characters. A zero count is not a failure
+       here: the sizing call already told us the variable exists, so it means the
+       value is empty, and resizing to zero returns it as such. */
     value.resize(resultSize);
 
     return value;
@@ -54,33 +59,45 @@ OsStringMap getEnvOs()
     return env;
 }
 
+void unsetEnvOs(const OsChar * name)
+{
+    using namespace nix::windows;
+
+    /* Unlike POSIX `unsetenv`, deleting a variable that is not set may
+       report `ERROR_ENVVAR_NOT_FOUND`; the variable is unset either way. */
+    if (!SetEnvironmentVariableW(name, nullptr))
+        if (auto lastError = GetLastError(); lastError != ERROR_ENVVAR_NOT_FOUND)
+            throw WinError(lastError, "unsetting environment variable '%s'", os_string_to_string(OsStringView{name}));
+}
+
+void setEnvOs(const OsString & name, const OsString & value)
+{
+    using namespace nix::windows;
+
+    if (!SetEnvironmentVariableW(name.c_str(), value.c_str()))
+        throw WinError("setting environment variable '%s'", os_string_to_string(name));
+}
+
+//////////////////////////////////////////////////////////////////////
+
+/* The portable wrappers, converting to and from `OsString`. */
+
 StringMap getEnv()
 {
     StringMap env;
-    for (auto & [name, value] : getEnvOs()) {
+    for (auto & [name, value] : getEnvOs())
         env.emplace(os_string_to_string(name), os_string_to_string(value));
-    }
     return env;
 }
 
-int unsetenv(const char * name)
+void setEnv(const char * name, const char * value)
 {
-    return -SetEnvironmentVariableA(name, nullptr);
+    setEnvOs(string_to_os_string(std::string_view{name}), string_to_os_string(std::string_view{value}));
 }
 
-int unsetEnvOs(const OsChar * name)
+void unsetEnv(const char * name)
 {
-    return -SetEnvironmentVariableW(name, nullptr);
-}
-
-int setEnv(const char * name, const char * value)
-{
-    return -SetEnvironmentVariableA(name, value);
-}
-
-int setEnvOs(const OsString & name, const OsString & value)
-{
-    return -SetEnvironmentVariableW(name.c_str(), value.c_str());
+    unsetEnvOs(string_to_os_string(std::string_view{name}).c_str());
 }
 
 } // namespace nix

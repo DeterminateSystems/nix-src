@@ -1,20 +1,26 @@
 error:
        … while evaluating the attribute 'outPath'
-         at «nix-internal»/derivation-internal.nix:51:7:
-           50|     value = commonAttrs // {
-           51|       outPath = strict.${outputName};
+         at «nix-internal»/derivation-internal.nix:50:7:
+           49|     value = commonAttrs // {
+           50|       outPath = strict.${outputName};
              |       ^
-           52|       drvPath = strict.drvPath;
+           51|       drvPath = strict.drvPath;
+
+       … while selecting an attribute
+         at «nix-internal»/derivation-internal.nix:50:17:
+           49|     value = commonAttrs // {
+           50|       outPath = strict.${outputName};
+             |                 ^
+           51|       drvPath = strict.drvPath;
 
        … while calling the 'derivationStrict' builtin
-         at «nix-internal»/derivation-internal.nix:38:12:
-           37|
-           38|   strict = drvFunc drvAttrs;
+         at «nix-internal»/derivation-internal.nix:37:12:
+           36|
+           37|   strict = drvFunc drvAttrs;
              |            ^
-           39|
+           38|
 
        … while evaluating derivation 'test'
-         whose name attribute is located at /pwd/lang/eval-fail-derivation-structuredAttrs-stack-overflow.nix:5:3
 
        … while evaluating attribute 'nested' of derivation 'test'
          at /pwd/lang/eval-fail-derivation-structuredAttrs-stack-overflow.nix:9:3:

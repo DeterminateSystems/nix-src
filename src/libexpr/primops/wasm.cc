@@ -17,7 +17,7 @@ namespace nix {
 using ValueId = uint32_t;
 
 template<typename T, typename E = Error>
-T unwrap(Result<T, E> && res)
+T unwrap(wasmtime::Result<T, E> && res)
 {
     if (res)
         return res.ok();
@@ -758,7 +758,7 @@ struct NixWasmInstance
 template<typename R, typename... Args>
 static void regFun(Linker & linker, std::string_view name, R (NixWasmInstance::*f)(Args...))
 {
-    unwrap(linker.func_wrap("env", name, [f](Caller caller, Args... args) -> Result<R, Trap> {
+    unwrap(linker.func_wrap("env", name, [f](Caller caller, Args... args) -> wasmtime::Result<R, Trap> {
         try {
             auto instance = std::any_cast<NixWasmInstance *>(caller.context().get_data());
             return (*instance.*f)(args...);
@@ -800,7 +800,7 @@ static void regFuns(Linker & linker, bool useWasi)
 
     if (useWasi) {
         unwrap(linker.func_wrap(
-            "env", "return_to_nix", [](Caller caller, ValueId resultId) -> Result<std::monostate, Trap> {
+            "env", "return_to_nix", [](Caller caller, ValueId resultId) -> wasmtime::Result<std::monostate, Trap> {
                 auto instance = std::any_cast<NixWasmInstance *>(caller.context().get_data());
                 instance->resultId = resultId;
                 return Trap("return_to_nix");
@@ -885,9 +885,9 @@ void WasmActivationsHook::resume()
     saved = nullptr;
 }
 
-static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_wasm(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
-    state.forceAttrs(*args[0], pos, "while evaluating the first argument to `builtins.wasm`");
+    state.forceAttrs(*args[0], noPos, "while evaluating the first argument to `builtins.wasm`");
 
     // Check for unknown attributes
     for (auto & attr : *args[0]->attrs()) {
@@ -913,12 +913,12 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
 
     try {
         auto instance =
-            pathAttr ? instantiateWasm(state, state.realisePath(pos, *pathAttr->value))
+            pathAttr ? instantiateWasm(state, state.realisePath(noPos, *pathAttr->value))
                      : NixWasmInstance{
                            state,
                            make_ref<NixWasmInstancePre>(
                                state.getExtension(rWasmState).getEngine(),
-                               state.forceStringNoCtx(*watAttr->value, pos, "while evaluating the 'wat' attribute"))};
+                               state.forceStringNoCtx(*watAttr->value, noPos, "while evaluating the 'wat' attribute"))};
 
         // Extract 'function' attribute (optional for wasi, required for non-wasi)
         std::string functionName;
@@ -932,7 +932,7 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
                 throw Error(
                     "missing required 'function' attribute in first argument to `builtins.wasm` for non-WASI modules");
             functionName = std::string(
-                state.forceStringNoCtx(*functionAttr->value, pos, "while evaluating the 'function' attribute"));
+                state.forceStringNoCtx(*functionAttr->value, noPos, "while evaluating the 'function' attribute"));
         }
 
         debug("calling wasm module");
@@ -964,7 +964,7 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
             }
 
             auto & vRes = instance.getValue(instance.resultId);
-            state.forceValue(vRes, pos);
+            state.forceValue(vRes, noPos);
             v = vRes;
         } else {
             // FIXME: use the "start" function if present.
@@ -978,11 +978,11 @@ static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value 
                 throw Error(
                     "Wasm function '%s' from '%s' did not return an i32 value", functionName, instance.pre->name);
             auto & vRes = instance.getValue(res[0].i32());
-            state.forceValue(vRes, pos);
+            state.forceValue(vRes, noPos);
             v = vRes;
         }
     } catch (Error & e) {
-        e.addTrace(state.positions[pos], "while executing a Wasm module");
+        e.addTrace(state.positions[noPos], "while executing a Wasm module");
         throw;
     }
 }

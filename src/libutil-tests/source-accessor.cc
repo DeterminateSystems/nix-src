@@ -2,8 +2,13 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/processes.hh"
 #include "nix/util/tests/gmock-matchers.hh"
+#include "nix/util/tests/result.hh"
+#include "nix/util/system-error.hh"
 
-#ifndef _WIN32
+#ifdef _WIN32
+#  include "nix/util/tests/wine.hh"
+#  include "nix/util/windows-environment.hh"
+#else
 #  include <fcntl.h>
 #endif
 
@@ -12,66 +17,6 @@
 #include <rapidcheck/gtest.h>
 
 namespace nix {
-
-MATCHER_P2(HasContents, path, expected, "")
-{
-    auto stat = arg->maybeLstat(path);
-    if (!stat) {
-        *result_listener << arg->showPath(path) << " does not exist";
-        return false;
-    }
-    if (stat->type != SourceAccessor::tRegular) {
-        *result_listener << arg->showPath(path) << " is not a regular file";
-        return false;
-    }
-    auto actual = arg->readFile(path);
-    if (actual != expected) {
-        *result_listener << arg->showPath(path) << " has contents " << ::testing::PrintToString(actual);
-        return false;
-    }
-    return true;
-}
-
-MATCHER_P2(HasSymlink, path, target, "")
-{
-    auto stat = arg->maybeLstat(path);
-    if (!stat) {
-        *result_listener << arg->showPath(path) << " does not exist";
-        return false;
-    }
-    if (stat->type != SourceAccessor::tSymlink) {
-        *result_listener << arg->showPath(path) << " is not a symlink";
-        return false;
-    }
-    auto actual = arg->readLink(path);
-    if (actual != target) {
-        *result_listener << arg->showPath(path) << " points to " << ::testing::PrintToString(actual);
-        return false;
-    }
-    return true;
-}
-
-MATCHER_P2(HasDirectory, path, dirents, "")
-{
-    auto stat = arg->maybeLstat(path);
-    if (!stat) {
-        *result_listener << arg->showPath(path) << " does not exist";
-        return false;
-    }
-    if (stat->type != SourceAccessor::tDirectory) {
-        *result_listener << arg->showPath(path) << " is not a directory";
-        return false;
-    }
-    auto actual = arg->readDirectory(path);
-    std::set<std::string> actualKeys, expectedKeys(dirents.begin(), dirents.end());
-    for (auto & [k, _] : actual)
-        actualKeys.insert(k);
-    if (actualKeys != expectedKeys) {
-        *result_listener << arg->showPath(path) << " has entries " << ::testing::PrintToString(actualKeys);
-        return false;
-    }
-    return true;
-}
 
 class FSSourceAccessorTest : public ::testing::Test
 {
@@ -94,14 +39,13 @@ protected:
 TEST_F(FSSourceAccessorTest, works)
 {
 #ifdef _WIN32
-    GTEST_SKIP() << "Broken on Windows";
+    if (windows::isWine() && !windows::wineSymlinksSupported(tmpDir))
+        GTEST_SKIP() << "Wine doesn't seem to be able to create symlinks here";
 #endif
     {
         RestoreSink sink(false);
         sink.dstPath = tmpDir;
-#ifndef _WIN32
-        sink.dirFd = openDirectory(tmpDir, FinalSymlink::Follow);
-#endif
+        sink.dirFd = testing::valueOrFail(openDirectory(tmpDir, FinalSymlink::Follow));
         sink.createDirectory(CanonPath("subdir"));
         sink.createRegularFile(CanonPath("file1"), [](CreateRegularFileSink & crf) { crf("content1"); });
         sink.createRegularFile(CanonPath("subdir/file2"), [](CreateRegularFileSink & crf) { crf("content2"); });
@@ -110,17 +54,19 @@ TEST_F(FSSourceAccessorTest, works)
         sink.createSymlink(CanonPath("a/dirlink"), "../subdir");
     }
 
-    EXPECT_THAT(makeFSSourceAccessor(tmpDir / "file1"), HasContents(CanonPath::root, "content1"));
-    EXPECT_THAT(makeFSSourceAccessor(tmpDir / "rootlink"), HasSymlink(CanonPath::root, "target"));
+    EXPECT_THAT(makeFSSourceAccessor(tmpDir / "file1"), testing::HasContents(CanonPath::root, "content1"));
+    EXPECT_THAT(makeFSSourceAccessor(tmpDir / "rootlink"), testing::HasSymlink(CanonPath::root, "target"));
     EXPECT_THAT(
         makeFSSourceAccessor(tmpDir),
-        HasDirectory(CanonPath::root, std::set<std::string>{"file1", "subdir", "rootlink", "a"}));
-    EXPECT_THAT(makeFSSourceAccessor(tmpDir / "subdir"), HasDirectory(CanonPath::root, std::set<std::string>{"file2"}));
+        testing::HasDirectory(CanonPath::root, std::set<std::string>{"file1", "subdir", "rootlink", "a"}));
+    EXPECT_THAT(
+        makeFSSourceAccessor(tmpDir / "subdir"),
+        testing::HasDirectory(CanonPath::root, std::set<std::string>{"file2"}));
 
     {
         auto accessor = makeFSSourceAccessor(tmpDir);
-        EXPECT_THAT(accessor, HasContents(CanonPath("file1"), "content1"));
-        EXPECT_THAT(accessor, HasContents(CanonPath("subdir/file2"), "content2"));
+        EXPECT_THAT(accessor, testing::HasContents(CanonPath("file1"), "content1"));
+        EXPECT_THAT(accessor, testing::HasContents(CanonPath("subdir/file2"), "content2"));
 
         EXPECT_TRUE(accessor->pathExists(CanonPath("file1")));
         EXPECT_FALSE(accessor->pathExists(CanonPath("nonexistent")));
@@ -146,7 +92,8 @@ TEST_F(FSSourceAccessorTest, works)
 TEST_F(FSSourceAccessorTest, invalidateCacheDropsStaleDirFds)
 {
 #ifdef _WIN32
-    GTEST_SKIP() << "fd-based accessor is Unix-only";
+    if (windows::isWine() && !windows::wineSymlinksSupported(tmpDir))
+        GTEST_SKIP() << "Wine doesn't seem to be able to create symlinks here";
 #endif
     auto accessor = makeFSSourceAccessor(tmpDir);
 
@@ -164,9 +111,48 @@ TEST_F(FSSourceAccessorTest, invalidateCacheDropsStaleDirFds)
 
     EXPECT_FALSE(accessor->pathExists(CanonPath("a/b/f")));
     EXPECT_TRUE(accessor->pathExists(CanonPath("a/b/g")));
-    EXPECT_THAT(accessor, HasContents(CanonPath("a/b/g"), "new"));
-    EXPECT_THAT(accessor, HasDirectory(CanonPath("a/b"), (std::set<std::string>{"g", "l"})));
-    EXPECT_THAT(accessor, HasSymlink(CanonPath("a/b/l"), "g"));
+    EXPECT_THAT(accessor, testing::HasContents(CanonPath("a/b/g"), "new"));
+    EXPECT_THAT(accessor, testing::HasDirectory(CanonPath("a/b"), (std::set<std::string>{"g", "l"})));
+    EXPECT_THAT(accessor, testing::HasSymlink(CanonPath("a/b/l"), "g"));
+}
+
+/* At the moment, the dir-fd cache resolves a miss by walking up to the deepest cached
+   ancestor and re-anchoring the rest of the path onto it. Nothing else
+   exercises that: the tests above only ever read a single branch, so the
+   lookup either hits exactly or starts from the root.
+
+   Only uses the `SourceAccessor` interface, so this runs on Windows too, which
+   uses the same accessor. */
+TEST_F(FSSourceAccessorTest, dirFdCacheReanchorsOnIntermediateHit)
+{
+    /* Siblings deliberately share a length, so that a component comparison
+       which only looked at sizes would confuse them. */
+    createDirs(tmpDir / "aaa" / "bbb" / "ccc");
+    createDirs(tmpDir / "aaa" / "bbb" / "ddd");
+    createDirs(tmpDir / "aaa" / "zzz");
+    writeFile(tmpDir / "aaa" / "bbb" / "ccc" / "f", "in-ccc");
+    writeFile(tmpDir / "aaa" / "bbb" / "ddd" / "f", "in-ddd");
+    writeFile(tmpDir / "aaa" / "zzz" / "f", "in-zzz");
+
+    auto accessor = makeFSSourceAccessor(tmpDir);
+
+    /* Populate the cache all the way down one branch. */
+    EXPECT_THAT(accessor, testing::HasContents(CanonPath("aaa/bbb/ccc/f"), "in-ccc"));
+
+    /* Sibling of the deepest cached directory: misses, re-anchors on `aaa/bbb`. */
+    EXPECT_THAT(accessor, testing::HasContents(CanonPath("aaa/bbb/ddd/f"), "in-ddd"));
+
+    /* Shallower sibling: re-anchors on `aaa` instead. */
+    EXPECT_THAT(accessor, testing::HasContents(CanonPath("aaa/zzz/f"), "in-zzz"));
+
+    /* Re-read everything, now served from the cache rather than walked. */
+    EXPECT_THAT(accessor, testing::HasContents(CanonPath("aaa/bbb/ccc/f"), "in-ccc"));
+    EXPECT_THAT(accessor, testing::HasContents(CanonPath("aaa/bbb/ddd/f"), "in-ddd"));
+    EXPECT_THAT(accessor, testing::HasContents(CanonPath("aaa/zzz/f"), "in-zzz"));
+
+    /* A genuine miss under a cached ancestor must stay a miss. */
+    EXPECT_FALSE(accessor->pathExists(CanonPath("aaa/bbb/eee/f")));
+    EXPECT_FALSE(accessor->pathExists(CanonPath("aaa/bbb/ccc/nope")));
 }
 
 /* Directories that are traversable but not listable (mode 0111) should
@@ -190,9 +176,9 @@ TEST_F(FSSourceAccessorTest, searchOnlyDirectories)
     /* Search-only accessor root (#16164). */
     auto accessor = makeFSSourceAccessor(tmpDir / "root");
     /* Path resolution through a search-only intermediate directory (#16165). */
-    EXPECT_THAT(accessor, HasContents(CanonPath("mid/sub/f"), "content"));
+    EXPECT_THAT(accessor, testing::HasContents(CanonPath("mid/sub/f"), "content"));
     /* A readable directory can be listed even if its parent is search-only. */
-    EXPECT_THAT(accessor, HasDirectory(CanonPath("mid/sub"), std::set<std::string>{"f"}));
+    EXPECT_THAT(accessor, testing::HasDirectory(CanonPath("mid/sub"), std::set<std::string>{"f"}));
     /* `fstat` on the search-only root descriptor itself. */
     EXPECT_EQ(accessor->lstat(CanonPath::root).type, SourceAccessor::tDirectory);
     /* `fstatat` relative to the search-only root descriptor. */
@@ -220,13 +206,14 @@ TEST_F(FSSourceAccessorTest, RestoreSinkRegularFileAtRoot)
         sink.createRegularFile(CanonPath::root, [](CreateRegularFileSink & crf) { crf("root content"); });
     }
 
-    EXPECT_THAT(makeFSSourceAccessor(filePath), HasContents(CanonPath::root, "root content"));
+    EXPECT_THAT(makeFSSourceAccessor(filePath), testing::HasContents(CanonPath::root, "root content"));
 }
 
 TEST_F(FSSourceAccessorTest, RestoreSinkSymlinkAtRoot)
 {
 #ifdef _WIN32
-    GTEST_SKIP() << "symlinks have some problems under Wine";
+    if (windows::isWine() && !windows::wineSymlinksSupported(tmpDir))
+        GTEST_SKIP() << "Wine doesn't seem to be able to create symlinks here";
 #endif
     auto linkPath = tmpDir / "rootlink";
     {
@@ -236,7 +223,7 @@ TEST_F(FSSourceAccessorTest, RestoreSinkSymlinkAtRoot)
         sink.createSymlink(CanonPath::root, "symlink_target");
     }
 
-    EXPECT_THAT(makeFSSourceAccessor(linkPath), HasSymlink(CanonPath::root, "symlink_target"));
+    EXPECT_THAT(makeFSSourceAccessor(linkPath), testing::HasSymlink(CanonPath::root, "symlink_target"));
 }
 
 } // namespace nix

@@ -2,6 +2,7 @@
 #include "nix/fetchers/fetchers.hh"
 #include "nix/fetchers/fetch-settings.hh"
 #include "nix/util/environment-variables.hh"
+#include "nix/util/logging.hh"
 
 #include <boost/unordered/concurrent_flat_map.hpp>
 
@@ -142,6 +143,8 @@ std::pair<StorePath, Hash> fetchToStore2(
                       hash.to_string(HashFormat::SRI, true));
                   return std::make_pair(storePath, hash);
               }();
+
+    act.result(resFetchToStore, store.printStorePath(storePath));
 
     if (cacheKey)
         settings.getCache()->upsert(*cacheKey, {{"hash", hash.to_string(HashFormat::SRI, true)}});

@@ -49,7 +49,8 @@ let
       binaryTarball
       binaryTarballCross
       installerScript
-      installerScriptForGHA
+      nixInstaller
+      nixInstallerScript
       dockerImage
       ;
 

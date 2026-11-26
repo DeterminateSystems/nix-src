@@ -180,7 +180,7 @@ struct CmdSearch : InstallableValueCommand, MixJSON
                             if (description != "")
                                 out += fmt(
                                     "\n  %s", hiliteMatches(description, descriptionMatches, ANSI_GREEN, ANSI_NORMAL));
-                            logger->cout(out);
+                            logger->coutStyled(out);
                         }
                     }
                 }
@@ -206,7 +206,7 @@ struct CmdSearch : InstallableValueCommand, MixJSON
         };
 
         Executor::WorkItems work;
-        for (auto & cursor : installable->getCursors(*state, false))
+        for (auto & cursor : installable->getCursors(*state, AutoCall::Yes, false))
             state->addWork(work, 1, [cursor, visit]() { visit(*cursor, cursor->getAttrPath(), true); });
 
         futures.spawn(std::move(work));

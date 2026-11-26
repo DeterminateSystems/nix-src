@@ -1,25 +1,35 @@
 #include "nix/fetchers/git-utils.hh"
+#include "nix/util/merkle-files.hh"
 #include "nix/util/file-system.hh"
-#include <gmock/gmock.h>
+#include "nix/util/tests/gmock-matchers.hh"
+#include "nix/util/serialise.hh"
+#include "nix/util/git.hh"
+#include "nix/util/finally.hh"
+
+#include <span>
+#include <tuple>
+#include <array>
+
 #include <git2/global.h>
 #include <git2/repository.h>
 #include <git2/signature.h>
 #include <git2/types.h>
 #include <git2/object.h>
 #include <git2/tag.h>
-#include <gtest/gtest.h>
-#include "nix/util/fs-sink.hh"
-#include "nix/util/serialise.hh"
-
 #include <git2/blob.h>
 #include <git2/tree.h>
+#include <git2/version.h>
+
+#include <zlib.h>
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
 namespace nix::fetchers {
 
 class GitUtilsTest : public ::testing::Test
 {
-    // We use a single repository for all tests.
-    std::unique_ptr<AutoDelete> delTmpDir;
+    AutoDelete delTmpDir;
 
 protected:
     std::filesystem::path tmpDir;
@@ -27,27 +37,24 @@ protected:
 public:
     void SetUp() override
     {
-        tmpDir = createTempDir();
-        delTmpDir = std::make_unique<AutoDelete>(tmpDir, true);
-
-        // Create the repo with libgit2
-        git_libgit2_init();
-        git_repository * repo = nullptr;
-        auto r = git_repository_init(&repo, tmpDir.string().c_str(), 0);
-        ASSERT_EQ(r, 0);
-        git_repository_free(repo);
+        tmpDir = createTempDir() / "test-git-repo";
+        GitRepo::openRepo(tmpDir, {.create = true, .bare = true});
+        delTmpDir = AutoDelete(tmpDir, true);
     }
 
     void TearDown() override
     {
-        // Destroy the AutoDelete, triggering removal
-        // not AutoDelete::reset(), which would cancel the deletion.
-        delTmpDir.reset();
+        delTmpDir.deletePath();
     }
 
     ref<GitRepo> openRepo()
     {
-        return GitRepo::openRepo(tmpDir, {.create = true});
+        return GitRepo::openRepo(tmpDir, {.create = false, .bare = true});
+    }
+
+    ref<GitRepoPool> openWriterPool()
+    {
+        return GitRepoPool::create(tmpDir, {.create = true, .bare = true});
     }
 
     std::string getRepoName() const
@@ -56,72 +63,88 @@ public:
     }
 };
 
-void writeString(CreateRegularFileSink & fileSink, std::string contents, bool executable)
+merkle::TreeEntry writeString(merkle::FileSinkBuilder & store, std::string contents, bool executable = false)
 {
-    if (executable)
-        fileSink.isExecutable();
-    fileSink.preallocateContents(contents.size());
-    fileSink(contents);
+    auto sink = store.makeRegularFileSink();
+    (*sink)(contents);
+    return merkle::TreeEntry{
+        executable ? merkle::Mode::Executable : merkle::Mode::Regular,
+        std::move(*sink).finalize(),
+    };
 }
 
 TEST_F(GitUtilsTest, sink_basic)
 {
     auto repo = openRepo();
-    auto sink = repo->getFileSystemObjectSink();
+    auto pool = openWriterPool();
 
-    // TODO/Question: It seems a little odd that we use the tarball-like convention of requiring a top-level directory
-    // here
-    //                The sync method does not document this behavior, should probably renamed because it's not very
-    //                general, and I can't imagine that "non-conventional" archives or any other source to be handled by
-    //                this sink.
+    // Build tree bottom-up using insertChild
+    // hello file
+    auto hello = writeString(*pool, "hello world");
 
-    sink->createDirectory(CanonPath("foo-1.1"));
+    // bye file
+    auto bye = writeString(*pool, "thanks for all the fish");
 
-    sink->createRegularFile(CanonPath("foo-1.1/hello"), [](CreateRegularFileSink & fileSink) {
-        writeString(fileSink, "hello world", false);
-    });
-    sink->createRegularFile(CanonPath("foo-1.1/bye"), [](CreateRegularFileSink & fileSink) {
-        writeString(fileSink, "thanks for all the fish", false);
-    });
-    sink->createSymlink(CanonPath("foo-1.1/bye-link"), "bye");
-    sink->createDirectory(CanonPath("foo-1.1/empty"));
-    sink->createDirectory(CanonPath("foo-1.1/links"));
-    sink->createHardlink(CanonPath("foo-1.1/links/foo"), CanonPath("foo-1.1/hello"));
+    // bye-link symlink
+    auto byeLink = pool->makeSymlink("bye");
 
-    // sink->createHardlink("foo-1.1/links/foo-2", CanonPath("foo-1.1/hello"));
+    // empty directory
+    auto empty = [&] {
+        auto emptyDir = pool->makeDirectorySink();
+        return merkle::TreeEntry{merkle::Mode::Directory, std::move(*emptyDir).finalize()};
+    }();
 
-    auto result = repo->dereferenceSingletonDirectory(sink->flush());
+    // links/foo file
+    auto linksFoo = writeString(*pool, "hello world");
+
+    // links directory
+    auto links = [&] {
+        auto linksDir = pool->makeDirectorySink();
+        linksDir->insertChild("foo", linksFoo);
+        return merkle::TreeEntry{merkle::Mode::Directory, std::move(*linksDir).finalize()};
+    }();
+
+    // foo-1.1 directory (contains hello, bye, bye-link, empty, links)
+    auto foo = [&] {
+        auto fooDir = pool->makeDirectorySink();
+        fooDir->insertChild("hello", hello);
+        fooDir->insertChild("bye", bye);
+        fooDir->insertChild("bye-link", byeLink);
+        fooDir->insertChild("empty", empty);
+        fooDir->insertChild("links", links);
+        return merkle::TreeEntry{merkle::Mode::Directory, std::move(*fooDir).finalize()};
+    }();
+
+    // root directory (contains foo-1.1)
+    auto rootHash = [&] {
+        auto rootDir = pool->makeDirectorySink();
+        rootDir->insertChild("foo-1.1", foo);
+        return std::move(*rootDir).finalize();
+    }();
+
+    pool->flush();
+
+    auto result = repo->dereferenceSingletonDirectory(rootHash);
     auto accessor = repo->getAccessor(result, {}, getRepoName());
-    auto entries = accessor->readDirectory(CanonPath::root);
-    ASSERT_EQ(entries.size(), 5u);
-    ASSERT_EQ(accessor->readFile(CanonPath("hello")), "hello world");
-    ASSERT_EQ(accessor->readFile(CanonPath("bye")), "thanks for all the fish");
-    ASSERT_EQ(accessor->readLink(CanonPath("bye-link")), "bye");
-    ASSERT_EQ(accessor->readDirectory(CanonPath("empty")).size(), 0u);
-    ASSERT_EQ(accessor->readFile(CanonPath("links/foo")), "hello world");
-};
 
-TEST_F(GitUtilsTest, sink_hardlink)
-{
-    auto repo = openRepo();
-    auto sink = repo->getFileSystemObjectSink();
+    ASSERT_THAT(
+        accessor,
+        testing::HasDirectory(
+            CanonPath::root,
+            std::set<std::string>{
+                "hello",
+                "bye",
+                "bye-link",
+                "empty",
+                "links",
+            }));
 
-    sink->createDirectory(CanonPath("foo-1.1"));
-
-    sink->createRegularFile(CanonPath("foo-1.1/hello"), [](CreateRegularFileSink & fileSink) {
-        writeString(fileSink, "hello world", false);
-    });
-
-    try {
-        sink->createHardlink(CanonPath("foo-1.1/link"), CanonPath("hello"));
-        sink->flush();
-        FAIL() << "Expected an exception";
-    } catch (const nix::Error & e) {
-        ASSERT_THAT(e.msg(), testing::HasSubstr("does not exist"));
-        ASSERT_THAT(e.msg(), testing::HasSubstr("/hello"));
-        ASSERT_THAT(e.msg(), testing::HasSubstr("foo-1.1/link"));
-    }
-};
+    ASSERT_THAT(accessor, testing::HasContents(CanonPath("hello"), "hello world"));
+    ASSERT_THAT(accessor, testing::HasContents(CanonPath("bye"), "thanks for all the fish"));
+    ASSERT_THAT(accessor, testing::HasSymlink(CanonPath("bye-link"), "bye"));
+    ASSERT_THAT(accessor, testing::HasDirectory(CanonPath("empty"), std::set<std::string>{}));
+    ASSERT_THAT(accessor, testing::HasContents(CanonPath("links/foo"), "hello world"));
+}
 
 TEST_F(GitUtilsTest, peel_reference)
 {
@@ -171,6 +194,158 @@ TEST_F(GitUtilsTest, peel_reference)
 
     git_signature_free(sig);
     git_repository_free(rawRepo);
+}
+
+TEST_F(GitUtilsTest, duplicateTreeEntries)
+{
+    StringSink packSink;
+
+    auto serialiseBigEndian = [](auto x, Sink & sink) {
+        std::array<unsigned char, sizeof(x)> bytes;
+        writeBigEndian(bytes.data(), x);
+        sink(std::string_view(reinterpret_cast<const char *>(bytes.data()), bytes.size()));
+    };
+
+    auto writeObjectPackHeader = [&packSink](int type, std::size_t size) {
+        std::vector<char> bytes;
+        unsigned char byte = type << 4 | (size & 0x0f);
+        size >>= 4;
+
+        while (size) {
+            byte |= 0x80;
+            bytes.push_back(byte);
+            byte = size & 0x7f;
+            size >>= 7;
+        }
+
+        bytes.push_back(byte);
+        packSink(std::string_view(bytes.data(), bytes.size()));
+    };
+
+    /* We don't have a deflate compression sink and seems excessive to write it just for tests.
+       Maybe it the future we might want to write pack files manually to work in constant memory? */
+    auto compressObject = [](std::string_view data) -> std::string {
+        z_stream stream = {};
+        if (deflateInit(&stream, Z_DEFAULT_COMPRESSION) != Z_OK)
+            unreachable();
+        Finally cleanup([&stream] { ::deflateEnd(&stream); });
+        stream.next_in = reinterpret_cast<unsigned char *>(const_cast<char *>(data.data()));
+        stream.avail_in = data.size();
+        auto maxOutputSize = ::deflateBound(&stream, data.size());
+        std::vector<unsigned char> result(maxOutputSize, '\0');
+        stream.next_out = result.data();
+        stream.avail_out = result.size();
+        if (::deflate(&stream, Z_FINISH) != Z_STREAM_END)
+            unreachable();
+        result.resize(result.size() - stream.avail_out);
+        return std::string(result.begin(), result.end());
+    };
+
+    /* https://git-scm.com/docs/pack-format */
+    packSink("PACK");
+    serialiseBigEndian(/*version=*/2u, packSink);
+    serialiseBigEndian(/*numObjects=*/5u, packSink);
+
+    auto writeBlobToPackfile = [&](std::string_view data) -> Hash {
+        HashSink hashSink(HashAlgorithm::SHA1);
+        git::dumpBlobPrefix(data.size(), hashSink);
+        hashSink(data);
+        auto hash = hashSink.finish();
+        writeObjectPackHeader(/*OBJ_BLOB=*/3, data.size());
+        packSink(compressObject(data));
+        return hash.hash;
+    };
+
+    auto writeTreeToPackfile = [&](std::span<const std::tuple<std::string, git::Mode, Hash>> entries) -> Hash {
+        using namespace std::string_literals;
+        std::string tree;
+
+        for (const auto & [name, mode, hash] : entries) {
+            tree += fmt("%o %s\0"s, std::to_underlying(mode), name);
+            tree += std::string_view(reinterpret_cast<const char *>(hash.hash), hash.hashSize);
+        }
+
+        writeObjectPackHeader(/*OBJ_TREE=*/2, tree.size());
+        packSink(compressObject(tree));
+        HashSink treeHashSink(HashAlgorithm::SHA1);
+        treeHashSink(fmt("tree %d\0"s, tree.size()));
+        treeHashSink(tree);
+        return treeHashSink.finish().hash;
+    };
+
+    auto blob1 = writeBlobToPackfile("hi");
+    ASSERT_EQ(blob1.gitRev(), "32f95c0d1244a78b2be1bab8de17906fabb2c4a8");
+    auto blob2 = writeBlobToPackfile("there");
+    ASSERT_EQ(blob2.gitRev(), "c78ee1a5bdf46d22da300b68d50bc45c587c3293");
+    auto tree1 = writeTreeToPackfile(
+        std::to_array<std::tuple<std::string, git::Mode, Hash>>({
+            {"a.txt", git::Mode::Regular, blob1},
+            {"a.txt", git::Mode::Executable, blob2},
+        }));
+    ASSERT_EQ(tree1.gitRev(), "164e45a3d3f73578e4d4f83651b5d0edc4564ba0");
+    auto tree2 = writeTreeToPackfile(
+        std::to_array<std::tuple<std::string, git::Mode, Hash>>({
+            /* Fake blob that actually points to a tree. */
+            {"a.txt", git::Mode::Regular, tree1},
+        }));
+    auto tree3 = writeTreeToPackfile(
+        std::to_array<std::tuple<std::string, git::Mode, Hash>>({
+            /* Fake tree that actually points to a blob. */
+            {"fake-dir", git::Mode::Directory, blob1},
+        }));
+
+    auto packHash = hashString(HashAlgorithm::SHA1, packSink.s);
+    packSink(std::string_view(reinterpret_cast<const char *>(packHash.hash), packHash.hashSize));
+
+    /* Now that the pack file is built, index it.
+       TODO: If libgit2 ever hardens itself against such pack files we might need to
+       rework the test and write the pack file manually. */
+    ::git_indexer * indexer = nullptr;
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+    ::git_indexer_options indexerOpts = GIT_INDEXER_OPTIONS_INIT;
+    indexerOpts.oid_type = GIT_OID_SHA1;
+#endif
+
+    Finally freeIndexer{[&indexer] { ::git_indexer_free(indexer); }};
+    ASSERT_EQ(
+        ::git_indexer_new(
+            &indexer,
+            (tmpDir / "objects" / "pack").string().c_str(),
+#if LIBGIT2_VERSION_CHECK(2, 0, 0)
+            &indexerOpts
+#else
+            0,
+            nullptr,
+            nullptr
+#endif
+            ),
+        0);
+
+    ::git_indexer_progress progress = {};
+    ASSERT_EQ(::git_indexer_append(indexer, packSink.s.data(), packSink.s.size(), &progress), 0);
+    ASSERT_EQ(::git_indexer_commit(indexer, &progress), 0);
+
+    auto repo = openRepo();
+    auto accessor1 = repo->getAccessor(tree1, {}, getRepoName());
+
+    auto throwCorruptedTree = ::testing::ThrowsMessage<Error>(
+        testing::HasSubstrIgnoreANSIMatcher("duplicated or incorrectly ordered tree entries"));
+    ASSERT_THAT([&] { accessor1->readDirectory(CanonPath::root); }, throwCorruptedTree);
+    ASSERT_THAT([&] { accessor1->readFile(CanonPath("a.txt")); }, throwCorruptedTree);
+    /* The cache should be nuked on corrupted tree errors. */
+    ASSERT_THAT([&] { accessor1->readFile(CanonPath("a.txt")); }, throwCorruptedTree);
+
+    auto accessor2 = repo->getAccessor(tree2, {}, getRepoName());
+    ASSERT_THAT(
+        [&] { accessor2->readFile(CanonPath("a.txt")); },
+        ::testing::ThrowsMessage<Error>(
+            testing::HasSubstrIgnoreANSIMatcher("'test-git-repo/a.txt' is not a regular file")));
+
+    auto accessor3 = repo->getAccessor(tree3, {}, getRepoName());
+    ASSERT_THAT(
+        [&] { accessor3->readDirectory(CanonPath("fake-dir")); },
+        ::testing::ThrowsMessage<Error>(
+            testing::HasSubstrIgnoreANSIMatcher("'test-git-repo/fake-dir' is not a directory")));
 }
 
 TEST(GitUtils, isLegalRefName)

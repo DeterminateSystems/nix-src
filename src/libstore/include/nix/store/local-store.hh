@@ -8,10 +8,12 @@
 #include "nix/store/indirect-root-store.hh"
 #include "nix/store/active-builds.hh"
 #include "nix/util/sync.hh"
+#include "nix/util/os-filename.hh"
 
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <list>
 #include <string>
 #include <boost/unordered/concurrent_flat_set_fwd.hpp>
 
@@ -312,6 +314,20 @@ public:
         RepairFlag repair,
         std::shared_ptr<const Provenance> provenance) override;
 
+    // Designed to be used from RestrictedStore,
+    // allows filtering the references while scanning.
+    // Not an entirely separate function in order to reduce duplication
+    StorePath addToStoreFromDump(
+        Source & dump,
+        std::string_view name,
+        FileSerialisationMethod dumpMethod,
+        ContentAddressMethod hashMethod,
+        HashAlgorithm hashAlgo,
+        const StorePathSet & references,
+        RepairFlag repair,
+        bool filterReferences,
+        std::shared_ptr<const Provenance> provenance);
+
     void addTempRoots(const StorePathSet & paths, bool skipIfSlow) override;
 
 private:
@@ -399,6 +415,8 @@ public:
     Roots findRoots(bool censor) override;
 
     void collectGarbage(const GCOptions & options, GCResults & results) override;
+
+    void deleteBuildTraces(const std::set<DrvOutput> & keys) override;
 
     /**
      * Called by `collectGarbage` to trace in reverse.
@@ -499,7 +517,7 @@ public:
      * Register the store path 'output' as the output named 'outputName' of
      * derivation 'deriver'.
      */
-    void registerDrvOutput(const Realisation & info) override;
+    void registerDrvOutputUnchecked(const Realisation & info) override;
     void registerDrvOutput(const Realisation & info, CheckSigsFlag checkSigs) override;
     void cacheDrvOutputMapping(
         State & state, const uint64_t deriver, const std::string & outputName, const StorePath & output);
@@ -561,7 +579,7 @@ private:
     typedef boost::concurrent_flat_set<ino_t> InodeHash;
 
     InodeHash loadInodeHash();
-    Strings readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash);
+    std::list<OsFilename> readDirectoryIgnoringInodes(const std::filesystem::path & path, const InodeHash & inodeHash);
     void optimisePath_(
         Activity * act,
         OptimiseStats & stats,
@@ -575,7 +593,7 @@ private:
 
     void addBuildLog(const StorePath & drvPath, std::string_view log) override;
 
-    friend struct PathSubstitutionGoal;
+    friend class PathSubstitutionGoal;
     friend struct DerivationGoal;
     /* Only used for createTempDirInStore. */
     friend class DerivationBuilderImpl;

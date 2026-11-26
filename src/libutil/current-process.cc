@@ -6,6 +6,7 @@
 #include <ranges>
 
 #include "nix/util/current-process.hh"
+#include "nix/util/system-error.hh"
 #include "nix/util/util.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/signals.hh"
@@ -17,6 +18,11 @@
 #  include <signal.h>
 #  include <sys/mman.h>
 #  include <unistd.h>
+#  include "unix/current-process-private.hh"
+#else
+#  define WIN32_LEAN_AND_MEAN
+#  include "nix/util/os-string.hh"
+#  include <windows.h>
 #endif
 
 #ifdef __APPLE__
@@ -68,42 +74,6 @@ unsigned int getMaxCPU()
 //////////////////////////////////////////////////////////////////////
 
 #ifndef _WIN32
-size_t savedStackSize = 0;
-
-void ensureStackSizeAtLeast(size_t stackSize)
-{
-    struct rlimit limit;
-    if (getrlimit(RLIMIT_STACK, &limit) == 0 && static_cast<size_t>(limit.rlim_cur) < stackSize) {
-        savedStackSize = limit.rlim_cur;
-        if (limit.rlim_max < static_cast<rlim_t>(stackSize)) {
-            if (getEnv("_NIX_TEST_NO_ENVIRONMENT_WARNINGS") != "1") {
-                logger->log(
-                    lvlWarn,
-                    HintFmt(
-                        "Stack size hard limit is %1%, which is less than the desired %2%. If possible, increase the hard limit, e.g. with 'ulimit -Hs %3%'.",
-                        limit.rlim_max,
-                        stackSize,
-                        stackSize / 1024)
-                        .str());
-            }
-        }
-        auto requestedSize = std::min(static_cast<rlim_t>(stackSize), limit.rlim_max);
-        limit.rlim_cur = requestedSize;
-        if (setrlimit(RLIMIT_STACK, &limit) != 0) {
-            logger->log(
-                lvlError,
-                HintFmt(
-                    "Failed to increase stack size from %1% to %2% (desired: %3%, maximum allowed: %4%): %5%",
-                    savedStackSize,
-                    requestedSize,
-                    stackSize,
-                    limit.rlim_max,
-                    std::strerror(errno))
-                    .str());
-        }
-    }
-}
-
 namespace {
 
 /**
@@ -201,10 +171,10 @@ void restoreProcessContext(bool restoreMounts)
     }
 
 #ifndef _WIN32
-    if (savedStackSize) {
+    if (unix::savedStackSize) {
         struct rlimit limit;
         if (getrlimit(RLIMIT_STACK, &limit) == 0) {
-            limit.rlim_cur = savedStackSize;
+            limit.rlim_cur = unix::savedStackSize;
             setrlimit(RLIMIT_STACK, &limit);
         }
     }
@@ -257,6 +227,13 @@ std::optional<std::filesystem::path> getSelfExe()
         path.pop_back();
 
         return std::string(path.begin(), path.end());
+#elif defined(_WIN32)
+        std::vector<OsChar> buf(32 * 1024);
+        DWORD size = buf.size();
+        if (!::QueryFullProcessImageNameW(
+                ::GetCurrentProcess(), /*dwFlags=*/0, /*lpExeName=*/buf.data(), /*lpdwSize=*/&size))
+            return std::nullopt;
+        return std::filesystem::path{OsString{buf.data(), size}};
 #else
         return std::nullopt;
 #endif

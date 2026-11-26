@@ -67,8 +67,9 @@ struct CmdFlakeBake : FlakeCommand, MixFlakeSchemas, MixReadOnlyOption
         writeFile(destDir / "outputs.json", inv.dump());
         writeFile(
             destDir / "flake.nix",
-#include "baked-flake.nix.gen.hh"
-        );
+            std::string{
+#embed "baked-flake.nix"
+            });
     }
 };
 

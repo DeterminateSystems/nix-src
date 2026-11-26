@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "nix/util/error.hh"
+#include "nix/util/system-error.hh"
 #include "nix/cmd/repl-interacter.hh"
 #include "nix/cmd/repl.hh"
 
@@ -26,6 +27,7 @@
 #include "nix/util/finally.hh"
 #include "nix/cmd/markdown.hh"
 #include "nix/store/local-fs-store.hh"
+#include "nix/store/build.hh"
 #include "nix/expr/print.hh"
 #include "nix/util/ref.hh"
 #include "nix/expr/value.hh"
@@ -66,7 +68,7 @@ struct NixRepl : AbstractNixRepl, detail::ReplCompleterMixin, gc
     Strings loadedFlakes;
     fun<AnnotatedValues()> getValues;
 
-    const static int envSize = 32768;
+    static const int envSize = 32768;
     std::shared_ptr<StaticEnv> staticEnv;
     std::optional<Value> lastLoaded;
     Env * env;
@@ -172,11 +174,6 @@ static std::ostream & showDebugTrace(std::ostream & out, const PosTable & positi
  * exception subtype is what distinguishes the two cases.
  */
 MakeError(IncompleteReplExpr, Error);
-
-static bool isIncompleteInput(const ParseError & e)
-{
-    return e.msg().find("unexpected end of file") != std::string::npos;
-}
 
 void IncompleteReplExpr::anchor() {}
 
@@ -510,9 +507,12 @@ ProcessLineResult NixRepl::processLine(std::string line)
         // runProgram redirects stdout to a StringSink,
         // using runProgram2 to allow editors to display their UI
         runProgram2({
-            .program = editor,
-            .lookupPath = true,
-            .args = std::move(args),
+            .spawnOptions =
+                {
+                    .program = editor,
+                    .lookupPath = true,
+                    .args = std::move(args),
+                },
             .isInteractive = true,
         });
 
@@ -549,7 +549,7 @@ ProcessLineResult NixRepl::processLine(std::string line)
         std::string drvPathRaw = state->store->printStorePath(drvPath);
 
         if (command == ":b" || command == ":bl") {
-            state->store->buildPaths({
+            state->store->getBuilder()->buildPaths({
                 DerivedPath::Built{
                     .drvPath = makeConstantStorePathRef(drvPath),
                     .outputs = OutputsSpec::All{},
@@ -677,23 +677,42 @@ ProcessLineResult NixRepl::processLine(std::string line)
         throw Error("unknown command '%1%'", command);
 
     else {
-        // Try parsing as bindings first (handles `x = 1`, `inherit ...`, etc.)
-        ExprAttrs * bindings = parseReplBindings(line);
+        /* Try first to evaluate as an expression. Bindings cannot be mistaken for expressions, even
+           though it can't be expressed in our LALR(1) grammar. */
 
-        if (bindings) {
+        Expr * expr = nullptr;
+        std::optional<ParseError> exprParseError;
+        try {
+            expr = parseString(line);
+        } catch (const ParseError & e) {
+            if (e.isIncomplete())
+                throw IncompleteReplExpr(e.message());
+            exprParseError = e;
+        }
+
+        if (expr) {
+            Value v;
+            expr->eval(*state, *env, v);
+            state->forceValue(v, v.determinePos(noPos));
+
+            auto suspension = logger->suspend();
+            printValue(std::cout, v, 1);
+            std::cout << std::endl;
+        } else {
+            ExprAttrs * bindings = nullptr;
+            try {
+                bindings = parseReplBindings(line);
+            } catch (ParseError & e) {
+                /* Expression-based errors are preferable almost always. */
+                throw std::move(*exprParseError);
+            }
+            assert(bindings);
             Env * inheritEnv = bindings->inheritFromExprs ? bindings->buildInheritFromEnv(*state, *env) : nullptr;
             for (auto & [symbol, def] : *bindings->attrs) {
                 Value & v(*state->allocValue());
                 v.mkThunk(def.chooseByKind(env, env, inheritEnv), def.e);
                 addVarToScope(symbol, v);
             }
-        } else {
-            // Otherwise evaluate as expression
-            Value v;
-            evalString(line, v);
-            auto suspension = logger->suspend();
-            printValue(std::cout, v, 1);
-            std::cout << std::endl;
         }
     }
 
@@ -723,8 +742,11 @@ void NixRepl::loadFlake(const std::string & flakeRefS)
         throw SystemError(e.code(), "cannot determine current working directory");
     }
 
-    auto flakeRef = parseFlakeRef(fetchSettings, flakeRefS, cwd.string(), true);
-    if (evalSettings.pureEval && !flakeRef.input.isLocked(fetchSettings))
+    const auto & fetchSettings = state->fetchSettings;
+    const bool isPureEval = state->settings.pureEval;
+
+    auto flakeRef = parseFlakeRef(flakeRefS, cwd.string(), true);
+    if (isPureEval && !flakeRef.input.isLocked(fetchSettings))
         throw Error("cannot use ':load-flake' on unlocked flake reference '%s' (use --impure to override)", flakeRefS);
 
     Value v;
@@ -737,8 +759,8 @@ void NixRepl::loadFlake(const std::string & flakeRefS)
             flakeRef,
             flake::LockFlags{
                 .updateLockFile = false,
-                .useRegistries = !evalSettings.pureEval,
-                .allowUnlocked = !evalSettings.pureEval,
+                .useRegistries = !isPureEval,
+                .allowUnlocked = !isPureEval,
             }),
         v);
     addAttrsToScope(v);
@@ -886,8 +908,8 @@ Expr * NixRepl::parseString(std::string s)
     try {
         return state->parseExprFromString(std::move(s), state->rootPath("."), staticEnv);
     } catch (ParseError & e) {
-        if (isIncompleteInput(e))
-            throw IncompleteReplExpr(e.msg());
+        if (e.isIncomplete())
+            throw IncompleteReplExpr(e.message());
         throw;
     }
 }
@@ -895,11 +917,16 @@ Expr * NixRepl::parseString(std::string s)
 ExprAttrs * NixRepl::parseReplBindings(std::string s)
 {
     auto basePath = state->rootPath(".");
+    std::optional<ParseError> incompleteError;
 
     // Try parsing as bindings
     try {
         return state->parseReplBindings(s, basePath, staticEnv);
-    } catch (ParseError &) {
+    } catch (ParseError & e) {
+        if (e.isIncomplete()) {
+            assert(e.hasPos()); /* Bison error handler always provides a position. */
+            incompleteError = e;
+        }
     }
 
     // Try with semicolon appended (for `inherit foo` shorthand)
@@ -907,10 +934,12 @@ ExprAttrs * NixRepl::parseReplBindings(std::string s)
     try {
         return state->parseReplBindings(s + ";", s, basePath, staticEnv);
     } catch (ParseError & e) {
-        if (isIncompleteInput(e))
-            throw IncompleteReplExpr(e.msg());
-        // Semicolon retry also failed; not valid binding syntax.
-        return nullptr;
+        // This is a hack around the fact that by replacing the unexpected EOF token with a `;`
+        // the error is no longer "incomplete". Note that the first condition is probably unreachable
+        // because of it.
+        if (e.isIncomplete() || (incompleteError && e.info().pos && *e.info().pos == *incompleteError->info().pos))
+            throw IncompleteReplExpr(e.message());
+        throw;
     }
 }
 

@@ -56,7 +56,7 @@ public:
         nix::Verbosity lvl,
         nix::ActivityType type,
         const std::string & s,
-        const Fields & /*fields*/,
+        std::span<const Field> /*fields*/,
         nix::ActivityId parent) noexcept override
     {
         if (!vtable.start_activity)
@@ -71,14 +71,14 @@ public:
             vtable.stop_activity(userdata, act);
     }
 
-    void result(nix::ActivityId act, nix::ResultType type, const Fields & fields) noexcept override
+    void result(nix::ActivityId act, nix::ResultType type, std::span<const Field> fields) noexcept override
     {
         if (!vtable.result_string)
             return;
-        if (fields.empty() || !std::get_if<std::string>(&fields[0].raw))
+        if (fields.empty() || !std::get_if<std::string>(&fields[0]))
             return;
         vtable.result_string(
-            userdata, act, static_cast<nix_result_type>(type), std::get<std::string>(fields[0].raw).c_str());
+            userdata, act, static_cast<nix_result_type>(type), std::get<std::string>(fields[0]).c_str());
     }
 
     virtual void anchor();

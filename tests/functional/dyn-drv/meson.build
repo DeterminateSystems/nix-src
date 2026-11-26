@@ -8,8 +8,10 @@ suites += {
     'eval-outputOf.sh',
     'failing-outer.sh',
     'dep-built-drv.sh',
-    'old-daemon-error-hack.sh',
     'dep-built-drv-2.sh',
+    'dep-built-drv-submitted.sh',
+    'submit-failure.sh',
+    'submit-reference.sh',
   ],
   'workdir' : meson.current_source_dir(),
 }

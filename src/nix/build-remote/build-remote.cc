@@ -5,6 +5,7 @@
 #include <set>
 #include <memory>
 #include <tuple>
+#include <iostream>
 
 #ifdef __APPLE__
 #  include <sys/time.h>
@@ -23,11 +24,16 @@
 
 #include "otel-logger.hh"
 #include "nix/util/strings.hh"
+#include "nix/util/util.hh"
+#include "nix/util/environment-variables.hh"
 #include "nix/store/derivations.hh"
+#include "nix/store/derivation/full-inputs.hh"
 #include "nix/store/local-store.hh"
+#include "nix/store/build.hh"
 #include "nix/cmd/legacy.hh"
 #include "nix/util/experimental-features.hh"
 #include "nix/store/globals.hh"
+#include "nix/util/system-error.hh"
 
 namespace nix {
 
@@ -77,8 +83,8 @@ static int main_build_remote(int argc, char ** argv)
         logger = makeJSONLogger(getStandardError()).release();
 
         /* Ensure we don't get any SSH passphrase or host key popups. */
-        unsetenv("DISPLAY");
-        unsetenv("SSH_ASKPASS");
+        unsetEnv("DISPLAY");
+        unsetEnv("SSH_ASKPASS");
 
         /* If we ever use the common args framework, make sure to
            remove initPlugins below and initialize settings first.
@@ -86,7 +92,10 @@ static int main_build_remote(int argc, char ** argv)
         if (argc != 2)
             throw UsageError("called without required arguments");
 
-        verbosity = (Verbosity) std::stoll(argv[1]);
+        auto rawVerbosity = string2Int<unsigned>(argv[1]);
+        if (!rawVerbosity)
+            throw UsageError("invalid verbosity '%s'", argv[1]);
+        verbosity = verbosityFromIntClamped(*rawVerbosity);
 
         FdSource source(STDIN_FILENO);
 
@@ -297,7 +306,15 @@ static int main_build_remote(int argc, char ** argv)
 
         std::cerr << "# accept\n" << storeUri << "\n";
 
-        auto inputs = readStrings<StringSet>(source);
+        /* The other side of the build hook protocol is Nix itself, so
+           these are always printed in canonical form. */
+        auto inputs = [&] {
+            StorePathSet res;
+            for (auto & i : readStrings<StringSet>(source))
+                res.insert(store->parseStorePathCanonical(i));
+            return res;
+        }();
+
         auto wantedOutputs = readStrings<StringSet>(source);
 
         AutoCloseFD uploadLock;
@@ -331,7 +348,7 @@ static int main_build_remote(int argc, char ** argv)
 
         {
             Activity act(*logger, lvlTalkative, actUnknown, fmt("copying dependencies to '%s'", storeUri));
-            copyPaths(*store, *sshStore, store->parseStorePathSet(inputs), NoRepair, NoCheckSigs, substitute);
+            copyPaths(*store, *sshStore, inputs, NoRepair, NoCheckSigs, substitute);
         }
 
         uploadLock = -1;
@@ -353,19 +370,39 @@ static int main_build_remote(int argc, char ** argv)
         //
         // This condition mirrors that: that code enforces the "rules" outlined there;
         // we do the best we can given those "rules".
-        if (trustedOrLegacy || drv.type().isCA()) {
-            // Hijack the inputs paths of the derivation to include all
-            // the paths that come from the `inputDrvs` set. We don’t do
-            // that for the derivations whose `inputDrvs` is empty
-            // because:
-            //
-            // 1. It’s not needed
-            //
-            // 2. Changing the `inputSrcs` set changes the associated
-            //    output ids, which break CA derivations
-            if (!drv.inputDrvs.map.empty())
-                drv.inputSrcs = store->parseStorePathSet(inputs);
-            optResult = sshStore->buildDerivation(*drvPath, static_cast<const BasicDerivation &>(drv));
+        if (trustedOrLegacy || type(drv).isCA()) {
+            // Check if there are any derivation inputs
+            bool hasInputDrvs = std::ranges::any_of(drv.inputs, [](const auto & input) {
+                return std::holds_alternative<SingleDerivedPath::Built>(input.raw());
+            });
+
+            BasicDerivation resolvedDrv{
+                .outputs = drv.outputs,
+                // Hijack the inputs paths of the derivation to include
+                // all the paths that come from the `inputDrvs` set. We
+                // don't do that for the derivations whose `inputDrvs`
+                // is empty because:
+                //
+                // 1. It's not needed
+                //
+                // 2. Changing the `inputSrcs` set changes the
+                //    associated output ids, which break CA derivations
+                .inputs =
+                    hasInputDrvs ? inputs : [&] {
+                        StorePathSet srcs;
+                        for (auto & input : drv.inputs)
+                            if (auto * op = std::get_if<SingleDerivedPath::Opaque>(&input.raw()))
+                                srcs.insert(op->path);
+                        return srcs;
+                    }(),
+                .platform = drv.platform,
+                .builder = drv.builder,
+                .args = drv.args,
+                .env = drv.env,
+                .structuredAttrs = drv.structuredAttrs,
+                .name = drv.name,
+            };
+            optResult = sshStore->getBuilder()->buildDerivation(*drvPath, resolvedDrv);
             auto & result = *optResult;
             if (auto * failureP = result.tryGetFailure()) {
                 if (settings.keepFailed) {
@@ -380,7 +417,7 @@ static int main_build_remote(int argc, char ** argv)
             }
         } else {
             copyClosure(*store, *sshStore, StorePathSet{*drvPath}, NoRepair, NoCheckSigs, substitute);
-            auto res = sshStore->buildPathsWithResults({DerivedPath::Built{
+            auto res = sshStore->getBuilder()->buildPathsWithResults({DerivedPath::Built{
                 .drvPath = makeConstantStorePathRef(*drvPath),
                 .outputs = OutputsSpec::All{},
             }});
@@ -391,7 +428,7 @@ static int main_build_remote(int argc, char ** argv)
 
         std::set<Realisation> missingRealisations;
         StorePathSet missingPaths;
-        if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations) && !drv.type().hasKnownOutputPaths()) {
+        if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations) && !type(drv).hasKnownOutputPaths()) {
             for (auto & outputName : wantedOutputs) {
                 auto thisOutputId = DrvOutput{*drvPath, outputName};
                 if (!store->queryRealisation(thisOutputId)) {
@@ -409,7 +446,7 @@ static int main_build_remote(int argc, char ** argv)
                 }
             }
         } else {
-            auto outputPaths = drv.outputsAndOptPaths(*store);
+            auto outputPaths = outputsAndOptPaths(drv, *store);
             for (auto & [outputName, hopefullyOutputPath] : outputPaths) {
                 assert(hopefullyOutputPath.second);
                 if (!store->isValidPath(*hopefullyOutputPath.second))
@@ -429,7 +466,7 @@ static int main_build_remote(int argc, char ** argv)
             // Should hold, because if the feature isn't enabled the set
             // of missing realisations should be empty
             experimentalFeatureSettings.require(Xp::CaDerivations);
-            store->registerDrvOutput(realisation);
+            store->registerDrvOutput(realisation, NoCheckSigs);
         }
 
         return 0;

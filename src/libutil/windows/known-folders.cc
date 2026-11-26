@@ -1,6 +1,8 @@
 #include "nix/util/windows-known-folders.hh"
 #include "nix/util/util.hh"
 #include "nix/util/users.hh"
+#include "nix/util/system-error.hh"
+#include "nix/util/finally.hh"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>

@@ -122,7 +122,7 @@ struct QueryActiveBuildsStore
 
 } // namespace nix
 
-JSON_IMPL(UserInfo)
-JSON_IMPL(ActiveBuild)
-JSON_IMPL(ActiveBuildInfo)
-JSON_IMPL(ActiveBuildInfo::ProcessInfo)
+JSON_IMPL(nix::UserInfo)
+JSON_IMPL(nix::ActiveBuild)
+JSON_IMPL(nix::ActiveBuildInfo)
+JSON_IMPL(nix::ActiveBuildInfo::ProcessInfo)

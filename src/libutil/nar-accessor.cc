@@ -1,6 +1,7 @@
 #include "nix/util/nar-accessor.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/error.hh"
+#include "nix/util/system-error.hh"
 
 namespace nix {
 
@@ -162,9 +163,8 @@ ref<NarAccessor> makeLazyNarAccessor(NarListing listing, GetNarBytes getNarBytes
 
 GetNarBytes seekableGetNarBytes(const std::filesystem::path & path)
 {
-    auto fd = openFileReadonly(path);
-    if (!fd)
-        throw NativeSysError("opening NAR cache file %s", PathFmt(path));
+    auto fd =
+        valueOr(openFileReadonly(path), NIX_THROW_NATIVE_SYS_ERROR_HANDLER("opening NAR cache file %s", PathFmt(path)));
 
     auto inner = seekableGetNarBytes(fd.get());
     return [inner = std::move(inner), fd = make_ref<AutoCloseFD>(std::move(fd))](

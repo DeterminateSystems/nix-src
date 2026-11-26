@@ -4,11 +4,13 @@
 #include "nix/util/signals.hh"
 #include "nix/util/socket.hh"
 #include "nix/util/util.hh"
+#include "nix/util/system-error.hh"
 
 #include <cstring>
 #include <cerrno>
 #include <limits>
 #include <memory>
+#include <utility>
 
 #include <boost/coroutine2/coroutine.hpp>
 #include <boost/coroutine2/protected_fixedsize_stack.hpp>
@@ -312,8 +314,8 @@ void FdSource::restart()
         throw Error("can't seek to the start of a file");
     buffer.reset();
     read = bufPosIn = bufPosOut = 0;
-    if (lseek(fd, 0, SEEK_SET) == -1)
-        throw SysError("seeking to the start of a file");
+    if (auto res = seek(fd, 0, SEEK_SET); !res)
+        throw NativeSysError(res.error(), "seeking to the start of a file");
 }
 
 void FdSource::skip(size_t len)
@@ -334,11 +336,11 @@ void FdSource::skip(size_t len)
     if (isSeekable && len) {
         if (len > static_cast<size_t>(std::numeric_limits<off_t>::max()))
             throw Error("cannot skip %d bytes: exceeds maximum file offset", len);
-        if (lseek(fd, len, SEEK_CUR) == -1) {
-            if (errno == ESPIPE)
+        if (auto res = seek(fd, len, SEEK_CUR); !res) {
+            if (NativeSysError::toErrorCode(res.error()) == std::errc::invalid_seek)
                 isSeekable = false;
             else
-                throw SysError("seeking forward in file");
+                throw NativeSysError(res.error(), "seeking forward in file");
         } else {
             read += len;
             return;
@@ -543,9 +545,16 @@ std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)
 
         void finish() override
         {
-            if (coro && *coro) {
-                CoroutineGuard guard{stackCookie};
-                (*coro)(true);
+            if (coro) {
+                if (*coro) {
+                    CoroutineGuard guard{stackCookie};
+                    (*coro)(true);
+                }
+            } else {
+                /* Callers of sourceToSink expect to always be invoked, even if there's no
+                   data to read (to invoke other side effects, e.g. in Store::addToStore). */
+                StringSource empty{std::string_view()};
+                reader(empty);
             }
         }
     };
@@ -699,8 +708,8 @@ Sink & operator<<(Sink & sink, const StringSet & s)
 Sink & operator<<(Sink & sink, const Error & ex)
 {
     auto & info = ex.info();
-    sink << "Error" << info.level << "Error" // removed
-         << info.msg.str() << 0              // FIXME: info.errPos
+    sink << "Error" << std::to_underlying(info.level) << "Error" // removed
+         << info.msg.str() << 0                                  // FIXME: info.errPos
          << info.traces.size();
     for (auto & trace : info.traces) {
         sink << 0; // FIXME: trace.pos
@@ -733,10 +742,38 @@ size_t readString(char * buf, size_t max, Source & source)
 std::string readString(Source & source, size_t max)
 {
     auto len = readNum<size_t>(source);
+    std::string res;
+    /* In practice this will limit the string to 2GiB on 32 bit systems. */
+    max = std::min(max, res.max_size());
     if (len > max)
         throw SerialisationError("string is too long");
-    std::string res(len, 0);
-    source(res.data(), len);
+    /* Grow with the data actually received rather than trusting `len` for
+       the allocation, so a bogus length prefix costs the peer as many bytes
+       as it costs us. */
+    while (res.size() < len) {
+        std::string::size_type filled = res.size();
+        /* `len` fits into std::string::size_type. */
+        std::string::size_type want = std::min<uint64_t>(
+            len,
+            std::max<uint64_t>(
+                /* Technically might overflow in size_type, but we are likely to run into bad_alloc first. */
+                2 * static_cast<uint64_t>(filled),
+                64 * 1024));
+        assert(want > filled); /* No overflows expected. */
+        std::exception_ptr ex;
+        res.resize_and_overwrite(
+            want, [filled, &ex, &source](char * buf, std::string::size_type bufSize) -> std::string::size_type {
+                try {
+                    const auto n = bufSize - filled;
+                    return filled + source.read(buf + filled, n);
+                } catch (...) {
+                    ex = std::current_exception();
+                    return filled;
+                }
+            });
+        if (ex)
+            std::rethrow_exception(ex);
+    }
     readPadding(len, source);
     return res;
 }
@@ -765,7 +802,7 @@ Error readError(Source & source)
     auto type = readString(source);
     if (type != "Error")
         throw SerialisationError("unexpected error type '%s'", type);
-    auto level = (Verbosity) readInt(source);
+    auto level = verbosityFromIntClamped(readInt(source));
     [[maybe_unused]] auto name = readString(source); // removed
     auto msg = readString(source);
     ErrorInfo info{

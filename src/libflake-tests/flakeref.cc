@@ -7,7 +7,9 @@
 #include "nix/flake/flakeref.hh"
 #include "nix/fetchers/attrs.hh"
 #include "nix/fetchers/fetchers.hh"
+#include "nix/store/tests/libstore.hh"
 #include "nix/util/configuration.hh"
+#include "nix/util/finally.hh"
 #include "nix/util/error.hh"
 #include "nix/util/experimental-features.hh"
 #include "nix/util/terminal.hh"
@@ -18,47 +20,45 @@ namespace nix {
 
 TEST(parseFlakeRef, path)
 {
-    fetchers::Settings fetchSettings;
-
     {
         auto s = "/foo/bar";
-        auto flakeref = parseFlakeRef(fetchSettings, s);
+        auto flakeref = parseFlakeRef(s);
         ASSERT_EQ(flakeref.to_string(), "path:/foo/bar");
     }
 
     {
         auto s = "/foo/bar?revCount=123&rev=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        auto flakeref = parseFlakeRef(fetchSettings, s);
+        auto flakeref = parseFlakeRef(s);
         ASSERT_EQ(flakeref.to_string(), "path:/foo/bar?rev=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&revCount=123");
     }
 
     {
         auto s = "/foo/bar?xyzzy=123";
-        EXPECT_THROW(parseFlakeRef(fetchSettings, s), Error);
+        EXPECT_THROW(parseFlakeRef(s), Error);
     }
 
     {
         auto s = "/foo/bar#bla";
-        EXPECT_THROW(parseFlakeRef(fetchSettings, s), Error);
+        EXPECT_THROW(parseFlakeRef(s), Error);
     }
 
     {
         auto s = "/foo/bar#bla";
-        auto [flakeref, fragment] = parseFlakeRefWithFragment(fetchSettings, s);
+        auto [flakeref, fragment] = parseFlakeRefWithFragment(s);
         ASSERT_EQ(flakeref.to_string(), "path:/foo/bar");
         ASSERT_EQ(fragment, "bla");
     }
 
     {
         auto s = "/foo/bar?revCount=123#bla";
-        auto [flakeref, fragment] = parseFlakeRefWithFragment(fetchSettings, s);
+        auto [flakeref, fragment] = parseFlakeRefWithFragment(s);
         ASSERT_EQ(flakeref.to_string(), "path:/foo/bar?revCount=123");
         ASSERT_EQ(fragment, "bla");
     }
 
     {
         auto s = "/foo bar/baz?dir=bla space";
-        auto flakeref = parseFlakeRef(fetchSettings, s);
+        auto flakeref = parseFlakeRef(s);
         ASSERT_EQ(flakeref.to_string(), "path:/foo%20bar/baz?dir=bla%20space");
         ASSERT_EQ(flakeref.toAttrs().at("dir"), fetchers::Attr("bla space"));
     }
@@ -66,30 +66,28 @@ TEST(parseFlakeRef, path)
 
 TEST(parseFlakeRef, GitArchiveInput)
 {
-    fetchers::Settings fetchSettings;
-
     {
         auto s = "github:foo/bar/branch%23"; // branch name with `#`
-        auto flakeref = parseFlakeRef(fetchSettings, s);
+        auto flakeref = parseFlakeRef(s);
         ASSERT_EQ(flakeref.to_string(), "github:foo/bar/branch%23");
     }
 
     {
         auto s = "github:foo/bar?ref=branch%23"; // branch name with `#`
-        auto flakeref = parseFlakeRef(fetchSettings, s);
+        auto flakeref = parseFlakeRef(s);
         ASSERT_EQ(flakeref.to_string(), "github:foo/bar/branch%23");
     }
 
     {
         auto s = "github:foo/bar?ref=branch#\"name.with.dot\""; // unescaped quotes `"`
-        auto [flakeref, fragment] = parseFlakeRefWithFragment(fetchSettings, s);
+        auto [flakeref, fragment] = parseFlakeRefWithFragment(s);
         ASSERT_EQ(fragment, "\"name.with.dot\"");
         ASSERT_EQ(flakeref.to_string(), "github:foo/bar/branch");
     }
 
     {
         auto s = "github:foo/bar#\"name.with.dot\""; // unescaped quotes `"`
-        auto [flakeref, fragment] = parseFlakeRefWithFragment(fetchSettings, s);
+        auto [flakeref, fragment] = parseFlakeRefWithFragment(s);
         ASSERT_EQ(fragment, "\"name.with.dot\"");
         ASSERT_EQ(flakeref.to_string(), "github:foo/bar");
     }
@@ -108,22 +106,20 @@ class InputFromURLTest : public ::testing::WithParamInterface<InputFromURLTestCa
 
 TEST_P(InputFromURLTest, attrsAreCorrectAndRoundTrips)
 {
-    fetchers::Settings fetchSettings;
-
     const auto & testCase = GetParam();
 
-    auto flakeref = parseFlakeRef(fetchSettings, testCase.url);
+    auto flakeref = parseFlakeRef(testCase.url);
 
     EXPECT_EQ(flakeref.toAttrs(), testCase.attrs);
     EXPECT_EQ(flakeref.to_string(), testCase.expectedUrl);
 
-    auto input = fetchers::Input::fromURL(fetchSettings, flakeref.to_string());
+    auto input = fetchers::Input::fromURL(flakeref.to_string());
 
     EXPECT_EQ(input.toURLString(), testCase.expectedUrl);
     EXPECT_EQ(input.toAttrs(), testCase.attrs);
 
     // Round-trip check.
-    auto input2 = fetchers::Input::fromURL(fetchSettings, input.toURLString());
+    auto input2 = fetchers::Input::fromURL(input.toURLString());
     EXPECT_EQ(input, input2);
     EXPECT_EQ(input.toURLString(), input2.toURLString());
 }
@@ -265,24 +261,67 @@ INSTANTIATE_TEST_SUITE_P(
                 },
             .description = "gitlab_ref_slashes_in_path_everywhere_with_pct_encoding",
             .expectedUrl = "gitlab:owner%252Fsubgroup/repoA/branchC",
+        },
+        InputFromURLTestCase{
+            // Can specify in the path
+            .url = "github:nixos/nix/0000000000000000000000000000000000000000",
+            .attrs =
+                {
+                    {"type", Attr("github")},
+                    {"owner", Attr("nixos")},
+                    {"repo", Attr("nix")},
+                    {"rev", Attr("0000000000000000000000000000000000000000")},
+                },
+            .description = "github_rev_in_url_path",
+            .expectedUrl = "github:nixos/nix/0000000000000000000000000000000000000000",
+        },
+        InputFromURLTestCase{
+            // Also in query parameter
+            .url = "github:nixos/nix?rev=0000000000000000000000000000000000000000",
+            .attrs =
+                {
+                    {"type", Attr("github")},
+                    {"owner", Attr("nixos")},
+                    {"repo", Attr("nix")},
+                    {"rev", Attr("0000000000000000000000000000000000000000")},
+                },
+            .description = "github_rev_in_url_query",
+            .expectedUrl = "github:nixos/nix/0000000000000000000000000000000000000000",
+        },
+        InputFromURLTestCase{
+            .url = "github:nixos/nix//master///something/",
+            .attrs =
+                {
+                    {"type", Attr("github")},
+                    {"owner", Attr("nixos")},
+                    {"repo", Attr("nix")},
+                    {"ref", Attr("master/something")},
+                },
+            .description = "github_slashes_in_url_path",
+            // XXX: Very strange that slashes get re-encoded in the path, even though they
+            // weren't initially. Also consecutive slashes get nuked. That seems wrong, but
+            // apparently has been the case since at least 2.18.
+            .expectedUrl = "github:nixos/nix/master%2Fsomething",
         }),
     [](const ::testing::TestParamInfo<InputFromURLTestCase> & info) { return info.param.description; });
 
 TEST(parseFlakeRef, nix219CompatRetainsDirInUrlAttr)
 {
-    fetchers::Settings fetchSettings;
+    /* Flake reference parsing reads this from the global fetcher settings. */
+    auto prev = fetchSettings.nix219Compat.get();
     fetchSettings.nix219Compat = true;
+    Finally restore([&] { fetchSettings.nix219Compat = prev; });
 
     /* Nix < 2.20 retained the `dir` query parameter in the `url`
        attribute of input types that have one. */
     {
-        auto flakeref = parseFlakeRef(fetchSettings, "git+https://example.org/repo?dir=sub");
+        auto flakeref = parseFlakeRef("git+https://example.org/repo?dir=sub");
         ASSERT_EQ(flakeref.subdir, "sub");
         ASSERT_EQ(flakeref.toAttrs().at("url"), Attr("https://example.org/repo?dir=sub"));
     }
 
     {
-        auto flakeref = parseFlakeRef(fetchSettings, "https://example.org/foo.tar.gz?dir=sub");
+        auto flakeref = parseFlakeRef("https://example.org/foo.tar.gz?dir=sub");
         ASSERT_EQ(flakeref.subdir, "sub");
         ASSERT_EQ(flakeref.toAttrs().at("url"), Attr("https://example.org/foo.tar.gz?dir=sub"));
     }
@@ -291,7 +330,7 @@ TEST(parseFlakeRef, nix219CompatRetainsDirInUrlAttr)
        `github`), the `dir` parameter was never part of the input
        attributes, so it should not cause a parse failure. */
     {
-        auto flakeref = parseFlakeRef(fetchSettings, "github:NixOS/nix?dir=perl");
+        auto flakeref = parseFlakeRef("github:NixOS/nix?dir=perl");
         ASSERT_EQ(flakeref.subdir, "perl");
         ASSERT_EQ(
             flakeref.toAttrs(),
@@ -306,9 +345,8 @@ TEST(parseFlakeRef, nix219CompatRetainsDirInUrlAttr)
 
 TEST(to_string, doesntReencodeUrl)
 {
-    fetchers::Settings fetchSettings;
     auto s = "http://localhost:8181/test/+3d.tar.gz";
-    auto flakeref = parseFlakeRef(fetchSettings, s);
+    auto flakeref = parseFlakeRef(s);
     auto unparsed = flakeref.to_string();
     auto expected = "http://localhost:8181/test/%2B3d.tar.gz";
 
@@ -324,7 +362,7 @@ TEST(parseFlakeRef, urlInterpretationErrorsAreNotMasked)
     // user, rather than causing the flake ref to be reinterpreted as a
     // path, leading to a confusing "not an absolute path" error.
     try {
-        parseFlakeRef(fetchSettings, "github:foo/bar?xyzzy=1");
+        parseFlakeRef("github:foo/bar?xyzzy=1");
         FAIL() << "expected parseFlakeRef to throw";
     } catch (BadURL & e) {
         auto msg = filterANSIEscapes(e.msg());
@@ -335,14 +373,10 @@ TEST(parseFlakeRef, urlInterpretationErrorsAreNotMasked)
 
 TEST(parseFlakeRef, malformedGithubUrlDoesNotCrash)
 {
-    fetchers::Settings fetchSettings;
-
     // Using ref= instead of rev= with a github: URL should produce an
     // error, not an assertion failure in renderAuthorityAndPath
     // (https://github.com/NixOS/nix/issues/15196).
-    EXPECT_THROW(
-        parseFlakeRef(fetchSettings, "github:nixos/nixpkgs/nixpkgs.git?ref=aead170c1a49253ebfa5027010dfd89a77b73ca4"),
-        Error);
+    EXPECT_THROW(parseFlakeRef("github:nixos/nixpkgs/nixpkgs.git?ref=aead170c1a49253ebfa5027010dfd89a77b73ca4"), Error);
 }
 
 } // namespace nix

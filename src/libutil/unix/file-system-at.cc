@@ -2,6 +2,8 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/signals.hh"
 #include "nix/util/source-accessor.hh"
+#include "nix/util/strings.hh"
+#include "nix/util/system-error.hh"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -24,6 +26,7 @@
 #endif
 
 #include "unix/unix-modes.hh"
+#include "util-unix-config-private.hh"
 
 namespace nix {
 
@@ -31,7 +34,8 @@ namespace nix {
 
 namespace linux {
 
-std::optional<AutoCloseFD> openat2(Descriptor dirFd, const char * path, uint64_t flags, uint64_t mode, uint64_t resolve)
+std::optional<Result<AutoCloseFD, NativeError>>
+openat2(Descriptor dirFd, const char * path, uint64_t flags, uint64_t mode, uint64_t resolve)
 {
 #  if HAVE_OPENAT2
     /* Cache the result of whether openat2 is not supported. */
@@ -49,7 +53,9 @@ std::optional<AutoCloseFD> openat2(Descriptor dirFd, const char * path, uint64_t
             return std::nullopt;
         }
 
-        return AutoCloseFD{static_cast<Descriptor>(res)};
+        if (res < 0)
+            return outcome::failure(errno);
+        return outcome::success(AutoCloseFD{static_cast<Descriptor>(res)});
     }
 #  endif
     return std::nullopt;
@@ -59,22 +65,22 @@ std::optional<AutoCloseFD> openat2(Descriptor dirFd, const char * path, uint64_t
 
 #endif
 
-void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t mode)
+void unix::fchmodatTryNoFollow(Descriptor dirFd, const OsCanonPath & path, mode_t mode)
 {
-    assert(!path.isRoot());
+    assert(!path.empty());
 
 #if HAVE_FCHMODAT2
     /* Cache whether fchmodat2 is not supported. */
     static std::atomic_flag fchmodat2Unsupported{};
     if (!fchmodat2Unsupported.test()) {
         /* Try with fchmodat2 first. */
-        auto res = ::syscall(__NR_fchmodat2, dirFd, path.rel_c_str(), mode, AT_SYMLINK_NOFOLLOW);
+        auto res = ::syscall(__NR_fchmodat2, dirFd, path.c_str(), mode, AT_SYMLINK_NOFOLLOW);
         /* Cache that the syscall is not supported. */
         if (res < 0) {
             if (errno == ENOSYS)
                 fchmodat2Unsupported.test_and_set();
             else {
-                throw SysError([&] { return HintFmt("fchmodat2 %s", PathFmt(descriptorToPath(dirFd) / path.rel())); });
+                throw SysError([&] { return HintFmt("fchmodat2 %s", PathFmt(descriptorToPath(dirFd) / path.path())); });
             }
         } else
             return;
@@ -82,12 +88,12 @@ void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t 
 #endif
 
 #ifdef __linux__
-    AutoCloseFD pathFd = ::openat(dirFd, path.rel_c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC);
+    AutoCloseFD pathFd = ::openat(dirFd, path.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC);
     if (!pathFd) {
         throw SysError([&] {
             return HintFmt(
                 "opening %s to get an O_PATH file descriptor (fchmodat2 is unsupported)",
-                PathFmt(descriptorToPath(dirFd) / path.rel()));
+                PathFmt(descriptorToPath(dirFd) / path.path()));
         });
     }
 
@@ -96,11 +102,11 @@ void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t 
     auto st = fstat(pathFd.get());
 
     if (S_ISLNK(st.st_mode))
-        throw SysError(EOPNOTSUPP, "can't change mode of symlink %s", PathFmt(descriptorToPath(dirFd) / path.rel()));
+        throw SysError(EOPNOTSUPP, "can't change mode of symlink %s", PathFmt(descriptorToPath(dirFd) / path.path()));
 
     static std::atomic_flag dontHaveProc{};
     if (!dontHaveProc.test()) {
-        static const CanonPath selfProcFd = CanonPath("/proc/self/fd");
+        static const std::filesystem::path selfProcFd = "/proc/self/fd";
 
         auto selfProcFdPath = selfProcFd / std::to_string(pathFd.get());
         if (int res = ::chmod(selfProcFdPath.c_str(), mode); res == -1) {
@@ -108,7 +114,8 @@ void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t 
                 dontHaveProc.test_and_set();
             else {
                 throw SysError([&] {
-                    return HintFmt("chmod %s (%s)", selfProcFdPath, PathFmt(descriptorToPath(dirFd) / path.rel()));
+                    return HintFmt(
+                        "chmod %s (%s)", PathFmt(selfProcFdPath), PathFmt(descriptorToPath(dirFd) / path.path()));
                 });
             }
         } else
@@ -121,7 +128,7 @@ void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t 
 
     int res = ::fchmodat(
         dirFd,
-        path.rel_c_str(),
+        path.c_str(),
         mode,
 #if defined(AT_SYMLINK_NOFOLLOW) && !defined(__linux__)
         AT_SYMLINK_NOFOLLOW
@@ -138,29 +145,33 @@ void unix::fchmodatTryNoFollow(Descriptor dirFd, const CanonPath & path, mode_t 
     );
 
     if (res == -1) {
-        throw SysError([&] { return HintFmt("fchmodat %s", PathFmt(descriptorToPath(dirFd) / path.rel())); });
+        throw SysError([&] { return HintFmt("fchmodat %s", PathFmt(descriptorToPath(dirFd) / path.path())); });
     }
 }
 
-static AutoCloseFD openFileEnsureBeneathNoSymlinksIterative(
+static Result<AutoCloseFD, NativeError> openFileEnsureBeneathNoSymlinksIterative(
     Descriptor dirFd,
-    const CanonPath & path,
+    const OsCanonPath & path,
     int flags,
     mode_t mode,
-    std::function<void(AutoCloseFD dirFd, CanonPath relPath)> dirFdCallback)
+    std::function<void(AutoCloseFD dirFd, OsCanonPath relPath)> dirFdCallback)
 {
     AutoCloseFD parentFd;
     auto nrComponents = std::ranges::distance(path);
     assert(nrComponents >= 1);
     auto components = std::views::take(path, nrComponents - 1); /* Everything but last component */
     auto getParentFd = [&]() { return parentFd ? parentFd.get() : dirFd; };
-    auto currentRelPath = CanonPath::root;
+    /* Path walked so far, relative to `dirFd`. Empty (the identity) before
+       the first component. */
+    OsCanonPath currentRelPath;
 
     /* This rather convoluted loop is necessary to avoid TOCTOU when validating that
        no inner path component is a symlink. */
     for (auto it = components.begin(); it != components.end(); ++it) {
-        auto component = std::string(*it);                        /* Copy into a string to make NUL terminated. */
-        assert(component != ".." && !component.starts_with('/')); /* In case invariant is broken somehow.. */
+        /* No copy needed to get a NUL-terminated string: `std::filesystem::path`
+           already stores one. The `..`/separator invariants hold because
+           every component of an `OsCanonPath` is a valid `OsFilename`. */
+        const OsFilename & component = *it;
         auto prevRelPath = currentRelPath;
         currentRelPath = currentRelPath / *it;
 
@@ -176,24 +187,18 @@ static AutoCloseFD openFileEnsureBeneathNoSymlinksIterative(
         );
 
         if (!parentFd2) {
-            /* Construct the CanonPath for error message. */
-            auto path2 = std::ranges::fold_left(components.begin(), ++it, CanonPath::root, [](auto lhs, auto rhs) {
-                lhs.push(rhs);
-                return lhs;
-            });
-
-            if (errno == ENOTDIR) /* Path component might be a symlink. */ {
+            auto err = errno;
+            if (err == ENOTDIR) /* Path component might be a symlink. */ {
                 /* Does not follow final symlink. We know `component` is a
                    single component so we don't have to worry about intermediate
                    symlinks either. */
                 if (auto st = maybeFstatat(getParentFd(), component); st && S_ISLNK(st->st_mode))
-                    throw SymlinkNotAllowed(path2);
-                errno = ENOTDIR; /* Restore the errno. */
-            } else if (errno == NIX_ERR_OPEN_SYMLINK) {
-                throw SymlinkNotAllowed(path2);
+                    throw SymlinkNotAllowed(currentRelPath);
+            } else if (err == NIX_ERR_OPEN_SYMLINK) {
+                throw SymlinkNotAllowed(currentRelPath);
             }
 
-            return AutoCloseFD{};
+            return outcome::failure(err);
         }
 
         if (dirFdCallback && parentFd)
@@ -202,24 +207,25 @@ static AutoCloseFD openFileEnsureBeneathNoSymlinksIterative(
         parentFd = std::move(parentFd2);
     }
 
-    auto lastComponent = std::string(path.baseName().value());
+    /* The iterator must outlive the reference, since the standard allows it to
+       own the component. */
+    auto lastIt = std::ranges::prev(path.end());
+    const OsFilename & lastComponent = *lastIt;
     AutoCloseFD res = ::openat(getParentFd(), lastComponent.c_str(), flags | O_NOFOLLOW, mode);
 
     if (!res) {
-        if (errno == NIX_ERR_OPEN_SYMLINK)
+        auto err = errno;
+        if (err == NIX_ERR_OPEN_SYMLINK)
             throw SymlinkNotAllowed(path);
         /* `O_DIRECTORY | O_NOFOLLOW` on a trailing symlink returns
            `ENOTDIR` rather than `ELOOP`. Post-check via `fstatat` to
            disambiguate — only on the error path, so the common
            successful-directory-open case pays no extra syscall. */
-        if (errno == ENOTDIR) {
+        if (err == ENOTDIR) {
             if (auto st = maybeFstatat(getParentFd(), lastComponent); st && S_ISLNK(st->st_mode))
                 throw SymlinkNotAllowed(path);
-            /* Put back errno so the caller will get the original
-               error. */
-            errno = ENOTDIR;
         }
-        return res;
+        return outcome::failure(err);
     }
 
     /* For `O_PATH`, the defensive `| O_NOFOLLOW` we added above
@@ -229,19 +235,17 @@ static AutoCloseFD openFileEnsureBeneathNoSymlinksIterative(
        are asking for a path reference, and interior symlinks are
        already guarded by the component-by-component walk above. */
 
-    return res;
+    return outcome::success(std::move(res));
 }
 
-AutoCloseFD openFileEnsureBeneathNoSymlinks(
+Result<AutoCloseFD, NativeError> openFileEnsureBeneathNoSymlinks(
     Descriptor dirFd,
-    const CanonPath & path,
+    const OsCanonPath & path,
     int flags,
     mode_t mode,
-    std::function<void(AutoCloseFD dirFd, CanonPath relPath)> dirFdCallback)
+    std::function<void(AutoCloseFD dirFd, OsCanonPath relPath)> dirFdCallback)
 {
-    /* Just in case the invariant is somehow broken. */
-    assert(!path.rel().starts_with('/'));
-    assert(!path.isRoot());
+    assert(!path.empty());
 
     /* We don't want callers of this function to think about the presence or
        absence of `O_NOFOLLOW`. "ensure beneath no symlinks" is in the name, so
@@ -272,8 +276,8 @@ AutoCloseFD openFileEnsureBeneathNoSymlinks(
     auto flagsAdj = (flags & O_PATH) && !(flags & O_DIRECTORY) ? flags | O_NOFOLLOW : flags;
 
     if (auto maybeFd = linux::openat2(
-            dirFd, path.rel_c_str(), flagsAdj, static_cast<uint64_t>(mode), RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)) {
-        if (!*maybeFd && errno == NIX_ERR_OPEN_SYMLINK)
+            dirFd, path.c_str(), flagsAdj, static_cast<uint64_t>(mode), RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)) {
+        if (!*maybeFd && maybeFd->error() == NIX_ERR_OPEN_SYMLINK)
             throw SymlinkNotAllowed(path);
         return std::move(*maybeFd);
     }
@@ -282,20 +286,78 @@ AutoCloseFD openFileEnsureBeneathNoSymlinks(
     return openFileEnsureBeneathNoSymlinksIterative(dirFd, path, flags, mode, std::move(dirFdCallback));
 }
 
-OsString readLinkAt(Descriptor dirFd, const CanonPath & path)
+OsString readLinkAt(Descriptor dirFd, const OsCanonPath & path)
 {
-    assert(!path.rel().starts_with('/')); /* Just in case the invariant is somehow broken. */
+    /* No emptiness assertion, unlike the other operations here: since Linux
+       2.6.39 an empty path makes `readlinkat` operate on `dirFd` itself, and
+       callers such as `ChrootLinuxDerivationBuilder::enterChroot` rely on
+       that. `OsCanonPath` guarantees there is no leading separator. */
     std::vector<char> buf;
     for (ssize_t bufSize = PATH_MAX / 4; true; bufSize += bufSize / 2) {
         checkInterrupt();
         buf.resize(bufSize);
-        ssize_t rlSize = ::readlinkat(dirFd, path.rel_c_str(), buf.data(), bufSize);
+        ssize_t rlSize = ::readlinkat(dirFd, path.c_str(), buf.data(), bufSize);
         if (rlSize == -1) {
             throw SysError(
-                [&] { return HintFmt("reading symbolic link %1%", PathFmt(descriptorToPath(dirFd) / path.rel())); });
+                [&] { return HintFmt("reading symbolic link %1%", PathFmt(descriptorToPath(dirFd) / path.path())); });
         } else if (rlSize < bufSize)
             return {buf.data(), static_cast<std::size_t>(rlSize)};
     }
+}
+
+static void symlinkAt(Descriptor dirFd, const OsCanonPath & path, const OsString & target)
+{
+    assert(!path.empty());
+    /* `requireCString` refuses a target with a NUL byte, which would
+       otherwise silently truncate it. */
+    if (::symlinkat(requireCString(target), dirFd, path.c_str()) == -1) {
+        throw SysError([&] {
+            return HintFmt("creating symlink %1% -> %2%", PathFmt(descriptorToPath(dirFd) / path.path()), target);
+        });
+    }
+}
+
+void createFileSymlinkAt(Descriptor dirFd, const OsCanonPath & path, const OsString & target)
+{
+    symlinkAt(dirFd, path, target);
+}
+
+void createDirectorySymlinkAt(Descriptor dirFd, const OsCanonPath & path, const OsString & target)
+{
+    symlinkAt(dirFd, path, target);
+}
+
+void createUnknownSymlinkAt(Descriptor dirFd, const OsCanonPath & path, const OsString & target)
+{
+    symlinkAt(dirFd, path, target);
+}
+
+Result<AutoCloseFD, NativeError> reopenDirectory(Descriptor dirFd)
+{
+    AutoCloseFD fd = ::openat(dirFd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (!fd)
+        return outcome::failure(errno);
+    return outcome::success(std::move(fd));
+}
+
+Result<AutoCloseFD, NativeError> openDirectoryAt(Descriptor dirFd, const OsCanonPath & path)
+{
+    assert(!path.empty());
+    // Use O_NOFOLLOW to avoid following symlinks - if path is a symlink, this will fail with ENOTDIR
+    AutoCloseFD fd = ::openat(dirFd, path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (!fd)
+        return outcome::failure(errno);
+    return outcome::success(std::move(fd));
+}
+
+Result<AutoCloseFD, NativeError> createDirectoryAt(Descriptor dirFd, const OsCanonPath & path, mode_t mode)
+{
+    assert(!path.empty());
+    if (::mkdirat(dirFd, path.c_str(), mode) == -1)
+        return outcome::failure(errno);
+    /* `mkdirat` doesn't open it, and opening it separately would not
+       be atomic, so leave that to the caller. */
+    return outcome::success(AutoCloseFD{});
 }
 
 PosixStat fstat(Descriptor fd)
@@ -307,26 +369,24 @@ PosixStat fstat(Descriptor fd)
     return st;
 }
 
-PosixStat fstatat(Descriptor dirFd, const std::filesystem::path & path)
+PosixStat fstatat(Descriptor dirFd, const OsCanonPath & path)
 {
-    assert(path.is_relative());
     assert(!path.empty());
     PosixStat st;
     if (::fstatat(dirFd, path.c_str(), &st, AT_SYMLINK_NOFOLLOW)) {
-        throw SysError([&] { return HintFmt("getting status of %s", PathFmt(descriptorToPath(dirFd) / path)); });
+        throw SysError([&] { return HintFmt("getting status of %s", PathFmt(descriptorToPath(dirFd) / path.path())); });
     }
     return st;
 }
 
-std::optional<PosixStat> maybeFstatat(Descriptor dirFd, const std::filesystem::path & path)
+std::optional<PosixStat> maybeFstatat(Descriptor dirFd, const OsCanonPath & path)
 {
-    assert(path.is_relative());
     assert(!path.empty());
     PosixStat st;
     if (::fstatat(dirFd, path.c_str(), &st, AT_SYMLINK_NOFOLLOW)) {
         if (errno == ENOENT || errno == ENOTDIR)
             return std::nullopt;
-        throw SysError([&] { return HintFmt("getting status of %s", PathFmt(descriptorToPath(dirFd) / path)); });
+        throw SysError([&] { return HintFmt("getting status of %s", PathFmt(descriptorToPath(dirFd) / path.path())); });
     }
     return st;
 }

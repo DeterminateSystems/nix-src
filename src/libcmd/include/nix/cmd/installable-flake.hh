@@ -1,8 +1,8 @@
 #pragma once
 ///@file
 
-#include "nix/cmd/common-eval-args.hh"
 #include "nix/cmd/installable-value.hh"
+#include "nix/util/args.hh"
 
 namespace nix {
 
@@ -62,13 +62,14 @@ struct InstallableFlake : InstallableValue
 
     DerivedPathsWithInfo toDerivedPaths() override;
 
-    std::pair<Value *, PosIdx> toValue(EvalState & state) override;
+    std::pair<Value *, PosIdx> toValue(EvalState & state, AutoCall autoCall) override;
 
     /**
      * Get a cursor to every attrpath in getActualAttrPaths() that
      * exists. However if none exists, throw an exception.
      */
-    std::vector<ref<eval_cache::AttrCursor>> getCursors(EvalState & state, bool useDefaultAttrPath) override;
+    std::vector<ref<eval_cache::AttrCursor>>
+    getCursors(EvalState & state, AutoCall autoCall, bool useDefaultAttrPath) override;
 
     void getCompletions(const std::string & flakeRefS, AddCompletions & completions);
 
@@ -97,7 +98,7 @@ private:
  */
 static inline FlakeRef defaultNixpkgsFlakeRef()
 {
-    return FlakeRef::fromAttrs(fetchSettings, {{"type", "indirect"}, {"id", "nixpkgs"}});
+    return FlakeRef::fromAttrs({{"type", "indirect"}, {"id", "nixpkgs"}});
 }
 
 } // namespace nix

@@ -28,6 +28,7 @@ mkMesonLibrary (finalAttrs: {
     ../../.version
     ./.version
     ./meson.build
+    ./meson.options
     ./include/nix/fetchers/meson.build
     ./builtin-flake-registry.json
     (fileset.fileFilter (file: file.hasExt "cc") ./.)

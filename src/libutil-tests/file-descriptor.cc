@@ -5,6 +5,7 @@
 #include "nix/util/file-system.hh"
 #include "nix/util/serialise.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/system-error.hh"
 
 #include <cstring>
 #include <random>
@@ -305,7 +306,7 @@ TEST(BufferedSourceReadLine, BufferExhaustedThenEof)
 TEST(WriteFull, RespectsAllowInterrupts)
 {
 #ifdef _WIN32
-    GTEST_SKIP() << "Broken on Windows";
+    GTEST_SKIP() << "Interrupt support on Windows not expected to work";
 #endif
     Pipe pipe;
     pipe.create();
@@ -360,7 +361,9 @@ TEST_P(CopyFdRangeTest, regularToRegular)
     copyFdRange(source.get(), 0, input.size(), sink, tryCoW());
     sink.flush();
     ASSERT_EQ(sink.written, input.size());
-    ASSERT_EQ(lseek(dest.get(), 0, SEEK_SET), 0);
+    auto offsetOrError = seek(dest.get(), 0, SEEK_SET);
+    ASSERT_TRUE(offsetOrError);
+    ASSERT_EQ(offsetOrError.value(), 0);
     ASSERT_EQ(readFile(dest.get()), input);
 }
 
@@ -377,7 +380,9 @@ TEST_P(CopyFdRangeTest, offsetWorks)
     copyFdRange(source.get(), offset, input.size() - offset, sink, tryCoW());
     sink.flush();
     ASSERT_EQ(sink.written, input.size() - offset);
-    ASSERT_EQ(lseek(dest.get(), 0, SEEK_SET), 0);
+    auto offsetOrError = seek(dest.get(), 0, SEEK_SET);
+    ASSERT_TRUE(offsetOrError);
+    ASSERT_EQ(offsetOrError.value(), 0);
     ASSERT_EQ(readFile(dest.get()), input.substr(offset));
 }
 
@@ -444,5 +449,13 @@ INSTANTIATE_TEST_SUITE_P(
         res += std::get<1>(info.param) ? "regular" : "nonregular";
         return res;
     });
+
+TEST(openNullFD, works)
+{
+    AutoCloseFD fd;
+    ASSERT_NO_THROW(fd = openNullFD());
+    ASSERT_NO_THROW(writeFull(fd.get(), "garbage"));
+    ASSERT_EQ(drainFD(fd.get()), "");
+}
 
 } // namespace nix

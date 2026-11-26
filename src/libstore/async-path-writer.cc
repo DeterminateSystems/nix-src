@@ -167,7 +167,7 @@ struct AsyncPathWriterImpl : AsyncPathWriter
 
     void writePaths(const std::vector<Item> & items)
     {
-// FIXME: addMultipeToStore() shouldn't require a NAR hash.
+// FIXME: addMultipleToStore() shouldn't require a NAR hash.
 #if 0
         Store::PathsSource sources;
         RepairFlag repair = NoRepair;

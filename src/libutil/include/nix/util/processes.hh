@@ -5,7 +5,6 @@
 #include "nix/util/error.hh"
 #include "nix/util/fun.hh"
 #include "nix/util/file-descriptor.hh"
-#include "nix/util/file-path.hh"
 #include "nix/util/logging.hh"
 #include "nix/util/ansicolor.hh"
 #include "nix/util/os-string.hh"
@@ -30,10 +29,16 @@ namespace nix {
 struct Sink;
 struct Source;
 
+namespace unix {
+#ifndef _WIN32
+constexpr static pid_t INVALID_PID = -1;
+#endif
+}; // namespace unix
+
 class Pid
 {
 #ifndef _WIN32
-    pid_t pid = -1;
+    pid_t pid = unix::INVALID_PID;
     bool separatePG = false;
     int killSignal = SIGKILL;
     std::chrono::milliseconds killTimeout{0};
@@ -49,12 +54,28 @@ public:
 #ifndef _WIN32
     Pid(pid_t pid);
     void operator=(pid_t pid);
-    operator pid_t();
+    operator pid_t() const;
 #else
     Pid(AutoCloseFD pid);
     void operator=(AutoCloseFD pid);
 #endif
     ~Pid();
+
+    /**
+     * Whether this holds a child at all, as opposed to having been
+     * default-constructed, moved from, or waited for.
+     *
+     * @note On Unix `Pid` also has an implicit `operator pid_t`. This wins
+     * overload resolution over it only because both are `const`: `bool` is an
+     * exact match where `pid_t` needs a further boolean conversion. If
+     * `operator pid_t` is ever made non-`const` it becomes the better match for
+     * a non-`const` `Pid`, which is nearly all of them, and then every
+     * `if (pid)` silently means `pid != 0` -- true for a `Pid` holding no child
+     * -- with no diagnostic. Measured: with a non-`const` `operator pid_t`,
+     * both `if (pid)` and `static_cast<bool>(pid)` select it.
+     */
+    explicit operator bool() const noexcept;
+
     int kill(bool allowInterrupts = true);
     int wait(bool allowInterrupts = true);
 
@@ -103,7 +124,6 @@ struct ProcessOptions
 {
     std::string errorPrefix = "";
     bool dieWithParent = true;
-    bool allowVfork = false;
     /**
      * use clone() with the specified flags (Linux only)
      */
@@ -147,6 +167,12 @@ pid_t startProcess(fun<void()> processMain, const ProcessOptions & options = Pro
 #endif
 
 /**
+ * The POSIX shell used to run command strings with `-c` (build-time
+ * configurable via the `sh-program` option; always an absolute path).
+ */
+const std::filesystem::path & shProgram();
+
+/**
  * Run a program and return its stdout in a string (i.e., like the
  * shell backtick operator).
  */
@@ -156,24 +182,78 @@ std::string runProgram(
     const OsStrings & args = OsStrings(),
     bool isInteractive = false);
 
-struct RunOptions
+/**
+ * Options for creating a new process running the specified program.
+ */
+struct SpawnOptions
 {
     std::filesystem::path program;
     bool lookupPath = true;
     OsStrings args;
 #ifndef _WIN32
+    std::optional<std::string> argv0;
     std::optional<uid_t> uid;
     std::optional<uid_t> gid;
 #endif
     std::optional<std::filesystem::path> chdir;
     std::optional<OsStringMap> environment;
+    /**
+     * @brief (Linux-only) whether to have the process die when its parent (us) exists.
+     *
+     * Implemented on best-effort basis and ignored if not implemented.
+     */
+    bool dieWithParent = true;
+    bool setSid = false;
+    /**
+     * @brief (Linux-only) whether to restore the mount ns in the child.
+     * Only set this to false if the child process needs a writable store.
+     * Ignored on non-Linux because it's irrelevant.
+     */
+    bool restoreMounts = true;
+};
+
+struct RunOptions
+{
+    SpawnOptions spawnOptions;
     Sink * standardOut = nullptr;
     bool mergeStderrToStdout = false;
     bool isInteractive = false;
 };
 
+struct FdRedirection
+{
+    Descriptor from, to;
+
+#ifdef _WIN32
+    /* These are just dummy values to represent distinct file descriptors one might want
+       to redirect. On Windows we'll do equality checks on the "from"/"to" to implement
+       the same dup housekeeping semantics as on POSIX. */
+    static inline const Descriptor stdInput = reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(STD_INPUT_HANDLE));
+    static inline const Descriptor stdOut = reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(STD_OUTPUT_HANDLE));
+    static inline const Descriptor stdError = reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(STD_ERROR_HANDLE));
+#else
+    static constexpr Descriptor stdInput = STDIN_FILENO;
+    static constexpr Descriptor stdOut = STDOUT_FILENO;
+    static constexpr Descriptor stdError = STDERR_FILENO;
+#endif
+};
+
 // Output = error code + "standard out" output stream
 std::pair<int, std::string> runProgram(RunOptions && options);
+
+/**
+ * @brief Spawn a program as a subprocess.
+ *
+ * @return Pid of the spawned process.
+ * @throws SysError if fork() or vfork() fail in the parent, ExecError if
+ * housekeeping fails with status code 127 (as does posix_spawn).
+ *
+ * @param fdr Unless specified, standard in, out and error are inherited.
+ * Redirections are applied in the same order in the child housekeeping.
+ * It's the callers responsibility to ensure that the redirected file descriptors
+ * are inheritable.
+ */
+Pid spawnProgram(const SpawnOptions & options, std::span<const FdRedirection> fdr);
 
 void runProgram2(const RunOptions & options);
 
@@ -185,8 +265,8 @@ public:
     int status;
 
     template<typename... Args>
-    ExecError(int status, const Args &... args)
-        : CloneableError(args...)
+    ExecError(int status, Args &&... args)
+        : CloneableError(std::forward<Args>(args)...)
         , status(status)
     {
     }

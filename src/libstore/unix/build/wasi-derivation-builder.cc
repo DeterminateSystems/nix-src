@@ -2,7 +2,7 @@
 
 #if NIX_USE_WASMTIME
 
-#  include "derivation-builder-impl.hh"
+#  include "unix-derivation-builder-impl.hh"
 
 #  include <wasmtime.hh>
 
@@ -23,11 +23,13 @@ static std::span<uint8_t> string2span(std::string_view s)
     return std::span<uint8_t>((uint8_t *) s.data(), s.size());
 }
 
-struct WasiDerivationBuilder : DerivationBuilderImpl
+struct WasiDerivationBuilder : UnixDerivationBuilderImpl
 {
     WasiDerivationBuilder(
-        LocalStore & store, std::shared_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
-        : DerivationBuilderImpl(store, std::move(miscMethods), std::move(params))
+        std::shared_ptr<BuildingStore> store,
+        std::shared_ptr<DerivationBuilderCallbacks> miscMethods,
+        DerivationBuilderParams params)
+        : UnixDerivationBuilderImpl(std::move(store), std::move(miscMethods), std::move(params))
     {
         experimentalFeatureSettings.require(Xp::WasmDerivations);
     }
@@ -52,8 +54,8 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
             wasiConfig.env(env2);
         }
         if (!wasiConfig.preopen_dir(
-                store.config->realStoreDir.get().string(),
-                store.storeDir,
+                store->getRealStoreDir().string(),
+                store->storeDir,
                 /* fs_mutable = */ true))
             throw Error("cannot add store directory to WASI config");
         if (!wasiConfig.preopen_dir(
@@ -62,7 +64,8 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
                 /* fs_mutable = */ true))
             throw Error("cannot add temporary directory to WASI config");
 
-        auto module = unwrap(Module::compile(engine, string2span(readFile(realPathInHost(drv.builder)))));
+        auto module =
+            unwrap(Module::compile(engine, string2span(readFile(realPathInHost(store->parseStorePath(drv.builder))))));
         wasmtime::Store wasmStore(engine);
         unwrap(wasmStore.context().set_wasi(std::move(wasiConfig)));
         auto instance = unwrap(linker.instantiate(wasmStore, module));
@@ -86,9 +89,12 @@ struct WasiDerivationBuilder : DerivationBuilderImpl
 void WasiDerivationBuilder::anchor() {}
 
 DerivationBuilderUnique makeWasiDerivationBuilder(
-    LocalStore & store, std::shared_ptr<DerivationBuilderCallbacks> miscMethods, DerivationBuilderParams params)
+    std::shared_ptr<BuildingStore> store,
+    std::shared_ptr<DerivationBuilderCallbacks> miscMethods,
+    DerivationBuilderParams params)
 {
-    return DerivationBuilderUnique(new WasiDerivationBuilder(store, std::move(miscMethods), std::move(params)));
+    return DerivationBuilderUnique(
+        new WasiDerivationBuilder(std::move(store), std::move(miscMethods), std::move(params)));
 }
 
 } // namespace nix

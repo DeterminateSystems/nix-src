@@ -8,6 +8,7 @@
 #include "nix/store/build/derivation-resolution-goal.hh"
 #include "nix/store/build/derivation-building-goal.hh"
 #include "nix/store/build/derivation-trampoline-goal.hh"
+#include "nix/util/system-error.hh"
 #ifndef _WIN32 // TODO Enable building on Windows
 #  include "nix/store/build/hook-instance.hh"
 #endif
@@ -109,11 +110,10 @@ Worker::makeDerivationResolutionGoal(const StorePath & drvPath, ref<const Deriva
     return initGoalIfNeeded(derivationResolutionGoals[drvPath], drvPath, drv, *this, buildMode);
 }
 
-std::shared_ptr<DerivationBuildingGoal> Worker::makeDerivationBuildingGoal(
-    const StorePath & drvPath, ref<const Derivation> drv, BuildMode buildMode, bool storeDerivation)
+std::shared_ptr<DerivationBuildingGoal>
+Worker::makeDerivationBuildingGoal(const StorePath & drvPath, ref<const BasicDerivation> drv, BuildMode buildMode)
 {
-    return initGoalIfNeeded(
-        derivationBuildingGoals[drvPath], drvPath, std::move(drv), *this, buildMode, storeDerivation);
+    return initGoalIfNeeded(derivationBuildingGoals[drvPath], drvPath, std::move(drv), *this, buildMode);
 }
 
 std::shared_ptr<PathSubstitutionGoal> Worker::makePathSubstitutionGoal(
@@ -160,7 +160,7 @@ void Worker::removeGoal(GoalPtr goal)
     } else if (auto drvBuildingGoal = std::dynamic_pointer_cast<DerivationBuildingGoal>(goal)) {
         derivationBuildingGoals.erase(drvBuildingGoal->drvPath);
     } else if (auto subGoal = std::dynamic_pointer_cast<PathSubstitutionGoal>(goal)) {
-        substitutionGoals.erase(subGoal->storePath);
+        substitutionGoals.erase(subGoal->getStorePath());
     } else if (auto subGoal = std::dynamic_pointer_cast<DrvOutputSubstitutionGoal>(goal)) {
         drvOutputSubstitutionGoals.erase(subGoal->id);
     } else {
@@ -483,13 +483,13 @@ void Worker::waitForInput()
                 goal->handleEOF(k);
             });
 
-        if (goal->exitCode == Goal::ecBusy && 0 != settings.maxSilentTime && j->respectTimeouts
+        if (!goal->exitCode && 0 != settings.maxSilentTime && j->respectTimeouts
             && after - j->lastOutput >= std::chrono::seconds(settings.maxSilentTime)) {
             goal->timedOut(TimedOut(settings.maxSilentTime));
         }
 
         else if (
-            goal->exitCode == Goal::ecBusy && 0 != settings.buildTimeout && j->respectTimeouts
+            !goal->exitCode && 0 != settings.buildTimeout && j->respectTimeouts
             && after - j->timeStarted >= std::chrono::seconds(settings.buildTimeout)) {
             goal->timedOut(TimedOut(settings.buildTimeout));
         }

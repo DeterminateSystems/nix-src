@@ -1,4 +1,5 @@
 #include "nix/expr/eval.hh"
+#include "nix/util/system-error.hh"
 #include "nix/expr/parallel-eval.hh"
 #include "nix/store/globals.hh"
 #include "nix/expr/primops.hh"
@@ -930,7 +931,7 @@ ValueStorage<sizeof(void *)>::waitOnThunk(EvalState & state, PackedPointer expec
 
     /* Wait for another thread to finish this value. */
     if (threadId == myEvalThreadId)
-        state.error<InfiniteRecursionError>("infinite recursion encountered")
+        state.error<InfiniteRecursionError>((Value *) this, "infinite recursion encountered")
             .atPos(((Value &) *this).determinePos(noPos))
             .debugThrow();
 
@@ -1014,19 +1015,19 @@ void ValueStorage<sizeof(void *)>::notifyWaiters()
     }
 }
 
-static void prim_parallel(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+static void prim_parallel(EvalState & state, CallSite callSite, Value * const * args, Value & v)
 {
-    state.forceList(*args[0], pos, "while evaluating the first argument passed to builtins.parallel");
+    state.forceList(*args[0], noPos, "while evaluating the first argument passed to builtins.parallel");
 
     if (state.executor->enabled) {
         Executor::WorkItems work;
         for (auto value : args[0]->listView())
             if (!value->isFinished())
-                state.addWork(work, 0, [value(RootValue(value)), &state, pos]() { state.forceValue(**value, pos); });
+                state.addWork(work, 0, [value(RootValue(value)), &state]() { state.forceValue(**value, noPos); });
         state.executor->spawn(std::move(work));
     }
 
-    state.forceValue(*args[1], pos);
+    state.forceValue(*args[1], noPos);
     v = *args[1];
 }
 

@@ -47,10 +47,7 @@ nixMake.mkComponent {
     "unix/include"
   ];
 
-  files = nixMake.commonSupportFiles // {
-    "schema.sql.gen.hh" = nixMake.mkStringHeader ./schema.sql;
-    "ca-specific-schema.sql.gen.hh" = nixMake.mkStringHeader ./ca-specific-schema.sql;
-  };
+  files = nixMake.commonSupportFiles;
 
   configHeaders = {
     "include/nix/store/config.hh" = {
@@ -80,6 +77,8 @@ nixMake.mkComponent {
       NIX_STORE_DIR = "/nix/store";
       NIX_USE_WASMTIME = nixMake.config.wasm;
       PACKAGE_VERSION = lib.fileContents ../../.version;
+      # The default of the Meson option `ssh-program`.
+      SSH_PROGRAM = "ssh";
       # package.nix only has a sandbox shell on Linux.
       SANDBOX_SHELL = if isLinux then "${pkgs.busybox-sandbox-shell}/bin/busybox" else null;
     };

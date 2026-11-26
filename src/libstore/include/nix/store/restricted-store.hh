@@ -8,8 +8,10 @@
 
 namespace nix {
 
+struct Builder;
 class LocalStore;
 struct LocalStoreConfig;
+class Worker;
 
 /**
  * A restricted store has a pointer to one of these, which manages the
@@ -55,12 +57,24 @@ public:
     /**
      * Recursive Nix calls are only allowed to build or realize paths
      * in the original input closure or added via a recursive Nix call
-     * (so e.g. you can't do 'nix-store -r /nix/store/<bla>' where
-     * /nix/store/<bla> is some arbitrary path in a binary cache).
+     * (so e.g. you can't do `nix-store -r /nix/store/<bla>` where
+     * `/nix/store/<bla>` is some arbitrary path in a binary cache).
      */
     virtual bool isAllowed(const StorePath &) = 0;
     virtual bool isAllowed(const DrvOutput & id) = 0;
     bool isAllowed(const DerivedPath & id);
+
+    /**
+     * Whether mounting dependencies inside the sandbox should happen,
+     * or if it should be entirely skipped.
+     */
+    virtual bool shouldModifySandbox() = 0;
+
+    /**
+     * Register a store path to an output name
+     * For builder-rpc-v0
+     */
+    virtual void submitOutput(const SingleDerivedPath & path, const OutputName & output) = 0;
 
     /**
      * Add 'path' to the set of paths that may be referenced by the
@@ -90,7 +104,8 @@ public:
         }
 
         try {
-            addDependencyImpl(path);
+            if (shouldModifySandbox())
+                addDependencyImpl(path);
             promise.set_value();
         } catch (...) {
             /* Notify all other waiters that we are done. */
@@ -115,5 +130,11 @@ protected:
  * Create a shared pointer to a restricted store.
  */
 ref<Store> makeRestrictedStore(ref<LocalStoreConfig> config, ref<LocalStore> next, RestrictionContext & context);
+
+/**
+ * Create a builder that wraps an inner builder, adding restriction
+ * checks and dependency tracking for recursive Nix builds.
+ */
+ref<Builder> makeRestrictedBuilder(Worker & inner, RestrictionContext & context);
 
 } // namespace nix

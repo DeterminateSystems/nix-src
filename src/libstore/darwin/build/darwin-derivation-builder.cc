@@ -1,5 +1,6 @@
-#include "derivation-builder-impl.hh"
+#include "unix-derivation-builder-impl.hh"
 #include "darwin-derivation-builder.hh"
+#include "nix/util/system-error.hh"
 
 #include <map>
 #include <spawn.h>
@@ -34,6 +35,21 @@ struct IpcsCommand
 
 namespace nix {
 
+/* Quote a string as an SBPL string literal. Escapes two characters: `\` which escapes
+   the next character and `"` which ends the literal when they are not escaped.
+   This keeps derivation-defined `__impureHostDeps` and other settings from injecting profile rules. */
+static std::string sbplQuote(std::string_view s)
+{
+    std::string res = "\"";
+    for (auto c : s) {
+        if (c == '"' || c == '\\')
+            res += '\\';
+        res += c;
+    }
+    res += '"';
+    return res;
+}
+
 void DarwinDerivationBuilder::prepareSandbox()
 {
     pathsInChroot = getPathsInSandbox();
@@ -41,7 +57,7 @@ void DarwinDerivationBuilder::prepareSandbox()
 
 void DarwinDerivationBuilder::setUser()
 {
-    DerivationBuilderImpl::setUser();
+    UnixDerivationBuilderImpl::setUser();
 
     /* This has to appear before import statements. */
     std::string sandboxProfile = "(version 1)\n";
@@ -64,7 +80,7 @@ void DarwinDerivationBuilder::setUser()
 
         /* And we want the store in there regardless of how empty pathsInChroot. We include the innermost
            path component this time, since it's typically /nix/store and we care about that. */
-        std::filesystem::path cur = store.storeDir;
+        std::filesystem::path cur = store->storeDir;
         while (cur != "/") {
             ancestry.insert(cur.native());
             cur = cur.parent_path();
@@ -72,13 +88,13 @@ void DarwinDerivationBuilder::setUser()
 
         /* Add all our input paths to the chroot */
         for (auto & i : inputPaths) {
-            auto p = store.printStorePath(i);
+            auto p = store->printStorePath(i);
             pathsInChroot.insert_or_assign(p, ChrootPath{.source = p});
         }
 
         /* Violations will go to the syslog if you set this. Unfortunately the destination does not appear to be
          * configurable */
-        if (store.config->getLocalSettings().darwinLogSandboxViolations) {
+        if (store->getLocalSettings().darwinLogSandboxViolations) {
             sandboxProfile += "(deny default)\n";
         } else {
             sandboxProfile += "(deny default (with no-log))\n";
@@ -96,7 +112,7 @@ void DarwinDerivationBuilder::setUser()
         /* Add the output paths we'll use at build-time to the chroot */
         sandboxProfile += "(allow file-read* file-write* process-exec\n";
         for (auto & [_, path] : scratchOutputs)
-            sandboxProfile += fmt("\t(subpath \"%s\")\n", store.printStorePath(path));
+            sandboxProfile += fmt("\t(subpath %s)\n", sbplQuote(store->printStorePath(path)));
 
         sandboxProfile += ")\n";
 
@@ -142,15 +158,15 @@ void DarwinDerivationBuilder::setUser()
             /* For future: One additional trick we can pull here is to reduce the path to a
                (prefix "$storePrefix/<hash>-"), which is shorter than either a subpath, or
                a literal value. It should be safe as hashes are unique. */
-            std::string profileRule =
-                S_ISDIR(optSt->st_mode) ? fmt("\t\t(subpath \"%s\")\n", path) : fmt("\t\t(literal \"%s\")\n", path);
+            std::string profileRule = S_ISDIR(optSt->st_mode) ? fmt("\t\t(subpath %s)\n", sbplQuote(path))
+                                                              : fmt("\t\t(literal %s)\n", sbplQuote(path));
 
             /* Legitimate derivation input paths are already lexically canonical. */
-            if (store.isInStore(path)) {
+            if (store->isInStore(path)) {
                 /* Anything that's inside the store must also be a valid StorePath (or a path under it).
                    Any other path under the store directory is an implementation detail of Nix.
                    (currently that's only .links/ directory). */
-                auto [sp, subdir] = store.toStorePath(path);
+                auto [sp, subdir] = store->toStorePath(path);
                 /* Bucket by the nix32 first char, which is uniformly distributed in the long run. */
                 bucketedStorePathProfiles[sp.hashPart().front()] += profileRule;
             } else {
@@ -161,15 +177,15 @@ void DarwinDerivationBuilder::setUser()
         if (!otherSandboxPathsProfile.empty()) /* Avoid a repeat of CVE-2026-110451. */
             sandboxProfile += fmt("(allow file-read* file-write* process-exec\n%s)\n", otherSandboxPathsProfile);
 
-        const auto storePrefix = store.storeDir + '/';
+        const auto storePrefix = store->storeDir + '/';
         for (const auto & [bucket, filters] : bucketedStorePathProfiles) {
             assert(!filters.empty()); /* Just to be safe. */
             const auto prefix = storePrefix + bucket;
             sandboxProfile +=
                 fmt("(allow file-read* file-write* process-exec\n"
-                    "\t(require-all (prefix \"%s\")\n"
+                    "\t(require-all (prefix %s)\n"
                     "\t\t(require-any\n%s)))\n",
-                    prefix,
+                    sbplQuote(prefix),
                     filters);
         }
 
@@ -177,7 +193,7 @@ void DarwinDerivationBuilder::setUser()
         sandboxProfile += "(allow file-read*\n";
         assert(!ancestry.empty()); /* Just to be safe. */
         for (auto & i : ancestry) {
-            sandboxProfile += fmt("\t(literal \"%s\")\n", i);
+            sandboxProfile += fmt("\t(literal %s)\n", sbplQuote(i));
         }
         sandboxProfile += ")\n";
 
@@ -222,13 +238,13 @@ void DarwinDerivationBuilder::setUser()
 
 void DarwinDerivationBuilder::execBuilder(const Strings & args, const Strings & envStrs)
 {
-    posix_spawnattr_t attrp;
+    ::posix_spawnattr_t attrp;
 
-    if (posix_spawnattr_init(&attrp))
-        throw SysError("failed to initialize builder");
+    if (int err = ::posix_spawnattr_init(&attrp))
+        throw SysError(err, "failed to initialize builder");
 
-    if (posix_spawnattr_setflags(&attrp, POSIX_SPAWN_SETEXEC))
-        throw SysError("failed to initialize builder");
+    if (int err = ::posix_spawnattr_setflags(&attrp, POSIX_SPAWN_SETEXEC))
+        throw SysError(err, "failed to initialize builder");
 
     if (drv.platform == "aarch64-darwin") {
         // Unset kern.curproc_arch_affinity so we can escape Rosetta
@@ -343,7 +359,7 @@ void DarwinDerivationBuilder::cleanupSysVIPCForUser(uid_t uid)
 
 void DarwinDerivationBuilder::killSandbox(bool getStats)
 {
-    DerivationBuilderImpl::killSandbox(getStats);
+    UnixDerivationBuilderImpl::killSandbox(getStats);
     if (buildUser) {
         auto uid = buildUser->getUID();
         cleanupSysVIPCForUser(uid);

@@ -6,6 +6,8 @@
 #include "nix/expr/tests/nix_api_expr.hh"
 #include "nix/util/tests/string_callback.hh"
 #include "nix/util/file-system.hh"
+#include "nix/util/finally.hh"
+#include "nix/expr/tests/gc.hh"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -13,6 +15,45 @@
 #include "expr-tests-config.hh"
 
 namespace nixC {
+
+#if NIX_USE_BOEHMGC
+TEST(nix_api_gc_test, last_decref_releases_root)
+{
+    ASSERT_EQ(NIX_OK, nix_libexpr_init(nullptr));
+
+    auto weak = static_cast<void **>(GC_MALLOC_ATOMIC(sizeof(void *)));
+    ASSERT_NE(nullptr, weak);
+    *weak = nullptr;
+    nix::Finally cleanup([&] {
+        GC_unregister_disappearing_link(weak);
+        GC_FREE(weak);
+    });
+
+    nix::runOnGCThread([&] {
+        auto object = GC_MALLOC(1024);
+        ASSERT_NE(nullptr, object);
+        ASSERT_EQ(NIX_OK, nix_gc_incref(nullptr, object));
+        ASSERT_EQ(NIX_OK, nix_gc_incref(nullptr, object));
+        *weak = object;
+        ASSERT_EQ(GC_SUCCESS, GC_GENERAL_REGISTER_DISAPPEARING_LINK(weak, object));
+        ASSERT_EQ(NIX_OK, nix_gc_decref(nullptr, object));
+    });
+    ASSERT_FALSE(HasFatalFailure());
+
+    nix_gc_now();
+
+    nix::runOnGCThread([&] {
+        ASSERT_NE(nullptr, *weak);
+        ASSERT_EQ(NIX_OK, nix_gc_decref(nullptr, *weak));
+    });
+    ASSERT_FALSE(HasFatalFailure());
+
+    for (int i = 0; i < 3; ++i)
+        nix_gc_now();
+
+    EXPECT_EQ(nullptr, *weak);
+}
+#endif
 
 TEST_F(nix_api_expr_test, nix_eval_state_lookup_path)
 {
@@ -52,6 +93,61 @@ TEST_F(nix_api_expr_test, nix_eval_state_lookup_path)
     ASSERT_EQ(0, strcmp(pathStr, nixpkgs.string().c_str()));
 
     nix_gc_decref(nullptr, value);
+}
+
+TEST_F(nix_api_expr_test, nix_eval_state_builder_set_setting)
+{
+    // Test whether setting eval settings via the C-api actually apply.
+
+    // Presence of builtins.currentSystem is used as an indicator whether pure-eval is used or not.
+    auto hasCurrentSystem = [&](EvalState * es) {
+        Value * v = nix_alloc_value(ctx, es);
+        nix_expr_eval_from_string(ctx, es, "builtins ? currentSystem", ".", v);
+        assert_ctx_ok();
+        nix_value_force(ctx, es, v);
+        assert_ctx_ok();
+        bool b = nix_get_bool(ctx, v);
+        assert_ctx_ok();
+        nix_gc_decref(nullptr, v);
+        return b;
+    };
+
+    // A builder with no settings evaluates impurely.
+    {
+        auto builder = nix_eval_state_builder_new(ctx, store);
+        assert_ctx_ok();
+        auto impureState = nix_eval_state_build(ctx, builder);
+        assert_ctx_ok();
+        nix_eval_state_builder_free(builder);
+        ASSERT_TRUE(hasCurrentSystem(impureState));
+        nix_state_free(impureState);
+    }
+
+    // A builder with pure-eval applied has no builtins.currentSystem
+    {
+        auto builder = nix_eval_state_builder_new(ctx, store);
+        assert_ctx_ok();
+        ASSERT_EQ(NIX_OK, nix_eval_state_builder_set_setting(ctx, builder, "pure-eval", "true"));
+        assert_ctx_ok();
+
+        auto pureEvalState = nix_eval_state_build(ctx, builder);
+        assert_ctx_ok();
+        nix_eval_state_builder_free(builder);
+        ASSERT_FALSE(hasCurrentSystem(pureEvalState));
+        nix_state_free(pureEvalState);
+    }
+}
+
+TEST_F(nix_api_expr_test, nix_eval_state_builder_set_setting_unknown)
+{
+    auto builder = nix_eval_state_builder_new(ctx, store);
+    assert_ctx_ok();
+
+    // An unknown setting errors out.
+    ASSERT_EQ(NIX_ERR_KEY, nix_eval_state_builder_set_setting(ctx, builder, "not-a-nix-setting", "x"));
+    ASSERT_EQ(NIX_ERR_KEY, nix_err_code(ctx));
+
+    nix_eval_state_builder_free(builder);
 }
 
 TEST_F(nix_api_expr_test, nix_expr_eval_from_string)

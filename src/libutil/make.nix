@@ -2,7 +2,7 @@
 { lib, nixMake }:
 
 let
-  inherit (nixMake.hostPlatform) isLinux isx86_64;
+  inherit (nixMake.hostPlatform) isDarwin isLinux isx86_64;
 in
 
 nixMake.mkComponent {
@@ -17,7 +17,8 @@ nixMake.mkComponent {
     "windows"
     "freebsd"
   ]
-  ++ lib.optional (!isLinux) "linux";
+  ++ lib.optional (!isLinux) "linux"
+  ++ lib.optional (!isDarwin) "darwin";
 
   includeDirs = [
     ""
@@ -51,8 +52,15 @@ nixMake.mkComponent {
       # package.nix only enables libcpuid on x86_64.
       HAVE_LIBCPUID = if isx86_64 then 1 else 0;
       HAVE_POSIX_FALLOCATE = if isLinux then 1 else 0;
+      # The default of the Meson option `sh-program`.
+      SH_PROGRAM = "/bin/sh";
     };
     "unix/util-unix-config-private.hh" = {
+      # FreeBSD-only.
+      HAVE_BINDAT = 0;
+      HAVE_CONNECTAT = 0;
+      # glibc >= 2.34 has it; macOS does not.
+      HAVE_CLOSEFROM = if isLinux then 1 else 0;
       HAVE_CLOSE_RANGE = if isLinux then 1 else 0;
       HAVE_COPY_FILE_RANGE = if isLinux then 1 else 0;
       HAVE_DECL_AT_SYMLINK_NOFOLLOW = 1;
